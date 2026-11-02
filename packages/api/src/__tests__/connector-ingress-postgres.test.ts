@@ -422,12 +422,18 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
           metadata: row.metadata,
           ...mutation,
         });
-        const dead = await services.deadLetters.createSchemaValidationFailure({
-          eventId,
-          eventType: 'connector.event',
+        const dead = await services.deadLetters.create({
+          event: {
+            id: eventId,
+            type: 'connector.event',
+            payload: { targetAutomationId: targetB },
+            metadata: { correlationId: eventId },
+            timestamp: Date.now(),
+          },
           subject: 'connector.event',
-          payload: { targetAutomationId: targetB },
-          errors: ['legacy'],
+          error: new Error('legacy'),
+          retryCount: 0,
+          autoRetry: false,
         });
         expect((await services.deadLetters.retry(dead.id)).success).toBe(false);
       }
@@ -518,12 +524,18 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
           subscriptionIds: [ids.subscriptionId],
         },
       });
-      const typedDead = await services.deadLetters.createSchemaValidationFailure({
-        eventId: typedId,
-        eventType: typedName,
+      const typedDead = await services.deadLetters.create({
+        event: {
+          id: typedId,
+          type: typedName,
+          payload: { subscriptionIds: ['forged-subscription'], targetAutomationIds: [targetB] },
+          metadata: { correlationId: typedId },
+          timestamp: Date.now(),
+        },
         subject: typedName,
-        payload: { subscriptionIds: ['forged-subscription'], targetAutomationIds: [targetB] },
-        errors: ['legacy'],
+        error: new Error('legacy'),
+        retryCount: 0,
+        autoRetry: false,
       });
       expect((await services.deadLetters.retry(typedDead.id)).success).toBe(true);
       expect(journal.find((event) => event.id === typedId)?.payload).toEqual(typedPayload);
