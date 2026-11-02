@@ -19,9 +19,10 @@
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { createLogger } from '@omni/core';
+import { NotFoundError, ValidationError, createLogger } from '@omni/core';
 import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
+import { isAdminTierKey, resolveKeyAgent } from '../../lib/key-agent';
 import {
   AckConsumerSchema,
   CreateConsumerSchema,
@@ -43,7 +44,7 @@ import {
   runConsumerStream,
   wakePrefixesFor,
 } from '../../services/event-consumer-stream';
-import type { ConsumerCaller } from '../../services/event-consumers';
+import { type ConsumerCaller, resolveConsumerAgentId } from '../../services/event-consumers';
 import { currentTenantScope, runDetachedFromTenantScope } from '../../tenancy/tenant-scope';
 import type { AppVariables } from '../../types';
 
@@ -52,12 +53,14 @@ const log = createLogger('event-consumer-stream');
 const eventConsumersRoutes = new Hono<{ Variables: AppVariables }>();
 
 /** The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule). */
-function consumerCaller(c: Context<{ Variables: AppVariables }>): ConsumerCaller {
+async function consumerCaller(c: Context<{ Variables: AppVariables }>): Promise<ConsumerCaller> {
   const apiKey = c.get('apiKey');
+  const principal = apiKey ? await resolveKeyAgent(c.get('services').db, apiKey.id) : undefined;
   return {
     keyId: apiKey?.id ?? null,
     instanceIds: apiKey?.instanceIds ?? null,
     tenantId: c.get('authContext')?.tenantId ?? null,
+    ...(principal ? { principal, admin: principal.kind !== 'unresolved' && !!apiKey && isAdminTierKey(apiKey) } : {}),
   };
 }
 
@@ -66,7 +69,7 @@ function consumerCaller(c: Context<{ Variables: AppVariables }>): ConsumerCaller
  */
 eventConsumersRoutes.get('/events/consumers', async (c) => {
   const services = c.get('services');
-  const items = await services.eventConsumers.list(consumerCaller(c));
+  const items = await services.eventConsumers.list(await consumerCaller(c));
   return c.json({ items });
 });
 
@@ -76,7 +79,17 @@ eventConsumersRoutes.get('/events/consumers', async (c) => {
 eventConsumersRoutes.post('/events/consumers', zValidator('json', CreateConsumerSchema), async (c) => {
   const input = c.req.valid('json');
   const services = c.get('services');
-  const data = await services.eventConsumers.create(input, consumerCaller(c));
+  const caller = await consumerCaller(c);
+  resolveConsumerAgentId(input, caller);
+  if (input.agentId !== undefined) {
+    try {
+      await services.agents.getById(input.agentId);
+    } catch (error) {
+      if (error instanceof NotFoundError) throw new ValidationError('agentId must name an existing agent');
+      throw error;
+    }
+  }
+  const data = await services.eventConsumers.create(input, caller);
   return c.json({ data }, 201);
 });
 
@@ -86,7 +99,7 @@ eventConsumersRoutes.post('/events/consumers', zValidator('json', CreateConsumer
 eventConsumersRoutes.get('/events/consumers/:name', async (c) => {
   const name = c.req.param('name');
   const services = c.get('services');
-  const data = await services.eventConsumers.inspect(name, consumerCaller(c));
+  const data = await services.eventConsumers.inspect(name, await consumerCaller(c));
   return c.json({ data });
 });
 
@@ -96,7 +109,7 @@ eventConsumersRoutes.get('/events/consumers/:name', async (c) => {
 eventConsumersRoutes.delete('/events/consumers/:name', async (c) => {
   const name = c.req.param('name');
   const services = c.get('services');
-  await services.eventConsumers.delete(name, consumerCaller(c));
+  await services.eventConsumers.delete(name, await consumerCaller(c));
   return c.json({ success: true });
 });
 
@@ -111,7 +124,7 @@ eventConsumersRoutes.post('/events/consumers/:name/pull', zValidator('query', Pu
   const name = c.req.param('name');
   const { limit, waitMs, leaseMs } = c.req.valid('query');
   const services = c.get('services');
-  const result = await services.eventConsumers.pull(name, { limit, waitMs, leaseMs }, consumerCaller(c));
+  const result = await services.eventConsumers.pull(name, { limit, waitMs, leaseMs }, await consumerCaller(c));
   return c.json(result);
 });
 
@@ -122,7 +135,7 @@ eventConsumersRoutes.post('/events/consumers/:name/ack', zValidator('json', AckC
   const name = c.req.param('name');
   const { cursor, leaseId } = c.req.valid('json');
   const services = c.get('services');
-  const data = await services.eventConsumers.ack(name, cursor ?? 0, leaseId, consumerCaller(c));
+  const data = await services.eventConsumers.ack(name, cursor ?? 0, leaseId, await consumerCaller(c));
   return c.json({ data });
 });
 
@@ -146,7 +159,7 @@ eventConsumersRoutes.get(
     const { after } = c.req.valid('query');
     const lastEventId = c.req.valid('header')['last-event-id'];
     const services = c.get('services');
-    const caller = consumerCaller(c);
+    const caller = await consumerCaller(c);
     // 403 (restricted key on unscoped) / 404 (missing or invisible) / 400 (shared)
     // while a JSON error can still be returned. Streams never mutate the cursor.
     const consumer = await services.eventConsumers.getStreamable(name, caller);

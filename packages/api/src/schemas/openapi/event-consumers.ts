@@ -30,6 +30,9 @@ export const ConsumerConditionSchema = z.object({
 const CONSUMER_ACCESS_FILTERS = ['all', 'allowed', 'denied'] as const;
 
 export const DurableConsumerSchema = z.object({
+  agentId: z.string().uuid().nullable().openapi({
+    description: 'Owning agent, or null for a legacy consumer. Only its proven keys and admin-tier keys can access it.',
+  }),
   id: z.string().uuid().openapi({ description: 'Consumer UUID' }),
   tenantId: z.string().uuid().nullable().openapi({
     description:
@@ -80,6 +83,10 @@ export const DurableConsumerSchema = z.object({
 });
 
 export const CreateConsumerSchema = z.object({
+  agentId: z.string().uuid().optional().openapi({
+    description:
+      'Owning agent (OMNI_PAIRED_AGENT_CONSUMERS required). Defaults to the calling agent; explicit ownership needs that agent or an admin-tier key.',
+  }),
   name: z
     .string()
     .min(1)

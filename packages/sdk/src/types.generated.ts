@@ -8831,6 +8831,11 @@ export interface components {
         DurableConsumer: {
             /**
              * Format: uuid
+             * @description Owning agent, or null for a legacy consumer. Only its proven keys and admin-tier keys can access it.
+             */
+            agentId: string | null;
+            /**
+             * Format: uuid
              * @description Consumer UUID
              */
             id: string;
@@ -8895,6 +8900,11 @@ export interface components {
             updatedAt: string;
         };
         CreateConsumerRequest: {
+            /**
+             * Format: uuid
+             * @description Owning agent (OMNI_PAIRED_AGENT_CONSUMERS required). Defaults to the calling agent; explicit ownership needs that agent or an admin-tier key.
+             */
+            agentId?: string;
             /** @description Unique consumer name (e.g. deploy-tracker) */
             name: string;
             /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
@@ -24040,6 +24050,11 @@ export interface operations {
                         items: {
                             /**
                              * Format: uuid
+                             * @description Owning agent, or null for a legacy consumer. Only its proven keys and admin-tier keys can access it.
+                             */
+                            agentId: string | null;
+                            /**
+                             * Format: uuid
                              * @description Consumer UUID
                              */
                             id: string;
@@ -24118,6 +24133,11 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
+                    /**
+                     * Format: uuid
+                     * @description Owning agent (OMNI_PAIRED_AGENT_CONSUMERS required). Defaults to the calling agent; explicit ownership needs that agent or an admin-tier key.
+                     */
+                    agentId?: string;
                     /** @description Unique consumer name (e.g. deploy-tracker) */
                     name: string;
                     /** @description Type filter: exact event type, or trailing-* prefix glob (e.g. custom.github.*) */
@@ -24167,6 +24187,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: {
+                            /**
+                             * Format: uuid
+                             * @description Owning agent, or null for a legacy consumer. Only its proven keys and admin-tier keys can access it.
+                             */
+                            agentId: string | null;
                             /**
                              * Format: uuid
                              * @description Consumer UUID
@@ -24319,6 +24344,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: {
+                            /**
+                             * Format: uuid
+                             * @description Owning agent, or null for a legacy consumer. Only its proven keys and admin-tier keys can access it.
+                             */
+                            agentId: string | null;
                             /**
                              * Format: uuid
                              * @description Consumer UUID
@@ -24702,6 +24732,11 @@ export interface operations {
                 content: {
                     "application/json": {
                         data: {
+                            /**
+                             * Format: uuid
+                             * @description Owning agent, or null for a legacy consumer. Only its proven keys and admin-tier keys can access it.
+                             */
+                            agentId: string | null;
                             /**
                              * Format: uuid
                              * @description Consumer UUID

@@ -33,6 +33,7 @@ import type { EventBus } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
   type Database,
+  apiKeys,
   applyTenancyRoles,
   applyTenantRlsEnforcement,
   createDbHandle,
@@ -1121,14 +1122,21 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
     const eventB = randomUUID();
     const json = { 'Content-Type': 'application/json' };
 
+    const tenantKeys = new Map<string | null, string>([
+      [tenantA, randomUUID()],
+      [tenantB, randomUUID()],
+      [null, randomUUID()],
+    ]);
+
     // Exercise the real routes + service + SQL. The auth edge supplies this
     // trusted context; the projected keys deliberately have NO instance limit.
     function appFor(tenantId: string | null) {
-      const keyId = randomUUID();
+      const keyId = tenantKeys.get(tenantId)!;
       const app = new Hono<{ Variables: AppVariables }>();
       app.onError(errorHandler);
       app.use('*', async (c, next) => {
         c.set('services', {
+          db,
           eventConsumers: service,
           events: new EventService(db),
           automations: { list: async () => [] },
@@ -1143,6 +1151,16 @@ postgresDescribe('durable event consumers (#989, real PostgreSQL)', () => {
     }
 
     beforeAll(async () => {
+      await db.insert(apiKeys).values(
+        [...tenantKeys.values()].map((id) => ({
+          id,
+          name: 'tenant-test',
+          keyPrefix: id.slice(0, 12),
+          keyHash: id,
+          scopes: ['*'],
+          createdBy: 'test',
+        })),
+      );
       const seeded = runSqlOn(
         pgRoleUrl(superUrl, dbName),
         `

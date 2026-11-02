@@ -49,7 +49,14 @@ function mount(services: unknown, apiKey?: ApiKeyData): Hono<{ Variables: AppVar
   const app = new Hono<{ Variables: AppVariables }>();
   app.onError(errorHandler);
   app.use('*', async (c, next) => {
-    c.set('services', { eventConsumers: services } as never);
+    c.set('services', {
+      eventConsumers: services,
+      db: {
+        select: () => ({
+          from: () => ({ where: () => ({ limit: async () => [{ ...apiKey, createdBy: 'test', status: 'active' }] }) }),
+        }),
+      },
+    } as never);
     if (apiKey) c.set('apiKey', apiKey);
     await next();
   });
@@ -88,8 +95,22 @@ async function hitEveryRoute(app: Hono<{ Variables: AppVariables }>): Promise<nu
 
 describe('consumer routes forward the caller', () => {
   for (const [label, key, expected] of [
-    ['restricted key', RESTRICTED_KEY, { keyId: RESTRICTED_KEY.id, instanceIds: [INST_A, INST_B], tenantId: null }],
-    ['unrestricted key', UNRESTRICTED_KEY, { keyId: UNRESTRICTED_KEY.id, instanceIds: null, tenantId: null }],
+    [
+      'restricted key',
+      RESTRICTED_KEY,
+      {
+        keyId: RESTRICTED_KEY.id,
+        instanceIds: [INST_A, INST_B],
+        tenantId: null,
+        principal: { kind: 'none' },
+        admin: false,
+      },
+    ],
+    [
+      'unrestricted key',
+      UNRESTRICTED_KEY,
+      { keyId: UNRESTRICTED_KEY.id, instanceIds: null, tenantId: null, principal: { kind: 'none' }, admin: true },
+    ],
     ['no key context', undefined, { keyId: null, instanceIds: null, tenantId: null }],
   ] as const) {
     test(`${label}: every route reaches the service with the original arguments plus the caller`, async () => {
