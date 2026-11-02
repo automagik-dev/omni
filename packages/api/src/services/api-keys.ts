@@ -34,6 +34,7 @@ import { z } from 'zod';
 import { CacheKeys, CacheTTL, type CachedApiKey, apiKeyCache, authCacheTtlMs } from '../cache';
 import { SCOPE_IMPLIED_BY } from '../constants/scopes';
 import { resolveProfile } from '../lib/resolve-profile';
+import { scopedHandle } from '../tenancy/tenant-scope';
 
 const log = createLogger('api-keys');
 
@@ -250,6 +251,22 @@ export class ApiKeyService {
     options: ApiKeyServiceOptions = {},
   ) {
     this.eventBus = options.eventBus ?? null;
+  }
+
+  /** Serialize binding-derived grants before reading their authority graph.
+   * A legacy caller needs a transaction too: an autocommit xact lock expires
+   * immediately. In a tenant request this is a savepoint in its stamped tx;
+   * the advisory locks remain held until the outer request commits.
+   */
+  async withAgentKeyLock<T>(agentIds: string[], fn: (keys: ApiKeyService, db: Database) => Promise<T>): Promise<T> {
+    return scopedHandle(this.db).transaction(async (tx) => {
+      // Reassignments lock both agents in stable order to avoid AB/BA deadlocks.
+      for (const agentId of [...new Set(agentIds)].sort()) {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`omni:agent-key:${agentId}`}))`);
+      }
+      const db = tx as unknown as Database;
+      return fn(new ApiKeyService(db, { eventBus: this.eventBus }), db);
+    });
   }
 
   /**

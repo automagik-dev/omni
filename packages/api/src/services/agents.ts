@@ -72,6 +72,11 @@ export class AgentService {
     this.manifestReconciler = reconciler;
   }
 
+  /** Bind ownership reads to the connection already held by a caller's lock. */
+  withDatabase(db: Database): AgentService {
+    return new AgentService(db, this.eventBus);
+  }
+
   /**
    * List agents with optional filters (paginated)
    */

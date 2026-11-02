@@ -626,13 +626,40 @@ export const TOTAL_PENDING_CEILING = 21;
  */
 export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   {
-    file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    file: 'packages/api/src/services/agent-key-bindings.ts',
     table: 'agents',
     class: 'control-plane',
     justification:
-      'Failure-only startup coverage snapshot counts agents without usable system keys, including route-only agents. ' +
-      'Legacy mode reads on the ambient database; enforcement enumerates tenant IDs only on the auth plane and reads ' +
-      'each tenant through runInWorkerTenantScope. Names stay in the single startup failure log; public health receives only a count.',
+      'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
+      'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
+      'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-bindings.ts',
+    table: 'instances',
+    class: 'control-plane',
+    justification:
+      'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
+      'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
+      'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-bindings.ts',
+    table: 'agent_routes',
+    class: 'control-plane',
+    justification:
+      'Shared agent-key authority graph reads scopedHandle for route requests and startup repair. ' +
+      'Enforced startup enumerates tenant IDs on the auth plane and calls this only in each tenant runtime scope; ' +
+      'legacy callers retain ambient reads. Stored agent/instance tenants must match and every existing grant needs a live default or route binding.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    table: 'agent_routes',
+    class: 'control-plane',
+    justification:
+      'Startup repair stabilizes existing route rows while rebuilding agent key grants from the shared default/route graph. ' +
+      'Legacy mode uses the ambient database; enforcement enumerates tenant IDs only on the auth plane and locks ' +
+      'each tenant through runInWorkerTenantScope. Healthy startup takes no repair transaction or row locks.',
   },
   {
     file: 'packages/api/src/services/agent-key-reconciliation.ts',
