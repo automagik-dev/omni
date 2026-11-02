@@ -57,6 +57,13 @@ function buildApp(
     throw new Error(`${method} must not be called by the stream`);
   };
   const services = {
+    db: {
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [{ name: 'stream-test', createdBy: 'test', status: 'active' }] }),
+        }),
+      }),
+    },
     eventConsumers: {
       getStreamable: options.getStreamable ?? (async () => CONSUMER),
       scanForStream: async (_name: string, after: number, access: StreamAccess): Promise<StreamScanResult> => {
@@ -78,7 +85,12 @@ function buildApp(
   app.use('*', async (c, next) => {
     c.set('services', services);
     if (options.instanceIds !== undefined) {
-      c.set('apiKey', { id: options.keyId, instanceIds: options.instanceIds } as unknown as AppVariables['apiKey']);
+      c.set('apiKey', {
+        id: options.keyId,
+        name: 'stream-test',
+        scopes: ['events:*'],
+        instanceIds: options.instanceIds,
+      } as unknown as AppVariables['apiKey']);
     }
     await next();
   });
@@ -202,14 +214,17 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     const mine = await readUntil(await restricted.app.request('/api/v2/events/consumers/vox/stream'), /id: 13\n/);
     expect(restricted.accesses[0]).toEqual({
       tenantId: null,
-      caller: { keyId: null, instanceIds: ['inst-a'], tenantId: null },
+      caller: { keyId: null, instanceIds: ['inst-a'], tenantId: null, principal: { kind: 'none' }, admin: false },
     });
     expect(mine).toContain('id: 11\n');
     expect(mine).not.toContain('id: 12\n');
 
     const full = buildApp({ journal, instanceIds: null });
     const all = await readUntil(await full.app.request('/api/v2/events/consumers/vox/stream'), /id: 13\n/);
-    expect(full.accesses[0]).toEqual({ tenantId: null, caller: { keyId: null, instanceIds: null, tenantId: null } });
+    expect(full.accesses[0]).toEqual({
+      tenantId: null,
+      caller: { keyId: null, instanceIds: null, tenantId: null, principal: { kind: 'none' }, admin: false },
+    });
     expect(all).toContain('id: 12\n');
   });
 
@@ -275,7 +290,9 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     const res = await app.request('/api/v2/events/consumers/vox/stream');
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain('connected');
-    expect(seen).toEqual([{ keyId: 'key-other', instanceIds: ['inst-z'], tenantId: null }]);
+    expect(seen).toEqual([
+      { keyId: 'key-other', instanceIds: ['inst-z'], tenantId: null, principal: { kind: 'none' }, admin: false },
+    ]);
     expect(scans).toEqual([]);
   });
 

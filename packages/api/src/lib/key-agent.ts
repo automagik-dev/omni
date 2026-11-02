@@ -2,6 +2,7 @@ import { type Database, agents, apiKeys, instances } from '@omni/db';
 import { eq, inArray } from 'drizzle-orm';
 import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { scopedHandle } from '../tenancy/tenant-scope';
+import type { ApiKeyData } from '../types';
 import { agentKeyNameCandidates } from './agent-key-name';
 import { agentKeyBelongsToBinding } from './agent-key-ownership';
 import { currentProducingKeyId, memoizeProducingKeyResolution } from './producer-scope';
@@ -73,4 +74,9 @@ export async function requestProducerColumns(db: Database): Promise<{
   // A fire-and-forget claim may have crossed the request's completion during the read.
   if (currentProducingKeyId() !== producingKeyId) return { producingKeyId: null, agentId: null };
   return { producingKeyId, agentId: principal.kind === 'agent' ? principal.agentId : null };
+}
+
+/** Owner tier is an unrestricted wildcard key; principal and tenant checks still apply. */
+export function isAdminTierKey(key: Pick<ApiKeyData, 'scopes' | 'instanceIds'>): boolean {
+  return key.scopes.includes('*') && key.instanceIds === null;
 }

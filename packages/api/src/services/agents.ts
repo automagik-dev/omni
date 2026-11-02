@@ -6,7 +6,7 @@ import { NotFoundError } from '@omni/core';
 import type { AgentEventManifest, EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni/db';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
 import { restoreActiveAgentKeys, revokeInactiveAgentKeys } from './agent-key-bindings';
@@ -109,8 +109,18 @@ export class AgentService {
   /**
    * Get agent by ID
    */
-  async getById(id: string): Promise<Agent> {
-    const [result] = await this.db.select().from(agents).where(eq(agents.id, id)).limit(1);
+  async getById(id: string, ownership?: Pick<Agent, 'tenantId'>): Promise<Agent> {
+    // Explicit ownership also bounds lookups before tenant RLS is enforced.
+    const tenant = ownership
+      ? ownership.tenantId === null
+        ? isNull(agents.tenantId)
+        : eq(agents.tenantId, ownership.tenantId)
+      : undefined;
+    const [result] = await this.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, id), tenant))
+      .limit(1);
 
     if (!result) {
       throw new NotFoundError('Agent', id);
