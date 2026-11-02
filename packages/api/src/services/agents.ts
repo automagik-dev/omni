@@ -9,7 +9,7 @@ import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni
 import { and, eq, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
-import { revokeInactiveAgentKeys } from './agent-key-bindings';
+import { restoreActiveAgentKeys, revokeInactiveAgentKeys } from './agent-key-bindings';
 import { ApiKeyService } from './api-keys';
 
 /**
@@ -144,15 +144,34 @@ export class AgentService {
    * Update an agent
    */
   async update(id: string, data: Partial<NewAgent>): Promise<Agent> {
-    const [updated] = await this.db
-      .update(agents)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(agents.id, id))
-      .returning();
-
-    if (!updated) {
-      throw new NotFoundError('Agent', id);
-    }
+    const write = async (db: Database, values: Partial<NewAgent> = data): Promise<Agent> => {
+      const [row] = await db
+        .update(agents)
+        .set({ ...values, updatedAt: new Date() })
+        .where(eq(agents.id, id))
+        .returning();
+      if (!row) throw new NotFoundError('Agent', id);
+      return row;
+    };
+    const updated =
+      data.isActive === undefined && data.name === undefined
+        ? await write(this.db)
+        : await new ApiKeyService(this.db, { eventBus: this.eventBus }).withAgentKeyLock([id], async (keys, db) => {
+            const [previous] = await db.select().from(agents).where(eq(agents.id, id));
+            if (!previous) throw new NotFoundError('Agent', id);
+            const renamed = data.name !== undefined && data.name !== previous.name;
+            if (renamed || data.isActive === false) {
+              // Retire keys while the graph still contains the stored name.
+              // Inactive ownership preserves healthy same-name siblings' keys.
+              await write(db, { isActive: false });
+              await revokeInactiveAgentKeys(keys, db, id);
+            }
+            const row = await write(db, { ...data, isActive: data.isActive ?? previous.isActive });
+            // Only a rename or a real reactivation re-mints current bindings.
+            // Routine active saves leave existing credentials in place.
+            if (row.isActive && (renamed || !previous.isActive)) await restoreActiveAgentKeys(keys, db, id);
+            return row;
+          });
 
     // omni#906: evict cached providers built from the pre-update agent row —
     // per-instance so sibling instances retain their own cached configuration.

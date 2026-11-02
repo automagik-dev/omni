@@ -195,6 +195,20 @@ export async function syncLockedAgentKey(
   }
 }
 
+/** Restore an active agent's current bindings under the caller's per-agent lock. */
+export async function restoreActiveAgentKeys(keys: ApiKeyService, db: Database, agentId: string): Promise<void> {
+  const graph = await readAgentKeyGraph(db);
+  const agent = graph.agents.find((row) => row.agentId === agentId);
+  if (!agent?.isActive) return;
+  const active = await keys.findAgentKeysByNames(agentKeyNameCandidates(agent.name, agent.tenantId));
+  const stale = staleBindingKeys(graph, active);
+  for (const key of stale)
+    await keys.revoke(key.id, 'Agent key contains grants without a live binding', 'system:auto-provision');
+  const usable = active.filter((key) => !stale.includes(key));
+  for (const binding of graph.bindings.filter((row) => row.agentId === agentId))
+    await grantBindingKey(keys, graph, usable, binding);
+}
+
 /** Identities remain in the graph after soft deletion to prove which keys may be retired. */
 export async function revokeInactiveAgentKeys(keys: ApiKeyService, db: Database, agentId: string): Promise<void> {
   const graph = await readAgentKeyGraph(db);

@@ -4,7 +4,7 @@
  * source of authority; widened credentials are revoked before narrow replacement.
  */
 import { createLogger } from '@omni/core';
-import { type ApiKey, type Database, type DbEnforcementMode, agentRoutes, instances, tenants } from '@omni/db';
+import { type ApiKey, type Database, type DbEnforcementMode, agentRoutes, agents, instances, tenants } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { agentKeyNameCandidates } from '../lib/agent-key-name';
 import { type AgentKeyOwner, agentKeyBelongsToBinding } from '../lib/agent-key-ownership';
@@ -43,6 +43,8 @@ async function reconcileScope(db: Database): Promise<string[]> {
   return db.transaction(async (tx) => {
     // Concurrent boots must not both provision the same missing system key.
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('omni:agent-key-reconciliation'))`);
+    // Keep the active-agent ownership snapshot valid until all grants commit.
+    await tx.select({ id: agents.id }).from(agents).for('share');
     await tx.select({ id: instances.id }).from(instances).for('share');
     await tx.select({ id: agentRoutes.id }).from(agentRoutes).for('share');
     const state = await bindingState(tx as unknown as Database);
