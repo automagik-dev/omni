@@ -211,6 +211,8 @@ Retrieval requires an unlocked global Omni key with `settings:write` (or `settin
 or `*`) and a writable DSH host. Tenant-bound keys and keys with instance, chat or
 outbound locks are refused. Other callers see an unavailable URL state and **ask an
 admin**. No callback is inferred from a local API address or request headers.
+DSH apps linked through pairing never show the verify token; only the admin keys
+described above can retrieve it.
 
 An administrator must configure `server.public_url` (with `OMNI_PUBLIC_URL` as fallback),
 `META_VERIFY_TOKEN` and `META_APP_SECRET` on the server. Missing configuration is shown

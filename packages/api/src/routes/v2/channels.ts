@@ -43,13 +43,15 @@ channelsRoutes.get('/whatsapp-business/webhook-setup', requireAnyScope(['setting
   let callbackUrl: string | null = null;
   try {
     const url = new URL(raw?.trim() ?? '');
+    const hostname = url.hostname.replace(/\.$/, '');
     if (
       url.protocol === 'https:' &&
       !url.username &&
       !url.password &&
       !url.search &&
       !url.hash &&
-      !/^(localhost|.*\.localhost|127\..*|0\.0\.0\.0|\[::1\]|\[::\])$/i.test(url.hostname.replace(/\.$/, ''))
+      !/^(localhost|.*\.localhost|127\..*|0\.0\.0\.0|\[::1\]|\[::\])$/i.test(hostname) &&
+      !/^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|.*\.local)$/i.test(hostname)
     ) {
       callbackUrl = `${url.href.replace(/\/+$/, '')}/api/v2/channels/whatsapp-business/webhook`;
     }
