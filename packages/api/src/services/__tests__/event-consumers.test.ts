@@ -163,6 +163,7 @@ function consumerRow(overrides: Partial<DurableConsumer> = {}): DurableConsumer 
     id: '00000000-0000-4000-8000-000000000001',
     name: 'c1',
     tenantId: null,
+    agentId: null,
     eventType: 'message.received',
     excludeTypes: null,
     filters: null,

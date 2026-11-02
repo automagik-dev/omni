@@ -175,6 +175,9 @@ Run the online phase **before** upgrading:
 ```bash
 # 1. Preflight: which high-volume tables still need indexes, and how big are they.
 #    Reports and exits without changing anything.
+#    Exits 3 when a large table still needs indexes, 0 when clear, 2 without --url.
+#    See docs/deployment/paired-agent-journal-indexes.md; handle exit 3 before
+#    continuing to step 2 if your shell uses set -e.
 cd packages/db && bun run db:online-ddl --url "postgres://…" --check
 
 # 2. Online phase: adds the nullable columns (catalog-only, instant) and builds

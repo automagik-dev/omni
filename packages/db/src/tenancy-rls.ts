@@ -207,6 +207,15 @@ export const APPLICATION_SCOPED_TENANT_TABLES: readonly RlsExclusion[] = [
       'regression with DB enforcement off, plus services/__tests__/event-consumers.test.ts. ' +
       'Follow-up: legacy-aware RLS for durable consumers.',
   },
+  {
+    table: 'agent_source_grants',
+    justification:
+      'Paired-agents slice 2 registers nullable tenant provenance alongside durable_consumers. ' +
+      'No reader or writer exists in slice 2 group 1. The group 4 agent-owned scan must check the ' +
+      'authenticated tenant and stored agent ownership before matching active grants; ' +
+      "slice 6's writer must authorize writes. " +
+      'The paired-agent flag refuses multitenancy; generic FORCE RLS would break the legacy boundary.',
+  },
 ];
 
 /** Every table that receives ENABLE + FORCE ROW LEVEL SECURITY. */
