@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { BaseChannelPlugin, ChannelRegistry, DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
+import { MetaWhatsAppClient } from '@omni/channel-whatsapp-business';
 import { ConnectorRegistry } from '@omni/connector-sdk';
 import {
   type ConnectorEventPublisher,
@@ -62,12 +63,16 @@ function onTimer<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 class TimerChannel extends BaseChannelPlugin {
-  readonly id = 'whatsapp-baileys';
+  readonly id: 'whatsapp-baileys' | 'whatsapp-business';
   readonly name = 'Timer channel';
   readonly version = '1.0.0';
   readonly capabilities = DEFAULT_CAPABILITIES;
-  constructor(private readonly onConnect: () => Promise<void>) {
+  constructor(
+    private readonly onConnect: () => Promise<void>,
+    id: 'whatsapp-baileys' | 'whatsapp-business' = 'whatsapp-baileys',
+  ) {
     super();
+    this.id = id;
   }
   async connect(): Promise<void> {
     await this.onConnect();
@@ -435,6 +440,49 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
       expect(observed?.agentId).toBeNull();
     });
   }
+
+  test('WhatsApp Business connect starts a real timer outside the still-active request and stamps NULL after the request too', async () => {
+    let observed: Awaited<ReturnType<typeof channelEvent>> | undefined;
+    let late: Promise<Awaited<ReturnType<typeof channelEvent>>> | undefined;
+    let release = () => {};
+    const ended = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const registry = new ChannelRegistry();
+    registry.register(
+      new TimerChannel(async () => {
+        observed = await onTimer(channelEvent);
+        late = onTimer(async () => {
+          await ended;
+          return channelEvent();
+        });
+      }, 'whatsapp-business'),
+    );
+    await db.update(instances).set({ channel: 'whatsapp-business' }).where(eq(instances.id, instanceA));
+    const probe = spyOn(MetaWhatsAppClient.prototype, 'getPhoneNumberInfo').mockResolvedValue({ id: 'phone' });
+    try {
+      const response = await createApp(db, bus, registry, null).app.request(
+        `/api/v2/instances/${instanceA}/whatsapp-business/connect`,
+        {
+          method: 'POST',
+          headers: { 'x-api-key': agentKey.plainTextKey, 'content-type': 'application/json' },
+          body: JSON.stringify({ accessToken: 'fixture-token', phoneNumberId: '123456789', wabaId: '987654321' }),
+        },
+      );
+      expect(response.status).toBe(200);
+      release();
+      expect(observed?.producingKeyId).toBeNull();
+      expect(observed?.agentId).toBeNull();
+      const after = await late;
+      expect(after?.producingKeyId).toBeNull();
+      expect(after?.agentId).toBeNull();
+    } finally {
+      release();
+      await late;
+      probe.mockRestore();
+      await db.update(instances).set({ channel: 'whatsapp-baileys' }).where(eq(instances.id, instanceA));
+    }
+  });
 
   test('reloadEngine starts a real subscription timer whose automation action has NULL producer provenance', async () => {
     const service = new AutomationService(db, bus);
