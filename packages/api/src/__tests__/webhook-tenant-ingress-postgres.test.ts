@@ -54,7 +54,7 @@ for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
     let admin: Database;
     let app: ReturnType<typeof createApp>['app'];
     let services: ReturnType<typeof createApp>['services'];
-    const receiveStatus = mode === 'enforced' ? 500 : 200;
+    const receiveStatus = 200;
     const scoped = <T>(tenant: string, fn: () => Promise<T>) =>
       mode === 'legacy' ? fn() : runInWorkerTenantScope(db, tenant, fn);
 
@@ -239,7 +239,7 @@ for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
         expect(rows[0]?.heartbeatCount).toBe(1);
       });
 
-    test('signed sources use their stored owner; enforced journal inserts fail closed until ownership derivation', async () => {
+    test('signed sources journal and publish under their persisted owner', async () => {
       for (const [name, tenant] of [
         ['signed-a', A],
         ['signed-b', B],
@@ -247,32 +247,11 @@ for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
         await source(name, tenant);
         const result = await deliver(name);
         expect(result.status).toBe(receiveStatus);
-        if (mode === 'enforced') {
-          const rawBody = JSON.stringify({ value: 'synthetic' });
-          let failure: unknown;
-          try {
-            await services.webhooks.receivePublic(
-              name,
-              JSON.parse(rawBody),
-              {
-                'x-signature': createHmac('sha256', SECRET).update(rawBody).digest('hex'),
-              },
-              { rawBody },
-            );
-          } catch (error) {
-            failure = error;
-          }
-          expect((failure as { cause?: { code?: string } })?.cause?.code).toBe('42501');
-          expect(published).toHaveLength(0);
-          expect(await scoped(tenant, () => scopedHandle(db).select().from(omniEvents))).toHaveLength(0);
-          continue;
-        }
         const body = (await result.json()) as { eventId: string };
         const [event] = await scoped(tenant, () =>
           scopedHandle(db).select().from(omniEvents).where(eq(omniEvents.id, body.eventId)),
         );
-        // Generic webhook events have no ownership parent yet (0092 trigger).
-        expect(event?.tenantId).toBeNull();
+        expect(event?.tenantId).toBe(mode === 'legacy' ? null : tenant);
         expect(published.at(-1)?.tenant).toBe(mode === 'legacy' ? null : tenant);
       }
     });
