@@ -8,7 +8,7 @@
  */
 
 import type { EventBus, OmniEvent, TypedOmniEvent } from '@omni/core';
-import { classifyEnvelope, createAgnoClient, createLogger } from '@omni/core';
+import { classifyEnvelope, createAgnoClient, createLogger, isRemovedProviderError } from '@omni/core';
 import type { ChannelType, Database } from '@omni/db';
 import { agents, chatParticipants } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
@@ -415,12 +415,13 @@ export async function runTrashEmojiCleanup(
       'Agent has no provider',
       UNSUPPORTED_SESSION_CLEAR,
     ];
-    if (skippableErrors.some((e) => errorMessage.includes(e))) {
+    const removedProvider = isRemovedProviderError(error);
+    if (removedProvider || skippableErrors.some((e) => errorMessage.includes(e))) {
       log.debug('Session clearing skipped', { instanceId, reason: errorMessage });
-      // The agent exists but its provider cannot reset sessions (e.g. webhook):
+      // The agent exists but its provider was removed or cannot reset sessions:
       // the trash emoji is still the dev/QA signal to lift a handoff pause, which
       // is Omni's own chat state and does not depend on the provider.
-      if (errorMessage.includes(UNSUPPORTED_SESSION_CLEAR)) {
+      if (removedProvider || errorMessage.includes(UNSUPPORTED_SESSION_CLEAR)) {
         await resumeChatAfterSessionClear(services, db, instanceId, chatId, tenantId);
       }
       return;
