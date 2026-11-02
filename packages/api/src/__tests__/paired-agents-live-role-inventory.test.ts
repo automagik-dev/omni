@@ -12,22 +12,15 @@ const TWO_TENANT_PROOFS = [
 ];
 // Existing debt at 979370390, outside these proofs. This list may only shrink:
 // equality catches new definitions AND stale entries after a helper is migrated.
-const LOCAL_URLFOR_CEILING = 14;
+const LOCAL_URLFOR_CEILING = 7;
 const LOCAL_URLFOR_ACKNOWLEDGED = [
   'packages/api/scripts/__tests__/reconcile-identity-fragmentation-postgres.test.ts',
-  'packages/api/src/__tests__/connector-ingress-postgres.test.ts',
-  'packages/api/src/__tests__/connector-keyed-tenancy-postgres.test.ts',
-  'packages/api/src/__tests__/events-custom-journal-postgres.test.ts',
   'packages/api/src/__tests__/follow-up-freshness-postgres.test.ts',
-  'packages/api/src/__tests__/webhook-clickup-source-postgres.test.ts',
-  'packages/api/src/__tests__/webhook-github-source-postgres.test.ts',
   'packages/api/src/plugins/__tests__/identity-canonicalization-postgres.test.ts',
   'packages/api/src/routes/v2/__tests__/chats-get-by-id-names-postgres.test.ts',
   'packages/api/src/routes/v2/__tests__/chats-sync-names-postgres.test.ts',
-  'packages/api/src/services/__tests__/event-schema-gates-postgres.test.ts',
   'packages/api/src/services/__tests__/manifest-compiler-postgres.test.ts',
   'packages/api/src/services/__tests__/strict-schema-gate-postgres.test.ts',
-  'packages/api/src/services/__tests__/webhook-idempotency-postgres.test.ts',
 ];
 
 test('every two-tenant proof imports and calls the shared live-role assertion', () => {
