@@ -654,6 +654,15 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   },
   {
     file: 'packages/api/src/services/agent-key-reconciliation.ts',
+    table: 'agents',
+    class: 'control-plane',
+    justification:
+      'Startup repair holds agent rows FOR SHARE until binding-derived key grants commit, so concurrent deactivation ' +
+      'waits and then revokes any provisioned key. Legacy repair uses its ambient transaction; enforced repair ' +
+      'locks only the current tenant through runInWorkerTenantScope. Healthy startup takes no repair row locks.',
+  },
+  {
+    file: 'packages/api/src/services/agent-key-reconciliation.ts',
     table: 'agent_routes',
     class: 'control-plane',
     justification:
