@@ -1,8 +1,8 @@
 /**
- * Test helper: skip database-dependent tests when PostgreSQL is unavailable.
+ * Test helper: run opted-in DB tests against a guarded disposable PostgreSQL target.
  *
  * Usage:
- *   import { describeWithDb, getTestDb, TEST_DATABASE_URL } from './db-helper';
+ *   import { describeWithDb, getTestDb } from './db-helper';
  *
  *   describeWithDb('My Tests', () => {
  *     let db: Database;
@@ -13,16 +13,24 @@
 
 import { describe } from 'bun:test';
 import { type Database, createDb } from '@omni/db';
+import { assertPgTestTarget } from '@omni/db/pg-migrated-template';
 import { sql } from 'drizzle-orm';
 
-const TEST_DATABASE_URL =
-  process.env.TEST_DATABASE_URL || process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:8432/omni';
+const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
+
+function guardedTestDatabaseUrl(): string {
+  if (!TEST_DATABASE_URL) throw new Error('DB tests require an explicit disposable TEST_DATABASE_URL');
+  assertPgTestTarget(TEST_DATABASE_URL);
+  return TEST_DATABASE_URL;
+}
 
 let _db: Database | null = null;
 
 async function probe(): Promise<boolean> {
+  // Configuration errors must fail loudly, rather than look like an unavailable DB.
+  const url = guardedTestDatabaseUrl();
   try {
-    const db = createDb({ url: TEST_DATABASE_URL, connectTimeout: 2 });
+    const db = createDb({ url, connectTimeout: 2 });
     await db.execute(sql`SELECT 1`);
     _db = db;
     return true;
@@ -33,14 +41,14 @@ async function probe(): Promise<boolean> {
 
 /**
  * Whether the test database is reachable.
- * Requires ENABLE_DB_TESTS=true to attempt connection — prevents hanging
- * in CI/deploy environments where the DB port may not be accepting connections.
+ * Requires ENABLE_DB_TESTS=true and a guarded TEST_DATABASE_URL to attempt a connection.
+ * Otherwise database-dependent suites remain explicitly opted out.
  */
 const DB_AVAILABLE = process.env.ENABLE_DB_TESTS === 'true' ? await probe() : false;
 
 /** Get a cached database connection (only call if DB_AVAILABLE is true). */
 export function getTestDb(): Database {
-  if (!_db) _db = createDb({ url: TEST_DATABASE_URL });
+  if (!_db) _db = createDb({ url: guardedTestDatabaseUrl() });
   return _db;
 }
 

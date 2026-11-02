@@ -102,6 +102,25 @@ describe('Meta webhook setup', () => {
     'https://172.16.0.1',
     'https://172.31.255.254',
     'https://192.168.0.1',
+    'https://169.254.0.0',
+    'https://169.254.255.255',
+    'https://[fc00::]',
+    'https://[fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[fe80::]',
+    'https://[febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[FC00:0000:0000:0000:0000:0000:0000:0001]',
+    'https://[::ffff:10.0.0.0]',
+    'https://[::ffff:10.255.255.255]',
+    'https://[::ffff:172.16.0.0]',
+    'https://[::ffff:172.31.255.255]',
+    'https://[::ffff:192.168.0.0]',
+    'https://[::ffff:192.168.255.255]',
+    'https://[::ffff:169.254.0.0]',
+    'https://[::ffff:169.254.255.255]',
+    'https://[::ffff:127.0.0.1]',
+    'https://[::ffff:0.0.0.0]',
+    'https://[0:0:0:0:0:ffff:a00:1]',
+    'https://[::FFFF:C0A8:101]',
     'https://omni.local',
     'https://OMNI.LOCAL.',
     'https://public.example.com/?query=x',
@@ -117,6 +136,32 @@ describe('Meta webhook setup', () => {
       const res = await app({}, false, `https://${host}`).request(PATH);
       expect(await readSetup(res)).toMatchObject({
         callbackUrl: `https://${host}/api/v2/channels/whatsapp-business/webhook`,
+        state: 'ready',
+      });
+    });
+  for (const publicUrl of [
+    'https://169.253.255.255',
+    'https://169.255.0.0',
+    'https://[fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[fe00::]',
+    'https://[fe7f:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[fec0::]',
+    'https://[fc::1]',
+    'https://[fe8::1]',
+    'https://[::ffff:9.255.255.255]',
+    'https://[::ffff:11.0.0.0]',
+    'https://[::ffff:172.15.255.255]',
+    'https://[::ffff:172.32.0.0]',
+    'https://[::ffff:192.167.255.255]',
+    'https://[::ffff:192.169.0.0]',
+    'https://[::ffff:169.253.255.255]',
+    'https://[::ffff:169.255.0.0]',
+    'https://169.254.example.com',
+  ])
+    test(`host outside the denied subnets remains usable: ${publicUrl}`, async () => {
+      const res = await app({}, false, publicUrl).request(PATH);
+      expect(await readSetup(res)).toMatchObject({
+        callbackUrl: `${new URL(publicUrl).href}api/v2/channels/whatsapp-business/webhook`,
         state: 'ready',
       });
     });
