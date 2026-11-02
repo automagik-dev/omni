@@ -62,6 +62,7 @@ import type {
 } from '@omni/db';
 import { agentSourceGrants, durableConsumers, instances, omniEvents } from '@omni/db';
 import { type SQL, and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { unionAll } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import type { KeyAgentResolution } from '../lib/key-agent';
 import { pairedAgentFlagState } from '../tenancy/feature-flag';
@@ -1036,7 +1037,8 @@ export class EventConsumerService {
   }
 
   /**
-   * Each branch reads at most a page in journal order. Taking the first page
+   * One statement gives every branch the same snapshot. Each branch reads at
+   * most a page in journal order. Taking the first page
    * of their ordered union cannot skip an unread match, even when S and A
    * authorize the same row. Instance restrictions apply only to I: an active
    * grant alone authorizes an instance-less S/A row. Reclaim uses the same
@@ -1058,14 +1060,15 @@ export class EventConsumerService {
     );
     const page = (branch: SQL | undefined) =>
       this.db.select().from(omniEvents).where(and(common, branch)).orderBy(asc(omniEvents.journalSeq)).limit(limit);
-    const branches = [page(and(isNotNull(omniEvents.instanceId), instanceScopeClause(consumer), extra))];
-    if (consumer.agentId && pairedAgentFlagState('consumers').enabled) {
-      branches.push(
-        page(and(isNull(omniEvents.instanceId), activeGrantSourceClause(consumer.agentId))),
-        page(and(isNull(omniEvents.instanceId), activeGrantAgentClause(consumer.agentId))),
-      );
-    }
-    const rows = (await Promise.all(branches)).flat();
+    const instancePage = page(and(isNotNull(omniEvents.instanceId), instanceScopeClause(consumer), extra));
+    const rows =
+      consumer.agentId && pairedAgentFlagState('consumers').enabled
+        ? await unionAll(
+            instancePage,
+            page(and(isNull(omniEvents.instanceId), activeGrantSourceClause(consumer.agentId))),
+            page(and(isNull(omniEvents.instanceId), activeGrantAgentClause(consumer.agentId))),
+          )
+        : await instancePage;
     const unique = new Map(rows.map((row) => [row.journalSeq, row]));
     return [...unique.values()].sort((a, b) => a.journalSeq - b.journalSeq).slice(0, limit);
   }

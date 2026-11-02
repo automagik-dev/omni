@@ -357,7 +357,7 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     expect((await pull(name)).items.map((item) => item.id)).toEqual([event.id]);
   });
 
-  test('pull, shared lease/ack, and stream agree; a revoked outstanding lease is not redelivered on expired reclaim', async () => {
+  test('pull, shared lease/ack, and stream agree; an active expired lease redelivers, then revocation stops reclaim', async () => {
     const approval = await grant('connector', C);
     const events = [await typed(), await typed()];
     const normal = await create('connector.gitlab.*');
@@ -371,18 +371,27 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     expect(leased.leaseId).toBeDefined();
     expect((await request(a, `/${shared}/ack`, 'POST', { leaseId: leased.leaseId })).status).toBe(200);
     expect((await pull(shared)).items).toEqual([]);
+    async function expire(name: string) {
+      const persisted = await consumers.getByName(name);
+      const state = persisted.leaseState;
+      if (!state) throw new Error('Expected shared lease state');
+      // Expire the actual persisted lease without wall-clock sleeps or a forged cursor.
+      await db
+        .update(durableConsumers)
+        .set({ leaseState: { ...state, leases: state.leases.map((lease) => ({ ...lease, expiresAt: 0 })) } })
+        .where(eq(durableConsumers.id, persisted.id));
+    }
     const outstanding = await create('connector.gitlab.*', true);
     const old = await pull(outstanding);
+    expect(old.items.map((item) => item.id)).toEqual(expected);
     expect(old.leaseId).toBeDefined();
+    await expire(outstanding);
+    const redelivered = await pull(outstanding);
+    expect(redelivered.items.map((item) => item.id)).toEqual(expected);
+    expect(redelivered.leaseId).toBeDefined();
+    expect(redelivered.leaseId).not.toBe(old.leaseId);
     await revoke(approval);
-    const persisted = await consumers.getByName(outstanding);
-    const state = persisted.leaseState;
-    if (!state) throw new Error('Expected shared lease state');
-    // Expire the actual persisted lease without wall-clock sleeps or a forged cursor.
-    await db
-      .update(durableConsumers)
-      .set({ leaseState: { ...state, leases: state.leases.map((lease) => ({ ...lease, expiresAt: 0 })) } })
-      .where(eq(durableConsumers.id, persisted.id));
+    await expire(outstanding);
     expect((await pull(outstanding)).items).toEqual([]);
     expect((await consumers.scanForStream(normal, 0, { tenantId: null, caller: caller() })).items).toEqual([]);
   });

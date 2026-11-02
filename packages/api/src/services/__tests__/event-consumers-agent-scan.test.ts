@@ -45,6 +45,15 @@ function queries() {
     .flatMap((result) => (result.type === 'return' ? [result.value] : []))
     .filter((query) => query.sql.includes('from "omni_events"') && !query.sql.includes('max('));
 }
+/** Inspect each parenthesized branch while retaining its actual bound parameters. */
+function branches() {
+  return queries().flatMap((query) =>
+    query.sql.split(' union all ').map((sql) => ({
+      sql,
+      params: [...sql.matchAll(/\$(\d+)/g)].map((match) => query.params[Number(match[1]) - 1]),
+    })),
+  );
+}
 beforeEach(() => {
   process.env.OMNI_PAIRED_AGENT_CONSUMERS = 'true';
   Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
@@ -67,9 +76,7 @@ test('ordered union deduplicates S/A overlap and never advances past an unread m
   const row = consumer();
   execute
     .mockResolvedValueOnce([row])
-    .mockResolvedValueOnce([event(2), event(8), event(11)])
-    .mockResolvedValueOnce([event(1), event(4), event(9)])
-    .mockResolvedValueOnce([event(1), event(3), event(10)])
+    .mockResolvedValueOnce([event(2), event(8), event(11), event(1), event(4), event(9), event(1), event(3), event(10)])
     .mockResolvedValueOnce([{ head: 11 }]);
   const first = await service.pull(row.name, { limit: 3 }, caller);
   expect(first.items.map((item) => item.journalSeq)).toEqual([1, 2, 3]);
@@ -77,14 +84,14 @@ test('ordered union deduplicates S/A overlap and never advances past an unread m
   expect(first.hasMore).toBe(true);
   execute
     .mockResolvedValueOnce([{ ...row, cursor: first.cursor }])
-    .mockResolvedValueOnce([event(8), event(11)])
-    .mockResolvedValueOnce([event(4), event(9)])
-    .mockResolvedValueOnce([event(10)])
+    .mockResolvedValueOnce([event(8), event(11), event(4), event(9), event(10)])
     .mockResolvedValueOnce([{ head: 11 }]);
   const second = await service.pull(row.name, { limit: 3 }, caller);
   expect(second.items.map((item) => item.journalSeq)).toEqual([4, 8, 9]);
   expect(second.cursor).toBe(9);
-  for (const query of queries()) {
+  expect(queries()).toHaveLength(2);
+  expect(branches()).toHaveLength(6);
+  for (const query of branches()) {
     expect(query.sql).toContain('order by "omni_events"."journal_seq" asc limit');
     expect(query.sql).toContain('not "omni_events"."event_type" like');
     expect(query.params).toContain(T);
@@ -95,12 +102,11 @@ test('caller extra and consumer instance scopes occur only on I; S/A correlate a
   const row = consumer({ accessFilter: 'allowed', waitForReady: true });
   execute
     .mockResolvedValueOnce([row])
-    .mockResolvedValueOnce([])
     .mockResolvedValueOnce([event(1)])
-    .mockResolvedValueOnce([])
     .mockResolvedValueOnce([{ head: 1 }]);
   expect((await service.pull(row.name, {}, caller)).items).toHaveLength(1);
-  const [i, s, a] = queries();
+  expect(queries()).toHaveLength(1);
+  const [i, s, a] = branches();
   if (!i || !s || !a) throw new Error('Expected three branches');
   expect(i.sql).toContain('"instance_id" is not null');
   expect(i.params.filter((value) => value === I)).toHaveLength(2);
@@ -123,16 +129,16 @@ test('expired shared reclaim bounds every branch by the original lease range', a
   const row = consumer({ shared: true, cursor: 3, leaseState: { claimed: 12, leases: [old] } });
   execute
     .mockResolvedValueOnce([row])
-    .mockResolvedValueOnce([event(5)])
-    .mockResolvedValueOnce([event(6)])
-    .mockResolvedValueOnce([])
+    .mockResolvedValueOnce([event(5), event(6)])
     .mockResolvedValueOnce([row])
     .mockResolvedValueOnce([{ head: 12 }]);
   const result = await service.pull(row.name, { limit: 2 }, caller);
   expect(result.items.map((item) => item.journalSeq)).toEqual([5, 6]);
   expect(result.cursor).toBe(7);
   expect(result.leaseId).toBeDefined();
-  for (const query of queries()) {
+  expect(queries()).toHaveLength(1);
+  expect(branches()).toHaveLength(3);
+  for (const query of branches()) {
     expect(query.sql).toContain('"journal_seq" >');
     expect(query.sql).toContain('"journal_seq" <=');
     expect(query.params).toContain(3);
@@ -161,34 +167,26 @@ test('withLag dispatches an empty instance page to granted rows when deciding ca
   execute
     .mockResolvedValueOnce([row])
     .mockResolvedValueOnce([{ head: 8 }])
-    .mockResolvedValueOnce([])
-    .mockResolvedValueOnce([event(4)])
-    .mockResolvedValueOnce([]);
+    .mockResolvedValueOnce([event(4)]);
   expect((await service.inspect(row.name, caller)).caughtUp).toBe(false);
-  expect(queries()).toHaveLength(3);
+  expect(queries()).toHaveLength(1);
 });
 
 test('scanForStream uses the same merged page and caller instance restriction', async () => {
   const row = consumer({ tenantId: null });
-  execute
-    .mockResolvedValueOnce([row])
-    .mockResolvedValueOnce([event(8)])
-    .mockResolvedValueOnce([event(3)])
-    .mockResolvedValueOnce([event(3), event(5)]);
+  execute.mockResolvedValueOnce([row]).mockResolvedValueOnce([event(8), event(3), event(3), event(5)]);
   const result = await service.scanForStream(row.name, 1, { tenantId: null, caller }, 2);
   expect(result.items.map((item) => item.journalSeq)).toEqual([3, 5]);
   expect(result.through).toBe(5);
   expect(result.full).toBe(true);
-  expect(queries()).toHaveLength(3);
+  expect(queries()).toHaveLength(1);
 });
 
 test('fresh shared leases use the dispatcher and cap the lease at the merged page boundary', async () => {
   const row = consumer({ shared: true, leaseState: { claimed: 0, leases: [] } });
   execute
     .mockResolvedValueOnce([row])
-    .mockResolvedValueOnce([event(8)])
-    .mockResolvedValueOnce([event(1)])
-    .mockResolvedValueOnce([event(3)])
+    .mockResolvedValueOnce([event(8), event(1), event(3)])
     .mockResolvedValueOnce([row])
     .mockResolvedValueOnce([{ head: 8 }]);
   const result = await service.pull(row.name, { limit: 2 }, caller);
@@ -207,4 +205,36 @@ test('legacy consumer keeps its single scan without grant predicates', async () 
   expect(queries()).toHaveLength(1);
   expect(queries()[0]?.sql).not.toContain('agent_source_grants');
   expect(queries()[0]?.sql).not.toContain('"instance_id" is not null');
+});
+
+test('single snapshot cannot skip an instance commit before a later granted-source commit', async () => {
+  let cursor = 0;
+  let committed = false;
+  const row = consumer();
+  // Deterministic READ COMMITTED schedule: the first I snapshot sees neither row;
+  // I(seq 10) then S(seq 11) commit in order before any subsequent statement.
+  // One UNION statement must retain that first snapshot for all three branches.
+  execute.mockImplementation(async () => {
+    const compiled = compile.mock.results.at(-1);
+    if (compiled?.type !== 'return') throw new Error('Expected a compiled statement');
+    const query = compiled.value.sql;
+    if (query.includes('from "durable_consumers"')) return [{ ...row, cursor }];
+    if (query.includes('max(')) return [{ head: 11 }];
+    if (!query.includes('from "omni_events"')) throw new Error(`Unexpected statement ${query}`);
+    const visible = committed;
+    committed = true;
+    if (query.includes('union all')) return visible ? [event(10), event(11)] : [];
+    if (query.includes('"instance_id" is not null')) return visible ? [event(10)] : [];
+    if (query.includes('"source_kind" = "omni_events"."source_kind"')) return [event(11)];
+    return [];
+  });
+  const first = await service.pull(row.name, { limit: 2 }, caller);
+  expect(first.items).toEqual([]);
+  expect(first.cursor).toBe(0);
+  cursor = first.cursor;
+  const second = await service.pull(row.name, { limit: 2 }, caller);
+  expect(second.items.map((item) => item.journalSeq)).toEqual([10, 11]);
+  expect(second.cursor).toBe(11);
+  expect(queries()).toHaveLength(2);
+  for (const query of queries()) expect(query.sql.match(/union all/g)).toHaveLength(2);
 });
