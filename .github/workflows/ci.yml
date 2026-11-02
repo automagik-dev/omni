@@ -506,6 +506,7 @@ jobs:
             packages/api/src/plugins/__tests__/media-remote-e2e.test.ts \
             packages/api/src/plugins/__tests__/media-processor-remote.test.ts \
             packages/api/src/plugins/__tests__/agent-dispatcher-media-remote.test.ts \
+            packages/api/src/routes/v2/__tests__/media-route.test.ts \
             2>&1 | tee remote-media-tests.log
 
       - name: Verify suites executed (not skipped)
