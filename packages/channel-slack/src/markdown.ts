@@ -76,9 +76,9 @@ function segment(text: string): Segment[] {
   return segments;
 }
 
-/** Undo escaping inside a URL, where & is a query separator and not markup. */
+/** Restore query separators only; raw < and > are invalid in URLs and must stay escaped. */
 function unescapeUrl(url: string): string {
-  return url.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  return url.replace(/&amp;/g, '&');
 }
 
 /**
@@ -89,15 +89,23 @@ function unescapeUrl(url: string): string {
 const PROTECTED_SLACK_PATTERN =
   /<(?:@[UW][A-Z0-9]+(?:\|[^<>\r\n]+)?|#[CG][A-Z0-9]+(?:\|[^<>\r\n]+)?|(?:https?:\/\/|mailto:|tel:|slack:\/\/)[^\s<>|]+(?:\|[^<>\r\n]*)?)>|OMNISLACKTOKEN\d+END/g;
 
-/** Canonical live mention tokens, excluding literal examples inside code. */
+/** Canonical top-level mention tokens, excluding code examples and nested link labels. */
 export function inlineSlackMentions(text: string): Set<string> {
   const mentions = new Set<string>();
   const pattern =
-    /<(?:@[UW][A-Z0-9]+|#[CG][A-Z0-9]+|!(?:here|channel|everyone)|!subteam\^S[A-Z0-9]+)(?:\|[^<>\r\n]+)?>/g;
+    /^<(?:@[UW][A-Z0-9]+|#[CG][A-Z0-9]+|!(?:here|channel|everyone)|!subteam\^S[A-Z0-9]+)(?:\|[^<>\r\n]+)?>$/;
   for (const run of segment(text)) {
     if (run.isCode) continue;
-    for (const match of run.text.matchAll(pattern)) {
-      mentions.add(match[0].replace(/\|[^>]*>/, '>'));
+    let depth = 0;
+    let start = 0;
+    for (const match of run.text.matchAll(/<|>/g)) {
+      if (match[0] === '<') {
+        if (depth === 0) start = match.index;
+        depth++;
+      } else if (depth > 0 && --depth === 0) {
+        const token = run.text.slice(start, match.index + 1);
+        if (pattern.test(token)) mentions.add(token.replace(/\|[^>]*>/, '>'));
+      }
     }
   }
   return mentions;

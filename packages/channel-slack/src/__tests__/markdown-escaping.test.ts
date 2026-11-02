@@ -30,6 +30,20 @@ describe('escapeMrkdwn — injection safety', () => {
 });
 
 describe('markdownToMrkdwn — injection safety (#889)', () => {
+  for (const token of ['<!channel>', '<!here>', '<!everyone>', '<!subteam^S123>']) {
+    for (const source of [
+      `[x](${token})`,
+      `![x](${token})`,
+      `[x](https://a.example/${token})`,
+      `[x](https://a.example|${token})`,
+      `[a](b) [c](${token})`,
+    ]) {
+      it(`keeps broadcast markup escaped in link/image URL: ${source}`, () => {
+        expect(markdownToMrkdwn(source)).not.toContain('<!');
+      });
+    }
+  }
+
   it('neutralises @channel-style broadcast markup', () => {
     const out = markdownToMrkdwn('cuidado <!channel>');
     expect(out).toBe('cuidado &lt;!channel&gt;');

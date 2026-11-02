@@ -29,6 +29,23 @@ const message = (text: string, metadata?: Record<string, unknown>): OutgoingMess
 });
 
 describe('Slack outbound mentions', () => {
+  it('retains an explicit structured here when a link URL contains broadcast-shaped text', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage('inst', message('[x](<!here>)', { mentions: [{ id: 'here', type: 'here' }] }));
+    expect(postMessage.mock.calls[0]?.[0].text).toBe('<!here> <&lt;!here&gt;|x>');
+  });
+
+  it('does not treat tokens inside link labels as live mentions', async () => {
+    const { plugin, postMessage } = await setup();
+    await plugin.sendMessage(
+      'inst',
+      message('[<@U123> and <@U456>](https://x.example)', {
+        mentions: [{ id: 'U123' }, { id: 'U456' }],
+      }),
+    );
+    expect(postMessage.mock.calls[0]?.[0].text).toBe('<@U123> <@U456> <https://x.example|<@U123> and <@U456>>');
+  });
+
   it('keeps structured broadcasts live while escaping broadcasts in the converted body', async () => {
     const { plugin, postMessage } = await setup();
     await plugin.sendMessage(
