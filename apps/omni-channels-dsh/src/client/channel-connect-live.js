@@ -4,6 +4,7 @@ import { CHANNEL_TYPES, canWrite } from './omni-store.js'
 import { ADD, copiedTelegramToken, offered, stepState, telegramChat } from './channel-add.js'
 import { call, t, icons } from './core.js'
 import { rich } from './omni-update.js'
+import { MetaWebhookSetup } from './meta-webhook-setup.js'
 const { ChevronLeftIcon } = icons
 
 // Adding a channel to the linked Omni, for real, with nothing to type in a terminal. The grid
@@ -393,7 +394,7 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
   }
   const field = (key, label, extra) => h('label', { className: 'oc-field' }, h('span', null, label), h('input', { value: fields[key], onChange: set(key), autoComplete: 'off', ...extra }))
   return h(FlowShell, { type, at: channel ? 1 : 0, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) },
-    channel ? h(Connected, { type, channel, omni })
+    channel ? h(Connected, { type, channel, omni }, h(MetaWebhookSetup, { initiallyOpen: true }))
       : h(Fragment, null,
         h('h2', null, t('Connect your Business number')),
         h('p', null, rich('Find these in Meta\'s {manager} → API setup.', { manager: h('a', { href: 'https://business.facebook.com/wa/manage/home/', target: '_blank', rel: 'noreferrer' }, t('WhatsApp Manager')) })),
