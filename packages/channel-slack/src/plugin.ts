@@ -2566,6 +2566,9 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): Promise<string> {
     const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+    const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    const caption = message.content.text || message.content.caption;
+    const initialComment = formatMode === 'passthrough' || caption === undefined ? caption : markdownToMrkdwn(caption);
 
     if (message.metadata?.base64) {
       const buffer = Buffer.from(message.metadata.base64 as string, 'base64');
@@ -2577,7 +2580,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           content: buffer,
           filename,
           threadTs,
-          initialComment: message.content.text || message.content.caption,
+          initialComment,
         },
         this.logger,
       );
@@ -2594,7 +2597,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         url: message.content.mediaUrl,
         filename: message.content.filename || `file-${Date.now()}`,
         threadTs,
-        initialComment: message.content.text || message.content.caption,
+        initialComment,
       },
       this.logger,
     );

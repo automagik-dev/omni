@@ -342,6 +342,13 @@ Duplicate mentions are omitted, including tokens already live in the body. Inval
 return a 400 validation error. Structured mentions apply to text sends; media/caption
 and streaming sends do not currently accept them.
 
+Media captions honor `messageFormatMode` too: `convert` (the default) converts
+Markdown and escapes free-text broadcasts; `passthrough` keeps the caption raw.
+Native streaming keeps standard Markdown and the native append transport. In
+`convert` mode it neutralizes broadcast/subteam introducers, including those split
+across chunks; it leaves other Markdown unchanged. A short unfinished prefix is
+held until the next chunk or stream completion. Native `passthrough` stays raw.
+
 ## Socket health (#941)
 
 A Slack instance can look "connected" while its WebSocket is deaf —

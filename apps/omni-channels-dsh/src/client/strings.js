@@ -2,6 +2,7 @@
 // (omni-ui) through addStrings, so the team's `t` translates them; the keys are the English
 // text. Words the team shows too (Channels, connected, Plugins…) are in its own copy.
 export const STRINGS = {
+  '(including your own device)': '（包括你自己的设备）',
   'Example': '示例',
   'Credentials may have been saved. Reload this channel before retrying.': '凭据可能已保存。重试前请重新加载此频道。',
   'Could not load agents. The current assignment is unchanged.': '无法加载智能体。当前分配保持不变。',
