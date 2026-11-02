@@ -1121,6 +1121,12 @@ const OBSERVABILITY_JUSTIFICATION =
 /** The committed registry the gate checks against. */
 export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
   {
+    route: 'GET /api/v2/channels/whatsapp-business/webhook-setup',
+    class: 'platform-admin',
+    justification:
+      'Deployment-wide Meta verification configuration, including the shared verify token. Requires settings:write and refuses tenant credentials and every resource lock; no tenant-owned data is read.',
+  },
+  {
     route: 'GET /api/v2/system/paired-agents',
     class: 'platform-admin',
     justification:
