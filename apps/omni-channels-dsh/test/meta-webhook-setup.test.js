@@ -17,6 +17,14 @@ test('host retrieves the authenticated endpoint, strips extras and preserves the
   assert.deepEqual(f.calls, [['GET', '/channels/whatsapp-business/webhook-setup']])
   assert.notEqual(f.registered.get('omni-wab-webhook-setup')?.read, true)
 })
+test('host accepts the invalid-URL state and all states served by older Omni releases', async () => {
+  for (const state of ['ready', 'public_url_missing', 'public_url_invalid', 'verify_token_missing']) {
+    const value = { ...config, state,
+      callbackUrl: state.startsWith('public_url_') ? null : config.callbackUrl,
+      verifyToken: state === 'verify_token_missing' ? null : config.verifyToken }
+    assert.deepEqual(await host(200, { data: value }).run(), { authorized: true, ...value })
+  }
+})
 test('denied, failed and malformed responses never reflect secrets from server error bodies', async () => {
   for (const status of [401, 403]) assert.deepEqual(await host(status, { error: { message: 'test-secret' } }).run(), { authorized: false })
   for (const status of [404, 500]) await assert.rejects(host(status, { error: { message: 'test-secret' } }).run(), e => !e.message.includes('test-secret'))

@@ -81,7 +81,7 @@ const Supported = z.object({ items: z.array(z.object({ id: z.string(), loaded: z
 const SlackApp = z.object({ configured: z.boolean() }).passthrough()
 const WebhookSetup = z.object({ data: z.object({
   callbackUrl: z.string().url().nullable(), verifyToken: z.string().max(8192).nullable(),
-  appSecretConfigured: z.boolean(), state: z.enum(['ready', 'public_url_missing', 'verify_token_missing']),
+  appSecretConfigured: z.boolean(), state: z.enum(['ready', 'public_url_missing', 'public_url_invalid', 'verify_token_missing']),
 }) })
 const SlackStart = z.object({ authorizeUrl: z.string().url().max(4096), nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/) }).passthrough()
 const SlackResult = z.discriminatedUnion('status', [

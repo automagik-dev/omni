@@ -2,6 +2,7 @@
  * Test helper: run opted-in DB tests against a guarded disposable PostgreSQL target.
  *
  * Usage:
+ *   Opt in with ENABLE_DB_TESTS=true and TEST_DATABASE_URL set to a guard-approved disposable database.
  *   import { describeWithDb, getTestDb } from './db-helper';
  *
  *   describeWithDb('My Tests', () => {

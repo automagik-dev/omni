@@ -93,7 +93,11 @@ describe('Meta webhook setup', () => {
       expect(await res.text()).not.toContain('test-verify-token');
     });
   for (const publicUrl of [
-    '',
+    'not a url',
+    'https://',
+    'https://[zz::1]',
+    'https://[fe80::1%25eth0]',
+    'https://999.1.1.1',
     'http://public.example.com',
     'https://localhost',
     'https://127.0.0.1',
@@ -102,6 +106,21 @@ describe('Meta webhook setup', () => {
     'https://172.16.0.1',
     'https://172.31.255.254',
     'https://192.168.0.1',
+    'https://100.64.0.0',
+    'https://100.127.255.255',
+    'https://[::ffff:100.64.0.0]',
+    'https://[::ffff:100.127.255.255]',
+    'https://[64:ff9b::]',
+    'https://[64:ff9b::ffff:ffff]',
+    'https://[64:ff9b::808:808]',
+    'https://[2002::]',
+    'https://[2002:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[2002:808:808::]',
+    'https://[::2]',
+    'https://[::a00:1]',
+    'https://[::10.0.0.1]',
+    'https://[::8.8.8.8]',
+    'https://[::ffff:ffff]',
     'https://169.254.0.0',
     'https://169.254.255.255',
     'https://[fc00::]',
@@ -129,7 +148,9 @@ describe('Meta webhook setup', () => {
     test(`unusable public URL is not guessed: ${publicUrl}`, async () => {
       Reflect.deleteProperty(process.env, 'OMNI_PUBLIC_URL');
       const res = await app({}, false, publicUrl).request(`http://request-host.invalid${PATH}`);
-      expect(await readSetup(res)).toMatchObject({ callbackUrl: null, state: 'public_url_missing' });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('cache-control')).toBe('no-store');
+      expect(await readSetup(res)).toMatchObject({ callbackUrl: null, state: 'public_url_invalid' });
     });
   for (const host of ['172.15.255.254', '172.32.0.1', '192.167.255.254', '192.169.0.1', '10.example.com'])
     test(`public host outside the private ranges remains usable: ${host}`, async () => {
@@ -140,6 +161,16 @@ describe('Meta webhook setup', () => {
       });
     });
   for (const publicUrl of [
+    'https://100.63.255.255',
+    'https://100.128.0.0',
+    'https://[::ffff:100.63.255.255]',
+    'https://[::ffff:100.128.0.0]',
+    'https://[64:ff9a:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[64:ff9b::1:0:0]',
+    'https://[2001:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
+    'https://[2003::]',
+    'https://[::1:0:0]',
+    'https://100.64.example.com',
     'https://169.253.255.255',
     'https://169.255.0.0',
     'https://[fbff:ffff:ffff:ffff:ffff:ffff:ffff:ffff]',
@@ -165,6 +196,28 @@ describe('Meta webhook setup', () => {
         state: 'ready',
       });
     });
+  for (const publicUrl of ['', '   '])
+    test(`empty configuration keeps the missing state: ${JSON.stringify(publicUrl)}`, async () => {
+      Reflect.deleteProperty(process.env, 'OMNI_PUBLIC_URL');
+      Reflect.deleteProperty(process.env, 'META_VERIFY_TOKEN');
+      const res = await app({}, false, publicUrl).request(PATH);
+      expect(res.status).toBe(200);
+      expect(await readSetup(res)).toMatchObject({
+        callbackUrl: null,
+        verifyToken: null,
+        state: 'public_url_missing',
+      });
+    });
+  test('an invalid URL takes precedence over a missing token', async () => {
+    Reflect.deleteProperty(process.env, 'META_VERIFY_TOKEN');
+    const res = await app({}, false, 'not a url').request(PATH);
+    expect(res.status).toBe(200);
+    expect(await readSetup(res)).toMatchObject({
+      callbackUrl: null,
+      verifyToken: null,
+      state: 'public_url_invalid',
+    });
+  });
   test('missing token and app secret are reported without returning either secret', async () => {
     Reflect.deleteProperty(process.env, 'META_VERIFY_TOKEN');
     Reflect.deleteProperty(process.env, 'META_APP_SECRET');
