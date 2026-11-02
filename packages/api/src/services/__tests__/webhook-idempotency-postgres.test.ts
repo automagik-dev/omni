@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import type { CustomEventType, EventBus } from '@omni/core';
 import { executeActions } from '@omni/core';
 import { type Database, type NewOmniEvent, createDbHandle, omniEvents, webhookSources } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import type { Services } from '../../services';
@@ -49,12 +49,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 interface PublishedEvent {
@@ -113,7 +107,7 @@ postgresDescribe('webhook ingress idempotency (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    dbUrl = urlFor(superUrl, dbName);
+    dbUrl = pgRoleUrl(superUrl, dbName);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     db = handle.db;

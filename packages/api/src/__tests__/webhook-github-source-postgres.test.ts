@@ -36,7 +36,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, omniEvents, webhookSources } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, like } from 'drizzle-orm';
 import { createApp } from '../app';
 import { EventSchemaService } from '../services/event-schemas';
@@ -68,12 +68,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 interface PublishedEvent {
@@ -200,7 +194,7 @@ postgresDescribe('GitHub source recipe end-to-end (#983, real PostgreSQL)', () =
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     db = handle.db;
     close = handle.close;
 

@@ -40,7 +40,7 @@ import {
   omniEvents,
   tenants,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../plugins/automation-actions';
 import { createServices } from '../services';
@@ -61,12 +61,6 @@ const BODY = JSON.stringify({
 
 function sign(body: string): string {
   return createHmac('sha256', SECRET).update(body).digest('hex');
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 interface CommentRequest {
@@ -191,7 +185,7 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 4 });
+    handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
     db = handle.db;
     const inMemory = inMemoryBus();
     bus = inMemory.bus;
@@ -249,7 +243,7 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
   afterAll(async () => {
     await stopEngine?.().catch(() => undefined);
     await handle?.close().catch(() => undefined);
-    const dbUrl = urlFor(superUrl, 'postgres');
+    const dbUrl = pgRoleUrl(superUrl, 'postgres');
     // Drop through the same psql binary the provisioner used.
     const { spawnSync } = await import('node:child_process');
     spawnSync(psqlBin, ['-X', '--no-psqlrc', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`, dbUrl], {
