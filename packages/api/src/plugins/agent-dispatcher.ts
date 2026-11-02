@@ -50,7 +50,6 @@ import {
   type MessageReceivedPayload,
   NatsGenieProvider,
   type OmniCustomerContext,
-  ProviderError,
   type ProviderFile,
   type ProviderOriginIdentity,
   type ReactionReceivedPayload,
@@ -67,6 +66,7 @@ import {
   generateCorrelationId,
   getHookRegistry,
   getJourneyTracker,
+  isRemovedProviderError,
   runWithEventCausality,
   webhookProviderConfig,
 } from '@omni/core';
@@ -4869,7 +4869,7 @@ async function getAgentProvider(
 
     return resolveProvider(provider, instance, db);
   } catch (error) {
-    if (error instanceof ProviderError && error.statusCode === 410) {
+    if (isRemovedProviderError(error)) {
       log.error(error.message, { instanceId: instance.id, providerId: instance.agentProviderId });
       throw error;
     }

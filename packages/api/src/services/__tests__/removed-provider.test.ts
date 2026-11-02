@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, mock, test } from 'bun:test';
-import { PROVIDER_SCHEMAS, REMOVED_OPENCLAW_MESSAGE } from '@omni/core';
+import { PROVIDER_SCHEMAS, ProviderError, REMOVED_OPENCLAW_MESSAGE } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
 import { Hono } from 'hono';
 import { errorHandler } from '../../middleware/error';
@@ -137,6 +137,19 @@ describe('removed provider compatibility', () => {
     await expect(dispatcher.getAgentProvider({ providers: inactive } as never, instance as never, db)).rejects.toThrow(
       REMOVED_OPENCLAW_MESSAGE,
     );
+  });
+
+  test('an upstream 410 from Agno keeps provider resolution on the legacy fallback path', async () => {
+    const { db } = fixture({ provider: { ...row, schema: 'agno' } });
+    const instance = { id: 'instance', agentProviderId: row.id };
+    const providers = {
+      getById: mock(async () => {
+        throw new ProviderError('Agno upstream returned HTTP 410', 'SERVER_ERROR', 410, { schema: 'agno' });
+      }),
+    };
+
+    expect(await dispatcher.getAgentProvider({ providers } as never, instance as never, db)).toBeNull();
+    expect(providers.getById).toHaveBeenCalledWith(row.id);
   });
 
   test('manual agent runs refuse before any outbound call', async () => {
