@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, apiKeys, createDbHandle } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { and, eq, sql } from 'drizzle-orm';
 import { DEFAULT_DEVICE_KEY_SCOPES } from '../../login/config';
 import { ApiKeyService, type ChildChat, MAX_LIVE_CHILDREN, type MintChildResult } from '../api-keys';
@@ -74,17 +75,7 @@ postgresDescribe('chat keys (real PostgreSQL)', () => {
 
   afterAll(async () => {
     await close?.().catch(() => undefined);
-    Bun.spawnSync({
-      cmd: [
-        psqlBin,
-        '-X',
-        '--no-psqlrc',
-        '--dbname',
-        superUrl,
-        '-c',
-        `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-      ],
-    });
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('migration 0088 applied with the chain, and applies again without error', async () => {

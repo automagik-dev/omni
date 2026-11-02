@@ -27,6 +27,7 @@ import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { createServices } from '../../services';
 import { setupMessagePersistence } from '../message-persistence';
@@ -144,7 +145,7 @@ postgresDescribe('identity canonicalization + exclusion (real PostgreSQL)', () =
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   const identitiesForInstance = (instanceId: string) =>

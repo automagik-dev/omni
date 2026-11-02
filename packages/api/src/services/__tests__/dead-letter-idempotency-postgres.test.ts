@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ConnectorEventPublisher, EventBus, OmniEvent } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, processedEvents } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { withIdempotency } from '../../lib/idempotency';
 import { DeadLetterService } from '../dead-letters';
@@ -67,19 +68,7 @@ postgresDescribe('dead-letter retry identity (legacy, real PostgreSQL)', () => {
 
   afterAll(async () => {
     for (const close of closers.reverse()) await close();
-    Bun.spawnSync({
-      cmd: [
-        psqlBin,
-        '-X',
-        '--no-psqlrc',
-        '--dbname',
-        pgRoleUrl(superUrl, 'postgres'),
-        '-c',
-        `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`,
-      ],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
     for (const [key, value] of Object.entries(previous)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

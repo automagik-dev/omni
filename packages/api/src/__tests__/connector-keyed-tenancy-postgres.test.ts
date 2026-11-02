@@ -23,6 +23,7 @@ import {
   pgRoleUrl,
   sqlTemplateName,
 } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { ConnectorService } from '../services/connectors';
@@ -156,19 +157,7 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
   afterAll(async () => {
     setTenantSecretMasterKey(null);
     for (const handle of handles) await handle.close();
-    Bun.spawnSync({
-      cmd: [
-        psqlBin,
-        '-X',
-        '--no-psqlrc',
-        '--dbname',
-        pgRoleUrl(superUrl, 'postgres'),
-        '-c',
-        `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`,
-      ],
-      stdout: 'ignore',
-      stderr: 'ignore',
-    });
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('migration reruns preserve an existing ClickUp binding and default its route', async () => {

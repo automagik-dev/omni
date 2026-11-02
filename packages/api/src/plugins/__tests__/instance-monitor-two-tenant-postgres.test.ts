@@ -39,6 +39,7 @@ import {
   instances,
 } from '@omni/db';
 import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
 import { __resetInstanceOwnerRegistry, rememberInstanceOwners } from '../../tenancy/instance-owner-registry';
@@ -149,7 +150,7 @@ postgresDescribe('instance-monitor sweeps under real RLS enforcement', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('the CONTROL: an unscoped whole-table instances read is refused, not empty', async () => {

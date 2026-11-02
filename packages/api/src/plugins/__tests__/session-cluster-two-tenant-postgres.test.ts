@@ -37,6 +37,7 @@ import {
   createDbHandle,
 } from '@omni/db';
 import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { AgentRunnerService } from '../../services/agent-runner';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import { __test__ as sessionCleanerTest } from '../session-cleaner';
@@ -148,7 +149,7 @@ postgresDescribe('two-tenant session/dispatch-backend containment (real PostgreS
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   // -------------------------------------------------------------------------

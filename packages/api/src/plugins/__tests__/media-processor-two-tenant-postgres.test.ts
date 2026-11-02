@@ -32,6 +32,7 @@ import {
   messages,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
@@ -180,7 +181,7 @@ postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () 
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('A worker persists media only under A; B cannot see it', async () => {

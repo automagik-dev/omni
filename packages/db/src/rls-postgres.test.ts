@@ -28,6 +28,7 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import postgres from 'postgres';
+import { dropDatabaseOrThrow } from './backfill/pg-testing';
 import { type Database, createDbHandle } from './client';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from './pg-migrated-template';
 import {
@@ -249,8 +250,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
     for (const handle of [provisioner, ddl, runtime, pooledRuntime, authPlane, legacy, legacyScoped]) {
       if (handle) await handle.close();
     }
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${enforcedDbName}" WITH (FORCE);`);
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${legacyDbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, enforcedDbName);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, legacyDbName);
     // Roles are cluster-wide; the synthetic cutover role must not outlive the
     // databases it was scoped to.
     runSqlOn(superUrl, `DROP ROLE IF EXISTS "${LEGACY_SCOPED_ROLE}";`);

@@ -38,6 +38,7 @@ import {
   handoffLogs,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { RouteResolver } from '../../services/route-resolver';
 import { scopedHandle } from '../../tenancy/tenant-scope';
@@ -159,7 +160,7 @@ postgresDescribe('two-tenant agent-dispatcher containment (real PostgreSQL)', ()
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('per-thread init marker lands under A and is invisible to B', async () => {

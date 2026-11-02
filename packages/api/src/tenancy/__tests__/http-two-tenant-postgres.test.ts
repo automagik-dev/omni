@@ -52,6 +52,7 @@ import {
   createDbHandle,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../../middleware/auth';
@@ -457,7 +458,7 @@ postgresDescribe('two-tenant containment over HTTP (real PostgreSQL)', () => {
     if (flagWasSet === undefined) delete process.env[MULTITENANCY_FLAG_ENV];
     else process.env[MULTITENANCY_FLAG_ENV] = flagWasSet;
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   describe('a minted tenant credential can actually use the API', () => {

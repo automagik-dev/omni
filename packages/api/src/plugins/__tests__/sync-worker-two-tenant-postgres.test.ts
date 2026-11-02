@@ -30,6 +30,7 @@ import {
   omniGroups,
 } from '@omni/db';
 import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
@@ -143,7 +144,7 @@ postgresDescribe('two-tenant sync-worker containment (real PostgreSQL)', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('upsertSyncedGroup writes a group only under its worker tenant; the other tenant cannot see it', async () => {
