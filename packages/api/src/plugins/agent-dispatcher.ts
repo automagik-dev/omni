@@ -4315,6 +4315,51 @@ async function processAgentResponse(
   const firstMessage = messages[0];
   if (!firstMessage) return;
 
+  await agentDispatchLimiter.run(
+    { instanceId: instance.id, chatId: firstMessage.payload.chatId, traceId: firstMessage.metadata.traceId ?? '' },
+    async () => {
+      // Buffered/queued coordinates are a snapshot. Admit the selected UUID only
+      // when execution starts, outside the provider-failure/legacy fallback funnel.
+      if (
+        instance.agentId &&
+        !(await applyAgentFkOverrides(db, instance.agentId, instance, firstMessage.metadata.trustedTenantId))
+      )
+        return;
+      await processAdmittedAgentResponse(services, instance, messages, triggerType, db, eventBus);
+    },
+  );
+}
+
+function sendAgentAckMessage(channel: ChannelType, instanceId: string, chatId: string, message: string | null): void {
+  if (!message) return;
+  // The ack precedes the reply and must not count as an answered turn (#912).
+  sendTextMessage(channel, instanceId, chatId, message, 'convert', undefined, undefined, undefined, true).catch(
+    (err) => {
+      log.warn('Failed to send agent ack message', { instanceId, chatId, error: String(err) });
+    },
+  );
+}
+
+function inboundPushName(rawPayload: Record<string, unknown>): string | undefined {
+  return (
+    (rawPayload.pushName as string | undefined) ??
+    (rawPayload.displayName as string | undefined) ??
+    (rawPayload.senderobj as { display?: string } | undefined)?.display ??
+    (rawPayload.contextobj as { senderName?: string } | undefined)?.senderName
+  );
+}
+
+async function processAdmittedAgentResponse(
+  services: Services,
+  instance: DispatchInstance,
+  messages: BufferedMessage[],
+  triggerType: AgentTriggerType,
+  db: Database,
+  eventBus: EventBus,
+): Promise<void> {
+  const firstMessage = messages[0];
+  if (!firstMessage) return;
+
   const chatId = firstMessage.payload.chatId;
   const senderId = firstMessage.payload.from ?? '';
   const channel = (firstMessage.metadata.channelType ?? instance.channel) as ChannelType;
@@ -4404,12 +4449,7 @@ async function processAgentResponse(
   // ── Session Reset Check + Activity Recording (post-personId guard) ──
   await handleSessionReset(firstMessage, instance, channel, senderId, chatId, services, db, eventBus, traceId);
 
-  const rawPayload = firstMessage.payload.rawPayload ?? {};
-  const pushName =
-    (rawPayload.pushName as string | undefined) ??
-    (rawPayload.displayName as string | undefined) ??
-    (rawPayload.senderobj as { display?: string } | undefined)?.display ??
-    (rawPayload.contextobj as { senderName?: string } | undefined)?.senderName;
+  const pushName = inboundPushName(firstMessage.payload.rawPayload ?? {});
   const senderName = await services.agentRunner.getSenderName(personId, pushName);
   const senderAgentId = await resolveDispatchSenderAgentId(db, instance);
 
@@ -4428,61 +4468,43 @@ async function processAgentResponse(
   const agentAckMessage = (inst.agentAckMessage as string) ?? null;
 
   try {
-    await agentDispatchLimiter.run({ instanceId: instance.id, chatId, traceId }, async () => {
-      await sendTypingPresence(channel, instance.id, chatId, 'composing');
-      try {
-        if (agentAckMessage) {
-          // systemNotice: the ack precedes the real reply — it must not count
-          // as "the turn was answered" for agent replay (#912 review)
-          sendTextMessage(
+    await sendTypingPresence(channel, instance.id, chatId, 'composing');
+    try {
+      sendAgentAckMessage(channel, instance.id, chatId, agentAckMessage);
+
+      // ── Per-thread lazy init ──
+      const perThreadExtraContext = await resolvePerThreadExtraContext(
+        db,
+        services,
+        instance,
+        channel,
+        chatId,
+        senderId,
+        firstMessage,
+      );
+
+      await runWithTransientDispatchRetry(
+        () =>
+          dispatchToAgent(
+            services,
+            instance,
+            messages,
+            triggerType,
             channel,
-            instance.id,
             chatId,
-            agentAckMessage,
-            'convert',
-            undefined,
-            undefined,
-            undefined,
-            true,
-          ).catch((err) => {
-            log.warn('Failed to send agent ack message', { instanceId: instance.id, chatId, error: String(err) });
-          });
-        }
-
-        // ── Per-thread lazy init ──
-        const perThreadExtraContext = await resolvePerThreadExtraContext(
-          db,
-          services,
-          instance,
-          channel,
-          chatId,
-          senderId,
-          firstMessage,
-        );
-
-        await runWithTransientDispatchRetry(
-          () =>
-            dispatchToAgent(
-              services,
-              instance,
-              messages,
-              triggerType,
-              channel,
-              chatId,
-              senderId,
-              personId,
-              senderName,
-              traceId,
-              senderAgentId,
-              perThreadExtraContext,
-              db,
-            ),
-          { instanceId: instance.id, chatId, traceId },
-        );
-      } finally {
-        await sendTypingPresence(channel, instance.id, chatId, 'paused');
-      }
-    });
+            senderId,
+            personId,
+            senderName,
+            traceId,
+            senderAgentId,
+            perThreadExtraContext,
+            db,
+          ),
+        { instanceId: instance.id, chatId, traceId },
+      );
+    } finally {
+      await sendTypingPresence(channel, instance.id, chatId, 'paused');
+    }
   } catch (error) {
     log.error('agent_dispatch_failed_after_retries', {
       instanceId: instance.id,
@@ -4885,14 +4907,16 @@ async function getAgentProvider(
 /**
  * omni-p7r: Apply agent entity overrides from the agentId FK on the instance/route.
  * Mutates effectiveInstance in-place with values from the Agent entity row.
- * Stamps transient dispatch fields (agentProviderId, agentType, agentInternalId) onto the copy.
+ * Stamps the selected UUID and transient provider fields only for an active,
+ * visible agent. Returns false for a missing/inactive target; dispatch callers
+ * must stop rather than reuse old coordinates or fall through to legacy.
  */
 export async function applyAgentFkOverrides(
   db: Database,
   agentFkId: string,
   effectiveInstance: DispatchInstance,
   trustedTenantId?: string,
-): Promise<void> {
+): Promise<boolean> {
   // Discrete DB block in the message's world (G5, ADR-0008): a tenant envelope
   // reads through a short worker scope — a forged cross-tenant agentId then
   // resolves nothing and stamps nothing — while a legacy caller (including the
@@ -4902,6 +4926,7 @@ export async function applyAgentFkOverrides(
     scopedHandle(db)
       .select({
         id: agents.id,
+        isActive: agents.isActive,
         name: agents.name,
         agentProviderId: agents.agentProviderId,
         agentType: agents.agentType,
@@ -4913,8 +4938,16 @@ export async function applyAgentFkOverrides(
       .limit(1),
   );
 
-  if (!agentRow) return;
+  if (!agentRow?.isActive) {
+    log.info('Skipping agent dispatch', {
+      instanceId: effectiveInstance.id,
+      agentId: agentFkId,
+      reason: agentRow ? 'agent inactive' : 'agent not found',
+    });
+    return false;
+  }
 
+  effectiveInstance.agentId = agentRow.id;
   // Stamp transient dispatch fields from the Agent entity
   effectiveInstance.agentProviderId = agentRow.agentProviderId ?? effectiveInstance.agentProviderId;
   // Map agentType: AgentEntityType → AgentType
@@ -4928,6 +4961,7 @@ export async function applyAgentFkOverrides(
   const providerAgentId =
     (agentRow.metadata as Record<string, unknown>)?.providerAgentId ?? agentRow.configPath ?? agentRow.name;
   if (providerAgentId) effectiveInstance.agentInternalId = providerAgentId as string;
+  return true;
 }
 
 /**
@@ -4967,19 +5001,22 @@ function mergeRouteOverrides(instance: Instance, route: ResolvedRoute): Dispatch
   };
 }
 
-/**
- * omni-930 phase 3: Apply instance-level agentId (UUID FK) overrides and return the result.
- * Used as the no-route early-return path in resolveEffectiveInstance.
- */
+type DispatchResolution =
+  | { status: 'ready'; instance: DispatchInstance; routeId: string | null }
+  | { status: 'skipped' };
+
+/** Apply the default agent FK when no route matches. */
 async function applyInstanceFkAndReturn(
   db: Database,
   instance: Instance,
   trustedTenantId?: string,
-): Promise<{ instance: DispatchInstance; routeId: null }> {
-  if (!instance.agentId) return { instance, routeId: null };
+): Promise<DispatchResolution> {
+  if (!instance.agentId) return { status: 'ready', instance, routeId: null };
   const effectiveInstance: DispatchInstance = { ...instance };
-  await applyAgentFkOverrides(db, instance.agentId, effectiveInstance, trustedTenantId);
-  return { instance: effectiveInstance, routeId: null };
+  if (!(await applyAgentFkOverrides(db, instance.agentId, effectiveInstance, trustedTenantId))) {
+    return { status: 'skipped' };
+  }
+  return { status: 'ready', instance: effectiveInstance, routeId: null };
 }
 
 /**
@@ -4995,7 +5032,7 @@ async function resolveEffectiveInstance(
   chatId: string | undefined,
   personId?: string,
   trustedTenantId?: string,
-): Promise<{ instance: DispatchInstance; routeId: string | null }> {
+): Promise<DispatchResolution> {
   // If chatId is undefined (chat not found in DB), skip chat-scoped route resolution
   // and return instance defaults. This is the safe path for LID-only chats.
   if (!chatId) {
@@ -5008,7 +5045,7 @@ async function resolveEffectiveInstance(
   if (!route) {
     // No route matched - use instance defaults.
     // omni-930 phase 3 / omni-p7r: Apply instance-level agentId entity overrides if set.
-    return applyInstanceFkAndReturn(db, instance);
+    return applyInstanceFkAndReturn(db, instance, trustedTenantId);
   }
 
   // Merge route overrides with instance defaults
@@ -5017,8 +5054,11 @@ async function resolveEffectiveInstance(
   // omni-p7r phase 2: Resolve agent entity overrides.
   // Route-level agentId takes priority; fall back to instance-level agentId.
   const effectiveAgentFkId = route.agentId ?? instance.agentId;
-  if (effectiveAgentFkId) {
-    await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance, trustedTenantId);
+  if (
+    effectiveAgentFkId &&
+    !(await applyAgentFkOverrides(db, effectiveAgentFkId, effectiveInstance, trustedTenantId))
+  ) {
+    return { status: 'skipped' };
   }
 
   log.debug('Route resolved and merged', {
@@ -5034,7 +5074,7 @@ async function resolveEffectiveInstance(
     instanceAgentId: instance.agentId,
   });
 
-  return { instance: effectiveInstance, routeId: route.id };
+  return { status: 'ready', instance: effectiveInstance, routeId: route.id };
 }
 
 // ============================================================================
@@ -5062,7 +5102,7 @@ async function processReactionTrigger(
   const reactionPersonId = await resolvePersonId(services, channel, baseInstance.id, payload.from, metadata.personId);
 
   // Resolve agent route and merge with instance defaults
-  const { instance, routeId: _routeId } = await resolveEffectiveInstance(
+  const resolved = await resolveEffectiveInstance(
     services,
     db,
     baseInstance,
@@ -5070,6 +5110,9 @@ async function processReactionTrigger(
     reactionPersonId,
     metadata.trustedTenantId,
   );
+
+  if (resolved.status === 'skipped') return;
+  const { instance } = resolved;
 
   log.info('Dispatching reaction trigger', {
     instanceId: instance.id,
@@ -6104,6 +6147,10 @@ export async function setupAgentDispatcher(
         firstMsg.metadata.personId,
         firstMsg.metadata.trustedTenantId,
       );
+      if (resolved.status === 'skipped') {
+        queuedAck?.remove();
+        return;
+      }
       instance = resolved.instance;
     }
 
@@ -6204,7 +6251,7 @@ export async function setupAgentDispatcher(
               trustedTenantId,
             );
 
-            const { instance: resolved, routeId } = await resolveEffectiveInstance(
+            const resolution = await resolveEffectiveInstance(
               services,
               db,
               instance,
@@ -6213,6 +6260,8 @@ export async function setupAgentDispatcher(
               trustedTenantId,
             );
 
+            if (resolution.status === 'skipped') return;
+            const { instance: resolved, routeId } = resolution;
             const debounceConfig = getDebounceConfig(resolved);
 
             // Group chats (WhatsApp: @g.us) can use a different debounce window.
@@ -6435,7 +6484,7 @@ export async function setupAgentDispatcher(
               services.chats.findByExternalIdSmart(metadata.instanceId as string, payload.chatId),
             );
             const typingPersonId = metadata.personId;
-            const { instance: resolved } = await resolveEffectiveInstance(
+            const resolution = await resolveEffectiveInstance(
               services,
               db,
               baseInstance,
@@ -6444,6 +6493,8 @@ export async function setupAgentDispatcher(
               trustedDispatchTenant(metadata),
             );
 
+            if (resolution.status === 'skipped') return;
+            const { instance: resolved } = resolution;
             const debounceConfig = getDebounceConfig(resolved);
             if (debounceConfig.restartOnTyping) {
               debouncer.onUserTyping(metadata.instanceId as string, payload.chatId, debounceConfig);
@@ -6605,6 +6656,9 @@ export const __test__ = {
    * (which is the only way to pin the identity threading across both attempts).
    */
   dispatchToAgent,
+  resolveEffectiveInstance,
+  agentDispatchLimiter,
+  flushBufferedMessages: () => activeMessageDebouncer?.flushAll(),
   /** The one funnel every agent reply leaves through — pins the part stamping. */
   sendResponseParts,
   awaitMediaProcessing,

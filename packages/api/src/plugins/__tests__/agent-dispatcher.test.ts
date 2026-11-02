@@ -100,6 +100,7 @@ mock.module('@omni/core', () => {
 function createMockDb(agentRowOverrides: Record<string, unknown> = {}) {
   const agentRow = {
     id: 'agent-uuid-1',
+    isActive: true,
     agentProviderId: 'provider-1',
     agentType: 'assistant',
     metadata: { providerAgentId: 'default-agent' },
@@ -2393,6 +2394,7 @@ describe('agent-dispatcher', () => {
       const claimed = new Set<string>();
       const agentRow = {
         id: 'agent-uuid-1',
+        isActive: true,
         agentProviderId: 'provider-1',
         agentType: 'assistant',
         metadata: { providerAgentId: 'default-agent' },
@@ -2524,6 +2526,7 @@ describe('agent-dispatcher', () => {
     function createFirstPartyDb() {
       const agentRow = {
         id: 'agent-uuid-1',
+        isActive: true,
         agentProviderId: 'provider-1',
         agentType: 'agent',
         metadata: { providerAgentId: 'default-agent' },
