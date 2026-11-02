@@ -160,7 +160,7 @@ postgresDescribe('agent activation key lifecycle (real PostgreSQL)', () => {
     return { services, events, run, pool };
   }
 
-  async function patch(ctx: ReturnType<typeof context>, id: string, isActive: boolean, name?: string) {
+  async function patch(ctx: ReturnType<typeof context>, id: string, isActive: boolean | undefined, name?: string) {
     const app = new Hono<{ Variables: AppVariables }>();
     app.use('*', async (c, next) => {
       c.set('services', ctx.services);
@@ -286,7 +286,84 @@ postgresDescribe('agent activation key lifecycle (real PostgreSQL)', () => {
     }, 15_000);
   }
 
+  function registerRenameTests(enforced: boolean) {
+    for (const activation of [undefined, true]) {
+      test(`rename${activation ? ' with active save' : ' only'} replaces owned keys and preserves same-name siblings (${enforced ? 'RLS' : 'legacy max=1'})`, async () => {
+        const tenantId = enforced ? crypto.randomUUID() : null;
+        const agent = await owner(tenantId);
+        const target = await instance(tenantId, agent.id);
+        const routed = await instance(tenantId);
+        await storedRoute(routed, agent);
+        const parent = await seed(agent, [target.id, routed.id]);
+        const sibling = await owner(tenantId, agent.name);
+        const siblingTarget = await instance(tenantId, sibling.id);
+        const siblingKey = await seed(sibling, [siblingTarget.id]);
+        const manual = await seed(agent, [target.id], 'operator');
+        const ctx = context(enforced, tenantId);
+        const renamed = await ctx.run(() => patch(ctx, agent.id, activation, `${agent.name}-renamed`));
+        expect(renamed.isActive).toBe(true);
+        const fresh = await keys.findAgentKeysByNames([keyName(renamed)]);
+        expect(fresh).toHaveLength(1);
+        expect(fresh[0]?.id).not.toBe(parent.key.id);
+        expect(new Set(fresh[0]?.instanceIds)).toEqual(new Set([target.id, routed.id]));
+        expect((await keys.getById(parent.key.id))?.status).toBe('revoked');
+        expect(await keys.validate(parent.plainTextKey)).toBeNull();
+        expect(await keys.getById(siblingKey.key.id)).toEqual(siblingKey.key);
+        expect(await keys.validate(siblingKey.plainTextKey)).not.toBeNull();
+        expect(await keys.getById(manual.key.id)).toEqual(manual.key);
+        expect((await keys.findAgentKeysByNames([keyName(agent)])).map((key) => key.id)).toEqual([siblingKey.key.id]);
+      });
+    }
+
+    for (const remove of ['deactivate', 'delete'] as const) {
+      test(`rename then ${remove} leaves no active system key under either name (${enforced ? 'RLS' : 'legacy max=1'})`, async () => {
+        const tenantId = enforced ? crypto.randomUUID() : null;
+        const agent = await owner(tenantId);
+        const target = await instance(tenantId, agent.id);
+        const parent = await seed(agent, [target.id]);
+        const ctx = context(enforced, tenantId);
+        const renamed = await ctx.run(() => patch(ctx, agent.id, undefined, `${agent.name}-renamed`));
+        const fresh = await keys.findAgentKeyByName(keyName(renamed));
+        expect(fresh).not.toBeNull();
+        if (remove === 'delete') await ctx.run(() => ctx.services.agents.delete(agent.id));
+        else await ctx.run(() => patch(ctx, agent.id, false));
+        expect(await keys.findAgentKeysByNames([keyName(agent), keyName(renamed)])).toEqual([]);
+        expect((await keys.getById(parent.key.id))?.status).toBe('revoked');
+        expect((await keys.getById(fresh?.id as string))?.status).toBe('revoked');
+        expect(await keys.validate(parent.plainTextKey)).toBeNull();
+      });
+    }
+
+    test(`rename during reactivation provisions only the new name (${enforced ? 'RLS' : 'legacy max=1'})`, async () => {
+      const tenantId = enforced ? crypto.randomUUID() : null;
+      const agent = await owner(tenantId);
+      const target = await instance(tenantId, agent.id);
+      const parent = await seed(agent, [target.id]);
+      const ctx = context(enforced, tenantId);
+      await ctx.run(() => patch(ctx, agent.id, false));
+      const renamed = await ctx.run(() => patch(ctx, agent.id, true, `${agent.name}-renamed`));
+      expect(await keys.findAgentKeyByName(keyName(agent))).toBeNull();
+      expect((await keys.getById(parent.key.id))?.status).toBe('revoked');
+      expect((await keys.findAgentKeyByName(keyName(renamed)))?.instanceIds).toEqual([target.id]);
+    });
+
+    test(`routine active save preserves credentials, including a stale key (${enforced ? 'RLS' : 'legacy max=1'})`, async () => {
+      const tenantId = enforced ? crypto.randomUUID() : null;
+      const agent = await owner(tenantId);
+      const target = await instance(tenantId, agent.id);
+      const staleTarget = await instance(tenantId);
+      const parent = await seed(agent, [target.id, staleTarget.id]);
+      const ctx = context(enforced, tenantId);
+      await ctx.run(() => patch(ctx, agent.id, true));
+      expect(await keys.getById(parent.key.id)).toEqual(parent.key);
+      expect((await keys.findAgentKeysByNames([keyName(agent)])).map((key) => key.id)).toEqual([parent.key.id]);
+      expect(ctx.events).toEqual([]);
+    });
+  }
+
   for (const enforced of [false, true]) {
+    registerRenameTests(enforced);
+
     test(`PATCH activation shares the binding writers' advisory lock (${enforced ? 'RLS' : 'legacy max=1'})`, async () => {
       const tenantId = enforced ? crypto.randomUUID() : null;
       const agent = await owner(tenantId);

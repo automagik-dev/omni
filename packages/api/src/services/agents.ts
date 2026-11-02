@@ -154,18 +154,22 @@ export class AgentService {
       return row;
     };
     const updated =
-      data.isActive === undefined
+      data.isActive === undefined && data.name === undefined
         ? await write(this.db)
         : await new ApiKeyService(this.db, { eventBus: this.eventBus }).withAgentKeyLock([id], async (keys, db) => {
-            if (data.isActive === false) {
-              // Retire the stored identity before applying a simultaneous rename.
+            const [previous] = await db.select().from(agents).where(eq(agents.id, id));
+            if (!previous) throw new NotFoundError('Agent', id);
+            const renamed = data.name !== undefined && data.name !== previous.name;
+            if (renamed || data.isActive === false) {
+              // Retire keys while the graph still contains the stored name.
+              // Inactive ownership preserves healthy same-name siblings' keys.
               await write(db, { isActive: false });
               await revokeInactiveAgentKeys(keys, db, id);
             }
-            const row = await write(db);
-            // Reactivation restores current bindings with fresh narrow keys;
-            // revoked credentials stay revoked, and an unbound agent gets none.
-            if (row.isActive) await restoreActiveAgentKeys(keys, db, id);
+            const row = await write(db, { ...data, isActive: data.isActive ?? previous.isActive });
+            // Only a rename or a real reactivation re-mints current bindings.
+            // Routine active saves leave existing credentials in place.
+            if (row.isActive && (renamed || !previous.isActive)) await restoreActiveAgentKeys(keys, db, id);
             return row;
           });
 
