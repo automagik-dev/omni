@@ -718,6 +718,56 @@ describe('sandboxChildSpecs', () => {
     expect(supervisorCommand(layout, state)[1]).toBe('/s/runtime/node_modules/@automagik/omni/bin/omni');
   });
 
+  for (const embedded of [false, true]) {
+    test(`only the API inherits explicit channel keys (embedded=${embedded})`, () => {
+      const channelEnv = {
+        META_APP_ID: 'test-app-id',
+        META_APP_SECRET: 'test-app-secret',
+        META_FLOWS_PUBLIC_BASE_URL: 'https://flows.example.test',
+        META_VERIFY_TOKEN: 'test-verify-token',
+        META_GRAPH_API_VERSION: 'v25.0',
+      };
+      const [pg, nats, api] = sandboxChildSpecs(
+        sandboxLayout('/s'),
+        state,
+        'omni_sk_test',
+        {
+          ...LEAKY_ENV,
+          ...channelEnv,
+          META_UNRELATED_SECRET: 'unrelated-meta-secret',
+          AWS_SECRET_ACCESS_KEY: 'unrelated-aws-secret',
+          OMNI_NOT_ALLOWLISTED: 'unrelated-omni-setting',
+          NODE_OPTIONS: '--require=/untrusted/module.js',
+          MEDIA_STORAGE_PATH: '/shared/media',
+          NATS_URL: 'nats://shared:4222',
+        },
+        { embedded },
+      );
+      expect(api?.env).toMatchObject(channelEnv);
+      for (const key of Object.keys(channelEnv)) {
+        expect(pg?.env[key]).toBeUndefined();
+        expect(nats?.env[key]).toBeUndefined();
+      }
+      for (const spec of [pg, nats, api]) {
+        for (const key of ['META_UNRELATED_SECRET', 'AWS_SECRET_ACCESS_KEY', 'OMNI_NOT_ALLOWLISTED', 'NODE_OPTIONS']) {
+          expect(spec?.env[key]).toBeUndefined();
+        }
+      }
+      expect(api?.env.DATABASE_URL).toBe('postgresql://postgres:postgres@localhost:15432/omni');
+      expect(api?.env.OMNI_API_KEY).toBe('omni_sk_test');
+      expect(api?.env.MEDIA_STORAGE_PATH).toBe('/s/data/media');
+      expect(api?.env.NATS_URL).toBe('nats://127.0.0.1:14222');
+    });
+  }
+
+  test('channel keys are not synthesized when absent; an explicit empty value is preserved', () => {
+    const api = sandboxChildSpecs(sandboxLayout('/s'), state, 'k', { META_APP_SECRET: '' })[2];
+    expect(api?.env.META_APP_SECRET).toBe('');
+    for (const key of ['META_APP_ID', 'META_VERIFY_TOKEN', 'META_GRAPH_API_VERSION', 'META_FLOWS_PUBLIC_BASE_URL']) {
+      expect(Object.hasOwn(api?.env ?? {}, key)).toBe(false);
+    }
+  });
+
   test("the API updates from the app: the app's yes confirms, and the runtime's CLI hands the update off", () => {
     const layout = sandboxLayout('/s');
     const api = sandboxChildSpecs(layout, state, 'omni_sk_test', LEAKY_ENV)[2];
@@ -1106,6 +1156,57 @@ describe('SandboxSupervisor', () => {
     expect(fake.events).toContain('kill pg SIGTERM');
     expect(fake.events).not.toContain('spawn api');
   });
+
+  for (const mode of ['unset', 'empty', 'configured']) {
+    const configured = mode === 'configured';
+    const channelEnv =
+      mode === 'unset'
+        ? {}
+        : {
+            META_APP_SECRET: configured ? 'private-app-secret' : '',
+            META_VERIFY_TOKEN: configured ? 'private-verify-token' : '',
+            META_FLOWS_PUBLIC_BASE_URL: configured ? 'https://private-flows.example.test' : '',
+          };
+    test(`boot logs only nonempty channel key names passed to the API (${mode})`, async () => {
+      const { deps: installDeps } = fakeDeps();
+      await installSandbox({ home, defaultHome, start: false }, installDeps);
+      const logs: string[] = [];
+      const env = {
+        ...LEAKY_ENV,
+        ...channelEnv,
+        META_UNRELATED_SECRET: 'private-unrelated-secret',
+      };
+      let apiReady: () => void = () => {};
+      const ready = new Promise<void>((resolve) => {
+        apiReady = resolve;
+      });
+      const fake = supervisorDeps({
+        env,
+        log: (line) => logs.push(line),
+        waitReady: async (spec) => {
+          if (spec.name === 'api') apiReady();
+          return true;
+        },
+      });
+      const done = runSandboxSupervisor(home, fake.deps);
+      await ready;
+      fake.signal('SIGTERM');
+      expect(await done).toBe(0);
+      const bootLogs = logs.filter((line) => line.startsWith('API channel environment keys:'));
+      expect(bootLogs).toEqual([
+        `API channel environment keys: ${configured ? 'META_APP_SECRET, META_FLOWS_PUBLIC_BASE_URL, META_VERIFY_TOKEN' : 'none'}`,
+      ]);
+      for (const secret of [
+        'private-app-secret',
+        'private-verify-token',
+        'https://private-flows.example.test',
+        'private-unrelated-secret',
+        'META_UNRELATED_SECRET',
+      ]) {
+        expect(logs.join('\n')).not.toContain(secret);
+      }
+    });
+  }
 
   test('omni sandbox run --embedded gives its children the embedded env', async () => {
     const { deps: installDeps } = fakeDeps();
