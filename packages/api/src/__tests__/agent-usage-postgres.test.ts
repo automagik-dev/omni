@@ -4,19 +4,25 @@
  * cost-per-event is a plain aggregation over omni_events.
  */
 
-import { afterAll, beforeAll, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import type { Database } from '@omni/db';
+import { type Database, createDbHandle } from '@omni/db';
 import { instances, omniEvents, triggerLogs } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { recordAutomationTriggerLog, stampAgentUsage } from '../services/agent-usage';
 import { EventService } from '../services/events';
-import { describeWithDb, getTestDb } from './db-helper';
 
 const USAGE = { providerId: 'prov-1', runId: 'run-1', costUsd: 0.25, tokensIn: 10, tokensOut: 20, model: 'm' };
 
-describeWithDb('stampAgentUsage', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('stampAgentUsage', () => {
   let db: Database;
+  const dbName = `omni_l1_${crypto.randomUUID().replaceAll('-', '')}`;
+  let close: (() => Promise<void>) | undefined;
   const ids: string[] = [];
 
   const seed = async (metadata: Record<string, unknown> | null) => {
@@ -38,12 +44,51 @@ describeWithDb('stampAgentUsage', () => {
 
   const row = async (id: string) => (await db.select().from(omniEvents).where(eq(omniEvents.id, id)))[0];
 
-  beforeAll(() => {
-    db = getTestDb();
+  beforeAll(async () => {
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    close = handle.close;
+    db = handle.db;
   });
 
-  afterAll(async () => {
+  async function cleanupRows() {
+    if (!db) return;
     await db.delete(omniEvents).where(sql`${omniEvents.externalId} LIKE 'ext-usage-%'`);
+  }
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    try {
+      await cleanupRows();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await close?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          psqlBin,
+          '-X',
+          '--no-psqlrc',
+          '--set',
+          'ON_ERROR_STOP=1',
+          '--dbname',
+          pgRoleUrl(superUrl, 'postgres'),
+          '-c',
+          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
+        ],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
   });
 
   it('merges agentUsage into existing metadata and sets agent_latency_ms', async () => {
