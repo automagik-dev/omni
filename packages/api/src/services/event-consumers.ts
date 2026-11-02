@@ -58,8 +58,10 @@ import type {
   SharedLeaseState,
 } from '@omni/db';
 import { durableConsumers, instances, omniEvents } from '@omni/db';
-import { type SQL, and, asc, eq, gt, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { type SQL, and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import type { KeyAgentResolution } from '../lib/key-agent';
+import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { eventTypeFilterClause } from './events';
@@ -68,6 +70,8 @@ import { eventTypeFilterClause } from './events';
 export type ConsumerStartFrom = 'now' | 'beginning';
 
 export interface CreateConsumerInput {
+  /** Trusted agent ownership is authorized separately from instance scoping. */
+  agentId?: string;
   name: string;
   eventType: string;
   /** Type globs to drop (same syntax as eventType); exclusion wins (#1078). */
@@ -106,6 +110,8 @@ export interface CreateConsumerInput {
  * unrestricted behaviour.
  */
 export interface ConsumerCaller {
+  principal?: KeyAgentResolution;
+  admin?: boolean;
   /** Trusted authenticated tenant; absent/null keeps legacy key access rules. */
   tenantId?: string | null;
   /** api_keys.id of the caller; null when the request carried no key. */
@@ -362,23 +368,71 @@ export function resolveConsumerScope(
  * Exported for unit tests.
  */
 export function canAccessConsumer(
-  consumer: Pick<DurableConsumer, 'tenantId' | 'scoped' | 'ownerKeyId'>,
+  consumer: Pick<DurableConsumer, 'tenantId' | 'scoped' | 'ownerKeyId'> & { agentId?: string | null },
   caller?: ConsumerCaller,
 ): boolean {
   if (caller?.tenantId && consumer.tenantId !== caller.tenantId) return false;
+  if (consumer.agentId) {
+    if (!caller) return true;
+    if (caller.principal?.kind === 'unresolved') return false;
+    return (
+      caller.admin === true || (caller.principal?.kind === 'agent' && caller.principal.agentId === consumer.agentId)
+    );
+  }
   if (!consumer.scoped || !caller || caller.instanceIds === null) return true;
   return consumer.ownerKeyId !== null && consumer.ownerKeyId === caller.keyId;
 }
 
 /** Mutations by restricted keys require a scoped consumer they own, also in SQL. */
-function consumerAccessClause(caller?: ConsumerCaller): SQL | undefined {
+export function consumerAccessClause(caller?: ConsumerCaller): SQL | undefined {
   const tenant = caller?.tenantId ? eq(durableConsumers.tenantId, caller.tenantId) : undefined;
-  if (!caller || caller.instanceIds === null) return tenant;
+  if (!caller || (caller.admin && caller.principal?.kind !== 'unresolved')) return tenant;
   const keyId = ownerKeyOf(caller);
+  const legacy = and(
+    isNull(durableConsumers.agentId),
+    caller.instanceIds === null
+      ? undefined
+      : keyId
+        ? and(eq(durableConsumers.scoped, true), eq(durableConsumers.ownerKeyId, keyId))
+        : sql`false`,
+  );
   return and(
     tenant,
-    keyId ? and(eq(durableConsumers.scoped, true), eq(durableConsumers.ownerKeyId, keyId)) : sql`false`,
+    or(legacy, caller.principal?.kind === 'agent' ? eq(durableConsumers.agentId, caller.principal.agentId) : undefined),
   );
+}
+
+/** Shared by the route (before agent lookup) and service (before any write). */
+export function resolveConsumerAgentId(input: CreateConsumerInput, caller?: ConsumerCaller): string | null {
+  const flag = pairedAgentFlagState('consumers');
+  if (!flag.enabled) {
+    if (input.agentId !== undefined)
+      throw new ValidationError(
+        `agentId needs ${flag.flag}=true${flag.reason === 'multitenancy_enabled' ? ' and OMNI_MULTITENANCY_ENABLED disabled' : ''}`,
+      );
+    return null;
+  }
+  if (caller?.principal?.kind === 'unresolved')
+    throw new OmniError({
+      code: ERROR_CODES.FORBIDDEN,
+      message: `An unresolved agent key cannot create consumers (${caller.principal.reason})`,
+      recoverable: false,
+    });
+  if (input.agentId !== undefined) {
+    const agentId = input.agentId.toLowerCase();
+    if (
+      !caller?.admin &&
+      !(caller?.principal?.kind === 'agent' && caller.principal.agentId.toLowerCase() === agentId)
+    ) {
+      throw new OmniError({
+        code: ERROR_CODES.FORBIDDEN,
+        message: 'Cannot create a consumer for another agent',
+        recoverable: false,
+      });
+    }
+    return agentId;
+  }
+  return caller?.principal?.kind === 'agent' ? caller.principal.agentId.toLowerCase() : null;
 }
 
 /**
@@ -582,6 +636,7 @@ export class EventConsumerService {
   }
 
   async create(input: CreateConsumerInput, caller?: ConsumerCaller): Promise<ConsumerWithLag> {
+    const agentId = resolveConsumerAgentId(input, caller);
     assertAccessFilterAvailable(input.access);
     const scope = resolveConsumerScope(input, caller);
     if (scope.scoped) await this.assertInstancesResolve(scope.instanceIds);
@@ -594,6 +649,7 @@ export class EventConsumerService {
       .values({
         name: input.name,
         tenantId,
+        agentId,
         eventType: input.eventType,
         excludeTypes: input.excludeTypes?.length ? input.excludeTypes : null,
         filters: input.filters ?? null,
@@ -619,6 +675,7 @@ export class EventConsumerService {
     if (this.eventBus) {
       await this.eventBus.publishGeneric('system.consumer.created', {
         consumerId: created.id,
+        ...(created.agentId ? { agentId: created.agentId } : {}),
         name: created.name,
         eventType: created.eventType,
         cursor: created.cursor,
@@ -978,6 +1035,8 @@ export class EventConsumerService {
           typeClause,
           consumer.tenantId ? eq(omniEvents.tenantId, consumer.tenantId) : undefined,
           instanceScopeClause(consumer),
+          // Interim fail-closed boundary; Group 4 adds the grant read clause.
+          consumer.agentId ? isNotNull(omniEvents.instanceId) : undefined,
           accessFilterClause(consumer.accessFilter, consumer.waitForReady),
           extra,
         ),
