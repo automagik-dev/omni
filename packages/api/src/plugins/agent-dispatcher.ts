@@ -4304,32 +4304,6 @@ async function applyCloseContactGate(
   }
 }
 
-async function processAgentResponse(
-  services: Services,
-  instance: DispatchInstance,
-  messages: BufferedMessage[],
-  triggerType: AgentTriggerType,
-  db: Database,
-  eventBus: EventBus,
-): Promise<void> {
-  const firstMessage = messages[0];
-  if (!firstMessage) return;
-
-  await agentDispatchLimiter.run(
-    { instanceId: instance.id, chatId: firstMessage.payload.chatId, traceId: firstMessage.metadata.traceId ?? '' },
-    async () => {
-      // Buffered/queued coordinates are a snapshot. Admit the selected UUID only
-      // when execution starts, outside the provider-failure/legacy fallback funnel.
-      if (
-        instance.agentId &&
-        !(await applyAgentFkOverrides(db, instance.agentId, instance, firstMessage.metadata.trustedTenantId))
-      )
-        return;
-      await processAdmittedAgentResponse(services, instance, messages, triggerType, db, eventBus);
-    },
-  );
-}
-
 function sendAgentAckMessage(channel: ChannelType, instanceId: string, chatId: string, message: string | null): void {
   if (!message) return;
   // The ack precedes the reply and must not count as an answered turn (#912).
@@ -4349,7 +4323,7 @@ function inboundPushName(rawPayload: Record<string, unknown>): string | undefine
   );
 }
 
-async function processAdmittedAgentResponse(
+async function processAgentResponse(
   services: Services,
   instance: DispatchInstance,
   messages: BufferedMessage[],
@@ -4468,43 +4442,49 @@ async function processAdmittedAgentResponse(
   const agentAckMessage = (inst.agentAckMessage as string) ?? null;
 
   try {
-    await sendTypingPresence(channel, instance.id, chatId, 'composing');
-    try {
-      sendAgentAckMessage(channel, instance.id, chatId, agentAckMessage);
+    await agentDispatchLimiter.run({ instanceId: instance.id, chatId, traceId }, async () => {
+      // Buffered/queued coordinates are a snapshot. Re-admit the selected UUID
+      // after the limiter wait, before provider/typing work. A skip returns
+      // through the ack cleanup without entering the provider fallback funnel.
+      if (instance.agentId && !(await applyAgentFkOverrides(db, instance.agentId, instance, dispatchTenantId))) return;
+      await sendTypingPresence(channel, instance.id, chatId, 'composing');
+      try {
+        sendAgentAckMessage(channel, instance.id, chatId, agentAckMessage);
 
-      // ── Per-thread lazy init ──
-      const perThreadExtraContext = await resolvePerThreadExtraContext(
-        db,
-        services,
-        instance,
-        channel,
-        chatId,
-        senderId,
-        firstMessage,
-      );
+        // ── Per-thread lazy init ──
+        const perThreadExtraContext = await resolvePerThreadExtraContext(
+          db,
+          services,
+          instance,
+          channel,
+          chatId,
+          senderId,
+          firstMessage,
+        );
 
-      await runWithTransientDispatchRetry(
-        () =>
-          dispatchToAgent(
-            services,
-            instance,
-            messages,
-            triggerType,
-            channel,
-            chatId,
-            senderId,
-            personId,
-            senderName,
-            traceId,
-            senderAgentId,
-            perThreadExtraContext,
-            db,
-          ),
-        { instanceId: instance.id, chatId, traceId },
-      );
-    } finally {
-      await sendTypingPresence(channel, instance.id, chatId, 'paused');
-    }
+        await runWithTransientDispatchRetry(
+          () =>
+            dispatchToAgent(
+              services,
+              instance,
+              messages,
+              triggerType,
+              channel,
+              chatId,
+              senderId,
+              personId,
+              senderName,
+              traceId,
+              senderAgentId,
+              perThreadExtraContext,
+              db,
+            ),
+          { instanceId: instance.id, chatId, traceId },
+        );
+      } finally {
+        await sendTypingPresence(channel, instance.id, chatId, 'paused');
+      }
+    });
   } catch (error) {
     log.error('agent_dispatch_failed_after_retries', {
       instanceId: instance.id,
@@ -4939,11 +4919,13 @@ export async function applyAgentFkOverrides(
   );
 
   if (!agentRow?.isActive) {
-    log.info('Skipping agent dispatch', {
+    const fields = {
       instanceId: effectiveInstance.id,
       agentId: agentFkId,
       reason: agentRow ? 'agent inactive' : 'agent not found',
-    });
+    };
+    if (agentRow) log.info('Skipping agent dispatch', fields);
+    else log.warn('Skipping agent dispatch', fields);
     return false;
   }
 

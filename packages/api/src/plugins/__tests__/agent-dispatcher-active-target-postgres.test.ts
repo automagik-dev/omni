@@ -1,5 +1,6 @@
 /** #1464: admit the effective, still-active target at execution time, across channels. */
 import { afterAll, afterEach, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
+import { shutdownAckSystem } from '@omni/channel-sdk';
 import type { AgentTrigger, EventBus, NatsGenieProvider } from '@omni/core';
 import { configureLogging, getLogBuffer, getLogConfig } from '@omni/core';
 import {
@@ -12,6 +13,7 @@ import {
   applyTenantRlsEnforcement,
   chats,
   createDbHandle,
+  handoffLogs,
   instances,
   processedEvents,
   tenants,
@@ -23,6 +25,7 @@ import { ApiKeyService } from '../../services/api-keys';
 import { InstanceService } from '../../services/instances';
 import { RouteResolver } from '../../services/route-resolver';
 import { currentTenantScope } from '../../tenancy/tenant-scope';
+import { AgentDispatchQueueFullError, AgentDispatchQueueTimeoutError } from '../agent-dispatch-limiter';
 import { __test__ as dispatcher, setupAgentDispatcher } from '../agent-dispatcher';
 import { buildAutomationEngineDeps } from '../automation-actions';
 import * as loader from '../loader';
@@ -101,6 +104,7 @@ for (const enforced of [false, true]) {
       pluginSpy?.mockRestore();
       dispatcher.resetNatsGenieProviderClass();
       dispatcher.resetProviderCaches();
+      shutdownAckSystem();
     });
     afterAll(async () => {
       for (const close of closers) await close();
@@ -139,7 +143,13 @@ for (const enforced of [false, true]) {
 
     async function harness(
       mode: Mode = 'round-trip',
-      options: { routed?: boolean; inactiveDefault?: boolean; inactiveTarget?: boolean } = {},
+      options: {
+        routed?: boolean;
+        inactiveDefault?: boolean;
+        inactiveTarget?: boolean;
+        reactionAck?: boolean;
+        nativeHandoff?: boolean;
+      } = {},
     ) {
       const target = await agent(!options.inactiveTarget);
       const defaultAgent = options.routed ? await agent(!options.inactiveDefault) : target;
@@ -162,8 +172,9 @@ for (const enforced of [false, true]) {
             mode: 'all',
             conditions: { onDm: true, onMention: true, onReply: true, onNameMatch: false },
           },
-          reactionAck: 'off',
+          reactionAck: options.reactionAck ? 'on' : 'off',
           agentAckMessage: 'ack',
+          agentErrorMessages: ['configured dispatch error'],
         })
         .returning();
       const [chat] = await admin
@@ -212,12 +223,16 @@ for (const enforced of [false, true]) {
         async dispose() {}
       }
       dispatcher.NatsGenieProviderClass = Provider as unknown as typeof NatsGenieProvider;
-      const customer = mock(async () => ({ id: 'sent' }));
+      const customer = mock(async (_instanceId: string, _message: unknown) => ({ success: true, messageId: 'sent' }));
       const typing = mock(async () => {});
+      const react = mock(async (_instanceId: string, _chatId: string, _messageId: string, _emoji: string) => {});
+      const unreact = mock(async (_instanceId: string, _chatId: string, _messageId: string, _emoji: string) => {});
       pluginSpy = spyOn(loader, 'getPlugin').mockResolvedValue({
         sendMessage: customer,
         sendTyping: typing,
-        capabilities: { canStreamResponse: true },
+        react,
+        unreact,
+        capabilities: { canStreamResponse: true, canHandoff: options.nativeHandoff ?? false },
         createStreamSender: () => ({ abort: async () => {} }),
       } as never);
       const keys = new ApiKeyService(admin);
@@ -229,6 +244,8 @@ for (const enforced of [false, true]) {
       });
       const turns = mock(async (_options: { agentId: string; apiKeyId: string }) => ({ id: 'turn' }));
       const instanceService = new InstanceService(db, null);
+      const pause = mock(async () => chat);
+      const disarm = mock(async () => {});
       const services = {
         db,
         instances: instanceService,
@@ -252,7 +269,8 @@ for (const enforced of [false, true]) {
             schemaConfig: { agentName: 'in-process' },
           }),
         },
-        chats: { findByExternalIdSmart: async () => chat, getById: async () => chat },
+        chats: { findByExternalIdSmart: async () => chat, getById: async () => chat, update: pause },
+        followUpLifecycle: { disarm },
         messages: { getByExternalId: async () => null },
         persons: { getById: async () => null },
       } as unknown as Parameters<typeof setupAgentDispatcher>[1];
@@ -286,7 +304,7 @@ for (const enforced of [false, true]) {
           chatId: EXTERNAL_CHAT,
           from: 'customer',
           emoji: '👍',
-          content: { type: 'text', text: 'hello' },
+          content: { type: 'text' as const, text: 'hello' },
           rawPayload: {},
         },
         metadata: {
@@ -298,7 +316,9 @@ for (const enforced of [false, true]) {
         },
       });
       const fire = async (type = 'message.received') => {
-        await handlers.get(type)!(event(type));
+        const incoming = event(type);
+        await handlers.get(type)!(incoming);
+        return incoming;
       };
       const flush = () => dispatcher.flushBufferedMessages();
       const quiet = () => {
@@ -332,6 +352,11 @@ for (const enforced of [false, true]) {
         runs,
         turns,
         key,
+        customer,
+        react,
+        unreact,
+        pause,
+        disarm,
       };
     }
 
@@ -382,6 +407,31 @@ for (const enforced of [false, true]) {
       }
     });
 
+    test('a missing default target warns when resolving without a route or internal chat ID', async () => {
+      const previous = getLogConfig();
+      const captured: string[] = [];
+      const unsubscribe = getLogBuffer().subscribe((entry) => captured.push(JSON.stringify(entry)));
+      try {
+        configureLogging({ level: 'warn', modules: 'agent-dispatcher' });
+        const h = await harness();
+        const missing = crypto.randomUUID();
+        const resolution = await dispatcher.resolveEffectiveInstance(
+          h.services,
+          db,
+          { ...h.instance, agentId: missing },
+          undefined,
+          undefined,
+          trustedTenantId,
+        );
+        expect(resolution.status).toBe('skipped');
+        expect(captured.some((entry) => entry.includes(missing) && entry.includes('agent not found'))).toBe(true);
+        h.quiet();
+      } finally {
+        unsubscribe();
+        configureLogging(previous);
+      }
+    });
+
     test('an active route over an inactive nonnull default opens a turn with the routed UUID and key', async () => {
       const h = await harness('turn-based', { routed: true, inactiveDefault: true });
       await h.fire();
@@ -417,9 +467,20 @@ for (const enforced of [false, true]) {
       expect(h.trigger).toHaveBeenCalledTimes(2);
     });
 
-    test('deletion while waiting for the limiter causes no customer or provider side effects', async () => {
-      const h = await harness('stream', { routed: true });
-      await h.fire();
+    test('deletion while waiting for the limiter quietly skips and removes the queued reaction ack', async () => {
+      const h = await harness('stream', { routed: true, reactionAck: true });
+      const incoming = await h.fire();
+      await dispatcher.ackQueuedMessage({
+        instanceId: h.instance.id,
+        chatId: EXTERNAL_CHAT,
+        queuePosition: 1,
+        message: {
+          payload: incoming.payload,
+          metadata: { ...incoming.metadata, traceId: 'queued-ack', resolvedInstance: h.instance },
+          timestamp: incoming.timestamp,
+        },
+      });
+      expect(h.react).toHaveBeenCalledTimes(1);
       const entered = deferred();
       const release = deferred();
       const held = dispatcher.agentDispatchLimiter.run(
@@ -444,7 +505,55 @@ for (const enforced of [false, true]) {
         await flush;
       }
       h.quiet();
+      expect(h.react).toHaveBeenCalledTimes(2);
+      expect(h.unreact).toHaveBeenCalledTimes(1);
+      expect(h.unreact.mock.calls[0]).toEqual(h.react.mock.calls[0]);
+      expect(h.unreact.mock.calls[0]?.[3]).toBe('👀');
+      expect(dispatcher.queuedMessageAcks.has(`${h.instance.id}:${EXTERNAL_CHAT}`)).toBe(false);
     });
+
+    for (const ErrorClass of [AgentDispatchQueueFullError, AgentDispatchQueueTimeoutError]) {
+      for (const nativeHandoff of [false, true]) {
+        test(`${ErrorClass.name} reaches ${nativeHandoff ? 'human handoff' : 'configured error feedback'} and removes the ack`, async () => {
+          const h = await harness('round-trip', { reactionAck: true, nativeHandoff });
+          const reject = spyOn(dispatcher.agentDispatchLimiter, 'run').mockRejectedValue(
+            new ErrorClass({
+              instanceId: h.instance.id,
+              chatId: EXTERNAL_CHAT,
+              ...dispatcher.agentDispatchLimiter.getSnapshot(h.instance.id),
+            }),
+          );
+          try {
+            await h.fire();
+            await h.flush();
+          } finally {
+            reject.mockRestore();
+          }
+          expect(h.trigger).not.toHaveBeenCalled();
+          expect(h.runs).not.toHaveBeenCalled();
+          expect(h.customer).toHaveBeenCalledTimes(1);
+          expect(h.customer.mock.calls[0]?.[1]).toMatchObject(
+            nativeHandoff
+              ? { metadata: { isHandoff: true, motivoHandoff: 'agent_dispatch_error' } }
+              : { content: { type: 'text', text: 'configured dispatch error' }, metadata: { systemNotice: true } },
+          );
+          if (nativeHandoff) {
+            expect(h.pause).toHaveBeenCalledWith(expect.any(String), { settings: { agentPaused: true } });
+            expect(h.disarm).toHaveBeenCalledTimes(1);
+            const rows = await admin.select().from(handoffLogs).where(eq(handoffLogs.instanceId, h.instance.id));
+            expect(rows).toHaveLength(1);
+            expect(rows[0]?.agentId).toBe(h.target.id);
+          } else {
+            expect(h.pause).not.toHaveBeenCalled();
+            expect(h.disarm).not.toHaveBeenCalled();
+          }
+          expect(h.react).toHaveBeenCalledTimes(1);
+          expect(h.unreact).toHaveBeenCalledTimes(1);
+          expect(h.unreact.mock.calls[0]).toEqual(h.react.mock.calls[0]);
+          expect(h.unreact.mock.calls[0]?.[3]).toBe('👀');
+        });
+      }
+    }
 
     test('a new rename uses the current name/key even with buffered coordinates', async () => {
       const h = await harness('turn-based', { routed: true });
@@ -493,6 +602,23 @@ for (const enforced of [false, true]) {
           OTHER_TENANT,
         );
         expect(resolution.status).toBe('skipped');
+        h.quiet();
+      });
+
+    if (enforced)
+      test('default resolution without an internal chat ID keeps the envelope tenant', async () => {
+        const h = await harness();
+        const own = await dispatcher.resolveEffectiveInstance(h.services, db, h.instance, undefined, undefined, TENANT);
+        expect(own.status).toBe('ready');
+        const foreign = await dispatcher.resolveEffectiveInstance(
+          h.services,
+          db,
+          h.instance,
+          undefined,
+          undefined,
+          OTHER_TENANT,
+        );
+        expect(foreign.status).toBe('skipped');
         h.quiet();
       });
 
