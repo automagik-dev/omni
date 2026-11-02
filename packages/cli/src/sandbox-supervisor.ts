@@ -339,7 +339,7 @@ export async function runSandboxSupervisor(
   const pgPassword = state.pgPasswordFile ? readPgPasswordFile(state.pgPasswordFile) : null;
   const specs = sandboxChildSpecs(layout, state, apiKey, deps.env, options, pgPassword);
   const apiEnv = specs.find((spec) => spec.name === 'api')?.env;
-  const channelKeys = SANDBOX_CHANNEL_ENV_KEYS.filter((key) => apiEnv?.[key] !== undefined);
+  const channelKeys = SANDBOX_CHANNEL_ENV_KEYS.filter((key) => Boolean(apiEnv?.[key]));
   deps.log(`API channel environment keys: ${channelKeys.length > 0 ? channelKeys.join(', ') : 'none'}`);
   const supervisor = new SandboxSupervisor(layout, specs, deps);
   return supervisor.run();

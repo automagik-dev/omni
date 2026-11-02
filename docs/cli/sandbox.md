@@ -39,10 +39,11 @@ The supervisor passes only these app-level channel keys to the API child, when s
 
 | Key | Purpose |
 |---|---|
-| `META_APP_SECRET` | Meta webhook signature verification and Flows |
+| `META_APP_SECRET` | Meta webhook and Flows signature verification |
 | `META_VERIFY_TOKEN` | Meta webhook verification challenge |
 | `META_APP_ID` | Meta Embedded Signup and profile-photo uploads |
 | `META_GRAPH_API_VERSION` | Override the persisted Meta Graph API version |
+| `META_FLOWS_PUBLIC_BASE_URL` | Public callback base URL for endpoint-backed (dynamic) Flows |
 
 Configure these in the **supervisor's** environment. For an at-login Linux sandbox, use
 `systemctl --user edit <sandbox-unit>.service` with a drop-in such as:
@@ -53,14 +54,23 @@ Environment="META_APP_SECRET=<app-secret>"
 Environment="META_VERIFY_TOKEN=<verify-token>"
 ```
 
-Reload and restart the sandbox unit after changing it. For launchd, configure the job's
-`EnvironmentVariables`; for a foreground or embedded `omni sandbox run`, provide the keys
-in that process's environment. Exporting a key in the shell running `omni sandbox start`
-does not reconfigure an existing service-manager job. Keep configuration files containing
-secrets private to your user.
+Reload and restart the sandbox unit after changing it. This Linux `--at-login` drop-in
+survives installs and in-app updates. Keep configuration files containing secrets private
+to your user.
 
-On boot, `<home>/logs/supervisor.log` lists the allowlisted key **names** passed to the API
-(or `none`), never their values. These keys are not stored in `sandbox.json`, and Postgres
+The other supported path is a foreground `omni sandbox run --home <dir>` (including
+`--embedded` when an app runs the supervisor directly): provide the keys in that process's
+environment. Exporting keys in the shell running `omni install --sandbox` or
+`omni sandbox start` does **not** work for the default sandbox, even for a new job: the
+launcher strips them before starting the supervisor.
+
+macOS has **no durable configuration path yet**. Omni regenerates the at-login launchd
+plist on install and in-app update, and the session plist on start. Hand-added environment
+entries are lost. Use a foreground `omni sandbox run` with the keys in its environment.
+
+On boot, `<home>/logs/supervisor.log` lists the **names** of nonempty allowlisted keys passed
+to the API (or `none`), never their values. Empty values are forwarded unchanged but are
+not counted as configured in the log. These keys are not stored in `sandbox.json`, and Postgres
 and NATS do not inherit them. All other parent variables remain excluded except the basic
 shell environment; database, API key, NATS and media paths remain sandbox-owned. There is
 no `META_*` or `OMNI_*` prefix passthrough.
