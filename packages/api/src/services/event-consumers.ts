@@ -41,6 +41,9 @@
  * instance-unrestricted keys: sharing their cursor with a restricted reader
  * would discard rows that reader never received. Restricted keys always
  * create scoped consumers. Scoped streams also apply the caller filter.
+ * Agent-owned consumers additionally admit instance-less rows through an active
+ * source or producing-agent grant. Instance scopes restrict their instance branch
+ * only; grant branches are enabled by the paired-agent consumers flag.
  * Tenant credentials additionally require a matching tenant stamp, even without
  * database enforcement; unstamped pre-0091 registrations are hidden from them.
  */
@@ -57,7 +60,7 @@ import type {
   OmniEvent,
   SharedLeaseState,
 } from '@omni/db';
-import { durableConsumers, instances, omniEvents } from '@omni/db';
+import { agentSourceGrants, durableConsumers, instances, omniEvents } from '@omni/db';
 import { type SQL, and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { KeyAgentResolution } from '../lib/key-agent';
@@ -65,6 +68,23 @@ import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { eventTypeFilterClause } from './events';
+
+/** Source namespaces are distinct: a parent connector never authorizes its legacy subscriptions. */
+function activeGrantSourceClause(agentId: string): SQL {
+  return sql`exists (select 1 from ${agentSourceGrants}
+    where ${agentSourceGrants.agentId} = ${agentId}
+      and ${agentSourceGrants.revokedAt} is null
+      and ${agentSourceGrants.sourceKind} = ${omniEvents.sourceKind}
+      and ${agentSourceGrants.sourceId} = ${omniEvents.sourceId})`;
+}
+
+function activeGrantAgentClause(agentId: string): SQL {
+  return sql`exists (select 1 from ${agentSourceGrants}
+    where ${agentSourceGrants.agentId} = ${agentId}
+      and ${agentSourceGrants.revokedAt} is null
+      and ${agentSourceGrants.sourceKind} = 'agent'
+      and ${agentSourceGrants.sourceId} = ${omniEvents.agentId})`;
+}
 
 /** Where a new consumer's cursor starts: the journal head (default) or 0 (full replay). */
 export type ConsumerStartFrom = 'now' | 'beginning';
@@ -605,7 +625,7 @@ export class EventConsumerService {
     const caughtUp =
       row.cursor >= head ||
       (
-        await this.scanPage(
+        await this.scan(
           narrowToCaller(row, caller),
           1,
           undefined,
@@ -726,7 +746,7 @@ export class EventConsumerService {
     const settleMs = consumer.waitForReady ? resolveConsumerSettleMs() : 0;
     const keyInstances = streamInstanceClause(caller?.instanceIds ?? null);
     const scan = async (): Promise<OmniEvent[]> => {
-      const page = await this.scanPage(consumer, limit, undefined, undefined, keyInstances);
+      const page = await this.scan(consumer, limit, undefined, undefined, keyInstances);
       return consumer.waitForReady ? truncateAtUnready(page, true, settleMs, Date.now()) : page;
     };
     let scanned = await scan();
@@ -841,7 +861,8 @@ export class EventConsumerService {
    * Scoping matches pull (getVisible + narrowToCaller), and an
    * instance-restricted API key additionally only scans its own instances'
    * rows (the `GET /events` rule), so other instances' rows are never sent
-   * and never hold the page; the position simply moves on past them.
+   * and never hold the page. Agent-owned grant branches remain independent
+   * of instance restrictions; the position simply moves on past excluded rows.
    */
   async scanForStream(
     name: string,
@@ -853,7 +874,7 @@ export class EventConsumerService {
       runTenantWorkDb(this.pool, access.tenantId, async () => {
         const consumer = { ...(await this.getStreamable(name, access.caller)), waitForReady: true };
         const keyInstances = streamInstanceClause(access.caller.instanceIds);
-        const page = await this.scanPage(consumer, limit, after, undefined, keyInstances);
+        const page = await this.scan(consumer, limit, after, undefined, keyInstances);
         const rows = truncateAtUnready(page, true, resolveConsumerSettleMs(), Date.now());
         const held = rows.length < page.length;
         const last = rows[rows.length - 1];
@@ -914,7 +935,7 @@ export class EventConsumerService {
       const now = Date.now();
       const plan = planSharedPull(state, now);
       const scanned = plan.reclaim
-        ? await this.scanPage(consumer, PULL_MAX_LIMIT, plan.reclaim.from, plan.reclaim.to, keyInstances)
+        ? await this.scan(consumer, PULL_MAX_LIMIT, plan.reclaim.from, plan.reclaim.to, keyInstances)
         : await this.scanFresh(consumer, limit, plan.after, keyInstances);
       const last = scanned[scanned.length - 1];
       if (!plan.reclaim && !last) return { consumer, lease: null, scanned };
@@ -997,9 +1018,56 @@ export class EventConsumerService {
     after: number,
     keyInstances?: SQL,
   ): Promise<OmniEvent[]> {
-    const page = await this.scanPage(consumer, limit, after, undefined, keyInstances);
+    const page = await this.scan(consumer, limit, after, undefined, keyInstances);
     if (!consumer.waitForReady) return page;
     return truncateAtUnready(page, true, resolveConsumerSettleMs(), Date.now());
+  }
+
+  private scan(
+    consumer: DurableConsumer,
+    limit: number,
+    after = consumer.cursor,
+    through?: number,
+    extra?: SQL,
+  ): Promise<OmniEvent[]> {
+    return consumer.agentId
+      ? this.scanAgentOwnedPage(consumer, limit, after, through, extra)
+      : this.scanPage(consumer, limit, after, through, extra);
+  }
+
+  /**
+   * Each branch reads at most a page in journal order. Taking the first page
+   * of their ordered union cannot skip an unread match, even when S and A
+   * authorize the same row. Instance restrictions apply only to I: an active
+   * grant alone authorizes an instance-less S/A row. Reclaim uses the same
+   * live grant predicates and its original upper bound on every branch.
+   */
+  private async scanAgentOwnedPage(
+    consumer: DurableConsumer,
+    limit: number,
+    after = consumer.cursor,
+    through?: number,
+    extra?: SQL,
+  ): Promise<OmniEvent[]> {
+    const common = and(
+      gt(omniEvents.journalSeq, after),
+      through === undefined ? undefined : lte(omniEvents.journalSeq, through),
+      eventTypeFilterClause([consumer.eventType], consumer.excludeTypes ?? undefined),
+      consumer.tenantId ? eq(omniEvents.tenantId, consumer.tenantId) : undefined,
+      accessFilterClause(consumer.accessFilter, consumer.waitForReady),
+    );
+    const page = (branch: SQL | undefined) =>
+      this.db.select().from(omniEvents).where(and(common, branch)).orderBy(asc(omniEvents.journalSeq)).limit(limit);
+    const branches = [page(and(isNotNull(omniEvents.instanceId), instanceScopeClause(consumer), extra))];
+    if (consumer.agentId && pairedAgentFlagState('consumers').enabled) {
+      branches.push(
+        page(and(isNull(omniEvents.instanceId), activeGrantSourceClause(consumer.agentId))),
+        page(and(isNull(omniEvents.instanceId), activeGrantAgentClause(consumer.agentId))),
+      );
+    }
+    const rows = (await Promise.all(branches)).flat();
+    const unique = new Map(rows.map((row) => [row.journalSeq, row]));
+    return [...unique.values()].sort((a, b) => a.journalSeq - b.journalSeq).slice(0, limit);
   }
 
   /**
@@ -1035,8 +1103,6 @@ export class EventConsumerService {
           typeClause,
           consumer.tenantId ? eq(omniEvents.tenantId, consumer.tenantId) : undefined,
           instanceScopeClause(consumer),
-          // Interim fail-closed boundary; Group 4 adds the grant read clause.
-          consumer.agentId ? isNotNull(omniEvents.instanceId) : undefined,
           accessFilterClause(consumer.accessFilter, consumer.waitForReady),
           extra,
         ),
