@@ -146,13 +146,15 @@ function hasDispatchKey(row: CoverageRow, byName: Map<string, ApiKey[]>, owners:
 
 async function agentsWithoutKeysInScope(db: Database): Promise<AgentWithoutKey[]> {
   const graph = await readAgentKeyGraph(db);
-  const rows: CoverageRow[] = graph.agents.flatMap<CoverageRow>((agent) => {
-    const bound = graph.bindings.filter((binding) => binding.agentId === agent.agentId);
-    const base = { id: agent.agentId, name: agent.name, tenantId: agent.tenantId };
-    return bound.length
-      ? bound.map((binding) => ({ ...base, instanceId: binding.instanceId, instanceTenantId: binding.tenantId }))
-      : [{ ...base, instanceId: null, instanceTenantId: null }];
-  });
+  const rows: CoverageRow[] = graph.agents
+    .filter((agent) => agent.isActive)
+    .flatMap<CoverageRow>((agent) => {
+      const bound = graph.bindings.filter((binding) => binding.agentId === agent.agentId);
+      const base = { id: agent.agentId, name: agent.name, tenantId: agent.tenantId };
+      return bound.length
+        ? bound.map((binding) => ({ ...base, instanceId: binding.instanceId, instanceTenantId: binding.tenantId }))
+        : [{ ...base, instanceId: null, instanceTenantId: null }];
+    });
   const names = graphKeyNames(graph);
   if (names.length === 0) return [];
   const byName = new Map<string, ApiKey[]>();

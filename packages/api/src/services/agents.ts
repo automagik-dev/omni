@@ -242,15 +242,19 @@ export class AgentService {
    * reconciled against a null manifest (= deleted).
    */
   async delete(id: string): Promise<void> {
-    const [updated] = await this.db
-      .update(agents)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(agents.id, id))
-      .returning({ id: agents.id, name: agents.name });
-
-    if (!updated) {
-      throw new NotFoundError('Agent', id);
-    }
+    const updated = await new ApiKeyService(this.db, { eventBus: this.eventBus }).withAgentKeyLock(
+      [id],
+      async (keys, db) => {
+        const [updated] = await db
+          .update(agents)
+          .set({ isActive: false, updatedAt: new Date() })
+          .where(eq(agents.id, id))
+          .returning({ id: agents.id, name: agents.name });
+        if (!updated) throw new NotFoundError('Agent', id);
+        await revokeInactiveAgentKeys(keys, db, id);
+        return updated;
+      },
+    );
 
     await this.manifestReconciler?.reconcileAgent({ id: updated.id, name: updated.name }, null);
   }

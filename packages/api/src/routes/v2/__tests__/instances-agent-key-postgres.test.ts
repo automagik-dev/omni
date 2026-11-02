@@ -5,9 +5,10 @@
  * Opt in with OMNI_G4_POSTGRES_URL; never reads ambient DATABASE_URL.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { createDbHandle } from '@omni/db';
+import { agents, createDbHandle, instances, tenants } from '@omni/db';
 import type { Database } from '@omni/db';
 import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { DEFAULT_TURN_SCOPES } from '../../../constants/scopes';
 import { ApiKeyService } from '../../../services/api-keys';
@@ -56,7 +57,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
     if (result.exitCode !== 0) throw new Error(result.stderr.toString());
   });
 
-  function harness(tenantId: string | null = null) {
+  async function harness(tenantId: string | null = null) {
     const service = new ApiKeyService(db);
     const issued: Awaited<ReturnType<ApiKeyService['create']>>[] = [];
     function captureIssued(keys: ApiKeyService) {
@@ -78,6 +79,34 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
       [AGENT_A]: `old-${crypto.randomUUID()}`,
       [AGENT_B]: `new-${crypto.randomUUID()}`,
     };
+    // The shared authority reader now uses persisted bindings, just like live requests.
+    await db.delete(instances).where(inArray(instances.id, [INSTANCE_A, INSTANCE_B]));
+    await db.delete(agents).where(inArray(agents.id, [AGENT_A, AGENT_B]));
+    if (tenantId)
+      await db
+        .insert(tenants)
+        .values({
+          id: tenantId,
+          slug: tenantId,
+          displayName: tenantId,
+          maxKeyTtlSeconds: 86400,
+          maxKeyRateLimit: 100,
+          maxKeyBudget: 100,
+        })
+        .onConflictDoNothing();
+    for (const id of [AGENT_A, AGENT_B]) {
+      await db.insert(agents).values({ id, name: names[id] as string, provider: 'claude' });
+      if (tenantId) await db.update(agents).set({ tenantId }).where(eq(agents.id, id));
+    }
+    await db.insert(instances).values(
+      [INSTANCE_A, INSTANCE_B].map((id) => ({
+        id,
+        name: crypto.randomUUID(),
+        channel: 'whatsapp-baileys' as const,
+        agentId: id === INSTANCE_A ? AGENT_A : null,
+        tenantId,
+      })),
+    );
     const assignments = new Map([[INSTANCE_A, AGENT_A]]);
     const app = new Hono<{ Variables: AppVariables }>();
     app.use('*', async (c, next) => {
@@ -96,6 +125,10 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
           },
           create: async (data: { agentId?: string }) => {
             if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
+            await db
+              .update(instances)
+              .set({ agentId: data.agentId ?? null })
+              .where(eq(instances.id, INSTANCE_B));
             return { ...data, id: INSTANCE_B, tenantId };
           },
           getById: async (id: string) => ({
@@ -107,6 +140,8 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
           update: async (id: string, patch: { agentId?: string | null }) => {
             if (patch.agentId === null) assignments.delete(id);
             else if (patch.agentId !== undefined) assignments.set(id, patch.agentId);
+            if (patch.agentId !== undefined)
+              await db.update(instances).set({ agentId: patch.agentId }).where(eq(instances.id, id));
             return { id, channel: 'whatsapp-baileys', tenantId };
           },
         },
@@ -126,19 +161,22 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ agentId }),
       });
-    const seed = (instanceIds: string[]) =>
-      service.create({
+    const seed = async (instanceIds: string[]) => {
+      for (const id of instanceIds) assignments.set(id, AGENT_A);
+      await db.update(instances).set({ agentId: AGENT_A }).where(inArray(instances.id, instanceIds));
+      return service.create({
         name: tenantId ? `agent:${tenantId}:${names[AGENT_A]}` : `agent:${names[AGENT_A]}`,
         instanceIds,
         scopes: [...DEFAULT_TURN_SCOPES],
         createdBy: 'system:auto-provision',
       });
+    };
     return { app, service, issued, names, assign, seed };
   }
 
   for (const tenantId of [null, '11111111-1111-4111-8111-111111111111']) {
     test(`POST extends the key before PATCH unbinds the first instance (${tenantId ?? 'legacy'})`, async () => {
-      const h = harness(tenantId);
+      const h = await harness(tenantId);
       const old = await h.seed([INSTANCE_A]);
       await h.service.validate(old.plainTextKey);
       const res = await h.app.request('/instances', {
@@ -156,7 +194,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
 
   test('unbind removes all canonical and legacy system grants without touching user keys', async () => {
     const tenantId = '11111111-1111-4111-8111-111111111111';
-    const h = harness(tenantId);
+    const h = await harness(tenantId);
     const qualified = await h.seed([INSTANCE_A]);
     const name = `agent:${h.names[AGENT_A]}`;
     const legacy = await h.service.create({
@@ -178,7 +216,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
   });
 
   test('agent lookup ignores user-created names and audited revoked system keys', async () => {
-    const h = harness();
+    const h = await harness();
     const name = `agent:${h.names[AGENT_A]}`;
     await h.service.create({
       name,
@@ -194,7 +232,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
   });
 
   test('unbinding the last instance revokes the key and invalidates cached authentication', async () => {
-    const h = harness();
+    const h = await harness();
     const old = await h.seed([INSTANCE_A]);
     expect((await h.service.validate(old.plainTextKey))?.instanceIds).toEqual([INSTANCE_A]);
     expect((await h.assign(INSTANCE_A, null)).status).toBe(200);
@@ -206,7 +244,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
   });
 
   test('reassigning an instance preserves the old key for only its other instance', async () => {
-    const h = harness();
+    const h = await harness();
     const old = await h.seed([INSTANCE_A, INSTANCE_B]);
     await h.service.validate(old.plainTextKey); // warm the cache before narrowing
     h.issued.length = 0;
@@ -220,7 +258,7 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
   });
 
   test('rebind creates a fresh working key; subsequent binds select it instead of the revoked row', async () => {
-    const h = harness();
+    const h = await harness();
     const old = await h.seed([INSTANCE_A]);
     await h.service.validate(old.plainTextKey);
     h.issued.length = 0;
