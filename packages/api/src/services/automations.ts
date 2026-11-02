@@ -14,6 +14,7 @@ import {
   type Automation as CoreAutomation,
   type EventMetadata,
   NotFoundError,
+  type OmniEvent,
   ValidationError,
   buildConditionContext,
   createAutomationEngine,
@@ -98,6 +99,7 @@ export class AutomationService {
   async startEngine(deps?: {
     sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
     callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+    admitAgentEvent?: (event: OmniEvent, trustedTenantId?: string | null) => Promise<boolean>;
     staleIdleTimeoutGate?: (
       chatId: string,
       instanceId: string,
