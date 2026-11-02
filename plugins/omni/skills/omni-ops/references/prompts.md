@@ -21,3 +21,5 @@ omni prompts list --json | jq '.[] | select(.customized == true) | {name, update
 # View the active gate prompt
 omni prompts get gate --json | jq '.prompt'
 ```
+
+Use `omni prompts --help` / `omni prompts set --help` for installed options. Read the current prompt before replacing or resetting it; `set` and `reset` affect future processing and aren't dry runs. Voice generation/discovery lives under `omni speak --help`, `omni tts --help` and `omni voice --help`.

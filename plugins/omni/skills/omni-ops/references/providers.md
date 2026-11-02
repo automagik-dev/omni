@@ -2,6 +2,10 @@
 
 Providers define how Omni reaches an agent backend. Schemas: `nats-genie`, `claude-code`, `a2a`, `ag-ui`, `agno`, `webhook`.
 
+## One-step agent setup
+
+`omni setup agent --help` wires provider + agent + instance binding and checks health. Inspect existing records first. A healthy provider does not prove a message was delivered. Use `omni agents manifest --help` for an agent's declared `accepts`/`publishes`; it is separate from provider connectivity. `omni a2a --help` covers A2A discovery/invocation.
+
 ## Commands
 
 ```bash

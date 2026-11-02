@@ -14,7 +14,7 @@ Use to list, inspect, connect, or pair channel instances (WhatsApp, Telegram, Di
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
 omni instances list --json | jq '.[] | {id, name, status}'
@@ -23,3 +23,5 @@ omni instances pair <id> --phone +5511999999999   # pairing code — preferred o
 ```
 
 Lifecycle, sync/backfill, contacts/groups, debounce, access control: omni-ops skill § Instances.
+
+Use `omni instances --help` for the full lifecycle. Creation requires both `--name` and `--channel`; `omni channels add --help` covers interactive setup. Passkey ceremonies use `passkey`, `passkey-submit` and `passkey-confirm`. Provider/agent binding: `omni setup agent --help`; declared channel event guarantees: `omni channels capabilities --help`.

@@ -34,3 +34,5 @@ omni routes test --instance <id> --chat <chatId> --json | jq '{route: .id, agent
 # Active routes overview
 omni routes list --instance <id> --active --json | jq '.[] | {id, label, scope, priority}'
 ```
+
+Inspect `omni routes create --help` / `omni routes update --help` for installed options. `--chat` here is the chat UUID, not a platform JID. To wire the underlying provider and agent before binding, use `omni setup agent --help`; inspect agent event declarations through `omni agents manifest --help`. A route test resolves a match; it does not send a message or prove agent delivery.
