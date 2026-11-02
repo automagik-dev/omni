@@ -17,6 +17,26 @@ import type { WebClient } from '@slack/web-api';
 import { createSlackStreamSender } from './stream';
 import type { StreamSenderOptions } from './stream';
 
+// Hold only an unfinished broadcast introducer; subteam IDs/labels can be arbitrarily long.
+const BROADCAST_PREFIXES = ['<!here>', '<!channel>', '<!everyone>', '<!subteam^'];
+
+/** Native streams accept standard Markdown, so only neutralize Slack broadcast tokens. */
+function guardBroadcasts(content: string, final: boolean): { text: string; tail: string } {
+  let end = content.length;
+  const lastOpen = content.lastIndexOf('<');
+  if (!final && lastOpen >= 0) {
+    const suffix = content.slice(lastOpen);
+    if (BROADCAST_PREFIXES.some((prefix) => suffix.length < prefix.length && prefix.startsWith(suffix))) {
+      end = lastOpen;
+    }
+  }
+  return {
+    // Encoding the opener is enough; leave all other Markdown and entities untouched.
+    text: content.slice(0, end).replace(/<!(here>|channel>|everyone>|subteam\^)/g, '&lt;!$1'),
+    tail: content.slice(end),
+  };
+}
+
 /**
  * Native sender surface beyond StreamSender: lets the plugin tell a stream
  * that Slack already halted it (agent_session_stopped.streaming_message_ts,
@@ -70,8 +90,14 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): Na
         stop: (args?: { markdown_text?: string }) => Promise<unknown>;
       }
     | undefined;
-  /** Content accumulated so far — used to compute append deltas */
-  let lastSentContent = '';
+  /** Raw content accepted so far, including the held tail; delta offsets must stay raw. */
+  let lastAcceptedContent = '';
+  /** At most ten characters of an unfinished broadcast prefix. */
+  let broadcastTail = '';
+
+  function prepareChunk(raw: string, final = false): { text: string; tail: string } {
+    return formatMode === 'passthrough' ? { text: raw, tail: '' } : guardBroadcasts(broadcastTail + raw, final);
+  }
   /**
    * Slack `ts` of the streamed message, once chat.startStream has run. The
    * SDK's ChatStreamer buffers appends (256 chars by default), so the ts is
@@ -122,8 +148,10 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): Na
         ...(threadTs ? { thread_ts: threadTs } : {}),
       });
 
-      noteStreamTs(await streamer.append({ markdown_text: firstChunk }));
-      lastSentContent = firstChunk;
+      const chunk = prepareChunk(firstChunk);
+      if (chunk.text) noteStreamTs(await streamer.append({ markdown_text: chunk.text }));
+      broadcastTail = chunk.tail;
+      lastAcceptedContent = firstChunk;
     } catch (err) {
       logger.warn('native-stream: chat.startStream failed, falling back to replace mode', {
         error: String(err),
@@ -149,11 +177,13 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): Na
   }
 
   async function appendDelta(newContent: string): Promise<void> {
-    const delta = newContent.slice(lastSentContent.length);
+    const delta = newContent.slice(lastAcceptedContent.length);
     if (!delta) return;
     try {
-      noteStreamTs(await streamer?.append({ markdown_text: delta }));
-      lastSentContent = newContent;
+      const chunk = prepareChunk(delta);
+      if (chunk.text) noteStreamTs(await streamer?.append({ markdown_text: chunk.text }));
+      broadcastTail = chunk.tail;
+      lastAcceptedContent = newContent;
     } catch (err) {
       logger.warn('native-stream: append failed', { error: String(err) });
     }
@@ -165,9 +195,10 @@ export function createNativeStreamSender(options: NativeStreamSenderOptions): Na
 
     if (!streamer) return;
 
-    const remainingDelta = finalContent ? finalContent.slice(lastSentContent.length) : undefined;
+    const remainingDelta = finalContent ? finalContent.slice(lastAcceptedContent.length) : '';
+    const chunk = prepareChunk(remainingDelta, true);
     try {
-      await streamer.stop(remainingDelta ? { markdown_text: remainingDelta } : undefined);
+      await streamer.stop(chunk.text ? { markdown_text: chunk.text } : undefined);
     } catch (err) {
       logger.warn('native-stream: stop failed', { error: String(err) });
     }
