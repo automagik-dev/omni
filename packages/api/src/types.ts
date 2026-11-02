@@ -106,7 +106,7 @@ export interface AppVariables {
  * Health check result
  */
 export interface HealthCheck {
-  status: 'ok' | 'error';
+  status: 'ok' | 'degraded' | 'error';
   latency?: number;
   error?: string;
   details?: Record<string, unknown>;
