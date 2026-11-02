@@ -14,15 +14,22 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Agent, AgentRoute, Database, Instance } from '@omni/db';
 import { agentProviders, agentRoutes, agents, chats, instances, persons } from '@omni/db';
+import { createDbHandle } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { routesRoutes } from '../routes/v2/agent-routes';
 import { type Services, createServices } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
 
-describeWithDb('Agent Routes Endpoints', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Agent Routes Endpoints', () => {
   let db: Database;
+  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
+  let close: (() => Promise<void>) | undefined;
   let testInstance: Instance;
   let testAgent: Agent;
   let testChat: { id: string };
@@ -46,7 +53,10 @@ describeWithDb('Agent Routes Endpoints', () => {
   };
 
   beforeAll(async () => {
-    db = getTestDb();
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    close = handle.close;
+    db = handle.db;
 
     // Create test instance
     const [instance] = await db
@@ -145,7 +155,8 @@ describeWithDb('Agent Routes Endpoints', () => {
   });
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Cleanup logic requires sequential steps
-  afterAll(async () => {
+  async function cleanupRows() {
+    if (!db) return;
     // Cleanup in reverse order (routes -> chats/persons -> agents -> providers -> instances)
     if (insertedIds.routes.length > 0) {
       await db.delete(agentRoutes).where(eq(agentRoutes.instanceId, testInstance.id));
@@ -173,6 +184,41 @@ describeWithDb('Agent Routes Endpoints', () => {
         await db.delete(instances).where(eq(instances.id, id));
       }
     }
+  }
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    try {
+      await cleanupRows();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await close?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          psqlBin,
+          '-X',
+          '--no-psqlrc',
+          '--set',
+          'ON_ERROR_STOP=1',
+          '--dbname',
+          pgRoleUrl(superUrl, 'postgres'),
+          '-c',
+          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
+        ],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
   });
 
   function createApp(existingServices?: Services) {

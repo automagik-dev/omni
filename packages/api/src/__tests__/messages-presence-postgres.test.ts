@@ -8,11 +8,12 @@ import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { OmniError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { instances } from '@omni/db';
+import { createDbHandle } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
 
 // Helper to create a mock plugin with configurable capabilities
 function createMockPlugin(
@@ -77,14 +78,23 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
   };
 }
 
-describeWithDb('POST /messages/send/presence', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('POST /messages/send/presence', () => {
   let db: Database;
+  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
+  let close: (() => Promise<void>) | undefined;
   let testInstance: Instance;
   let testSlackInstance: Instance;
   const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    close = handle.close;
+    db = handle.db;
 
     // Create a test instance
     const [instance] = await db
@@ -114,11 +124,47 @@ describeWithDb('POST /messages/send/presence', () => {
     insertedInstanceIds.push(slackInstance.id);
   });
 
-  afterAll(async () => {
+  async function cleanupRows() {
+    if (!db) return;
     // Clean up test instances
     for (const id of insertedInstanceIds) {
       await db.delete(instances).where(eq(instances.id, id));
     }
+  }
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    try {
+      await cleanupRows();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await close?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          psqlBin,
+          '-X',
+          '--no-psqlrc',
+          '--set',
+          'ON_ERROR_STOP=1',
+          '--dbname',
+          pgRoleUrl(superUrl, 'postgres'),
+          '-c',
+          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
+        ],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
   });
 
   function createTestApp(mockPlugin: ReturnType<typeof createMockPlugin> | null = createMockPlugin()) {

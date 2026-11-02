@@ -8,26 +8,36 @@
  * Profile/contacts/groups sync types should NOT be blocked.
  */
 
-import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { instances, syncJobs } from '@omni/db';
+import { createDbHandle } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { instancesRoutes } from '../routes/v2/instances';
 import { createServices } from '../services';
 import type { Services } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
 
-describeWithDb('History-Push Sync Guard', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('History-Push Sync Guard', () => {
   let db: Database;
+  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
+  let close: (() => Promise<void>) | undefined;
   let services: Services;
   let testInstance: Instance;
   const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    close = handle.close;
+    db = handle.db;
     services = createServices(db, null);
 
     const [inst] = await db
@@ -42,12 +52,48 @@ describeWithDb('History-Push Sync Guard', () => {
     insertedInstanceIds.push(inst.id);
   });
 
-  afterAll(async () => {
+  async function cleanupRows() {
+    if (!db) return;
     // Clean up sync jobs first (foreign key)
     for (const id of insertedInstanceIds) {
       await db.delete(syncJobs).where(eq(syncJobs.instanceId, id));
       await db.delete(instances).where(eq(instances.id, id));
     }
+  }
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    try {
+      await cleanupRows();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await close?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          psqlBin,
+          '-X',
+          '--no-psqlrc',
+          '--set',
+          'ON_ERROR_STOP=1',
+          '--dbname',
+          pgRoleUrl(superUrl, 'postgres'),
+          '-c',
+          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
+        ],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
   });
 
   function createTestApp() {

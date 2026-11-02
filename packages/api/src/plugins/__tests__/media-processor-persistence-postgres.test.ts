@@ -1,17 +1,24 @@
-import { afterEach, beforeAll, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '@omni/db';
 import { chats, instances, mediaContent, messages, omniEvents } from '@omni/db';
+import { createDbHandle } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import type { MediaProcessingService } from '@omni/media-processing';
 import { eq, inArray } from 'drizzle-orm';
-import { describeWithDb, getTestDb } from '../../__tests__/db-helper';
 import { __test__ } from '../media-processor';
 
 type ProcessingResult = Awaited<ReturnType<MediaProcessingService['process']>>;
 type MediaProcessorTestContext = Parameters<typeof __test__.persistProcessingResult>[0];
 
-describeWithDb('media processor persistence', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('media processor persistence', () => {
   let db: Database;
+  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
+  let close: (() => Promise<void>) | undefined;
   const cleanup = {
     instanceIds: [] as string[],
     chatIds: [] as string[],
@@ -19,8 +26,41 @@ describeWithDb('media processor persistence', () => {
     eventIds: [] as string[],
   };
 
-  beforeAll(() => {
-    db = getTestDb();
+  beforeAll(async () => {
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    close = handle.close;
+    db = handle.db;
+  });
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    try {
+      await close?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          psqlBin,
+          '-X',
+          '--no-psqlrc',
+          '--set',
+          'ON_ERROR_STOP=1',
+          '--dbname',
+          pgRoleUrl(superUrl, 'postgres'),
+          '-c',
+          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
+        ],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
   });
 
   afterEach(async () => {
@@ -116,7 +156,13 @@ describeWithDb('media processor persistence', () => {
     const missingEventId = randomUUID();
     const result = transcriptionResult('transcricao persistida sem FK segura');
 
-    await __test__.persistProcessingResult(testContext(), messageId, missingEventId, result, 'audio');
+    const safeEventId = await __test__.resolveSafeMediaContentEventId(
+      testContext(),
+      { metadata: { correlationId: randomUUID(), envelopeVersion: 1 } },
+      missingEventId,
+    );
+    expect(safeEventId).toBeNull();
+    await __test__.persistProcessingResult(testContext(), messageId, safeEventId, result, 'audio');
 
     const [storedMessage] = await db
       .select({ transcription: messages.transcription })
