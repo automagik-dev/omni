@@ -36,6 +36,13 @@ import postgres, { type Sql } from 'postgres';
 import type { Database } from './client';
 import { unwrapDbError } from './errors';
 
+// Test-facing prerequisite builders for additive-state runtime-role fixtures.
+export {
+  connectorIngressRoleStatements,
+  contextFunctionStatements,
+  connectorIngressFunctionStatements,
+} from './tenancy-rls';
+
 // Refuse unsafe suite configuration before setup OR teardown hooks register.
 // Some suites invoke psql directly during cleanup even if their setup failed.
 for (const variable of [

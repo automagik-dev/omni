@@ -724,6 +724,16 @@ async function journalInternalEvent(db: Database, event: OmniEvent): Promise<voi
   try {
     await runConsumerInTenantContext(db, event, async () => {
       const sdb = scopedHandle(db);
+      // A direct claim already persisted the trusted columns before publishing.
+      // Consumers have no request holder: do not resolve that principal again for a no-op insert.
+      if (pairedAgentFlagState('consumers').enabled && event.id && isValidUuid(event.id)) {
+        const [claimed] = await sdb
+          .select({ id: omniEvents.id })
+          .from(omniEvents)
+          .where(eq(omniEvents.id, event.id))
+          .limit(1);
+        if (claimed) return;
+      }
       const payload =
         typeof event.payload === 'object' && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
       const instanceId = metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null;

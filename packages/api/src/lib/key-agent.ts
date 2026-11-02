@@ -4,7 +4,7 @@ import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { agentKeyNameCandidates } from './agent-key-name';
 import { agentKeyBelongsToBinding } from './agent-key-ownership';
-import { currentProducingKeyId } from './producer-scope';
+import { currentProducingKeyId, memoizeProducingKeyResolution } from './producer-scope';
 
 export type KeyAgentResolution =
   | { kind: 'none' }
@@ -17,6 +17,10 @@ export type KeyAgentResolution =
 /** Slice 3 replaces this binding proof with the backfilled api_keys.agent_id. */
 export async function resolveKeyAgent(db: Database, keyId: string | null): Promise<KeyAgentResolution> {
   if (!keyId) return { kind: 'none' };
+  return memoizeProducingKeyResolution(db, keyId, () => resolveKeyAgentUncached(db, keyId));
+}
+
+async function resolveKeyAgentUncached(db: Database, keyId: string): Promise<KeyAgentResolution> {
   const [key] = await db
     .select({
       name: apiKeys.name,
@@ -66,5 +70,7 @@ export async function requestProducerColumns(db: Database): Promise<{
   if (!pairedAgentFlagState('consumers').enabled) return { producingKeyId: null, agentId: null };
   const producingKeyId = currentProducingKeyId();
   const principal = await resolveKeyAgent(db, producingKeyId);
+  // A fire-and-forget claim may have crossed the request's completion during the read.
+  if (currentProducingKeyId() !== producingKeyId) return { producingKeyId: null, agentId: null };
   return { producingKeyId, agentId: principal.kind === 'agent' ? principal.agentId : null };
 }

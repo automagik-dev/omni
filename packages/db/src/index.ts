@@ -44,9 +44,6 @@ export {
   RUNTIME_DENIED_TABLES,
   TENANT_SETTING,
   applyTenantRlsEnforcement,
-  connectorIngressRoleStatements,
-  contextFunctionStatements,
-  connectorIngressFunctionStatements,
   readEnforcementState,
   revertTenantRlsEnforcement,
 } from './tenancy-rls';

@@ -1,6 +1,7 @@
 /** Provenance acceptance on the gate's disposable PostgreSQL target, using its runtime role. */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { BaseChannelPlugin, ChannelRegistry, DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
 import { ConnectorRegistry } from '@omni/connector-sdk';
 import {
   type ConnectorEventPublisher,
@@ -17,25 +18,31 @@ import {
   DEFAULT_ROLE_NAMES,
   type Database,
   agents,
+  apiKeys,
   applyTenancyRoles,
   automations,
   connectorEventSubscriptions,
-  connectorIngressFunctionStatements,
-  connectorIngressRoleStatements,
   connectors,
-  contextFunctionStatements,
   createDbHandle,
   instances,
   omniEvents,
   tenants,
 } from '@omni/db';
-import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import {
+  assertPgTestRole,
+  connectorIngressFunctionStatements,
+  connectorIngressRoleStatements,
+  contextFunctionStatements,
+  pgRoleUrl,
+  provisionMigratedDatabase,
+} from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { createApp } from '../app';
-import { currentProducingKeyId, runWithProducingKey } from '../lib/producer-scope';
+import { currentProducingKeyId, runOutsideProducerScope, runWithProducingKey } from '../lib/producer-scope';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { ApiKeyService, type CreateApiKeyResult } from '../services/api-keys';
+import { AutomationService } from '../services/automations';
 import { ConnectorService } from '../services/connectors';
 import { WebhookService } from '../services/webhooks';
 import { pairedAgentFlagState } from '../tenancy/feature-flag';
@@ -45,6 +52,31 @@ import { HOOK_SECRET, TYPED_EVENT, eventsOnlyConnector, signHook } from './fixtu
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 const postgresDescribe = superUrl ? describe : describe.skip;
+
+function onTimer<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      void fn().then(resolve, reject);
+    }, 0);
+  });
+}
+
+class TimerChannel extends BaseChannelPlugin {
+  readonly id = 'whatsapp-baileys';
+  readonly name = 'Timer channel';
+  readonly version = '1.0.0';
+  readonly capabilities = DEFAULT_CAPABILITIES;
+  constructor(private readonly onConnect: () => Promise<void>) {
+    super();
+  }
+  async connect(): Promise<void> {
+    await this.onConnect();
+  }
+  async disconnect(): Promise<void> {}
+  async sendMessage(): Promise<never> {
+    throw new Error('Unused send');
+  }
+}
 
 function isTypedEvent<T extends CoreEventType>(event: OmniEvent, type: T): event is TypedOmniEvent<T> {
   return event.type === type;
@@ -63,7 +95,7 @@ function provenanceBus() {
         entry.pattern === event.type ||
         (entry.pattern.endsWith('.>') && event.type.startsWith(entry.pattern.slice(0, -1)))
       )
-        pending.push(Promise.resolve().then(() => entry.handler(event)));
+        pending.push(runOutsideProducerScope(() => Promise.resolve().then(() => entry.handler(event))));
     }
     return { id: event.id, sequence: journal.length, stream: 'memory' };
   };
@@ -121,6 +153,7 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
   let plainKey: CreateApiKeyResult;
   let unresolvedKey: CreateApiKeyResult;
   let app: ReturnType<typeof createApp>['app'];
+  let requestHooks: WebhookService;
   let hooks: WebhookService;
   let connectorService: ConnectorService;
   let sourceId: string;
@@ -162,7 +195,7 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
     const keys = new ApiKeyService(owner);
     agentKey = await keys.create({
       name: 'agent:producer-a',
-      scopes: ['events:write'],
+      scopes: ['events:write', 'instances:write'],
       instanceIds: [instanceA],
       createdBy: 'system:auto-provision',
     });
@@ -213,7 +246,9 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
     hooks = new WebhookService(db, bus);
     const source = await hooks.create({ name: 'provenance-source' });
     sourceId = source.id;
-    app = createApp(db, bus, null, null).app;
+    const application = createApp(db, bus, null, null);
+    app = application.app;
+    requestHooks = application.services.webhooks;
   }, 180_000);
 
   beforeEach(() => {
@@ -290,6 +325,18 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
     });
   }
 
+  test('a keyed trigger proves its principal once and the detached consumer retains the claimed stamp', async () => {
+    const reads = spyOn(db, 'select');
+    try {
+      const event = await trigger(agentKey, true);
+      expect(event.agentId).toBe(agentA);
+      const principalReads = reads.mock.calls.filter(([fields]) => fields?.createdBy === apiKeys.createdBy);
+      expect(principalReads).toHaveLength(1);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+
   async function deliveries() {
     const raw = JSON.stringify({ id: randomUUID() });
     const legacy = await connectorService.receive(legacyId, raw, signHook(raw));
@@ -314,7 +361,7 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
     }
   });
 
-  test('direct ingress claims inside an authenticated producer scope retain both key and proven agent', async () => {
+  test('direct ingress claim mechanism retains both key and proven agent inside a producer scope', async () => {
     const events = await runWithProducingKey(agentKey.key.id, deliveries);
     for (const event of events) {
       expect(event.producingKeyId).toBe(agentKey.key.id);
@@ -339,6 +386,95 @@ postgresDescribe('trusted journal provenance (real PostgreSQL)', () => {
     const event = await channelEvent();
     expect(event.producingKeyId).toBeNull();
     expect(event.agentId).toBeNull();
+  });
+
+  test('a real timer started by an authenticated request journals NULL provenance after the response', async () => {
+    let release = () => {};
+    const responseEnded = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let late: Promise<Awaited<ReturnType<typeof channelEvent>>> | undefined;
+    const original = requestHooks.trigger.bind(requestHooks);
+    const triggerSpy = spyOn(requestHooks, 'trigger').mockImplementation(async (...args) => {
+      late = onTimer(async () => {
+        await responseEnded;
+        return channelEvent();
+      });
+      return original(...args);
+    });
+    try {
+      await trigger(agentKey, false);
+      release();
+      const event = await late;
+      expect(event?.producingKeyId).toBeNull();
+      expect(event?.agentId).toBeNull();
+    } finally {
+      release();
+      triggerSpy.mockRestore();
+      await late;
+    }
+  });
+
+  for (const operation of ['connect', 'restart']) {
+    test(`instance ${operation} starts real channel timers outside the still-active request producer scope`, async () => {
+      let observed: Awaited<ReturnType<typeof channelEvent>> | undefined;
+      const registry = new ChannelRegistry();
+      registry.register(
+        new TimerChannel(async () => {
+          observed = await onTimer(channelEvent);
+        }),
+      );
+      const instanceApp = createApp(db, bus, registry, null).app;
+      const response = await instanceApp.request(`/api/v2/instances/${instanceA}/${operation}`, {
+        method: 'POST',
+        headers: { 'x-api-key': agentKey.plainTextKey, 'content-type': 'application/json' },
+        body: '{}',
+      });
+      expect(response.status).toBe(200);
+      expect(observed?.producingKeyId).toBeNull();
+      expect(observed?.agentId).toBeNull();
+    });
+  }
+
+  test('reloadEngine starts a real subscription timer whose automation action has NULL producer provenance', async () => {
+    const service = new AutomationService(db, bus);
+    const triggerType = 'custom.provenance.timer';
+    const outputType = 'custom.provenance.timer_action';
+    const original = bus.subscribePattern.bind(bus);
+    let fired = false;
+    await service.startEngine();
+    const subscriptionSpy = spyOn(bus, 'subscribePattern').mockImplementation(async (pattern, handler, options) => {
+      const subscription = await original(pattern, handler, options);
+      if (pattern === `${triggerType}.>`)
+        await onTimer(async () => {
+          fired = true;
+          await handler({ ...createOmniEvent(triggerType, {}, undefined, 'timer-trigger'), payload: {} });
+        });
+      return subscription;
+    });
+    let automationId: string | undefined;
+    try {
+      await runWithProducingKey(agentKey.key.id, async () => {
+        const created = await service.create({
+          name: 'timer-producer',
+          triggerEventType: triggerType,
+          actions: [{ type: 'emit_event', config: { eventType: outputType, payloadTemplate: { proof: 'timer' } } }],
+        });
+        automationId = created.id;
+      });
+      await bus.idle();
+      expect(fired).toBe(true);
+      const emitted = bus.journal.find((event) => event.type === outputType);
+      expect(emitted).toBeDefined();
+      if (!emitted) throw new Error('Automation did not publish');
+      const event = await row(emitted.id);
+      expect(event.producingKeyId).toBeNull();
+      expect(event.agentId).toBeNull();
+    } finally {
+      subscriptionSpy.mockRestore();
+      await service.stopEngine();
+      if (automationId) await db.delete(automations).where(eq(automations.id, automationId));
+    }
   });
 
   for (const mode of ['flag unset', 'flag and multitenancy both true']) {

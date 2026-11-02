@@ -21,6 +21,7 @@ import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
 import { agentKeyName, agentKeyNameCandidates } from '../../lib/agent-key-name';
 import { type AgentKeyBinding, type AgentKeyOwner, agentKeyBelongsToBinding } from '../../lib/agent-key-ownership';
 import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
+import { runOutsideProducerScope } from '../../lib/producer-scope';
 import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
@@ -916,11 +917,13 @@ async function connectInstanceWithPlugin(
   options: Record<string, unknown>,
 ): Promise<string | undefined> {
   try {
-    await plugin.connect(instanceId, {
-      instanceId,
-      credentials: {},
-      options,
-    });
+    await runOutsideProducerScope(() =>
+      plugin.connect(instanceId, {
+        instanceId,
+        credentials: {},
+        options,
+      }),
+    );
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : 'Unknown error';
@@ -2229,7 +2232,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     // Persisted WhatsApp socket settings on restart (GH #310, #1211)
     applyWhatsAppBaileysOptions(restartOptions, instance);
-    await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
+    await runOutsideProducerScope(() =>
+      plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions }),
+    );
   } catch (error) {
     return c.json(
       {

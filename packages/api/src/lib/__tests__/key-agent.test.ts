@@ -1,7 +1,7 @@
 import { afterAll, afterEach, expect, spyOn, test } from 'bun:test';
 import { createDbHandle } from '@omni/db';
 import { PostgresJsPreparedQuery } from 'drizzle-orm/postgres-js/session';
-import { resolveKeyAgent } from '../key-agent';
+import { requestProducerColumns, resolveKeyAgent } from '../key-agent';
 import { currentProducingKeyId, runWithProducingKey } from '../producer-scope';
 
 // The prepared-query seam returns fixtures before postgres.js opens any connection.
@@ -119,4 +119,44 @@ test('producer scopes isolate concurrent requests and restore after exceptions',
     }),
   ).rejects.toThrow('proof');
   expect(currentProducingKeyId()).toBeNull();
+});
+
+test('one request memoizes concurrent agent resolution; another request always rechecks', async () => {
+  for (let request = 0; request < 2; request++) {
+    execute.mockResolvedValueOnce([key]).mockResolvedValueOnce([instance]).mockResolvedValueOnce([agent]);
+    await runWithProducingKey(keyId, async () => {
+      const resolutions = await Promise.all([resolveKeyAgent(handle.db, keyId), resolveKeyAgent(handle.db, keyId)]);
+      expect(resolutions).toEqual([
+        { kind: 'agent', agentId },
+        { kind: 'agent', agentId },
+      ]);
+      expect(await resolveKeyAgent(handle.db, keyId)).toEqual({ kind: 'agent', agentId });
+    });
+    expect(execute).toHaveBeenCalledTimes((request + 1) * 3);
+  }
+});
+
+test('a direct claim whose principal read outlives the request loses its producer', async () => {
+  const previous = process.env.OMNI_PAIRED_AGENT_CONSUMERS;
+  const tenancy = process.env.OMNI_MULTITENANCY_ENABLED;
+  process.env.OMNI_PAIRED_AGENT_CONSUMERS = 'true';
+  Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
+  let release: (rows: unknown[]) => void = () => {};
+  const read = new Promise<unknown[]>((resolve) => {
+    release = resolve;
+  });
+  execute.mockImplementationOnce(() => read);
+  let claim: ReturnType<typeof requestProducerColumns> | undefined;
+  try {
+    await runWithProducingKey(keyId, async () => {
+      claim = requestProducerColumns(handle.db);
+    });
+    release([{ ...key, createdBy: 'human' }]);
+    expect(await claim).toEqual({ producingKeyId: null, agentId: null });
+  } finally {
+    if (previous === undefined) Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+    else process.env.OMNI_PAIRED_AGENT_CONSUMERS = previous;
+    if (tenancy === undefined) Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
+    else process.env.OMNI_MULTITENANCY_ENABLED = tenancy;
+  }
 });
