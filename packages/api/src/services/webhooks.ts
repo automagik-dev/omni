@@ -33,7 +33,9 @@ import {
 } from '@omni/db';
 import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import { deriveIdempotencyKey, resolvePayloadPath } from '../lib/ingress-idempotency';
+import { requestProducerColumns } from '../lib/key-agent';
 import { executePoll, isPollAllowlistConfigured, isPollDue, resolveAllowedCommand } from '../lib/poll-connector';
+import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import type { DeadLetterService } from './dead-letters';
@@ -464,6 +466,8 @@ export class WebhookService {
       idempotencyKey,
       receivedAt: new Date(),
       metadata: { correlationId: eventId, source: 'webhook', fullEventType: eventType, webhookSource: sourceName },
+      ...(await requestProducerColumns(this.db)),
+      ...(pairedAgentFlagState('consumers').enabled ? { sourceKind: 'webhook_source', sourceId: source.id } : {}),
     });
 
     if (claim.duplicate) {
@@ -768,6 +772,7 @@ export class WebhookService {
       idempotencyKey,
       causationId: metadata.causationId ?? null,
       receivedAt: new Date(),
+      ...(await requestProducerColumns(this.db)),
       metadata: {
         correlationId: metadata.correlationId ?? eventId,
         source: 'manual-trigger',

@@ -31,6 +31,7 @@ import {
   connectEventBus,
   createLogger,
   enableDefaultMetrics,
+  setEnvelopeProducerResolver,
   setEnvelopeTenantResolver,
 } from '@omni/core';
 import type { Database, DbEnforcementMode, EnforcedBootIdentities } from '@omni/db';
@@ -67,6 +68,7 @@ const shutdownLog = createLogger('api:shutdown');
 import packageJson from '../package.json';
 import { runStartupAgentKeyRepair } from './agent-key-repair-state';
 import { type App, createApp } from './app';
+import { currentProducingKeyId } from './lib/producer-scope';
 import { type Login, announceClaim } from './login';
 import { resolveLoginDefaults } from './login/secret';
 import { markPluginsDegraded } from './plugin-state';
@@ -171,6 +173,7 @@ async function connectToNats(db: Database): Promise<(EventBus & ConnectorEventPu
     // republish must pass an explicit `metadata.tenantId` — this resolver never
     // lends an ambient tenant across the request→worker boundary.
     setEnvelopeTenantResolver(() => currentTenantScope()?.tenantId ?? null);
+    setEnvelopeProducerResolver(() => (pairedAgentFlagState('consumers').enabled ? currentProducingKeyId() : null));
 
     // ...and the PRODUCER-side derivation for publishes that have no request at
     // all — every channel-plugin emit (`message.received`, `instance.connected`,

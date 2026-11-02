@@ -337,6 +337,8 @@ describe('db-access guard', () => {
       // (the request transaction when scoped, ambient for a legacy credential or
       // the auth-exempt public ingress). The delivery claim is the journal row.
       'packages/api/src/services/connectors.ts',
+      // Key-to-agent provenance reads instances/agents through the active scope.
+      'packages/api/src/lib/key-agent.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

@@ -206,6 +206,8 @@ export interface OmniEvent<T extends EventType = EventType, P = unknown> {
 
 export interface EventMetadata {
   correlationId: string;
+  /** Set only by the factory from the trusted ambient producer resolver. */
+  producingKeyId?: string;
   /**
    * Id of the IMMEDIATE parent event — the event whose consumption caused
    * this publish (#957, RFC #925 G3). `correlationId` groups a flow;
