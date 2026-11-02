@@ -50,7 +50,9 @@ import {
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents, processedEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Services } from '../services';
+import { accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import type { AgentRunResult as RunnerResult } from '../services/agent-runner';
 import { recordAutomationTriggerLog, stampAgentUsage } from '../services/agent-usage';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
@@ -61,6 +63,57 @@ import { getPlugin } from './loader';
 const log = createLogger('automation-actions');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const INBOUND_CALL_AGENT_TYPES = new Set(['message.received', 'reaction.received', 'reaction.removed']);
+const InboundCallSourceSchema = z.object({
+  instanceId: z.string().uuid(),
+  from: z.string().refine((value) => value.trim().length > 0),
+  channelType: z.string().optional(),
+  rawPayload: z
+    .object({
+      key: z.object({ participantAlt: z.string().nullish() }).passthrough().nullish(),
+      resolvedSenderPhone: z.string().nullish(),
+    })
+    .passthrough()
+    .nullish(),
+});
+
+/** Authorize the ingress sender even when call_agent takes its chatless fallback. */
+async function admitInboundCallAgent(
+  services: Services,
+  db: Database,
+  ctx: AgentCallContext,
+  trustedTenantId: string | null,
+): Promise<void> {
+  if (!ctx.event || !INBOUND_CALL_AGENT_TYPES.has(ctx.event.type)) return;
+  let allowed = false;
+  let reason = 'invalid ingress identity';
+  try {
+    const source = InboundCallSourceSchema.safeParse(ctx.event.source);
+    if (source.success) {
+      const instance = await runTenantWorkDb(db, trustedTenantId, () =>
+        services.instances.getById(source.data.instanceId),
+      );
+      const result = await runAccessFallbackChain(accessFallbackCandidates(source.data), (sender) =>
+        services.access.evaluateAccess(instance, sender, source.data.channelType ?? instance.channel, trustedTenantId),
+      );
+      allowed = result.allowed;
+      reason = result.reason;
+    }
+  } catch (error) {
+    // A policy/lookup failure is a refusal, never an unrestricted chatless run.
+    reason = 'access evaluation failed';
+    log.warn('call_agent ingress access evaluation failed', { eventId: ctx.event.id, error: String(error) });
+  }
+  if (!allowed) {
+    log.warn('Skipping call_agent: ingress access refused', {
+      eventId: ctx.event.id,
+      eventType: ctx.event.type,
+      reason,
+    });
+    throw new Error('call_agent ingress access refused');
+  }
+}
 
 /** agents.agent_type (entity taxonomy) → provider dispatch type. */
 const AGENT_TYPE_MAP: Record<string, 'agent' | 'team' | 'workflow'> = {
@@ -382,6 +435,7 @@ export function buildAutomationEngineDeps(
     },
 
     callAgent: async (ctx, cfg, trustedTenantId = null) => {
+      await admitInboundCallAgent(services, db, ctx, trustedTenantId);
       // Chatless dispatch (#1010): no instance and no chat resolved from the
       // triggering event — provider comes from the agent row instead.
       if (ctx.chatless) {

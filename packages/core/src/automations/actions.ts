@@ -75,6 +75,13 @@ export interface AgentCallContext {
     id: string;
     type: string;
     correlationId?: string;
+    /** Original ingress identity; never rendered from action config or prompts. */
+    source?: {
+      instanceId?: string;
+      channelType?: string;
+      from?: unknown;
+      rawPayload?: unknown;
+    };
   };
   /**
    * Chatless dispatch (#1010, RFC #925 G4 runtime half): the triggering event
@@ -799,6 +806,21 @@ function buildChatlessMessages(context: TemplateContext, promptOverride?: string
   return [JSON.stringify(context.payload)];
 }
 
+function agentCallEvent(context: TemplateContext): AgentCallContext['event'] {
+  if (!context.event) return undefined;
+  return {
+    id: context.event.id,
+    type: context.event.type,
+    correlationId: context.event.metadata.correlationId,
+    source: {
+      instanceId: context.event.metadata.instanceId,
+      channelType: context.event.metadata.channelType,
+      from: context.payload.from,
+      rawPayload: context.payload.rawPayload,
+    },
+  };
+}
+
 /**
  * Build the chatless AgentCallContext (#1010): dispatch with only an agent id
  * plus the triggering event. The session scope is
@@ -834,13 +856,7 @@ function buildChatlessAgentCallContext(
       chatId: sessionKey,
       senderId: sessionKey,
       messages: messagesResult,
-      event: context.event
-        ? {
-            id: context.event.id,
-            type: context.event.type,
-            correlationId: context.event.metadata.correlationId,
-          }
-        : undefined,
+      event: agentCallEvent(context),
     },
   };
 }
@@ -906,15 +922,8 @@ function extractAgentCallContext(
       senderId,
       senderName,
       messages: messagesResult,
-      // Envelope of the triggering event (#960) — lets the agent know which
-      // event woke it. Derived from engine-threaded metadata, never payload.
-      event: context.event
-        ? {
-            id: context.event.id,
-            type: context.event.type,
-            correlationId: context.event.metadata.correlationId,
-          }
-        : undefined,
+      // Original envelope and ingress identity, independent of action templates.
+      event: agentCallEvent(context),
     },
   };
 }
