@@ -46,6 +46,7 @@ import {
   onDisposableExit,
   resolvePgBinaries,
 } from './disposable-pg-cluster';
+import { reportPgGateResult } from './pg-gate-report';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
@@ -193,34 +194,8 @@ try {
     }
   })();
 
-  // --- assert nothing skipped ---------------------------------------------
-  const skipped = /^\s*(\d+)\s+skip\s*$/m.exec(output);
-  const skipCount = skipped ? Number(skipped[1]) : 0;
-  const ran = /^\s*(\d+)\s+pass\s*$/m.exec(output);
-  const passCount = ran ? Number(ran[1]) : 0;
-
-  const problems: string[] = [];
-  if (child.exitCode !== 0) problems.push(`bun test exited ${child.exitCode}`);
-  if (skipCount > 0) problems.push(`${skipCount} test(s) SKIPPED — the gate requires every suite to run`);
-  if (passCount === 0) problems.push('no tests passed — the suites did not execute');
-  // Every discovered suite must have RUN. `bun test` prints a per-file header
-  // only when a file produced output, so presence-of-filename is not a usable
-  // signal; the trailing "Ran N tests across M files" is.
-  const acrossFiles = /across\s+(\d+)\s+files?/.exec(output);
-  const filesRun = acrossFiles ? Number(acrossFiles[1]) : 0;
-  if (filesRun !== suites.length) {
-    problems.push(`bun test ran ${filesRun} file(s), expected ${suites.length}`);
-  }
-
-  if (problems.length > 0) {
-    // Successful runs stay concise; failures retain the child diagnostics.
-    process.stderr.write(output);
-    process.stderr.write(`\npg-gate: FAILED\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
-    exitCode = 1;
-  } else {
-    process.stdout.write(`\npg-gate: PASSED — ${passCount} assertions across ${suites.length} suites, 0 skipped\n`);
-    exitCode = 0;
-  }
+  // Name failing suites before any NOTICE flood; retain every byte in a separate log.
+  exitCode = reportPgGateResult(output, suites, child.exitCode);
 } finally {
   const destroyed = dataDir && !keep;
   cleanup();
@@ -230,4 +205,4 @@ try {
   }
 }
 
-process.exit(exitCode);
+process.exitCode = exitCode;
