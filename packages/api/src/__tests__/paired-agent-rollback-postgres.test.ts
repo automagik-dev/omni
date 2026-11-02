@@ -192,6 +192,9 @@ pgDescribe('paired-agent rollback and forward-only grant delivery (real PostgreS
         agentId: A,
       });
       expect(rejected.status).toBe(400);
+      const message = z.object({ error: z.object({ message: z.string() }) }).parse(await rejected.json()).error.message;
+      expect(message).toContain('OMNI_PAIRED_AGENT_CONSUMERS=true');
+      if (off === 'multitenancy') expect(message).toContain('OMNI_MULTITENANCY_ENABLED');
       expect(await pull(a, owned)).toEqual([instanceRow.id]);
       const hookOff = await claimed('/webhooks/rollback-source', plain);
       const agentOff = await claimed('/events/trigger');
