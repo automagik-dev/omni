@@ -24,5 +24,7 @@ omni webhooks trigger --type "order.created" --payload '{"orderId":"123"}' --ins
 
 ```bash
 omni webhooks trigger --type "test.ping" --payload '{}' --instance <id> --correlation-id "test-001" --json
-omni journey show "test-001"
+omni events trace <returned-event-id> --json
 ```
+
+Trace uses the returned event ID, not the correlation string; `journey show` is for channel-message latency. Record a successful connector run that found zero events with `omni webhooks heartbeat <source>` so its liveness window is reset. Heartbeat and trigger publish state; run them only for the authorized source. See `omni webhooks --help`, `omni sources --help` and `omni connectors --help` for source/connector management.

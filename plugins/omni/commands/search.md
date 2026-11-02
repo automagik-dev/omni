@@ -14,7 +14,7 @@ Use to find messages by content across chats and instances.
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
 omni messages search "invoice" --since 7d --limit 50
@@ -23,3 +23,5 @@ omni messages search "urgent" --chat <chatId> --since 24h
 ```
 
 Full single-message content: `omni messages get <messageId>`. Chat-scoped browsing: /omni:chats. Event-content search: omni-ops skill § Events.
+
+Inspect `omni messages search --help` for installed filters and select the intended server with global `--server <name>`. Results are constrained by that credential's access; an empty result is not permission to broaden its grants.

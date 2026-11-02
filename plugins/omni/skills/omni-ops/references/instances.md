@@ -33,6 +33,16 @@ omni instances whoami <id> --json                        # connected phone numbe
 omni instances check <id> +5511999 --json                # is this number on WhatsApp?
 ```
 
+For a pending WhatsApp passkey ceremony:
+
+```bash
+omni instances passkey <id> --json
+omni instances passkey-submit <id> --response-file ./assertion.json --json
+omni instances passkey-confirm <id> --json
+```
+
+Only submit the actual one-time assertion for the intended instance; inspect each command's help before completing the ceremony. For channel setup and declared event guarantees, use `omni channels add --help` and `omni channels capabilities --help`.
+
 ## Sync and backfill
 
 ```bash
@@ -64,7 +74,7 @@ omni instances update <id> --reply-filter-mode filtered --reply-on-dm --json
 omni instances update <id> --agent-fk-id <agent-uuid> --json                   # "null" clears
 ```
 
-Assigning an agent to an instance with no reply filter auto-defaults the filter to `{mode:"all", onDm:true}` so messages dispatch instead of silently dropping (omni#443). Full agent-connect flow lives in the omni-setup skill.
+Assigning an agent to an instance with no reply filter auto-defaults the filter to `{mode:"all", onDm:true}` so messages dispatch instead of silently dropping (omni#443). General provider/agent/binding setup uses `omni setup agent --help`; the omni-setup skill explains external-runtime compatibility and verification. Use `omni follow-up --help` and `omni turns --help` for those separate lifecycle operations.
 
 ## Access control
 

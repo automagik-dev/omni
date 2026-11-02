@@ -1,5 +1,21 @@
 # Config, Auth, Keys, Service & Debug
 
+## Remote server registry
+
+```bash
+omni server list --json                      # masked credentials; do not use --reveal in logs
+omni server current --json
+omni server add <name> <url>                  # registers the URL only; no device login
+omni auth login --server <name> --api-key <key>
+omni server use <name>                       # persist the active server
+omni status --server <name> --json            # one-command target override
+omni server remove <name>                    # switch away first if active
+```
+
+The CLI still requires an API key and does not initiate/poll device-code pairing. `auth login` saves the supplied key in the selected server entry after validation; logout clears that entry's credentials. Device keys currently fail CLI validation because they lack `auth:validate`; ask the operator for an appropriate CLI credential rather than expanding permissions. `claim`, `approve`, and bare `connect` are privileged operator actions requiring an existing `auth:admin` key, not agent self-service (setup skill).
+
+Remote registry entries are distinct from `server.*`, which configure the locally supervised runtime. Manage `servers.*` through `omni server`, not `omni config set`; `servers.active` is a read-only row in config list.
+
 ## Auth
 
 ```bash
@@ -12,11 +28,13 @@ omni auth logout
 ## CLI config
 
 ```bash
-omni config list --json              # keys: apiUrl, apiKey, defaultInstance, format, showCommands, telemetry
+omni config list --json              # includes updateChannel, server.* and read-only servers.active
 omni config get defaultInstance --json
 omni config set defaultInstance <id> --json
 omni config unset <key>
 ```
+
+`config list` enumerates the installed keys. Alongside client defaults it includes `server.port`, `server.databaseUrl`, `server.dataDir`, `server.logLevel`, `server.nodeEnv`, `server.natsHost`, `server.publicUrl`, and `server.login`. Runtime changes apply through the appropriate authorized start/install/update path. `auth status` can fail on credentials or scope even when the API is healthy; don't turn that error into an install/restart recommendation. `auth recover` is privileged local PM2 recovery, not remote sign-in.
 
 ## API keys
 
@@ -44,7 +62,7 @@ omni start
 omni stop
 omni restart
 omni update -y --no-restart          # update CLI to latest
-omni doctor                          # diagnose and repair the embedded runtime
+omni doctor                          # diagnostics; inspect --help before opting into repairs
 ```
 
 ## Logs
@@ -74,3 +92,5 @@ omni payloads get <eventId> agent_response --json   # stages: webhook_raw|agent_
 omni payloads stats --json
 omni payloads config --retention 30 --json          # storage toggles: --store-webhook, --store-agent-request, ...
 ```
+
+For isolated runtimes, desktop setup, host trust, tenancy and audit, discover the separate surfaces with `omni sandbox --help`, `omni desktop --help`, `omni trust --help`, `omni tenants --help`, `omni multitenancy --help` and `omni audit --help`. Trust/tenant changes need an explicit authorized scope; they are not auth troubleshooting shortcuts.

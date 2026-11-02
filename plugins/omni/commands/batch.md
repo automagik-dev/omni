@@ -14,7 +14,7 @@ Use for backfilling transcriptions and descriptions across many messages. Always
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
 omni batch estimate --instance <id> --type time_based_batch --days 7 --content-types audio --json
@@ -23,3 +23,5 @@ omni batch status <jobId> --watch --interval 2000
 ```
 
 Estimate-then-create pattern, content types, list/cancel: omni-ops skill § Batch.
+
+Inspect `omni batch estimate --help` / `omni batch create --help` for installed options. `create --no-confirm` skips a prompt; it does not make the job a dry run or grant permission to consume credits. Separate ad hoc media tools: `omni media --help`.

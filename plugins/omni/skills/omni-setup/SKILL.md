@@ -1,99 +1,106 @@
 ---
 name: omni-setup
-description: "Get Omni running from scratch — install, connect WhatsApp, plug your agent, verify. Zero to messaging in 4 steps."
+description: "Configure an existing Omni or install a local runtime, connect a channel, wire an agent, and verify."
 allowed-tools: Bash(omni *), Bash(genie *), Bash(pm2 *)
 ---
 
-# Omni Setup — Zero to Messaging in 4 Steps
+# Omni Setup
 
-Canonical install → connect → plug → verify flow. Each step starts with a check — if it already passes, skip ahead. Report each step as done only after its verify command confirms it.
+Choose the requested target first. An auth failure on a remote Omni is not a reason to install or restart a local server.
 
-## Step 1: Install
+## 1. Existing server or local install
 
-```bash
-omni auth status                  # valid connection? skip to Step 2
-omni install                      # interactive wizard: system checks, NATS, PM2, ports, API key → ~/.omni/config.json
-omni install --non-interactive    # scripted/CI installs
-omni status                       # verify server health before moving on
-```
-
-## Step 2: Connect channel
+For an existing server:
 
 ```bash
-omni instances list               # an instance with status "connected"? note its ID, skip to Step 3
-omni start                        # starts services and shows a WhatsApp QR code
+omni server list --json
+omni server add <name> <url>                  # registers the URL; obtains no credential
+omni auth login --server <name> --api-key <key>
+omni server use <name>                       # or use --server <name> per command
+omni status --json
+omni auth status --json
 ```
 
-Scan with WhatsApp (Settings > Linked Devices > Link a Device). The QR expires in ~60s — regenerate with `omni instances qr <id>`, or skip QR entirely with a pairing code: `omni instances pair <id> --phone +5511999999999`. Confirm with `omni instances list` (status `connected`).
+An API key is still required. There is no CLI device-code sign-in: adding a keyless server entry only saves its address. `auth login` validates the supplied key and saves it in the targeted server entry. Currently owner-approved device keys cannot pass that validation because they lack `auth:validate`; ask the operator for an appropriate existing CLI credential rather than widening a key or disabling scope checks.
 
-Other channels (Telegram, Discord, ...): `omni instances create --channel <type>` — see `omni channels --help`.
-
-## Step 3: Plug agent
+Only when a local install is requested:
 
 ```bash
-omni connect <instance-id> <agent-name>
+omni install --help
+omni install                                 # non-interactive, reinstall-safe bootstrap
+omni status --json
 ```
 
-One command does it all: discovers the agent in the Genie directory, creates a `nats-genie` provider, creates the Omni agent record, and updates the instance (agentId FK, provider, reply filter, trigger mode). It replaces the deprecated `omni providers setup genie`.
+`--non-interactive` is a deprecated no-op. Choose `--port`, `--database-url` (external Postgres), or `--systemd` when appropriate. `--sandbox` installs an isolated runtime; inspect `omni sandbox --help` and install help for `--home`, `--at-login`, `--no-start` and other sandbox options. `omni desktop --help` covers the desktop app. Installing or starting services needs authorization.
 
-| Flag | Default | Behavior |
-|------|---------|----------|
-| `--mode` | `turn-based` | `turn-based` (agent closes each turn with `omni done`) or `fire-and-forget` |
-| `--reply-filter` | `all` | `all` = reply to every inbound message; `filtered` = conditions (DM, mention, reply on by default) |
-| `--nats-url` | `localhost:4222` | NATS server used by the provider |
+### Operator device approval is separate
 
-> **`--reply-filter all` means reply to EVERYTHING** — on WhatsApp that includes every group and broadcast the account is in. If the instance will join groups, pass `--reply-filter filtered` at connect time, or tighten later:
-> `omni instances update <id> --reply-filter-mode filtered --reply-on-dm`
-> A null/missing filter also lets every message through (behavior change in automagik-dev/omni#371); the API logs a one-time warning per instance.
+An operator already holding a key with `auth:admin` can use `omni claim`, `omni approve <code>`, or bare `omni connect` (optionally `--url https://omni.example.com`). Claim makes an unclaimed Omni theirs; approve accepts a waiting device code; connect prints a one-time link/QR for a supported app. These are not ways for a keyless agent or CLI to grant itself access. Human login must be enabled and is unavailable with multitenancy. The full app flow is in `docs/guides/pair-dsh-with-omni.md` in the Omni repository.
 
-Agent not registered yet? `genie dir add <agent-name> --dir /path/to/agent`, then re-run `omni connect`.
-
-## Step 4: Start bridge
-
-The NATS ↔ agent bridge (`OmniBridge`) runs inside `genie serve` — there is no `genie omni start`.
+## 2. Connect a channel
 
 ```bash
-genie serve start
-genie serve status                                             # verify the bridge is live
-pm2 start "genie serve start" --name genie-serve && pm2 save   # long-running deployments
+omni instances list --json                    # reuse the intended connected instance
+omni channels --help
+omni channels add whatsapp-baileys            # interactive channel setup
 ```
 
-Message flow: inbound NATS event → bridge routes to the agent (spawns a session if needed, sets `OMNI_INSTANCE`, `OMNI_CHAT`, `OMNI_MESSAGE`, `OMNI_AGENT`) → agent replies with verb commands → `omni done` closes the turn.
+For explicit provisioning, use `omni instances create --name "Support" --channel <type>`, then the channel's connection flow. `omni start` starts the local API/NATS through PM2; it does not display a WhatsApp QR or create a channel instance.
 
-### NATS topic contract
-
-Debug any hop with `nats sub '<pattern>'`:
-
-| Direction | Subject | Purpose |
-|-----------|---------|---------|
-| Omni → Genie | `omni.message.<instance-id>.<chat-id>` | Inbound message payload |
-| Genie → Omni | `omni.reply.<instance-id>.<chat-id>` | Agent reply back to the channel |
-| Omni → Genie | `omni.session.reset.<instance-id>.<chat-id>` | `{ action: 'kill' }` — drop the in-memory session |
-| Omni → Genie | `omni.turn.{open,done,nudge,stalled,timeout}.<instance-id>.<chat-id>` | Turn lifecycle signals |
-
-Omni subscribes with the recursive wildcard `omni.reply.<instance-id>.>` because WhatsApp chat IDs contain dots (`5511...@s.whatsapp.net`) that the single-token `*` wildcard does not match.
-
-## Verify end-to-end
+For an existing WhatsApp instance:
 
 ```bash
-omni where                          # active instance + chat context
-omni instances get <instance-id>    # agentId must NOT be null
-genie ls --source omni              # agent appears after its first message
-omni use <instance-id>
-omni open <chat-jid>
-omni say "test"
+omni instances pair <id> --phone +5511999999999
+omni instances qr <id>                        # QR fallback; --no-watch for one shot
+omni instances list --json
 ```
 
-A reply appearing in the chat = the full pipeline works.
+Scan a pending QR in WhatsApp → Linked Devices. For a pending WhatsApp passkey ceremony, inspect `omni instances passkey --help`, `passkey-submit --help` and `passkey-confirm --help` before submitting the one-time response. Other channel credentials and setup are in `omni channels add --help`.
+
+## 3. Wire the agent
+
+```bash
+omni setup agent --help
+```
+
+This wires a provider, agent and instance binding and performs a health check. Choose a supported schema and its required flags: `agno`, `webhook`, `ag-ui`, `claude-code`, `a2a`, or `nats-genie`. Inspect existing providers/agents before creating duplicates. A health check alone does not prove replies work end to end.
+
+For a compatible external Genie runtime, two-argument connect configures Omni:
+
+```bash
+omni connect <instance-id> <agent-name> --reply-filter filtered
+```
+
+It verifies the installed Genie's directory JSON interface before discovering the agent and changing Omni records. Incompatible Genie versions are refused; use `genie --help` and that version's documentation, or choose another supported provider through `setup agent`. Do not assume `genie dir add`, `genie serve start/status`, `genie ls --source omni` or `genie events` exist.
+
+| Flag | Behavior |
+|------|----------|
+| `--mode turn-based` | Default; the external agent closes every turn with `omni done` |
+| `--mode fire-and-forget` | Configure fire-and-forget dispatch |
+| `--reply-filter filtered` | Limit dispatch using reply conditions; inspect the resulting instance filter |
+| `--reply-filter all` | Default: every inbound message can trigger, including groups |
+| `--nats-url <url>` | Matching local sandbox metadata is used when available; localhost:4222 is only the standard local API fallback. Required for remote/nondefault targets without verified local metadata |
+
+`connect` does not start or verify the external bridge. Start that runtime only through its supported version's instructions and verify it separately. Never expose NATS without auth/TLS or a private network.
+
+## 4. Verify the requested path
+
+```bash
+omni instances get <instance-id> --json        # inspect agentId and reply filter
+omni providers list --json
+omni agents list --json
+omni events stream --instance <instance-id>
+```
+
+With authorization, send a test message to the intended channel and observe the agent reply there. Report configuration, runtime health and delivered replies separately. Turn-based dispatch supplies `OMNI_INSTANCE`, `OMNI_CHAT`, `OMNI_MESSAGE`, `OMNI_TURN_ID`; replies use verbs and close with `omni done` (agent skill).
 
 ## Troubleshooting
 
 | Symptom | Check / fix |
 |---------|-------------|
-| Bridge won't start, connection refused | `pm2 list` → `pm2 restart omni-nats`; `pm2 logs omni-nats`. Never started? `omni start` (manual: `~/.omni/nats-server -js -sd ~/.omni/data/nats -a 127.0.0.1`) |
-| Another host can't reach NATS (4222) | Managed NATS listens on `127.0.0.1` by default. Only if remote access is needed: `omni config set server.natsHost 0.0.0.0` (protect NATS with auth/TLS or a private network), then `omni stop && omni start` (`omni restart` keeps old args); remote clients set `NATS_URL=nats://<host>:4222` |
-| API 500s / degraded mode | `pm2 restart omni-api`; `pm2 logs omni-api`; `omni status`; check DB URL in `~/.omni/server-config.json` |
-| `omni connect` fails: "Failed to discover agent" | `genie dir ls` — if missing: `genie dir add <name> --dir /path/to/agent` |
-| Messages arrive, agent never replies | `genie serve status` (bridge up?); `genie events list --since 5m` + `genie events errors`; agent must end every turn with `omni done`; filter mismatch: `omni instances get <id> --json \| jq .agentReplyFilter` |
-| agentId still null after connect | `omni agents list` for the agent UUID → `omni instances update <id> --agent-fk-id <uuid>`; if no agent record exists, re-run `omni connect` |
-| QR expired / won't scan | `omni instances qr <id>` regenerates (~60s lifetime); prefer `omni instances pair <id> --phone +55...` |
+| No credential or auth denied | Check `omni server current --json` and the targeted key's scopes with the operator. `auth status` failure does not prove the API is stopped |
+| Server unreachable | `omni status --json`; verify the selected URL. For an authorized local managed runtime, inspect PM2 or `omni sandbox status` as appropriate |
+| Local runtime config | `omni config list --json` (keys are masked); local settings are `server.*` in the CLI config, distinct from the remote `omni server` registry |
+| Genie directory unsupported | Consult `genie --help` and its installed version's integration docs; no unverified bridge recipe |
+| Messages arrive but no reply | Inspect instance `agentId`, reply filter, provider health and `omni events trace <event-id>`; verify the external runtime independently |
+| QR expired | `omni instances qr <id>` or `omni instances pair <id> --phone +55...` |

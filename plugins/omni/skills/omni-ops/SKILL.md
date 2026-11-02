@@ -27,15 +27,33 @@ Install, channel pairing, agent plugging (`omni connect`), and bridge troublesho
 
 ## Ground rules
 
-- Reads are free: run `list` / `get` / `status` / `test` / `estimate` without asking.
+- Within the authorized task, use `list` / `get` / `status`, estimates and dry-run tests to inspect state. `automations test --execute` runs real actions; it has the same effect boundary as `automations execute`. Following a durable consumer normally advances its cursor; `events follow --no-ack` omits acknowledgement but still pulls (and can claim a shared lease). Use consumer `inspect` for metadata-only reads.
 - Pause for the user before destructive or irreversible ops: `instances delete`, `instances logout`, `keys delete`, `persons merge`, `dead-letters abandon`, `automations execute` against production traffic, access-mode flips on live instances, large batch jobs.
 - Report verified outcomes — what the command actually returned, not what you intended. A change counts as done when a follow-up read confirms it.
+
+## Additional management groups
+
+Use the installed CLI's group help for capabilities not expanded in these references:
+
+| Intent | Discovery |
+|--------|-----------|
+| Remote server selection / credentials | `omni server --help`, `omni auth --help`; config reference |
+| Local isolated runtime / desktop app | `omni sandbox --help`, `omni desktop --help`; setup skill |
+| Channel event contracts | `omni channels capabilities --help` |
+| Agent definitions / accepts-publishes manifest | `omni agents --help`, `omni agents manifest --help` |
+| Connectors / GitHub and other sources | `omni connectors --help`, `omni sources --help` |
+| Host trust / tenancy | `omni trust --help`, `omni tenants --help`, `omni multitenancy --help` |
+| Turn, audit and follow-up management | `omni turns --help`, `omni audit --help`, `omni follow-up --help` |
+| Slack-specific operations | `omni slack --help` |
+
+These are discovery paths, not blanket permission to change trust, scope, tenancy or live traffic. The CLI cannot pair itself keylessly: `server add` only registers a URL; an API key is still required. Operator `claim`/`approve`/bare `connect` require an existing `auth:admin` key (setup skill).
 
 ## Quick health check
 
 ```bash
+omni server current --json             # verify target; --server <name> selects per command
 omni status --json                     # API health
-omni auth status --json                # credentials valid?
+omni auth status --json                # validation scope/credential errors are not server downtime
 omni instances list --status connected --json | jq '.[] | {id, name, channel}'
 omni dead-letters stats --json         # failed-event backlog
 ```
