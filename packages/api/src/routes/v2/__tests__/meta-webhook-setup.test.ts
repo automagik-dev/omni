@@ -97,6 +97,13 @@ describe('Meta webhook setup', () => {
     'http://public.example.com',
     'https://localhost',
     'https://127.0.0.1',
+    'https://10.0.0.1',
+    'https://10.255.255.254',
+    'https://172.16.0.1',
+    'https://172.31.255.254',
+    'https://192.168.0.1',
+    'https://omni.local',
+    'https://OMNI.LOCAL.',
     'https://public.example.com/?query=x',
     'https://user:pass@public.example.com',
   ])
@@ -104,6 +111,14 @@ describe('Meta webhook setup', () => {
       Reflect.deleteProperty(process.env, 'OMNI_PUBLIC_URL');
       const res = await app({}, false, publicUrl).request(`http://request-host.invalid${PATH}`);
       expect(await readSetup(res)).toMatchObject({ callbackUrl: null, state: 'public_url_missing' });
+    });
+  for (const host of ['172.15.255.254', '172.32.0.1', '192.167.255.254', '192.169.0.1', '10.example.com'])
+    test(`public host outside the private ranges remains usable: ${host}`, async () => {
+      const res = await app({}, false, `https://${host}`).request(PATH);
+      expect(await readSetup(res)).toMatchObject({
+        callbackUrl: `https://${host}/api/v2/channels/whatsapp-business/webhook`,
+        state: 'ready',
+      });
     });
   test('missing token and app secret are reported without returning either secret', async () => {
     Reflect.deleteProperty(process.env, 'META_VERIFY_TOKEN');
