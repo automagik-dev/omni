@@ -149,6 +149,7 @@ async function runChatlessCallAgent(
   const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
     scopedHandle(db)
       .select({
+        isActive: agents.isActive,
         name: agents.name,
         agentProviderId: agents.agentProviderId,
         agentType: agents.agentType,
@@ -161,6 +162,10 @@ async function runChatlessCallAgent(
       .limit(1),
   );
   if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+  if (!agentRow.isActive) {
+    log.info('Skipping call_agent: agent inactive', { agentId: agentFkId });
+    throw new Error(`Agent is inactive: ${agentFkId}`);
+  }
   if (!agentRow.agentProviderId) {
     throw new Error(`Agent ${agentFkId} has no agent provider configured (required for chatless call_agent)`);
   }
@@ -467,6 +472,7 @@ export function buildAutomationEngineDeps(
       const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
         scopedHandle(db)
           .select({
+            isActive: agents.isActive,
             name: agents.name,
             agentProviderId: agents.agentProviderId,
             agentType: agents.agentType,
@@ -478,6 +484,10 @@ export function buildAutomationEngineDeps(
           .limit(1),
       );
       if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+      if (!agentRow.isActive) {
+        log.info('Skipping call_agent: agent inactive', { agentId: agentFkId });
+        throw new Error(`Agent is inactive: ${agentFkId}`);
+      }
 
       const providerAgentId =
         ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??

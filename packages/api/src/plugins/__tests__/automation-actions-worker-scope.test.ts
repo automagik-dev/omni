@@ -34,6 +34,7 @@ const CHAT_UUID = '99999999-9999-4999-8999-999999999999';
 const AGENT_ROW = {
   name: 'agent-name',
   agentProviderId: 'prov-1',
+  isActive: true,
   agentType: 'assistant',
   metadata: {},
   configPath: null,
