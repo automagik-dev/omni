@@ -9,6 +9,7 @@
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { type SystemUpdater, UpdateVersionSchema } from '../../system/update';
+import { pairedAgentFlagState } from '../../tenancy/feature-flag';
 import type { AppVariables } from '../../types';
 
 const RequestSchema = z.object({ version: UpdateVersionSchema }).strict();
@@ -23,6 +24,11 @@ function updaterOf(c: Context<Env>): SystemUpdater {
 }
 
 export const systemRoutes = new Hono<Env>();
+
+systemRoutes.get('/paired-agents', (c) => {
+  const { flag, enabled, reason } = pairedAgentFlagState('consumers');
+  return c.json({ data: { consumers: { flag, enabled, reason } } });
+});
 
 systemRoutes.get('/update', async (c) => c.json({ data: await updaterOf(c).status() }));
 
