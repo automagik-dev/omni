@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { AgentEventManifest, EventBus } from '@omni/core';
-import type { Agent, Database, NewAgent } from '@omni/db';
+import { type Agent, type Database, type NewAgent, agents } from '@omni/db';
 import { AgentService } from '../agents';
 
 function createMockAgent(overrides: Partial<Agent> = {}): Agent {
@@ -33,10 +33,12 @@ function createMockAgent(overrides: Partial<Agent> = {}): Agent {
 
 function createMockDatabase(results: Agent[] = []) {
   const selectQuery = {
-    from: mock(() => ({
-      ...selectQuery,
-      $dynamic: () => selectQuery,
-    })),
+    from: mock((table: unknown) =>
+      Object.assign(Promise.resolve(table === agents ? results : []), {
+        ...selectQuery,
+        $dynamic: () => selectQuery,
+      }),
+    ),
     $dynamic: () => selectQuery,
     // where() returns a real Promise carrying the chainable props, so the
     // builder resolves like Drizzle's whether awaited directly (update()'s
@@ -63,6 +65,10 @@ function createMockDatabase(results: Agent[] = []) {
         })),
       })),
     })),
+    execute: mock(async () => []),
+    async transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+      return fn(db);
+    },
     _selectQuery: selectQuery,
   };
 

@@ -38,7 +38,9 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertPgTestTarget } from '../packages/db/src/pg-migrated-template';
+// Do not import suite setup here: it validates inherited OMNI_G* URLs at load.
+// The gate first acquires its own target, then replaces those URLs for its child.
+import { assertPgTestTarget } from '../packages/db/src/pg-test-target';
 import {
   createDisposableCluster,
   destroyDisposableCluster,

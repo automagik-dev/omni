@@ -261,7 +261,7 @@ export function createServices(db: Database, eventBus: (EventBus & ConnectorEven
     settings,
     access: new AccessService(db, eventBus, accessCache),
     providers,
-    routes: new RouteService(db, routeResolver),
+    routes: new RouteService(db, routeResolver, eventBus),
     routeResolver,
     deadLetters,
     payloadStore,
