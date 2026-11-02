@@ -336,8 +336,9 @@ export class DeadLetterService {
     } else {
       await this.eventBus.publishGeneric(entry.eventType as EventType, payload, {
         source,
-        // Keep retries of this row stable for consumer-side idempotency. The
-        // original event ID may already have a retained failed-handler claim.
+        // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
+        // stable across attempts for consumer-side idempotency. Do not reuse
+        // entry.eventId: it may already have a retained failed-handler claim.
         publishEventId: entry.id,
         ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
       });

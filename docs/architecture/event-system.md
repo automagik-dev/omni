@@ -1223,7 +1223,14 @@ const largePayloads = await db.query.eventPayloads.findMany({
 
 ## Dead Letter Queue
 
-Failed events go to a dead letter queue for manual inspection:
+Failed events go to a dead letter queue for manual inspection. In the runtime
+`packages/api/src/services/dead-letters.ts`, generic retries use the dead-letter
+**row id** as `OmniEvent.id` on every attempt, rather than the original `eventId`.
+Consumer-side idempotency can therefore skip repeat delivery after an uncertain
+publish result without reusing a retained claim on the original event. Connector
+retries instead retain the original journal event id. NATS-level dedup is not used.
+
+Simplified generic-event lifecycle:
 
 ```typescript
 // packages/core/src/events/dead-letter.ts
@@ -1266,8 +1273,11 @@ export class DeadLetterHandler {
       throw new Error(`Dead letter not found: ${deadLetterId}`);
     }
 
-    // Re-publish original event
-    await this.eventBus.publish(record.payload);
+    // Re-publish the original payload under the stable dead-letter row id.
+    await this.eventBus.publishGeneric(record.eventType, record.payload.payload, {
+      publishEventId: record.id,
+      source: 'dead-letter-retry',
+    });
 
     // Mark as retried
     await this.db.update(deadLetterEvents)
