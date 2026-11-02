@@ -18,22 +18,44 @@ describe('escapeMrkdwn', () => {
   });
 });
 
-describe('markdownToMrkdwn — injection safety', () => {
-  it('neutralises a user mention hidden in text', () => {
-    // The one that matters: unescaped, Slack renders this as a real mention
-    // and pings a human who was never involved.
-    const out = markdownToMrkdwn('olha isso <@U099LEAD>');
-    expect(out).toContain('&lt;@U099LEAD&gt;');
-    expect(out).not.toContain('<@U099LEAD>');
+describe('markdownToMrkdwn — Slack tokens', () => {
+  for (const token of [
+    '<@U099LEAD>',
+    '<@W123USER>',
+    '<@U123|alice>',
+    '<#C123>',
+    '<#C123|general>',
+    '<!here>',
+    '<!channel>',
+    '<!everyone>',
+    '<!subteam^S123>',
+    '<https://example.com/a_b?x=1&y=2|a *label* & more>',
+    '<https://example.com/a_b?x=1&y=2>',
+    '<mailto:alice@example.com|email>',
+    '<https://example.com|a `literal` label>',
+  ]) {
+    it(`preserves ${token} while converting adjacent markdown`, () => {
+      expect(markdownToMrkdwn(`**hello ${token}** & a < b > c`)).toBe(`*hello ${token}* &amp; a &lt; b &gt; c`);
+    });
+  }
+
+  it('escapes malformed and unknown control tokens', () => {
+    const input = '<@not-an-id> <#invalid> <!unknown> <script> <https://example.com|bad<label>';
+    expect(markdownToMrkdwn(input)).toBe(escapeMrkdwn(input));
   });
 
-  it('neutralises @channel-style broadcast markup', () => {
-    const out = markdownToMrkdwn('cuidado <!channel>');
-    expect(out).not.toContain('<!channel>');
+  it('does not activate pre-escaped mentions', () => {
+    expect(markdownToMrkdwn('&lt;@U123&gt;')).toBe('&amp;lt;@U123&amp;gt;');
   });
 
-  it('neutralises a channel link', () => {
-    expect(markdownToMrkdwn('veja <#C123>')).not.toContain('<#C123>');
+  it('preserves repeated tokens and ordinary markdown links together', () => {
+    expect(markdownToMrkdwn('<@U123> [docs](https://example.com/?a=1&b=2) <@U123>')).toBe(
+      '<@U123> <https://example.com/?a=1&b=2|docs> <@U123>',
+    );
+  });
+
+  it('does not confuse input containing a placeholder-like string with a token', () => {
+    expect(markdownToMrkdwn('OMNISLACKTOKEN0END **hi <@U123>**')).toBe('OMNISLACKTOKEN0END *hi <@U123>*');
   });
 });
 

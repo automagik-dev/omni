@@ -74,6 +74,46 @@ const downloadGuard = createDownloadGuard();
 
 type SlackPresenceType = 'typing' | 'recording' | 'paused';
 
+const SLACK_MENTION_ID_PATTERNS = {
+  user: /^[UW][A-Z0-9]+$/,
+  channel: /^[CG][A-Z0-9]+$/,
+  role: /^S[A-Z0-9]+$/,
+};
+const slackMentionsSchema = z
+  .array(
+    z
+      .object({
+        id: z.string().min(1),
+        type: z.enum(['user', 'channel', 'role', 'everyone', 'here']).default('user'),
+      })
+      .refine(
+        ({ id, type }) => type === 'everyone' || type === 'here' || SLACK_MENTION_ID_PATTERNS[type].test(id),
+        'Invalid Slack mention ID',
+      ),
+  )
+  .default([]);
+
+/** Match Discord's structured-mention prefix; Slack roles are user groups (subteams). */
+function withSlackMentions(text: string, value: unknown): string {
+  const mentions = slackMentionsSchema.parse(value);
+  if (mentions.length === 0) return text;
+  const tokens = mentions.map(({ id, type }) => {
+    switch (type) {
+      case 'user':
+        return `<@${id}>`;
+      case 'channel':
+        return `<#${id}>`;
+      case 'role':
+        return `<!subteam^${id}>`;
+      case 'everyone':
+        return '<!everyone>';
+      case 'here':
+        return '<!here>';
+    }
+  });
+  return `${tokens.join(' ')} ${text}`;
+}
+
 /**
  * Lift the fields the receiver routes on out of one of Bolt's per-event body
  * types.
@@ -2491,7 +2531,7 @@ export class SlackPlugin extends BaseChannelPlugin {
       attachment.actingClient,
       {
         channelId,
-        text: message.content.text ?? '',
+        text: withSlackMentions(message.content.text ?? '', message.metadata?.mentions),
         threadTs,
         username: config.defaultUsername,
         iconUrl: config.defaultIconUrl,

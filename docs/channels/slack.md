@@ -321,6 +321,20 @@ Beyond send/receive, the Slack plugin supports:
 - **DM open** — `omni slack dm <instance> <userId>` resolves/opens the DM
   channel for a `U…` user id and prints the follow-up send command.
 
+### Outbound mentions and formatting
+
+In `convert` mode, native Slack user/channel mentions, broadcast mentions (`<!here>`,
+`<!channel>`, `<!everyone>`), user-group mentions, and Slack link tokens survive Markdown
+conversion. Other angle brackets and ampersands are escaped; fenced and inline code remain
+literal. `passthrough` sends the body without conversion.
+
+`POST /api/v2/messages/send` also accepts structured `mentions`, which Slack prepends to the text:
+users use `U…`/`W…` IDs, channels use `C…`/`G…` IDs, and `type: "role"` uses a Slack user-group
+`S…` ID. `type: "here"` and `type: "everyone"` generate Slack broadcast tokens (the required
+`id` field is unused for these two types). Native inline tokens therefore notify their
+recipients in convert mode; use code formatting or escape the token when you want literal
+text instead.
+
 ## Socket health (#941)
 
 A Slack instance can look "connected" while its WebSocket is deaf —
