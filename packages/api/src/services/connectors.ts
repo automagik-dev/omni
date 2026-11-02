@@ -43,6 +43,7 @@ import {
 } from '@omni/db';
 import { type AnyColumn, and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
+import { requestProducerColumns } from '../lib/key-agent';
 import type {
   CreateConnectorBody,
   CreateSubscriptionBody,
@@ -54,6 +55,7 @@ import {
   resolveConnectorIngressTenant,
   resolveConnectorTenantByConnectorId,
 } from '../tenancy/connector-ingress';
+import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -1071,6 +1073,8 @@ export class ConnectorService {
           metadata,
           receivedAt: new Date(),
           tenantId: connector.tenantId,
+          ...(await requestProducerColumns(this.pool)),
+          ...(pairedAgentFlagState('consumers').enabled ? { sourceKind: 'connector', sourceId: connector.id } : {}),
         })
         // Both the global and tenant-scoped idempotency indexes must arbitrate concurrent retries.
         .onConflictDoNothing()
@@ -1325,6 +1329,10 @@ export class ConnectorService {
           metadata,
           receivedAt: new Date(),
           tenantId: subscription.tenantId ?? connector.tenantId ?? null,
+          ...(await requestProducerColumns(this.pool)),
+          ...(pairedAgentFlagState('consumers').enabled
+            ? { sourceKind: 'connector_subscription', sourceId: subscription.id }
+            : {}),
         })
         .onConflictDoNothing({ target: omniEvents.idempotencyKey })
         .returning({ id: omniEvents.id });
