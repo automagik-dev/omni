@@ -1,0 +1,184 @@
+/** Real login command/output/config in isolated children; no HTTP or process-wide mock leakage. */
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const AUTH_PATH = fileURLToPath(new URL('../auth.ts', import.meta.url));
+const CONFIG_PATH = fileURLToPath(new URL('../../config.ts', import.meta.url));
+const KEY = ['omni', 'sk', 'login', 'fixture'].join('_');
+const initialConfig = {
+  apiUrl: 'http://default.invalid',
+  apiKey: 'unchanged-local-key',
+  servers: {
+    active: 'default',
+    list: {
+      default: { url: 'http://default.invalid', apiKey: 'unchanged-local-key' },
+      prod: { url: 'https://prod.invalid' },
+    },
+  },
+};
+let configDir: string;
+const children = new Set<{ kill(): void; exited: Promise<number> }>();
+
+beforeEach(() => {
+  configDir = mkdtempSync(join(tmpdir(), 'omni-auth-login-'));
+  writeFileSync(join(configDir, 'config.json'), JSON.stringify(initialConfig));
+});
+
+afterEach(async () => {
+  await Promise.all(
+    [...children].map(async (child) => {
+      child.kill();
+      await child.exited;
+    }),
+  );
+  rmSync(configDir, { recursive: true, force: true });
+});
+
+async function login(
+  args: string[] = [],
+  options: { stdin?: string; envKey?: string; tty?: boolean; valid?: boolean } = {},
+) {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      '--eval',
+      `
+import { mock } from 'bun:test';
+import { writeFileSync } from 'node:fs';
+mock.module('@omni/sdk', () => ({
+  createOmniClient: (options) => {
+    writeFileSync(process.env.OMNI_CONFIG_DIR + '/request.json', JSON.stringify({
+      keyMatches: options.apiKey === process.env.EXPECTED_AUTH_KEY, baseUrl: options.baseUrl,
+    }));
+    return { auth: { validate: async () => ({ valid: ${options.valid !== false}, keyName: 'fixture', keyPrefix: 'fixture-', scopes: [] }) } };
+  },
+}));
+${options.tty ? "Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });" : ''}
+const { setRuntimeServer } = await import(${JSON.stringify(CONFIG_PATH)});
+setRuntimeServer('prod');
+const { createAuthCommand } = await import(${JSON.stringify(AUTH_PATH)});
+await createAuthCommand().parseAsync(['login', ...${JSON.stringify(args)}], { from: 'user' });
+`,
+    ],
+    {
+      env: {
+        PATH: process.env.PATH,
+        HOME: configDir,
+        OMNI_CONFIG_DIR: configDir,
+        EXPECTED_AUTH_KEY: KEY,
+        ...(options.envKey === undefined ? {} : { OMNI_API_KEY: options.envKey }),
+      },
+      stdin: new Blob([options.stdin ?? '']),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  );
+  children.add(child);
+  try {
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    expect(stdout + stderr).not.toContain(KEY);
+    return { exitCode, stdout, stderr };
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+    children.delete(child);
+  }
+}
+
+function assertSaved(baseUrl = 'https://prod.invalid') {
+  expect(JSON.parse(readFileSync(join(configDir, 'request.json'), 'utf8'))).toEqual({ keyMatches: true, baseUrl });
+  const config = JSON.parse(readFileSync(join(configDir, 'config.json'), 'utf8'));
+  expect(config.servers.list.prod).toEqual({ url: baseUrl, apiKey: KEY });
+  expect(config.servers.list.default).toEqual(initialConfig.servers.list.default);
+  expect(config.servers.active).toBe('default');
+  expect(config.apiKey).toBe('unchanged-local-key');
+}
+
+function assertUnchanged() {
+  expect(existsSync(join(configDir, 'request.json'))).toBe(false);
+  expect(JSON.parse(readFileSync(join(configDir, 'config.json'), 'utf8'))).toEqual(initialConfig);
+}
+
+describe('auth login safe input', () => {
+  for (const newline of ['\n', '\r\n']) {
+    test(`reads piped stdin with ${JSON.stringify(newline)} without echoing the key`, async () => {
+      const result = await login(['--api-key-stdin'], { stdin: KEY + newline });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Logged in successfully');
+      assertSaved();
+    });
+  }
+
+  test('uses OMNI_API_KEY without an argument and retains --api-url', async () => {
+    const result = await login(['--api-url', 'https://override.invalid'], { envKey: KEY });
+    expect(result.exitCode).toBe(0);
+    assertSaved('https://override.invalid');
+  });
+
+  test('keeps --api-key working and prefers it over the ambient env', async () => {
+    const result = await login(['--api-key', KEY], { envKey: 'other-env-key' });
+    expect(result.exitCode).toBe(0);
+    assertSaved();
+  });
+
+  test('explicit stdin overrides ambient OMNI_API_KEY', async () => {
+    const result = await login(['--api-key-stdin'], { stdin: KEY, envKey: 'other-env-key' });
+    expect(result.exitCode).toBe(0);
+    assertSaved();
+  });
+
+  test('refuses conflicting flags before validation or writing config', async () => {
+    const result = await login(['--api-key', KEY, '--api-key-stdin'], { stdin: KEY });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('Use only one of --api-key and --api-key-stdin');
+    assertUnchanged();
+  });
+
+  test('does not silently read stdin or reuse a stored key without an input source', async () => {
+    const result = await login([], { stdin: KEY });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('OMNI_API_KEY');
+    assertUnchanged();
+  });
+
+  for (const stdin of ['', '   ', `${KEY}\nextra`, `${KEY}\n\n`]) {
+    test(`refuses invalid stdin ${JSON.stringify(stdin === '' ? 'empty' : stdin.length)} without echoing it`, async () => {
+      const result = await login(['--api-key-stdin'], { stdin, envKey: KEY });
+      expect(result.exitCode).toBe(2);
+      assertUnchanged();
+    });
+  }
+
+  test('refuses an empty environment key', async () => {
+    const result = await login([], { envKey: '' });
+    expect(result.exitCode).toBe(2);
+    assertUnchanged();
+  });
+
+  test('refuses an empty explicit key rather than falling back to env', async () => {
+    const result = await login(['--api-key', ''], { envKey: KEY });
+    expect(result.exitCode).toBe(2);
+    assertUnchanged();
+  });
+
+  test('refuses --api-key-stdin on a TTY before reading it', async () => {
+    const result = await login(['--api-key-stdin'], { tty: true });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('requires piped stdin');
+    assertUnchanged();
+  });
+
+  test('an invalid API response still leaves stored credentials unchanged', async () => {
+    const result = await login(['--api-key-stdin'], { stdin: KEY, valid: false });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('API key is invalid');
+    expect(JSON.parse(readFileSync(join(configDir, 'config.json'), 'utf8'))).toEqual(initialConfig);
+  });
+});

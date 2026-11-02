@@ -153,6 +153,8 @@ describe('CLI Basic Tests', () => {
       expect(result.stdout).toContain('auth');
       expect(result.stdout).toContain('config');
       expect(result.stdout).toContain('instances');
+      expect(result.stdout).toContain('Bootstrap Omni server (non-interactive, reinstall-safe)');
+      expect(result.stdout).not.toContain('Interactive setup wizard');
     });
 
     test('shows help for auth command', async () => {
