@@ -23,19 +23,13 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
 import { type Database, type EventType, chats, createDbHandle, instances, persons } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { EventService } from '../services/events';
 
 const superUrl = process.env.OMNI_G3_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G3_PSQL_BIN ?? 'psql';
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 type CustomEventHandler = (event: {
   id: string;
@@ -74,7 +68,7 @@ postgresDescribe('custom event journal fidelity (#966, real PostgreSQL)', () => 
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     db = handle.db;
     closeDb = () => handle.close().catch(() => undefined);
 

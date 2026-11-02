@@ -1,5 +1,5 @@
 /** Startup upgrade repair against a disposable PostgreSQL database only. */
-import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import { configureLogging, getLogConfig } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
@@ -33,6 +33,13 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
   const dbName = `omni_agent_reconcile_${crypto.randomUUID().replaceAll('-', '')}`;
   const closers: (() => Promise<void>)[] = [];
+  const previousEnv = { ...process.env };
+  afterEach(() => {
+    for (const name of ['OMNI_MULTITENANCY_ENABLED', 'OMNI_PAIRED_AGENT_CONSUMERS']) {
+      if (previousEnv[name] === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = previousEnv[name];
+    }
+  });
   let db: Database;
   let keys: ApiKeyService;
 
@@ -593,5 +600,33 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     const snapshot = await keys.getById(key.key.id);
     await reconcileAgentKeys(runtime, authPlane, 'enforced');
     expect(await keys.getById(key.key.id)).toEqual(snapshot);
+  }, 15_000);
+  test('multitenancy on without paired flag: enforced startup revokes widened A once, restores A binding and leaves B keys unchanged', async () => {
+    process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+    Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+    const a = await binding(crypto.randomUUID());
+    const b = await binding(crypto.randomUUID());
+    const widened = await seed(`agent:${a.instance.tenantId}:${a.agent.name}`);
+    const bKey = await seed(`agent:${b.instance.tenantId}:${b.agent.name}`, [b.instance.id]);
+    const beforeB = await keys.getById(bKey.key.id);
+    const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
+    await applyTenantRlsEnforcement(db);
+    await applyTenancyRoles(db, passwords, DEFAULT_ROLE_NAMES, dbName);
+    const runtime = openDb({ name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
+    await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
+    const authPlane = openDb({ name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
+    const revoke = spyOn(ApiKeyService.prototype, 'revoke');
+    try {
+      await reconcileAgentKeys(runtime, authPlane, 'enforced');
+      await reconcileAgentKeys(runtime, authPlane, 'enforced');
+      expect(revoke.mock.calls.filter(([id]) => id === widened.key.id)).toHaveLength(1);
+      expect((await keys.getById(widened.key.id))?.status).toBe('revoked');
+      expect((await keys.findAgentKeyByName(`agent:${a.instance.tenantId}:${a.agent.name}`))?.instanceIds).toEqual([
+        a.instance.id,
+      ]);
+      expect(await keys.getById(bKey.key.id)).toEqual(beforeB);
+    } finally {
+      revoke.mockRestore();
+    }
   }, 15_000);
 });

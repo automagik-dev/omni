@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { executeAction } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, instances, omniEvents, tenants } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { authMiddleware } from '../../middleware/auth';
@@ -59,12 +59,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 interface PublishedEvent {
@@ -127,7 +121,7 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));

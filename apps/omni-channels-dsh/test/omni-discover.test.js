@@ -111,13 +111,13 @@ test('a config that does not parse is passed over, and an Omni that answers is s
   }
 })
 
-// The floor is the Omni release with the chat keys this plugin's threads mint (engines.omni):
-// the one just before it shows as outdated in Connect, the floor itself does not.
+// engines.omni is the floor: the preceding build shows as outdated, the floor does not.
 test('an Omni older than the plugin\'s minimum shows as outdated, and one at the minimum does not', async (t) => {
-  assert.equal(OMNI_MINIMUM, '2.261027.3')
   const { home, stop } = homeWith({ cli: { apiUrl: 'http://localhost:8882' } })
   t.after(stop)
-  for (const [version, outdated] of [['2.261027.2', true], [OMNI_MINIMUM, false]]) {
+  const [major, date, build] = OMNI_MINIMUM.split('.').map(Number)
+  const previous = `${major}.${date}.${build - 1}`
+  for (const [version, outdated] of [[previous, true], [OMNI_MINIMUM, false]]) {
     const answers = loopback({ 8882: 'pairable' })
     const fetchImpl = async (address, init) => {
       if (new URL(String(address)).pathname !== '/api/v2/health') return answers(address, init)

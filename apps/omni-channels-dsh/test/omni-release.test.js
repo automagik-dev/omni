@@ -5,11 +5,13 @@ import { DEFAULT_REGISTRY, forgetReleases, installRelease, pickRelease, registry
 import { minimumOf, newer, OMNI_MINIMUM, PLUGIN_VERSION } from '../src/host/version.js'
 
 const PKG = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+const REPO = JSON.parse(readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'))
 
-test('the minimum is what engines.omni declares, a release no newer than the plugin', () => {
+test('the declared minimum is released with the plugin or pending the next release cut', () => {
   assert.equal(OMNI_MINIMUM, minimumOf(PKG.engines.omni))
   assert.match(OMNI_MINIMUM, /^\d+\.\d{6}\.\d+$/)
-  assert.equal(newer(OMNI_MINIMUM, PLUGIN_VERSION), false)
+  // A minimum above the repo version is pending; the release cut stamps it and the plugin.
+  assert.ok(!newer(OMNI_MINIMUM, PLUGIN_VERSION) || newer(OMNI_MINIMUM, REPO.version))
   assert.equal(minimumOf('>=2.261025.2 <3'), '2.261025.2')
   assert.equal(minimumOf('^2.261025.2'), null)
 })

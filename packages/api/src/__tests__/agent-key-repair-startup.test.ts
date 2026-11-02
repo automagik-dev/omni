@@ -7,6 +7,8 @@ import { getHealth } from '../routes/health';
 import { HealthResponseSchema } from '../schemas/openapi/health';
 import type { AppVariables, HealthResponse } from '../types';
 
+const previousEnv = { ...process.env };
+
 // A boot can finish registering HTTP routes after its repair step, without a real DB/server.
 async function boot(
   repair: () => Promise<void>,
@@ -30,11 +32,29 @@ async function health(app: Awaited<ReturnType<typeof boot>>['app']) {
 }
 
 afterEach(async () => {
+  for (const name of ['OMNI_MULTITENANCY_ENABLED', 'OMNI_PAIRED_AGENT_CONSUMERS']) {
+    if (previousEnv[name] === undefined) Reflect.deleteProperty(process.env, name);
+    else process.env[name] = previousEnv[name];
+  }
   // A fresh process starts healthy; restore that state for other health test files.
   await runStartupAgentKeyRepair(async () => {});
 });
 
 describe('startup agent key repair', () => {
+  test('multitenancy on without the paired flag: failed repair logs once and boot serves degraded health with reason', async () => {
+    process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+    Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+    const error = new Error('tenant repair failed');
+    const { app, reportFailure } = await boot(async () => {
+      throw error;
+    });
+    const { response, body } = await health(app);
+    expect(response.status).toBe(200);
+    expect(body.status).toBe('degraded');
+    expect(body.checks.agentKeyRepair?.error).toContain('Agent key repair failed');
+    expect(reportFailure).toHaveBeenCalledTimes(1);
+    expect(reportFailure.mock.calls[0]?.[0]).toBe(error);
+  });
   test('an injected repair failure logs once with its cause and boot still serves degraded health', async () => {
     const cause = new Error('database permission denied');
     const error = new Error('repair failed', { cause });

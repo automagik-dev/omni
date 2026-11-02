@@ -46,10 +46,6 @@ const automationId = crypto.randomUUID();
 const SECRET = 'existing-clickup-secret';
 const TYPE = 'connector.gitlab.merge_request.merged';
 
-function urlFor(database: string, user?: { name: string; password: string }): string {
-  return pgRoleUrl(superUrl, database, user);
-}
-
 // Raw SQL fixtures exercise the database contract before G4 widens EventType.
 async function insertTypedJournal(
   db: Database,
@@ -82,7 +78,17 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
 
   function applyMigration(file: string = migration) {
     const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '--set', 'ON_ERROR_STOP=1', '--dbname', urlFor(dbName), '-f', file],
+      cmd: [
+        psqlBin,
+        '-X',
+        '--no-psqlrc',
+        '--set',
+        'ON_ERROR_STOP=1',
+        '--dbname',
+        pgRoleUrl(superUrl, dbName),
+        '-f',
+        file,
+      ],
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -99,7 +105,7 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
     const template = sqlTemplateName('omni_connector_g2_prefix', prefix);
     ensureSqlTemplate(access, template, prefix);
     createDatabaseFromTemplate(access, dbName, template);
-    owner = open(urlFor(dbName));
+    owner = open(pgRoleUrl(superUrl, dbName));
     await owner.execute(sql`
       INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget) VALUES
         (${TENANT_A}, 'connector-keyed-a', 'Connector A', 86400, 1000, 1000),
@@ -140,9 +146,11 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
     await applyTenantRlsEnforcement(owner);
     const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
     await applyTenancyRoles(owner, passwords, DEFAULT_ROLE_NAMES, dbName);
-    runtime = open(urlFor(dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }));
+    runtime = open(pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }));
     await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
-    authPlane = open(urlFor(dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }));
+    authPlane = open(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+    );
   }, 180_000);
 
   afterAll(async () => {
@@ -154,7 +162,7 @@ postgresDescribe('connector-keyed ingress schema and tenancy', () => {
         '-X',
         '--no-psqlrc',
         '--dbname',
-        urlFor('postgres'),
+        pgRoleUrl(superUrl, 'postgres'),
         '-c',
         `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`,
       ],

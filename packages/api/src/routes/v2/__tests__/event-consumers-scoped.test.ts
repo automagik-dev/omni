@@ -17,12 +17,13 @@
  * live in `__tests__/event-consumers-postgres.test.ts`.
  */
 
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { type Database, instances } from '@omni/db';
 import { Hono } from 'hono';
 import { errorHandler } from '../../../middleware/error';
 import { CreateConsumerSchema } from '../../../schemas/openapi/event-consumers';
 import { EventConsumerService } from '../../../services/event-consumers';
+import { buildWorkerTenantContext } from '../../../tenancy/worker-tenant-context';
 import type { ApiKeyData, AppVariables } from '../../../types';
 import { eventConsumersRoutes } from '../event-consumers';
 
@@ -45,7 +46,7 @@ const UNRESTRICTED_KEY: ApiKeyData = {
   expiresAt: null,
 };
 
-function mount(services: unknown, apiKey?: ApiKeyData): Hono<{ Variables: AppVariables }> {
+function mount(services: unknown, apiKey?: ApiKeyData, tenantId?: string): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
   app.onError(errorHandler);
   app.use('*', async (c, next) => {
@@ -58,6 +59,7 @@ function mount(services: unknown, apiKey?: ApiKeyData): Hono<{ Variables: AppVar
       },
     } as never);
     if (apiKey) c.set('apiKey', apiKey);
+    if (tenantId) c.set('authContext', buildWorkerTenantContext(tenantId));
     await next();
   });
   app.route('/', eventConsumersRoutes);
@@ -325,6 +327,43 @@ describe('unscoped consumer delivery and mutations fail closed over HTTP', () =>
       expect(await res.json()).toMatchObject({
         error: { code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') },
       });
+    });
+  }
+});
+
+const previousEnv = { ...process.env };
+afterEach(() => {
+  for (const name of ['OMNI_MULTITENANCY_ENABLED', 'OMNI_PAIRED_AGENT_CONSUMERS']) {
+    if (previousEnv[name] === undefined) Reflect.deleteProperty(process.env, name);
+    else process.env[name] = previousEnv[name];
+  }
+});
+test('multitenancy on without paired flag: tenant credential still refuses restricted unscoped pull, lease, ack, stream and delete', async () => {
+  process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+  Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+  const tenantId = crypto.randomUUID();
+  const db = {
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [{ name: 'legacy', scoped: false, tenantId }] }) }),
+    }),
+  } as unknown as Database;
+  const app = mount(new EventConsumerService(db), { ...RESTRICTED_KEY, scopes: ['events:write'] }, tenantId);
+  for (const [method, path, body] of [
+    ['POST', '/events/consumers/legacy/pull', undefined],
+    ['POST', '/events/consumers/legacy/pull?leaseMs=1000', undefined],
+    ['GET', '/events/consumers/legacy/stream', undefined],
+    ['POST', '/events/consumers/legacy/ack', { cursor: 100 }],
+    ['POST', '/events/consumers/legacy/ack', { leaseId: crypto.randomUUID() }],
+    ['DELETE', '/events/consumers/legacy', undefined],
+  ] as const) {
+    const response = await app.request(path, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') },
     });
   }
 });
