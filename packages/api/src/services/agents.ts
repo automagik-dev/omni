@@ -9,6 +9,8 @@ import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni
 import { and, eq, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
+import { restoreActiveAgentKeys, revokeInactiveAgentKeys } from './agent-key-bindings';
+import { ApiKeyService } from './api-keys';
 
 /**
  * Agent columns whose values get baked into cached IAgentProvider instances by
@@ -142,15 +144,30 @@ export class AgentService {
    * Update an agent
    */
   async update(id: string, data: Partial<NewAgent>): Promise<Agent> {
-    const [updated] = await this.db
-      .update(agents)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(agents.id, id))
-      .returning();
-
-    if (!updated) {
-      throw new NotFoundError('Agent', id);
-    }
+    const write = async (db: Database, values: Partial<NewAgent> = data): Promise<Agent> => {
+      const [row] = await db
+        .update(agents)
+        .set({ ...values, updatedAt: new Date() })
+        .where(eq(agents.id, id))
+        .returning();
+      if (!row) throw new NotFoundError('Agent', id);
+      return row;
+    };
+    const updated =
+      data.isActive === undefined
+        ? await write(this.db)
+        : await new ApiKeyService(this.db, { eventBus: this.eventBus }).withAgentKeyLock([id], async (keys, db) => {
+            if (data.isActive === false) {
+              // Retire the stored identity before applying a simultaneous rename.
+              await write(db, { isActive: false });
+              await revokeInactiveAgentKeys(keys, db, id);
+            }
+            const row = await write(db);
+            // Reactivation restores current bindings with fresh narrow keys;
+            // revoked credentials stay revoked, and an unbound agent gets none.
+            if (row.isActive) await restoreActiveAgentKeys(keys, db, id);
+            return row;
+          });
 
     // omni#906: evict cached providers built from the pre-update agent row —
     // per-instance so sibling instances retain their own cached configuration.
