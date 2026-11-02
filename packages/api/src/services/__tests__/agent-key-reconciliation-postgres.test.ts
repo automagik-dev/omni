@@ -132,6 +132,47 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     return app.request('/probe', { headers: { 'x-api-key': secret } });
   }
 
+  test('widened authentication refusals warn once per key across cache, database and service instances', async () => {
+    const first = await seed(`agent:warn-${crypto.randomUUID()}`);
+    const second = await seed(`agent:warn-${crypto.randomUUID()}`, []);
+    const narrow = await seed(`agent:warn-${crypto.randomUUID()}`, [crypto.randomUUID()]);
+    const manual = await seed(`agent:warn-${crypto.randomUUID()}`, undefined, 'operator');
+    const other = await seed(`unrelated-${crypto.randomUUID()}`);
+    const config = getLogConfig();
+    const output: string[] = [];
+    const writer = spyOn(process.stdout, 'write').mockImplementation((data) => {
+      output.push(String(data));
+      return true;
+    });
+    try {
+      configureLogging({ level: 'warn', format: 'json', modules: 'api-keys' });
+      await apiKeyCache.set(CacheKeys.apiKey(first.key.keyHash), first.key);
+      expect(await keys.validate(first.plainTextKey)).toBeNull();
+      expect(await apiKeyCache.get(CacheKeys.apiKey(first.key.keyHash))).toBeNull();
+      expect(await keys.validate(second.plainTextKey)).toBeNull();
+      const anotherService = new ApiKeyService(db);
+      for (const key of [first, second]) {
+        expect(await keys.validate(key.plainTextKey)).toBeNull();
+        expect(await anotherService.validate(key.plainTextKey)).toBeNull();
+      }
+      for (const key of [narrow, manual, other]) expect(await keys.validate(key.plainTextKey)).not.toBeNull();
+      expect(await keys.validate('omni_sk_nonexistent')).toBeNull();
+      const warnings = output.map((line) => JSON.parse(line));
+      expect(warnings).toHaveLength(2);
+      expect(new Set(warnings.map((entry) => entry.keyId))).toEqual(new Set([first.key.id, second.key.id]));
+      for (const warning of warnings) {
+        expect(warning.level).toBe('warn');
+        expect(warning.msg).toContain('without instance grants');
+        expect(Object.keys(warning).sort()).toEqual(['keyId', 'level', 'module', 'msg', 'time']);
+      }
+      expect(output.join('')).not.toContain(first.plainTextKey);
+      expect(output.join('')).not.toContain(first.key.keyHash);
+    } finally {
+      configureLogging(config);
+      writer.mockRestore();
+    }
+  });
+
   for (const instanceIds of [undefined, []]) {
     test(`a ${JSON.stringify(instanceIds) ?? 'NULL'}-list auto agent key cannot authenticate, including cached entries`, async () => {
       const result = await seed(`agent:auth-${crypto.randomUUID()}`, instanceIds);
