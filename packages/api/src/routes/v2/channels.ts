@@ -23,11 +23,13 @@ for (const [network, prefix, family] of [
   ['0.0.0.0', 32, 'ipv4'],
   ['127.0.0.0', 8, 'ipv4'],
   ['10.0.0.0', 8, 'ipv4'],
+  ['100.64.0.0', 10, 'ipv4'],
   ['169.254.0.0', 16, 'ipv4'],
   ['172.16.0.0', 12, 'ipv4'],
   ['192.168.0.0', 16, 'ipv4'],
-  ['::', 128, 'ipv6'],
-  ['::1', 128, 'ipv6'],
+  ['::', 96, 'ipv6'], // IPv4-compatible, including unspecified/loopback.
+  ['64:ff9b::', 96, 'ipv6'], // NAT64.
+  ['2002::', 16, 'ipv6'], // 6to4.
   ['fc00::', 7, 'ipv6'],
   ['fe80::', 10, 'ipv6'],
 ] as const)
@@ -58,9 +60,10 @@ channelsRoutes.get('/whatsapp-business/webhook-setup', requireAnyScope(['setting
 
   // Same settings-row-first, env-fallback precedence as server OAuth configuration.
   const raw = await c.get('services').settings.getString('server.public_url', 'OMNI_PUBLIC_URL');
+  const publicUrl = raw?.trim() ?? '';
   let callbackUrl: string | null = null;
   try {
-    const url = new URL(raw?.trim() ?? '');
+    const url = new URL(publicUrl);
     const hostname = url.hostname.replace(/\.$/, '');
     const address = hostname.replace(/^\[|\]$/g, '');
     const family = isIP(address);
@@ -84,7 +87,13 @@ channelsRoutes.get('/whatsapp-business/webhook-setup', requireAnyScope(['setting
       callbackUrl,
       verifyToken,
       appSecretConfigured: Boolean(process.env.META_APP_SECRET),
-      state: !callbackUrl ? 'public_url_missing' : !verifyToken ? 'verify_token_missing' : 'ready',
+      state: callbackUrl
+        ? verifyToken
+          ? 'ready'
+          : 'verify_token_missing'
+        : publicUrl
+          ? 'public_url_invalid'
+          : 'public_url_missing',
     }),
   });
 });
