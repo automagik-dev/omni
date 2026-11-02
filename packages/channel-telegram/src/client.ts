@@ -23,7 +23,14 @@ export async function createBot(instanceId: string, token: string): Promise<Tele
 
   // Lazy-load grammy to keep modules importable in tests without loading grammy.
   const { Bot } = await import('grammy');
-  const bot = new Bot(token) as unknown as TelegramBotLike;
+  const bot = new Bot(token, {
+    client: {
+      // Above grammY's 30s long poll; its 500s default hides dead connections.
+      timeoutSeconds: 45,
+      // A fresh connection avoids reusing sockets discarded by an idle NAT.
+      baseFetchConfig: { agent: false },
+    },
+  }) as unknown as TelegramBotLike;
   bots.set(instanceId, bot);
 
   log.info('Created grammy Bot', { instanceId });
