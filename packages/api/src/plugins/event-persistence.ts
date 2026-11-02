@@ -21,6 +21,7 @@
 
 import type {
   EventBus,
+  EventMetadata,
   MessageReceivedPayload,
   MessageSentPayload,
   OmniEvent,
@@ -39,13 +40,26 @@ import {
   persons,
 } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
+import { resolveKeyAgent } from '../lib/key-agent';
 import { AccessService, accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import { ChatService } from '../services/chats';
+import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext, runTenantWorkDb, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
+
+/** The factory's envelope carries the authenticated key across the consumer boundary. */
+export async function journalProducerColumns(
+  db: Database,
+  metadata: EventMetadata,
+): Promise<{ producingKeyId: string | null; agentId: string | null }> {
+  if (!pairedAgentFlagState('consumers').enabled) return { producingKeyId: null, agentId: metadata.agentId ?? null };
+  const producingKeyId = isValidUuid(metadata.producingKeyId ?? '') ? (metadata.producingKeyId ?? null) : null;
+  const principal = await resolveKeyAgent(db, producingKeyId);
+  return { producingKeyId, agentId: principal.kind === 'agent' ? principal.agentId : null };
+}
 
 /**
  * Safely map channel type - defaults to 'discord' if unknown
@@ -273,7 +287,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 correlationId: metadata.correlationId,
                 from: payload.from,
               },
-              agentId: metadata.agentId ?? null,
+              ...(await journalProducerColumns(db, metadata)),
               causationId: metadata.causationId ?? null,
               conversationId: null,
               // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
@@ -349,7 +363,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 filename: payload.content.filename,
                 voiceNote: payload.content.isVoiceNote,
               },
-              agentId: metadata.agentId ?? null,
+              ...(await journalProducerColumns(db, metadata)),
               causationId: metadata.causationId ?? null,
               conversationId: null,
               // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
@@ -411,7 +425,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 status: 'completed',
                 receivedAt: new Date(event.timestamp),
                 deliveredAt: new Date(payload.deliveredAt),
-                agentId: metadata.agentId ?? null,
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 ...chatLink,
@@ -465,7 +479,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 status: 'completed',
                 receivedAt: new Date(event.timestamp),
                 readAt: new Date(payload.readAt),
-                agentId: metadata.agentId ?? null,
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 ...chatLink,
@@ -551,7 +565,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                   correlationId: metadata.correlationId,
                   retryable: payload.retryable,
                 },
-                agentId: metadata.agentId ?? null,
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 ...chatLink,
@@ -612,6 +626,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 receivedAt: new Date(event.timestamp),
                 rawPayload: deepSanitize({ ...payload, rawPayload: payload.rawPayload ?? null }),
                 metadata: { correlationId: metadata.correlationId, from: payload.from, emoji: payload.emoji },
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
@@ -743,6 +758,7 @@ async function journalInternalEvent(db: Database, event: OmniEvent): Promise<voi
           source: metadata.source,
           fullEventType: event.type,
         },
+        ...(await journalProducerColumns(db, metadata)),
         causationId: metadata.causationId ?? null,
         conversationId: null,
         chatId: payloadChatId,
