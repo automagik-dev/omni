@@ -9,13 +9,12 @@
 
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError, OmniError } from '@omni/core';
-import { type Database, type Instance, createDbHandle } from '@omni/db';
+import type { Database, Instance } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';
-import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 // Helper to create a mock plugin with configurable capabilities
 function createMockPlugin(
@@ -76,22 +75,15 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
 postgresDescribe('Read Receipt Endpoints', () => {
   let db: Database;
-  const dbName = `omni_l1_${crypto.randomUUID().replaceAll('-', '')}`;
-  let close: (() => Promise<void>) | undefined;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let testInstance: Instance;
   let testChat: { id: string; externalId: string };
   let testDmChat: { id: string; externalId: string };
   let testMessage: { id: string; externalId: string };
   let testDmMessage: { id: string; externalId: string };
-  const insertedInstanceIds: string[] = [];
-  const insertedChatIds: string[] = [];
-  const insertedMessageIds: string[] = [];
 
   beforeAll(async () => {
-    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
-    close = handle.close;
-    db = handle.db;
+    db = clone.setup();
 
     // Create a test instance
     const [instance] = await db
@@ -105,7 +97,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       throw new Error('Failed to create test instance');
     }
     testInstance = instance;
-    insertedInstanceIds.push(instance.id);
 
     // Create a test chat
     const [chat] = await db
@@ -122,7 +113,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       throw new Error('Failed to create test chat');
     }
     testChat = { id: chat.id, externalId: chat.externalId };
-    insertedChatIds.push(chat.id);
 
     // Create a test message (with rawPayload containing participant for group read receipts)
     const [message] = await db
@@ -142,7 +132,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       throw new Error('Failed to create test message');
     }
     testMessage = { id: message.id, externalId: message.externalId };
-    insertedMessageIds.push(message.id);
 
     // Create a DM chat (non-group — no participant needed)
     const [dmChat] = await db
@@ -157,7 +146,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       .returning();
     if (!dmChat) throw new Error('Failed to create DM chat');
     testDmChat = { id: dmChat.id, externalId: dmChat.externalId };
-    insertedChatIds.push(dmChat.id);
 
     // Create a DM message (no participant in rawPayload)
     const [dmMsg] = await db
@@ -175,57 +163,9 @@ postgresDescribe('Read Receipt Endpoints', () => {
       .returning();
     if (!dmMsg) throw new Error('Failed to create DM message');
     testDmMessage = { id: dmMsg.id, externalId: dmMsg.externalId };
-    insertedMessageIds.push(dmMsg.id);
   });
 
-  async function cleanupRows() {
-    if (!db) return;
-    // Clean up in reverse order (messages -> chats -> instances)
-    for (const id of insertedMessageIds) {
-      await db.delete(messages).where(eq(messages.id, id));
-    }
-    for (const id of insertedChatIds) {
-      await db.delete(chats).where(eq(chats.id, id));
-    }
-    for (const id of insertedInstanceIds) {
-      await db.delete(instances).where(eq(instances.id, id));
-    }
-  }
-
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    try {
-      await cleanupRows();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      await close?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      const result = Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--set',
-          'ON_ERROR_STOP=1',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
-  });
+  afterAll(() => clone.teardown());
 
   function createTestApp(mockPlugin: ReturnType<typeof createMockPlugin> | null = createMockPlugin()) {
     const services = createServices(db, null);
@@ -340,7 +280,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       if (!otherInstance) {
         throw new Error('Failed to create other instance');
       }
-      insertedInstanceIds.push(otherInstance.id);
 
       const { app } = createTestApp();
 
@@ -512,7 +451,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       if (!otherInstance) {
         throw new Error('Failed to create other instance');
       }
-      insertedInstanceIds.push(otherInstance.id);
 
       const { app } = createTestApp();
 
@@ -694,7 +632,6 @@ postgresDescribe('Read Receipt Endpoints', () => {
       if (!otherInstance) {
         throw new Error('Failed to create other instance');
       }
-      insertedInstanceIds.push(otherInstance.id);
 
       const { app } = createTestApp();
 

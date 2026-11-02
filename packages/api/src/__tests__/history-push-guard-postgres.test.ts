@@ -8,7 +8,7 @@
  * Profile/contacts/groups sync types should NOT be blocked.
  */
 
-import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { instances, syncJobs } from '@omni/db';
@@ -18,16 +18,20 @@ import { instancesRoutes } from '../routes/v2/instances';
 import { createServices } from '../services';
 import type { Services } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('History-Push Sync Guard', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('History-Push Sync Guard', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let services: Services;
   let testInstance: Instance;
-  const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
     services = createServices(db, null);
 
     const [inst] = await db
@@ -39,16 +43,9 @@ describeWithDb('History-Push Sync Guard', () => {
       .returning();
     if (!inst) throw new Error('Failed to create test instance');
     testInstance = inst;
-    insertedInstanceIds.push(inst.id);
   });
 
-  afterAll(async () => {
-    // Clean up sync jobs first (foreign key)
-    for (const id of insertedInstanceIds) {
-      await db.delete(syncJobs).where(eq(syncJobs.instanceId, id));
-      await db.delete(instances).where(eq(instances.id, id));
-    }
-  });
+  afterAll(() => clone.teardown());
 
   function createTestApp() {
     const mockRegistry = {

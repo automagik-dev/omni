@@ -4,24 +4,27 @@
  * Tests for POST /instances/:id/resync - history backfill trigger.
  */
 
-import { afterAll, beforeAll, expect, mock, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { instances } from '@omni/db';
-import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { instancesRoutes } from '../routes/v2/instances';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
-describeWithDb('Resync Endpoint', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Resync Endpoint', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let testInstance: Instance;
-  const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
 
     const [inst] = await db
       .insert(instances)
@@ -32,14 +35,9 @@ describeWithDb('Resync Endpoint', () => {
       .returning();
     if (!inst) throw new Error('Failed to create test instance');
     testInstance = inst;
-    insertedInstanceIds.push(inst.id);
   });
 
-  afterAll(async () => {
-    for (const id of insertedInstanceIds) {
-      await db.delete(instances).where(eq(instances.id, id));
-    }
-  });
+  afterAll(() => clone.teardown());
 
   function createTestApp(eventBusMock?: unknown) {
     const services = createServices(db, null);

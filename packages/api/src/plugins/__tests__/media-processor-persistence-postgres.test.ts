@@ -1,17 +1,22 @@
-import { afterEach, beforeAll, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import type { Database } from '@omni/db';
 import { chats, instances, mediaContent, messages, omniEvents } from '@omni/db';
 import type { MediaProcessingService } from '@omni/media-processing';
 import { eq, inArray } from 'drizzle-orm';
-import { describeWithDb, getTestDb } from '../../__tests__/db-helper';
+import { createMigratedTestDatabase } from '../../__tests__/fixtures/pg-clone';
 import { __test__ } from '../media-processor';
 
 type ProcessingResult = Awaited<ReturnType<MediaProcessingService['process']>>;
 type MediaProcessorTestContext = Parameters<typeof __test__.persistProcessingResult>[0];
 
-describeWithDb('media processor persistence', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('media processor persistence', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   const cleanup = {
     instanceIds: [] as string[],
     chatIds: [] as string[],
@@ -19,9 +24,11 @@ describeWithDb('media processor persistence', () => {
     eventIds: [] as string[],
   };
 
-  beforeAll(() => {
-    db = getTestDb();
+  beforeAll(async () => {
+    db = clone.setup();
   });
+
+  afterAll(() => clone.teardown());
 
   afterEach(async () => {
     if (cleanup.messageIds.length > 0) {
@@ -116,7 +123,13 @@ describeWithDb('media processor persistence', () => {
     const missingEventId = randomUUID();
     const result = transcriptionResult('transcricao persistida sem FK segura');
 
-    await __test__.persistProcessingResult(testContext(), messageId, missingEventId, result, 'audio');
+    const safeEventId = await __test__.resolveSafeMediaContentEventId(
+      testContext(),
+      { metadata: { correlationId: randomUUID(), envelopeVersion: 1 } },
+      missingEventId,
+    );
+    expect(safeEventId).toBeNull();
+    await __test__.persistProcessingResult(testContext(), messageId, safeEventId, result, 'audio');
 
     const [storedMessage] = await db
       .select({ transcription: messages.transcription })

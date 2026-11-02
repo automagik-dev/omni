@@ -17,10 +17,10 @@
  *      and every tenant-scoped sweep was skipped. Proving this needs the real
  *      `tenants`/`instances` enumeration path.
  *
- * Skipped cleanly when ENABLE_DB_TESTS is unset (see db-helper).
+ * Runs against pg-gate's isolated migrated-template database.
  */
 
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
 import type { Database } from '@omni/db';
 import { instances, scheduledMessages, tenants } from '@omni/db';
@@ -29,7 +29,7 @@ import { createScheduledMessageSweeper } from '../scheduler';
 import type { Services } from '../services';
 import { ScheduledMessageService } from '../services/scheduled-messages';
 import { MULTITENANCY_FLAG_ENV } from '../tenancy/feature-flag';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const noop = () => {};
 const noopLogger = { debug: noop, info: noop, warn: noop, error: noop } as never;
@@ -51,22 +51,19 @@ function countingPlugin(onSend?: (n: number) => Promise<void>): { plugin: Channe
   return { plugin, count: () => sends };
 }
 
-describeWithDb('scheduled-message delivery safety (integration)', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('scheduled-message delivery safety (integration)', () => {
   let db: Database;
-  const createdInstanceIds: string[] = [];
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
 
-  beforeAll(() => {
-    db = getTestDb();
+  beforeAll(async () => {
+    db = clone.setup();
   });
 
-  afterAll(async () => {
-    // Scheduled rows cascade from their instance. Tenants are intentionally
-    // left behind: a DB trigger forbids tenant hard-deletes, and a leftover
-    // active tenant with no due rows is harmless to future sweeps.
-    for (const id of createdInstanceIds) {
-      await db.delete(instances).where(eq(instances.id, id));
-    }
-  });
+  afterAll(() => clone.teardown());
 
   async function seedInstance(tenantId?: string): Promise<string> {
     const [inst] = await db
@@ -74,7 +71,7 @@ describeWithDb('scheduled-message delivery safety (integration)', () => {
       .values({ name: `sched-del-${crypto.randomUUID()}`, channel: 'whatsapp-baileys' as const, tenantId })
       .returning();
     if (!inst) throw new Error('failed to seed instance');
-    createdInstanceIds.push(inst.id);
+
     return inst.id;
   }
 

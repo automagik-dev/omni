@@ -7,13 +7,13 @@
  * `*-postgres.test.ts` file, which the db-access guard's scanner excludes — so
  * this helper adds zero sites to the guard.
  *
- * Not a test file itself; imported by direct path from the G6 postgres suites.
+ * Imported by G6 suites directly and by API suites through @omni/db/pg-testing.
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { provisionMigratedDatabase } from '../pg-migrated-template';
+import { type PgSuperAccess, pgRoleUrl, provisionMigratedDatabase } from '../pg-migrated-template';
 import { type ToolingSql, openToolingConnection } from './db';
 
 /** The disposable superuser URL every G6 suite keys on (via the pg-gate). */
@@ -80,4 +80,24 @@ export function dropDatabase(base: string, database: string): void {
 /** Open a tooling connection to a provisioned database. Caller must `end()`. */
 export function connect(url: string): ToolingSql {
   return openToolingConnection(url);
+}
+
+/** Checked, loud sibling; the historical dropDatabase contract above stays unchanged. */
+export function dropDatabaseOrThrow(access: PgSuperAccess, database: string): void {
+  const result = Bun.spawnSync({
+    cmd: [
+      access.psqlBin,
+      '-X',
+      '--no-psqlrc',
+      '--set',
+      'ON_ERROR_STOP=1',
+      '--dbname',
+      pgRoleUrl(access.superUrl, 'postgres'),
+      '-c',
+      `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`,
+    ],
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (result.exitCode !== 0) throw new Error(`Failed to drop test database ${database}: ${result.stderr.toString()}`);
 }

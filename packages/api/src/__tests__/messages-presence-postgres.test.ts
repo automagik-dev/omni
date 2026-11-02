@@ -8,11 +8,10 @@ import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { OmniError } from '@omni/core';
 import type { Database, Instance } from '@omni/db';
 import { instances } from '@omni/db';
-import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 // Helper to create a mock plugin with configurable capabilities
 function createMockPlugin(
@@ -77,14 +76,18 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
   };
 }
 
-describeWithDb('POST /messages/send/presence', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('POST /messages/send/presence', () => {
   let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let testInstance: Instance;
   let testSlackInstance: Instance;
-  const insertedInstanceIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    db = clone.setup();
 
     // Create a test instance
     const [instance] = await db
@@ -98,7 +101,6 @@ describeWithDb('POST /messages/send/presence', () => {
       throw new Error('Failed to create test instance');
     }
     testInstance = instance;
-    insertedInstanceIds.push(instance.id);
 
     const [slackInstance] = await db
       .insert(instances)
@@ -111,15 +113,9 @@ describeWithDb('POST /messages/send/presence', () => {
       throw new Error('Failed to create Slack test instance');
     }
     testSlackInstance = slackInstance;
-    insertedInstanceIds.push(slackInstance.id);
   });
 
-  afterAll(async () => {
-    // Clean up test instances
-    for (const id of insertedInstanceIds) {
-      await db.delete(instances).where(eq(instances.id, id));
-    }
-  });
+  afterAll(() => clone.teardown());
 
   function createTestApp(mockPlugin: ReturnType<typeof createMockPlugin> | null = createMockPlugin()) {
     const services = createServices(db, null);
