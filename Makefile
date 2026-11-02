@@ -258,7 +258,7 @@ test-db:
 # about tenant isolation. No .env is loaded: the gate never touches an ambient
 # DATABASE_URL or a shared cluster.
 test-pg-gate:
-	bun test scripts/pg-gate-report.test.ts
+	bun test scripts/pg-gate-report.test.ts scripts/pg-gate-inventory.test.ts
 	bun scripts/pg-gate.ts
 
 # Keep-warm variant (#967): first run creates the disposable cluster and
