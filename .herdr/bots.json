@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "categories": [
+    {
+      "id": "connectors",
+      "title": "Connectors",
+      "sub": "GitLab connector and paired agents"
+    },
+    {
+      "id": "platform",
+      "title": "Platform",
+      "sub": "Tenancy, keys, tests and cleanup"
+    }
+  ],
+  "bots": [
+    {
+      "id": "b-txjahcaxyw",
+      "kind": "main",
+      "name": "Omni Orchestrator",
+      "role": "Runs Omni and coordinates across projects",
+      "instructions": "",
+      "agent": "claude",
+      "look": {
+        "character": "octopus",
+        "colour": "deepseek"
+      },
+      "model": "claude-opus-5-5"
+    },
+    {
+      "id": "b-d6euvowxh3",
+      "kind": "member",
+      "name": "Connectors Captain",
+      "role": "GitLab connector and paired-agents wishes",
+      "instructions": "",
+      "agent": "claude",
+      "category": "connectors",
+      "look": {
+        "character": "octopus",
+        "colour": "deepseek"
+      }
+    },
+    {
+      "id": "b-c76syrkmjw",
+      "kind": "member",
+      "name": "Connectors Dev",
+      "role": "Implements connector groups",
+      "rank": "dev",
+      "instructions": "",
+      "agent": "codex",
+      "lead": "b-d6euvowxh3",
+      "look": {
+        "character": "octopus",
+        "colour": "deepseek"
+      }
+    },
+    {
+      "id": "b-w6kmutwlxe",
+      "kind": "member",
+      "name": "Tenancy Dev",
+      "role": "Tenant isolation and agent keys",
+      "rank": "dev",
+      "instructions": "",
+      "agent": "codex",
+      "category": "platform",
+      "look": {
+        "character": "octopus",
+        "colour": "deepseek"
+      }
+    },
+    {
+      "id": "b-vuohqz2vby",
+      "kind": "member",
+      "name": "Maintenance Dev",
+      "role": "Flaky tests, removals and cleanup",
+      "rank": "dev",
+      "instructions": "",
+      "agent": "codex",
+      "category": "platform",
+      "look": {
+        "character": "octopus",
+        "colour": "deepseek"
+      }
+    }
+  ]
+}

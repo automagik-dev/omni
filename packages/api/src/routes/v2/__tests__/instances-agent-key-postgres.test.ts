@@ -59,12 +59,21 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
   function harness(tenantId: string | null = null) {
     const service = new ApiKeyService(db);
     const issued: Awaited<ReturnType<ApiKeyService['create']>>[] = [];
-    const create = service.create.bind(service);
-    service.create = async (options) => {
-      const result = await create(options);
-      issued.push(result);
-      return result;
-    };
+    function captureIssued(keys: ApiKeyService) {
+      const create = keys.create.bind(keys);
+      keys.create = async (options) => {
+        const result = await create(options);
+        issued.push(result);
+        return result;
+      };
+    }
+    captureIssued(service);
+    const lock = service.withAgentKeyLock.bind(service);
+    service.withAgentKeyLock = (ids, fn) =>
+      lock(ids, async (keys, tx) => {
+        captureIssued(keys);
+        return fn(keys, tx);
+      });
     const names: Record<string, string> = {
       [AGENT_A]: `old-${crypto.randomUUID()}`,
       [AGENT_B]: `new-${crypto.randomUUID()}`,
@@ -75,7 +84,16 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
       c.set('apiKey', { id: 'operator', name: 'operator', scopes: ['*'], instanceIds: null, expiresAt: null });
       c.set('services', {
         apiKeys: service,
+        routes: {
+          withDatabase() {
+            return this;
+          },
+          list: async () => [],
+        },
         instances: {
+          withDatabase() {
+            return this;
+          },
           create: async (data: { agentId?: string }) => {
             if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
             return { ...data, id: INSTANCE_B, tenantId };
@@ -92,7 +110,12 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
             return { id, channel: 'whatsapp-baileys', tenantId };
           },
         },
-        agents: { getById: async (id: string) => ({ id, name: names[id], metadata: null }) },
+        agents: {
+          withDatabase() {
+            return this;
+          },
+          getById: async (id: string) => ({ id, name: names[id], metadata: null }),
+        },
       } as never);
       await next();
     });

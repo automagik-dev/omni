@@ -96,6 +96,7 @@ function harness(options: {
   instanceTenantId?: string | null;
   instanceTenants?: Record<string, string | null>;
   revokeFails?: boolean;
+  routedAgents?: Record<string, string[]>;
 }): Harness {
   const keys: ExistingKey[] = options.existingKeys ?? [];
   const lookups: string[] = [];
@@ -111,7 +112,16 @@ function harness(options: {
   app.use('*', async (c, next) => {
     if (options.authContext) c.set('authContext', options.authContext);
     c.set('services', {
+      routes: {
+        withDatabase() {
+          return this;
+        },
+        list: mock(async (id: string) => (options.routedAgents?.[id] ?? []).map((agentId) => ({ agentId }))),
+      },
       instances: {
+        withDatabase() {
+          return this;
+        },
         create: mock(async (data: { agentId?: string }) => {
           if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
           return { ...data, id: INSTANCE_B, tenantId };
@@ -129,9 +139,15 @@ function harness(options: {
         }),
       },
       agents: {
+        withDatabase() {
+          return this;
+        },
         getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {
+        async withAgentKeyLock(_ids: string[], fn: (keys: unknown) => Promise<unknown>) {
+          return fn(this);
+        },
         findAgentKeyByName: mock(async (name: string) => {
           lookups.push(name);
           return keys.find((k) => k.name === name && k.status !== 'revoked') ?? null;
@@ -177,6 +193,24 @@ function assignAgent(h: Harness, instanceId: string, agentId: string | null): Pr
 }
 
 describe('agent key provisioning is tenant-scoped', () => {
+  test('unbinding retains the key while a route on the instance still names the old agent', async () => {
+    const key: ExistingKey = {
+      id: 'routed',
+      name: `agent:${TENANT_A}:${SHARED_AGENT_NAME}`,
+      instanceIds: [INSTANCE_A],
+    };
+    const h = harness({
+      authContext: tenantContext(TENANT_A),
+      existingKeys: [key],
+      agentAssignments: [[INSTANCE_A, AGENT_A]],
+      routedAgents: { [INSTANCE_A]: [AGENT_A] },
+    });
+    expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+    expect(h.revoked).toEqual([]);
+    expect(h.updated).toEqual([]);
+    expect(key.instanceIds).toEqual([INSTANCE_A]);
+  });
+
   test("tenant B naming an agent like tenant A's does not touch tenant A's key", async () => {
     // Tenant A is already provisioned, under A's qualified name.
     const aKey: ExistingKey = {

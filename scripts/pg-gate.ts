@@ -38,6 +38,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertPgTestTarget } from '../packages/db/src/pg-migrated-template';
 import {
   createDisposableCluster,
   destroyDisposableCluster,
@@ -45,6 +46,7 @@ import {
   onDisposableExit,
   resolvePgBinaries,
 } from './disposable-pg-cluster';
+import { reportPgGateResult } from './pg-gate-report';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = join(here, '..');
@@ -126,6 +128,7 @@ try {
     if (explicitUrl.includes('?') || parsed.hostname !== '127.0.0.1' || !isDisposablePgPort(Number(parsed.port))) {
       throw new Error('pg-gate: requires 127.0.0.1 on a disposable port (never 5432 or 15432)');
     }
+    assertPgTestTarget(explicitUrl, { ...process.env, OMNI_PG_TEST_TARGET: parsed.host });
   }
   if (!explicitUrl) {
     try {
@@ -144,6 +147,10 @@ try {
 
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   for (const variable of POSTGRES_URL_VARS) env[variable] = url;
+  // Test helpers accept TCP only at this gate's explicitly acquired target.
+  env.OMNI_PG_TEST_TARGET = new URL(url).host;
+  // The shared preflight checks postgres.js resolved options without connecting.
+  assertPgTestTarget(url, env);
   // Mute the app logger under the gate unless the caller asked for logs (#967):
   // the suites intentionally exercise warn/error paths and the JSON flood is
   // pure I/O on green runs. bun test's own failure diagnostics are unaffected.
@@ -187,34 +194,8 @@ try {
     }
   })();
 
-  // --- assert nothing skipped ---------------------------------------------
-  const skipped = /^\s*(\d+)\s+skip\s*$/m.exec(output);
-  const skipCount = skipped ? Number(skipped[1]) : 0;
-  const ran = /^\s*(\d+)\s+pass\s*$/m.exec(output);
-  const passCount = ran ? Number(ran[1]) : 0;
-
-  const problems: string[] = [];
-  if (child.exitCode !== 0) problems.push(`bun test exited ${child.exitCode}`);
-  if (skipCount > 0) problems.push(`${skipCount} test(s) SKIPPED — the gate requires every suite to run`);
-  if (passCount === 0) problems.push('no tests passed — the suites did not execute');
-  // Every discovered suite must have RUN. `bun test` prints a per-file header
-  // only when a file produced output, so presence-of-filename is not a usable
-  // signal; the trailing "Ran N tests across M files" is.
-  const acrossFiles = /across\s+(\d+)\s+files?/.exec(output);
-  const filesRun = acrossFiles ? Number(acrossFiles[1]) : 0;
-  if (filesRun !== suites.length) {
-    problems.push(`bun test ran ${filesRun} file(s), expected ${suites.length}`);
-  }
-
-  if (problems.length > 0) {
-    // Successful runs stay concise; failures retain the child diagnostics.
-    process.stderr.write(output);
-    process.stderr.write(`\npg-gate: FAILED\n${problems.map((p) => `  - ${p}`).join('\n')}\n`);
-    exitCode = 1;
-  } else {
-    process.stdout.write(`\npg-gate: PASSED — ${passCount} assertions across ${suites.length} suites, 0 skipped\n`);
-    exitCode = 0;
-  }
+  // Name failing suites before any NOTICE flood; retain every byte in a separate log.
+  exitCode = reportPgGateResult(output, suites, child.exitCode);
 } finally {
   const destroyed = dataDir && !keep;
   cleanup();
@@ -224,4 +205,4 @@ try {
   }
 }
 
-process.exit(exitCode);
+process.exitCode = exitCode;

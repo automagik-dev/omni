@@ -4,10 +4,12 @@ import { configureLogging, getLogConfig } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
   type Database,
+  agentRoutes,
   agents,
   apiKeys,
   applyTenancyRoles,
   applyTenantRlsEnforcement,
+  chats,
   createDbHandle,
   instances,
   tenants,
@@ -104,6 +106,15 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     if (tenantId) await db.update(agents).set({ tenantId }).where(eq(agents.id, agent.id));
     const instance = await instanceFor(agent.id, tenantId);
     return { agent, instance };
+  }
+
+  async function routeFor(instanceId: string, agentId: string) {
+    const [chat] = await db
+      .insert(chats)
+      .values({ instanceId, externalId: crypto.randomUUID(), channel: 'whatsapp-baileys', chatType: 'dm' })
+      .returning();
+    if (!chat) throw new Error('route chat fixture missing');
+    await db.insert(agentRoutes).values({ instanceId, agentId, scope: 'chat', chatId: chat.id });
   }
 
   function seed(name: string, instanceIds?: string[], createdBy = 'system:auto-provision') {
@@ -295,6 +306,88 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     expect(await keys.findAgentKeysByNames([bName])).toHaveLength(1);
   });
 
+  for (const tenantId of [null, crypto.randomUUID()]) {
+    test(`startup heals pre-existing routes after revoking a widened key (${tenantId ?? 'legacy'})`, async () => {
+      const { agent, instance } = await binding(tenantId);
+      await db.update(instances).set({ agentId: null }).where(eq(instances.id, instance.id));
+      await routeFor(instance.id, agent.id);
+      const name = tenantId ? `agent:${tenantId}:${agent.name}` : `agent:${agent.name}`;
+      const widened = await seed(name);
+      await reconcileAgentKeys(db, db, 'legacy');
+      expect((await keys.getById(widened.key.id))?.status).toBe('revoked');
+      const repaired = await keys.findAgentKeyByName(name);
+      expect(repaired?.instanceIds).toEqual([instance.id]);
+      expect((await dispatch(instance)).success).toBe(true);
+      const snapshot = await keys.list();
+      await reconcileAgentKeys(db, db, 'legacy');
+      expect(await keys.list()).toEqual(snapshot);
+    });
+
+    test(`repair revokes a cached nonempty key containing an unbound grant (${tenantId ?? 'legacy'})`, async () => {
+      const { agent, instance } = await binding(tenantId);
+      const staleInstance = await instanceFor(agent.id, tenantId);
+      const name = tenantId ? `agent:${tenantId}:${agent.name}` : `agent:${agent.name}`;
+      const mixed = await seed(name, [instance.id, staleInstance.id]);
+      await keys.validate(mixed.plainTextKey);
+      await db.update(instances).set({ agentId: null }).where(eq(instances.id, staleInstance.id));
+      await reconcileAgentKeys(db, db, 'legacy');
+      expect((await keys.getById(mixed.key.id))?.status).toBe('revoked');
+      expect(await keys.validate(mixed.plainTextKey)).toBeNull();
+      const repaired = await keys.findAgentKeyByName(name);
+      expect(repaired?.id).not.toBe(mixed.key.id);
+      expect(repaired?.instanceIds).toEqual([instance.id]);
+    });
+  }
+
+  test('repair revokes a nonempty key after its last binding disappeared', async () => {
+    const { agent, instance } = await binding();
+    const old = await seed(`agent:${agent.name}`, [instance.id]);
+    await db.update(instances).set({ agentId: null }).where(eq(instances.id, instance.id));
+    await reconcileAgentKeys(db, db, 'legacy');
+    expect((await keys.getById(old.key.id))?.status).toBe('revoked');
+    expect(await keys.findAgentKeyByName(old.key.name)).toBeNull();
+  });
+
+  test('one instance can authorize both a default agent and a different routed agent', async () => {
+    const main = await binding();
+    const routed = await binding();
+    await db.update(instances).set({ agentId: null }).where(eq(instances.id, routed.instance.id));
+    await routeFor(main.instance.id, routed.agent.id);
+    await routeFor(routed.instance.id, routed.agent.id);
+    const old = await seed(`agent:${routed.agent.name}`, [routed.instance.id]);
+    await reconcileAgentKeys(db, db, 'legacy');
+    expect((await keys.getById(old.key.id))?.status).toBe('active');
+    expect(new Set((await keys.getById(old.key.id))?.instanceIds)).toEqual(
+      new Set([main.instance.id, routed.instance.id]),
+    );
+    expect((await keys.findAgentKeyByName(`agent:${main.agent.name}`))?.instanceIds).toEqual([main.instance.id]);
+  });
+
+  test('stale-key revocation survives replacement failure and a later boot heals it', async () => {
+    const { agent, instance } = await binding();
+    const removed = await instanceFor(agent.id, null);
+    const name = `agent:${agent.name}`;
+    const old = await seed(name, [instance.id, removed.id]);
+    await db.update(instances).set({ agentId: null }).where(eq(instances.id, removed.id));
+    const originalCreate = ApiKeyService.prototype.create;
+    const create = spyOn(ApiKeyService.prototype, 'create').mockImplementation(async function (
+      this: ApiKeyService,
+      options,
+    ) {
+      if (options.name === name) throw new Error('replacement denied');
+      return originalCreate.call(this, options);
+    });
+    try {
+      await expect(reconcileAgentKeys(db, db, 'legacy')).rejects.toThrow('replacement denied');
+      expect((await keys.getById(old.key.id))?.status).toBe('revoked');
+      expect(await keys.validate(old.plainTextKey)).toBeNull();
+    } finally {
+      create.mockRestore();
+    }
+    await reconcileAgentKeys(db, db, 'legacy');
+    expect((await keys.findAgentKeyByName(name))?.instanceIds).toEqual([instance.id]);
+  });
+
   test('agent lookup selects the newest active system key and deterministically breaks timestamp ties', async () => {
     const name = `agent:duplicate-${crypto.randomUUID()}`;
     const first = await seed(name, [crypto.randomUUID()]);
@@ -330,7 +423,8 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     const replacement = await keys.findAgentKeyByName(stale.key.name);
     expect(replacement?.id).not.toBe(stale.key.id);
     expect(replacement?.instanceIds).toEqual([own.instance.id]);
-    expect(await keys.getById(stale.key.id)).toEqual(stale.key);
+    expect((await keys.getById(stale.key.id))?.status).toBe('revoked');
+    expect(await keys.validate(stale.plainTextKey)).toBeNull();
     const snapshot = await keys.list();
     await reconcileAgentKeys(db, db, 'legacy');
     expect(await keys.list()).toEqual(snapshot);
@@ -343,7 +437,7 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
     const reads = spyOn(ApiKeyService.prototype, 'findAgentKeysByNames');
     try {
       await reconcileAgentKeys(db, db, 'legacy');
-      expect(reads).toHaveBeenCalledTimes(1);
+      expect(reads).toHaveBeenCalledTimes(2);
       const repaired = await keys.findAgentKeyByName(`agent:${agent.name}`);
       expect(new Set(repaired?.instanceIds)).toEqual(new Set(bound));
       reads.mockClear();
@@ -351,7 +445,7 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
       try {
         await reconcileAgentKeys(db, db, 'legacy');
         expect(transaction).not.toHaveBeenCalled();
-        expect(reads).not.toHaveBeenCalled();
+        expect(reads).toHaveBeenCalledTimes(1);
       } finally {
         transaction.mockRestore();
       }
@@ -411,8 +505,16 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
   test('enforced startup enumerates tenants on the auth plane and repairs under runtime RLS scopes', async () => {
     const { agent, instance: first } = await binding(crypto.randomUUID());
     const second = await instanceFor(agent.id, first.tenantId);
+    const routed = await instanceFor(agent.id, first.tenantId);
+    await db.update(instances).set({ agentId: null }).where(eq(instances.id, routed.id));
+    await routeFor(routed.id, agent.id);
     const key = await seed(`agent:${first.tenantId}:${agent.name}`, [first.id]);
     const widened = await seed(`agent:${first.tenantId}:${agent.name}`);
+    const victim = await binding(crypto.randomUUID());
+    const removed = await instanceFor(victim.agent.id, victim.instance.tenantId);
+    const victimName = `agent:${victim.instance.tenantId}:${victim.agent.name}`;
+    const stale = await seed(victimName, [victim.instance.id, removed.id]);
+    await db.update(instances).set({ agentId: null }).where(eq(instances.id, removed.id));
     const passwords = {
       ddl: crypto.randomUUID().replaceAll('-', ''),
       runtime: crypto.randomUUID().replaceAll('-', ''),
@@ -428,9 +530,24 @@ postgresDescribe('agent key startup reconciliation (real PostgreSQL)', () => {
       FROM pg_roles WHERE rolname = current_user
     `);
     expect(identity).toMatchObject({ name: DEFAULT_ROLE_NAMES.runtime, rolsuper: false, rolbypassrls: false });
+    const originalCreate = ApiKeyService.prototype.create;
+    const create = spyOn(ApiKeyService.prototype, 'create').mockImplementation(async function (
+      this: ApiKeyService,
+      options,
+    ) {
+      if (options.name === victimName) throw new Error('enforced replacement denied');
+      return originalCreate.call(this, options);
+    });
+    try {
+      await expect(reconcileAgentKeys(runtime, authPlane, 'enforced')).rejects.toThrow('enforced replacement denied');
+      expect((await keys.getById(stale.key.id))?.status).toBe('revoked');
+      expect(await keys.validate(stale.plainTextKey)).toBeNull();
+    } finally {
+      create.mockRestore();
+    }
     await reconcileAgentKeys(runtime, authPlane, 'enforced');
     expect((await keys.getById(widened.key.id))?.status).toBe('revoked');
-    expect(new Set((await keys.getById(key.key.id))?.instanceIds)).toEqual(new Set([first.id, second.id]));
+    expect(new Set((await keys.getById(key.key.id))?.instanceIds)).toEqual(new Set([first.id, second.id, routed.id]));
     expect((await findAgentsWithoutKeys(runtime, authPlane, 'enforced')).map((row) => row.id)).not.toContain(agent.id);
     const snapshot = await keys.getById(key.key.id);
     await reconcileAgentKeys(runtime, authPlane, 'enforced');

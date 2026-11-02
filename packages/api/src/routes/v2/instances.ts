@@ -1374,11 +1374,35 @@ async function handleAgentKeyProvisioning(
   oldAgentId: string | null,
   tenantId: string | null,
 ) {
+  const agentIds = [oldAgentId, newAgentId].filter((id): id is string => id !== null);
+  await services.apiKeys.withAgentKeyLock(agentIds, async (apiKeys, db) => {
+    const lockedServices = {
+      ...services,
+      apiKeys,
+      agents: services.agents.withDatabase(db),
+      instances: services.instances.withDatabase(db),
+      routes: services.routes.withDatabase(db),
+    };
+    await provisionLockedAgentKey(lockedServices, instanceId, newAgentId, oldAgentId, tenantId);
+  });
+}
+
+/** Reads and updates below share the route writer's per-agent transaction lock. */
+async function provisionLockedAgentKey(
+  services: Services,
+  instanceId: string,
+  newAgentId: string | null,
+  oldAgentId: string | null,
+  tenantId: string | null,
+) {
   // Remove instance from old agent's key
   if (oldAgentId) {
     try {
       const oldAgent = await services.agents.getById(oldAgentId);
-      await removeInstanceFromAgentKeys(services, instanceId, oldAgent.name, tenantId);
+      const routes = await services.routes.list(instanceId);
+      if (!routes.some((route) => route.agentId === oldAgentId)) {
+        await removeInstanceFromAgentKeys(services, instanceId, oldAgent.name, tenantId);
+      }
     } catch (err) {
       log.error('Failed to remove instance from old agent key', { oldAgentId, instanceId, error: String(err) });
     }
@@ -1432,7 +1456,12 @@ async function findOwnedBindingKey(services: Services, binding: AgentKeyBinding)
     [...ids].map(async (id) => {
       try {
         const instance = await services.instances.getById(id);
-        owners.set(id, { agentId: instance.agentId, tenantId: instance.tenantId });
+        const routedAgentIds = await ownedRouteAgents(services, id, instance.tenantId);
+        owners.set(id, {
+          agentId: instance.agentId,
+          tenantId: instance.tenantId,
+          routedAgentIds,
+        });
       } catch {
         // A missing or invisible grant cannot prove ownership. Provision a new
         // narrow key instead of adding authority to this ambiguous credential.
@@ -1440,6 +1469,23 @@ async function findOwnedBindingKey(services: Services, binding: AgentKeyBinding)
     }),
   );
   return candidates.find((key) => agentKeyBelongsToBinding(key, binding, owners)) ?? null;
+}
+
+/** A route names an owner only when its agent shares the stored instance tenant. */
+async function ownedRouteAgents(services: Services, instanceId: string, tenantId: string | null): Promise<string[]> {
+  const routes = await services.routes.list(instanceId);
+  const ids = [...new Set(routes.flatMap((route) => route.agentId ?? []))];
+  const owners = await Promise.all(
+    ids.map(async (id) => {
+      try {
+        const agent = await services.agents.getById(id);
+        return agent.tenantId === tenantId ? [id] : [];
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return owners.flat();
 }
 
 /** Remove every matching scoped grant, including legacy names and duplicate rows. */
