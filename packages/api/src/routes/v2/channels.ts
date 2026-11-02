@@ -6,6 +6,7 @@
  * declarations are held to the code by channel-sdk's event-capabilities test.
  */
 
+import { BlockList, isIP } from 'node:net';
 import { Hono } from 'hono';
 import { requireAnyScope } from '../../middleware/auth';
 import { isLockActive } from '../../middleware/scope-enforcer';
@@ -14,6 +15,23 @@ import type { ChannelCapabilitiesMatrix } from '../../schemas/openapi/channels';
 import type { AppVariables } from '../../types';
 
 const channelsRoutes = new Hono<{ Variables: AppVariables }>();
+
+// Check parsed literal addresses without resolving DNS. BlockList also applies
+// IPv4 subnets to their IPv4-mapped IPv6 representations.
+const nonPublicCallbackIps = new BlockList();
+for (const [network, prefix, family] of [
+  ['0.0.0.0', 32, 'ipv4'],
+  ['127.0.0.0', 8, 'ipv4'],
+  ['10.0.0.0', 8, 'ipv4'],
+  ['169.254.0.0', 16, 'ipv4'],
+  ['172.16.0.0', 12, 'ipv4'],
+  ['192.168.0.0', 16, 'ipv4'],
+  ['::', 128, 'ipv6'],
+  ['::1', 128, 'ipv6'],
+  ['fc00::', 7, 'ipv6'],
+  ['fe80::', 10, 'ipv6'],
+] as const)
+  nonPublicCallbackIps.addSubnet(network, prefix, family);
 
 // Also set before auth in app.ts, so refusals cannot be cached either.
 channelsRoutes.use('/whatsapp-business/webhook-setup', async (c, next) => {
@@ -44,14 +62,16 @@ channelsRoutes.get('/whatsapp-business/webhook-setup', requireAnyScope(['setting
   try {
     const url = new URL(raw?.trim() ?? '');
     const hostname = url.hostname.replace(/\.$/, '');
+    const address = hostname.replace(/^\[|\]$/g, '');
+    const family = isIP(address);
     if (
       url.protocol === 'https:' &&
       !url.username &&
       !url.password &&
       !url.search &&
       !url.hash &&
-      !/^(localhost|.*\.localhost|127\..*|0\.0\.0\.0|\[::1\]|\[::\])$/i.test(hostname) &&
-      !/^(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|.*\.local)$/i.test(hostname)
+      !/^(localhost|.*\.(localhost|local)|127\..*)$/i.test(hostname) &&
+      (!family || !nonPublicCallbackIps.check(address, family === 4 ? 'ipv4' : 'ipv6'))
     ) {
       callbackUrl = `${url.href.replace(/\/+$/, '')}/api/v2/channels/whatsapp-business/webhook`;
     }
