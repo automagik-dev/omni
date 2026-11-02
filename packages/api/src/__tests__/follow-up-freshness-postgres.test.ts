@@ -22,7 +22,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import { type Database, chatFollowUpState, chats, createDbHandle, instances } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { and, eq } from 'drizzle-orm';
 import {
   FollowUpLifecycleService,
@@ -48,12 +48,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 const config = (overrides: Partial<FollowUpSequenceConfig> = {}): FollowUpSequenceConfig => ({
@@ -88,7 +82,7 @@ postgresDescribe('evaluateIdleTimeoutFreshness (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     db = handle.db;

@@ -26,7 +26,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { createServices } from '../../services';
 import { setupMessagePersistence } from '../message-persistence';
@@ -53,12 +53,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
 }
 
 /** Capture the handlers `setupMessagePersistence` registers on the bus. */
@@ -119,7 +113,7 @@ postgresDescribe('identity canonicalization + exclusion (real PostgreSQL)', () =
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     // Instances are seeded WITHOUT a tenant. This suite runs the legacy world
     // (no RLS): a non-null instance tenant would make the derivation trigger
