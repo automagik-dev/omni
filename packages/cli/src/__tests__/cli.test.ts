@@ -363,7 +363,7 @@ describe('CLI Integration Tests', () => {
       test(`auth login accepts ${source} through the root CLI without echoing the key`, async () => {
         const result = await runCli(
           ['auth', 'login', '--api-url', MOCK_URL, ...(source === 'stdin' ? ['--api-key-stdin'] : [])],
-          { OMNI_CLI_API_KEY: source === 'env' ? MOCK_API_KEY : '', OMNI_API_KEY: 'server-primary-fixture' },
+          { OMNI_CLI_API_KEY: source === 'env' ? MOCK_API_KEY : '', OMNI_API_KEY: 'test-primary-key' },
           source === 'stdin' ? `${MOCK_API_KEY}\n` : undefined,
         );
         assertSuccess(result, `auth login ${source}`);

@@ -7,15 +7,15 @@ import { fileURLToPath } from 'node:url';
 
 const AUTH_PATH = fileURLToPath(new URL('../auth.ts', import.meta.url));
 const CONFIG_PATH = fileURLToPath(new URL('../../config.ts', import.meta.url));
-const KEY = ['omni', 'sk', 'login', 'fixture'].join('_');
-const PRIMARY_KEY = 'server-primary-fixture';
+const KEY = 'test-cli-key';
+const PRIMARY_KEY = 'test-primary-key';
 const initialConfig = {
   apiUrl: 'http://default.invalid',
-  apiKey: 'unchanged-local-key',
+  apiKey: 'test-local-key',
   servers: {
     active: 'default',
     list: {
-      default: { url: 'http://default.invalid', apiKey: 'unchanged-local-key' },
+      default: { url: 'http://default.invalid', apiKey: 'test-local-key' },
       prod: { url: 'https://prod.invalid' },
     },
   },
@@ -117,7 +117,7 @@ function assertSaved(baseUrl = 'https://prod.invalid', key = KEY) {
   expect(config.servers.list.prod).toEqual({ url: baseUrl, apiKey: key });
   expect(config.servers.list.default).toEqual(initialConfig.servers.list.default);
   expect(config.servers.active).toBe('default');
-  expect(config.apiKey).toBe('unchanged-local-key');
+  expect(config.apiKey).toBe('test-local-key');
 }
 
 function assertUnchanged() {
@@ -144,14 +144,14 @@ describe('auth login safe input', () => {
   });
 
   test('keeps --api-key working and prefers it over the ambient env', async () => {
-    const result = await login(['--api-key', KEY], { envKey: 'other-env-key' });
+    const result = await login(['--api-key', KEY], { envKey: 'test-env-key' });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('"keySource": "flag"');
     assertSaved();
   });
 
   test('explicit stdin overrides ambient OMNI_CLI_API_KEY', async () => {
-    const result = await login(['--api-key-stdin'], { stdin: KEY, envKey: 'other-env-key' });
+    const result = await login(['--api-key-stdin'], { stdin: KEY, envKey: 'test-env-key' });
     expect(result.exitCode).toBe(0);
     assertSaved();
   });
