@@ -2,11 +2,12 @@ import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { PROVIDER_SCHEMAS, REMOVED_OPENCLAW_MESSAGE } from '@omni/core';
 import type { AgentProvider, Database } from '@omni/db';
 import { Hono } from 'hono';
+import { errorHandler } from '../../middleware/error';
 import { __test__ as dispatcher, resolveProvider } from '../../plugins/agent-dispatcher';
 import { providersRoutes } from '../../routes/v2/providers';
 import { CreateProviderSchema, ProviderSchema } from '../../schemas/openapi/providers';
 import type { AppVariables } from '../../types';
-import { AgentRunnerService } from '../agent-runner';
+import { type AgentRunContext, AgentRunnerService } from '../agent-runner';
 import { ProviderService } from '../providers';
 
 const row: AgentProvider = {
@@ -32,20 +33,48 @@ const row: AgentProvider = {
   lastHealthError: null,
 };
 
-function fixture() {
+function fixture(options: { writable?: boolean; provider?: AgentProvider } = {}) {
+  const stored = structuredClone(options.provider ?? row);
+  let deleted = false;
   const query = {
     from: () => query,
     where: () => query,
     $dynamic: () => query,
-    limit: async () => [row],
-    orderBy: async () => [row],
+    limit: async () => (deleted ? [] : [stored]),
+    orderBy: async () => (deleted ? [] : [stored]),
   };
   const writes = mock(() => {
-    throw new Error('Unexpected database write');
+    if (!options.writable) throw new Error('Unexpected database write');
   });
-  const db = { select: () => query, insert: writes, update: writes, delete: writes } as unknown as Database;
+  const db = {
+    select: () => query,
+    insert: writes,
+    update: () => {
+      writes();
+      return {
+        set: (data: Partial<AgentProvider>) => ({
+          where: () => {
+            Object.assign(stored, data);
+            return Object.assign(Promise.resolve(), { returning: async () => [stored] });
+          },
+        }),
+      };
+    },
+    delete: () => {
+      writes();
+      return {
+        where: () => ({
+          returning: async () => {
+            deleted = true;
+            return [{ id: stored.id }];
+          },
+        }),
+      };
+    },
+  } as unknown as Database;
   const providers = new ProviderService(db);
   const app = new Hono<{ Variables: AppVariables }>();
+  app.onError(errorHandler);
   app.use('*', async (c, next) => {
     c.set('services', { providers } as AppVariables['services']);
     await next();
@@ -128,6 +157,93 @@ describe('removed provider compatibility', () => {
         }),
       ).rejects.toThrow(REMOVED_OPENCLAW_MESSAGE);
       expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  test.each(['run', 'stream'] as const)('%s refuses a retained provider before producing a reply', async (mode) => {
+    const { db } = fixture();
+    const previousFetch = globalThis.fetch;
+    const fetch = mock(async () => {
+      throw new Error('Unexpected outbound request');
+    });
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    try {
+      const runner = new AgentRunnerService(db);
+      const context: AgentRunContext = {
+        instance: { id: 'instance', agentProviderId: row.id, agentInternalId: 'agent' } as AgentRunContext['instance'],
+        chatId: 'chat',
+        senderId: 'sender',
+        chatType: 'dm',
+        messages: ['hello'],
+      };
+      const result = mode === 'stream' ? runner.stream(context).next() : runner.run(context);
+      await expect(result).rejects.toMatchObject({ message: REMOVED_OPENCLAW_MESSAGE, statusCode: 410 });
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  test('renaming a retained provider keeps the removal marker and secret masking in the PATCH response', async () => {
+    const { app, providers, writes } = fixture({ writable: true });
+    const response = await app.request(`/providers/${row.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'renamed-provider' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: AgentProvider };
+    expect(body.data).toMatchObject({
+      id: row.id,
+      name: 'renamed-provider',
+      schema: 'openclaw',
+      lastHealthStatus: 'error',
+      lastHealthError: REMOVED_OPENCLAW_MESSAGE,
+      apiKey: '********',
+      schemaConfig: { devicePrivateKey: '[REDACTED]', deviceToken: '[REDACTED]' },
+    });
+    expect((await providers.getByName('renamed-provider')).name).toBe('renamed-provider');
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+
+  test('replacing a retained provider with a supported schema removes the read marker', async () => {
+    const { app, providers } = fixture({ writable: true });
+    const response = await app.request(`/providers/${row.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ schema: 'webhook', baseUrl: 'https://example.com/hook' }),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { data: AgentProvider };
+    expect(body.data).toMatchObject({ id: row.id, schema: 'webhook', baseUrl: 'https://example.com/hook' });
+    expect(body.data.lastHealthError).not.toBe(REMOVED_OPENCLAW_MESSAGE);
+    expect((await providers.getById(row.id)).schema).toBe('webhook');
+  });
+
+  test('a retained provider can be deleted through the management API', async () => {
+    const { app, writes } = fixture({ writable: true });
+    const response = await app.request(`/providers/${row.id}`, { method: 'DELETE' });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true });
+    expect((await app.request(`/providers/${row.id}`)).status).toBe(404);
+    expect(writes).toHaveBeenCalledTimes(1);
+  });
+
+  test.each([
+    ['ws://example.com/gateway', 'http://example.com/health'],
+    ['wss://example.com/gateway', 'https://example.com/health'],
+    ['https://example.com/api', 'https://example.com/health'],
+  ])('supported provider health converts %s to %s', async (baseUrl, expectedUrl) => {
+    const { providers, writes } = fixture({ writable: true, provider: { ...row, schema: 'webhook', baseUrl } });
+    const previousFetch = globalThis.fetch;
+    const fetch = mock(async () => new Response('ok'));
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    try {
+      expect(await providers.checkHealth(row.id)).toMatchObject({ healthy: true });
+      expect(fetch).toHaveBeenCalledWith(expectedUrl, expect.objectContaining({ method: 'GET' }));
+      expect(writes).toHaveBeenCalledTimes(1);
     } finally {
       globalThis.fetch = previousFetch;
     }

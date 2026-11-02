@@ -934,6 +934,28 @@ describe('agent-dispatcher', () => {
       cleanup?.();
     });
 
+    it('refuses a removed provider on reactions without falling back to the legacy runner', async () => {
+      const eventBus = createMockEventBus();
+      const getById = mock(async () => createMockProvider({ schema: 'openclaw' }));
+      const run = mock(async () => {
+        throw new Error('Removed provider must not reach legacy dispatch');
+      });
+      const services = createMockServices({
+        providers: { getById },
+        agentRunner: {
+          getInstanceWithProvider: mock(async () => createMockInstance({ triggerEvents: ['reaction.received'] })),
+          getSenderName: mock(async () => 'Reactor'),
+          run,
+        },
+      });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+      await eventBus.fire('reaction.received', createReactionEvent());
+
+      expect(getById).toHaveBeenCalledWith('provider-1');
+      expect(run).not.toHaveBeenCalled();
+    });
+
     it('processes a valid reaction event', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
