@@ -8743,10 +8743,10 @@ export interface components {
             /** @description Whether META_APP_SECRET is set; its value is never returned */
             appSecretConfigured: boolean;
             /**
-             * @description Public URL absence takes precedence when both URL and token are missing; inspect both nullable fields and appSecretConfigured. Ready means URL/token configured, not successful Meta verification.
+             * @description public_url_missing means no configured URL; public_url_invalid means the configured URL is malformed or unusable as a public HTTPS callback. URL problems take precedence over a missing token. Ready means URL/token configured, not successful Meta verification.
              * @enum {string}
              */
-            state: "ready" | "public_url_missing" | "verify_token_missing";
+            state: "ready" | "public_url_missing" | "public_url_invalid" | "verify_token_missing";
         };
         Connector: {
             /** Format: uuid */
@@ -22830,7 +22830,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Webhook configuration; missing configuration is explicit */
+            /** @description Webhook configuration; missing or invalid configuration is explicit */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -22848,10 +22848,10 @@ export interface operations {
                             /** @description Whether META_APP_SECRET is set; its value is never returned */
                             appSecretConfigured: boolean;
                             /**
-                             * @description Public URL absence takes precedence when both URL and token are missing; inspect both nullable fields and appSecretConfigured. Ready means URL/token configured, not successful Meta verification.
+                             * @description public_url_missing means no configured URL; public_url_invalid means the configured URL is malformed or unusable as a public HTTPS callback. URL problems take precedence over a missing token. Ready means URL/token configured, not successful Meta verification.
                              * @enum {string}
                              */
-                            state: "ready" | "public_url_missing" | "verify_token_missing";
+                            state: "ready" | "public_url_missing" | "public_url_invalid" | "verify_token_missing";
                         };
                     };
                 };

@@ -33,9 +33,9 @@ export const MetaWebhookSetupSchema = z.object({
   verifyToken: z.string().nullable().describe('Active server META_VERIFY_TOKEN; not a Graph API access token'),
   appSecretConfigured: z.boolean().describe('Whether META_APP_SECRET is set; its value is never returned'),
   state: z
-    .enum(['ready', 'public_url_missing', 'verify_token_missing'])
+    .enum(['ready', 'public_url_missing', 'public_url_invalid', 'verify_token_missing'])
     .describe(
-      'Public URL absence takes precedence when both URL and token are missing; inspect both nullable fields and appSecretConfigured. Ready means URL/token configured, not successful Meta verification.',
+      'public_url_missing means no configured URL; public_url_invalid means the configured URL is malformed or unusable as a public HTTPS callback. URL problems take precedence over a missing token. Ready means URL/token configured, not successful Meta verification.',
     ),
 });
 
@@ -52,7 +52,7 @@ export function registerChannelSchemas(registry: OpenAPIRegistry): void {
       'Requires settings:write and an unlocked, non-tenant credential. Returns the configured public callback and active verification token (shared across Meta instances). Cache-Control: no-store. Never returns the app secret or Graph API access tokens.',
     responses: {
       200: {
-        description: 'Webhook configuration; missing configuration is explicit',
+        description: 'Webhook configuration; missing or invalid configuration is explicit',
         content: { 'application/json': { schema: z.object({ data: MetaWebhookSetupSchema }) } },
       },
       401: { description: 'Authentication required' },
