@@ -126,12 +126,12 @@ export function install(rt) {
     return value
   }
 
-  // Uncached, scoped reads. Only transport failures and server errors are retriable;
+  // Uncached, scoped reads. Transport failures, timeouts, throttling and server errors retry;
   // missing/forbidden/malformed records must not block the whole durable stream.
   async function messageOf(row, required = false) {
     if (!row.chatUuid || !row.externalId) return undefined
     const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
-    if (required && response?.status >= 500) throw new Error('own-device media lookup server error')
+    if (required && (response?.status >= 500 || [408, 429].includes(response?.status))) throw new Error('own-device media lookup temporarily unavailable')
     if (!response?.ok) return undefined
     let data
     try { data = await response.json() } catch (error) {
