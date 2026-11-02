@@ -581,7 +581,7 @@ export function createApp(
     }
 
     try {
-      const result = await services.webhooks.receive(sourceName, payload, headers, {
+      const result = await services.webhooks.receivePublic(sourceName, payload, headers, {
         autoCreate: false,
         rawBody,
         requireSignature: true,
