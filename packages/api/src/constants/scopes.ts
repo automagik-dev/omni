@@ -233,6 +233,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /instances': 'instances:read',
   'GET /instances/supported-channels': 'instances:read',
   'GET /channels/capabilities': 'instances:read',
+  'GET /channels/whatsapp-business/webhook-setup': 'settings:write',
   'GET /instances/:id': 'instances:read',
   'POST /instances': 'instances:write',
   'PATCH /instances/:id': 'instances:write',

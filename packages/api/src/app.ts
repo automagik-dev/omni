@@ -168,6 +168,10 @@ export function createApp(
 
   // Global middleware
   app.use('*', timing());
+  app.use('/api/v2/channels/whatsapp-business/webhook-setup', async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    await next();
+  });
 
   // Request safety: timeout and body size limits
   app.use('*', async (c, next) => {

@@ -3673,6 +3673,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/whatsapp-business/webhook-setup": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read Meta webhook setup for this deployment
+         * @description Requires settings:write and an unlocked, non-tenant credential. Returns the configured public callback and active verification token (shared across Meta instances). Cache-Control: no-store. Never returns the app secret or Graph API access tokens.
+         */
+        get: operations["getMetaWebhookSetup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels/capabilities": {
         parameters: {
             query?: never;
@@ -8711,6 +8731,22 @@ export interface components {
             deletes: boolean | "unknown";
             /** @description true/false as established from the channel's code; 'unknown' when undeclared */
             idempotency: boolean | "unknown";
+        };
+        MetaWebhookSetup: {
+            /**
+             * Format: uri
+             * @description Configured public HTTPS callback, never inferred from request headers
+             */
+            callbackUrl: string | null;
+            /** @description Active server META_VERIFY_TOKEN; not a Graph API access token */
+            verifyToken: string | null;
+            /** @description Whether META_APP_SECRET is set; its value is never returned */
+            appSecretConfigured: boolean;
+            /**
+             * @description Public URL absence takes precedence when both URL and token are missing; inspect both nullable fields and appSecretConfigured. Ready means URL/token configured, not successful Meta verification.
+             * @enum {string}
+             */
+            state: "ready" | "public_url_missing" | "verify_token_missing";
         };
         Connector: {
             /** Format: uuid */
@@ -22782,6 +22818,57 @@ export interface operations {
                         };
                     };
                 };
+            };
+        };
+    };
+    getMetaWebhookSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Webhook configuration; missing configuration is explicit */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /**
+                             * Format: uri
+                             * @description Configured public HTTPS callback, never inferred from request headers
+                             */
+                            callbackUrl: string | null;
+                            /** @description Active server META_VERIFY_TOKEN; not a Graph API access token */
+                            verifyToken: string | null;
+                            /** @description Whether META_APP_SECRET is set; its value is never returned */
+                            appSecretConfigured: boolean;
+                            /**
+                             * @description Public URL absence takes precedence when both URL and token are missing; inspect both nullable fields and appSecretConfigured. Ready means URL/token configured, not successful Meta verification.
+                             * @enum {string}
+                             */
+                            state: "ready" | "public_url_missing" | "verify_token_missing";
+                        };
+                    };
+                };
+            };
+            /** @description Authentication required */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Global settings administrator required; tenant and locked credentials are refused */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
