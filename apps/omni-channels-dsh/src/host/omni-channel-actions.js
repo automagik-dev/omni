@@ -5,7 +5,8 @@
 // the linked key (rt.omniRequest, omni.js), so the key never reaches the page: the page gets
 // the channel, the code to scan, the connection state and Omni's own words when it refuses.
 // A token or access token the person types goes from the page to here once and is not
-// returned.
+// returned. The webhook setup endpoint separately returns the shared verification token only
+// to an unlocked global settings administrator, through a writable host.
 //
 // What the key may do is read from POST /auth/validate: without instances:write the page
 // stays read-only for channels, without messages:send for replies. An Omni from before that
@@ -78,6 +79,10 @@ const Chat = z.object({ data: z.object({ id, instanceId: id, externalId: z.strin
 const Validate = z.object({ data: z.object({ scopes: z.array(z.string()) }).passthrough() })
 const Supported = z.object({ items: z.array(z.object({ id: z.string(), loaded: z.boolean().optional() }).passthrough()) }).passthrough()
 const SlackApp = z.object({ configured: z.boolean() }).passthrough()
+const WebhookSetup = z.object({ data: z.object({
+  callbackUrl: z.string().url().nullable(), verifyToken: z.string().max(8192).nullable(),
+  appSecretConfigured: z.boolean(), state: z.enum(['ready', 'public_url_missing', 'verify_token_missing']),
+}) })
 const SlackStart = z.object({ authorizeUrl: z.string().url().max(4096), nonce: z.string().regex(/^[A-Za-z0-9_-]{8,128}$/) }).passthrough()
 const SlackResult = z.discriminatedUnion('status', [
   z.object({ status: z.literal('pending') }),
@@ -209,6 +214,14 @@ export function install(rt) {
   }
 
   // Where pairing stands: the connection state and, while WhatsApp waits for a scan, the code.
+  async function webhookSetup() {
+    const reply = await request('GET', '/channels/whatsapp-business/webhook-setup')
+    if ([401, 403].includes(reply.status)) return { authorized: false }
+    // Never reflect server error bodies: they might contain credential material.
+    if (!reply.ok) throw refused('Could not load Meta webhook setup. Update Omni or ask an admin.')
+    return { authorized: true, ...parse(WebhookSetup, reply.json, 'Invalid Meta webhook setup response').data }
+  }
+
   async function pairing(body) {
     const { id: channelId } = parse(ChannelPayload, body, 'Unknown channel')
     const status = parse(Status, await must('GET', `/instances/${channelId}/status`), 'Omni did not say how the channel is')
@@ -297,6 +310,8 @@ export function install(rt) {
     'omni-channel-create': create, 'omni-channel-phone-code': phoneCode, 'omni-channel-cancel': cancel, 'omni-channel-act': act, 'omni-send': send,
     'omni-slack-start': slackStart, 'omni-slack-result': slackResult, 'omni-wab-connect': wabConnect,
     'omni-channel-settings-save': saveSettings, 'omni-wab-repair': wabRepair,
+    // Secret retrieval requires the team's writable-host gate as well as API authorization.
+    'omni-wab-webhook-setup': webhookSetup,
   }
   const READS = { 'omni-channel-abilities': readAbilities, 'omni-channel-pairing': pairing, 'omni-channel-types': types, 'omni-slack-app': slackApp,
     'omni-channel-settings': settings, 'omni-channel-agents': agents }

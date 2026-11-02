@@ -3,6 +3,7 @@ const { createElement: h, useEffect, useRef, useState } = SettingsReact
 import { FIELDS, GROUPS, fieldText, inputValue } from '../host/channel-settings.js'
 import { call, t } from './core.js'
 import { refreshLive } from './omni-store.js'
+import { MetaWebhookSetup } from './meta-webhook-setup.js'
 
 // Keyed by channel id by the parent: a late response can never edit a different channel.
 export function ChannelSettings({ channel, writable, request = call, refresh = () => refreshLive(call) }) {
@@ -95,6 +96,7 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
   }
   return h('section', { 'aria-label': t('Channel settings') },
     h('h2', { className: 'oc-section' }, t('Channel settings')),
+    channel.type === 'whatsapp-business' ? h(MetaWebhookSetup, { request, writable }) : null,
     error ? h('p', { role: 'alert', className: 'oc-problem' }, error) : null,
     saved ? h('p', { role: 'status' }, t('Settings saved')) : null,
     !record ? h('p', null, error ? t('Settings unavailable') : t('Loading settings…')) : h('div', null,

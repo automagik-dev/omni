@@ -489,21 +489,21 @@ function sl(s15, t2, e, i, r, n) {
   for (let l = 0; l < s15.length - 1; l++) {
     let a = l, u = s15.get(++a);
     if (!u.isWrapped) continue;
-    let h19 = [s15.get(l)];
-    for (; a < s15.length && u.isWrapped; ) h19.push(u), u = s15.get(++a);
+    let h20 = [s15.get(l)];
+    for (; a < s15.length && u.isWrapped; ) h20.push(u), u = s15.get(++a);
     if (!n && i >= l && i < a) {
-      l += h19.length - 1;
+      l += h20.length - 1;
       continue;
     }
-    let c = 0, d = ri(h19, c, t2), _ = 1, p = 0;
-    for (; _ < h19.length; ) {
-      let f = ri(h19, _, t2), A = f - p, R = e - d, O = Math.min(A, R);
-      h19[c].copyCellsFrom(h19[_], p, d, O, false), d += O, d === e && (c++, d = 0), p += O, p === f && (_++, p = 0), d === 0 && c !== 0 && h19[c - 1].getWidth(e - 1) === 2 && (h19[c].copyCellsFrom(h19[c - 1], e - 1, d++, 1, false), h19[c - 1].setCell(e - 1, r));
+    let c = 0, d = ri(h20, c, t2), _ = 1, p = 0;
+    for (; _ < h20.length; ) {
+      let f = ri(h20, _, t2), A = f - p, R = e - d, O = Math.min(A, R);
+      h20[c].copyCellsFrom(h20[_], p, d, O, false), d += O, d === e && (c++, d = 0), p += O, p === f && (_++, p = 0), d === 0 && c !== 0 && h20[c - 1].getWidth(e - 1) === 2 && (h20[c].copyCellsFrom(h20[c - 1], e - 1, d++, 1, false), h20[c - 1].setCell(e - 1, r));
     }
-    h19[c].replaceCells(d, e, r);
+    h20[c].replaceCells(d, e, r);
     let m = 0;
-    for (let f = h19.length - 1; f > 0 && (f > c || h19[f].getTrimmedLength() === 0); f--) m++;
-    m > 0 && (o.push(l + h19.length - m), o.push(m)), l += h19.length - 1;
+    for (let f = h20.length - 1; f > 0 && (f > c || h20[f].getTrimmedLength() === 0); f--) m++;
+    m > 0 && (o.push(l + h20.length - m), o.push(m)), l += h20.length - 1;
   }
   return o;
 }
@@ -533,8 +533,8 @@ function al(s15, t2, e) {
     n > a && (n -= a, o++);
     let u = s15[o].getWidth(n - 1) === 2;
     u && n--;
-    let h19 = u ? e - 1 : e;
-    i.push(h19), l += h19;
+    let h20 = u ? e - 1 : e;
+    i.push(h20), l += h20;
   }
   return i;
 }
@@ -823,23 +823,23 @@ var init_xterm = __esm({
       decode(t2, e) {
         let i = t2.length;
         if (!i) return 0;
-        let r = 0, n, o, l, a, u = 0, h19 = 0;
+        let r = 0, n, o, l, a, u = 0, h20 = 0;
         if (this.interim[0]) {
           let _ = false, p = this.interim[0];
           p &= (p & 224) === 192 ? 31 : (p & 240) === 224 ? 15 : 7;
           let m = 0, f;
           for (; (f = this.interim[++m] & 63) && m < 4; ) p <<= 6, p |= f;
           let A = (this.interim[0] & 224) === 192 ? 2 : (this.interim[0] & 240) === 224 ? 3 : 4, R = A - m;
-          for (; h19 < R; ) {
-            if (h19 >= i) return 0;
-            if (f = t2[h19++], (f & 192) !== 128) {
-              h19--, _ = true;
+          for (; h20 < R; ) {
+            if (h20 >= i) return 0;
+            if (f = t2[h20++], (f & 192) !== 128) {
+              h20--, _ = true;
               break;
             } else this.interim[m++] = f, p <<= 6, p |= f & 63;
           }
-          _ || (A === 2 ? p < 128 ? h19-- : e[r++] = p : A === 3 ? p < 2048 || p >= 55296 && p <= 57343 || p === 65279 || (e[r++] = p) : p < 65536 || p > 1114111 || (e[r++] = p)), this.interim.fill(0);
+          _ || (A === 2 ? p < 128 ? h20-- : e[r++] = p : A === 3 ? p < 2048 || p >= 55296 && p <= 57343 || p === 65279 || (e[r++] = p) : p < 65536 || p > 1114111 || (e[r++] = p)), this.interim.fill(0);
         }
-        let c = i - 4, d = h19;
+        let c = i - 4, d = h20;
         for (; d < i; ) {
           for (; d < c && !((n = t2[d]) & 128) && !((o = t2[d + 1]) & 128) && !((l = t2[d + 2]) & 128) && !((a = t2[d + 3]) & 128); ) e[r++] = n, e[r++] = o, e[r++] = l, e[r++] = a, d += 4;
           if (n = t2[d++], n < 128) e[r++] = n;
@@ -1124,17 +1124,17 @@ var init_xterm = __esm({
           e(void 0);
           return;
         }
-        let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h19 = false;
+        let r = [], n = this._optionsService.rawOptions.linkHandler, o = new q(), l = i.getTrimmedLength(), a = -1, u = -1, h20 = false;
         for (let c = 0; c < l; c++) if (!(u === -1 && !i.hasContent(c))) {
           if (i.loadCell(c, o), o.hasExtendedAttrs() && o.extended.urlId) if (u === -1) {
             u = c, a = o.extended.urlId;
             continue;
-          } else h19 = o.extended.urlId !== a;
-          else u !== -1 && (h19 = true);
-          if (h19 || u !== -1 && c === l - 1) {
+          } else h20 = o.extended.urlId !== a;
+          else u !== -1 && (h20 = true);
+          if (h20 || u !== -1 && c === l - 1) {
             let d = this._oscLinkService.getLinkData(a)?.uri;
             if (d) {
-              let _ = { start: { x: u + 1, y: t2 }, end: { x: c + (!h19 && c === l - 1 ? 1 : 0), y: t2 } }, p = false;
+              let _ = { start: { x: u + 1, y: t2 }, end: { x: c + (!h20 && c === l - 1 ? 1 : 0), y: t2 } }, p = false;
               if (!n?.allowNonHttpProtocols) try {
                 let m = new URL(d);
                 ["http:", "https:"].includes(m.protocol) || (p = true);
@@ -1143,7 +1143,7 @@ var init_xterm = __esm({
               }
               p || r.push({ text: d, range: _, activate: (m, f) => n ? n.activate(m, f, _) : Ol(m, f), hover: (m, f) => n?.hover?.(m, f, _), leave: (m, f) => n?.leave?.(m, f, _) });
             }
-            h19 = false, o.hasExtendedAttrs() && o.extended.urlId ? (u = c, a = o.extended.urlId) : (u = -1, a = -1);
+            h20 = false, o.hasExtendedAttrs() && o.extended.urlId ? (u = c, a = o.extended.urlId) : (u = -1, a = -1);
           }
         }
         e(r);
@@ -1386,10 +1386,10 @@ var init_xterm = __esm({
         return false;
       }
       O.some = u;
-      function h19(I, k) {
+      function h20(I, k) {
         for (let P of I) if (k(P)) return P;
       }
-      O.find = h19;
+      O.find = h20;
       function* c(I, k) {
         for (let P of I) k(P) && (yield P);
       }
@@ -1477,29 +1477,29 @@ var init_xterm = __esm({
         else {
           let a = /* @__PURE__ */ new Map(), u = [...this.livingDisposables.values()].filter((c) => c.source !== null && !this.getRootParent(c, a).isSingleton);
           if (u.length === 0) return;
-          let h19 = new Set(u.map((c) => c.value));
-          if (i = u.filter((c) => !(c.parent && h19.has(c.parent))), i.length === 0) throw new Error("There are cyclic diposable chains!");
+          let h20 = new Set(u.map((c) => c.value));
+          if (i = u.filter((c) => !(c.parent && h20.has(c.parent))), i.length === 0) throw new Error("There are cyclic diposable chains!");
         }
         if (!i) return;
         function r(a) {
           function u(c, d) {
             for (; c.length > 0 && d.some((_) => typeof _ == "string" ? _ === c[0] : c[0].match(_)); ) c.shift();
           }
-          let h19 = a.source.split(`
+          let h20 = a.source.split(`
 `).map((c) => c.trim().replace("at ", "")).filter((c) => c !== "");
-          return u(h19, ["Error", /^trackDisposable \(.*\)$/, /^DisposableTracker.trackDisposable \(.*\)$/]), h19.reverse();
+          return u(h20, ["Error", /^trackDisposable \(.*\)$/, /^DisposableTracker.trackDisposable \(.*\)$/]), h20.reverse();
         }
         let n = new ur();
         for (let a of i) {
           let u = r(a);
-          for (let h19 = 0; h19 <= u.length; h19++) n.add(u.slice(0, h19).join(`
+          for (let h20 = 0; h20 <= u.length; h20++) n.add(u.slice(0, h20).join(`
 `), a);
         }
         i.sort(no((a) => a.idx, so));
         let o = "", l = 0;
         for (let a of i.slice(0, t2)) {
           l++;
-          let u = r(a), h19 = [];
+          let u = r(a), h20 = [];
           for (let c = 0; c < u.length; c++) {
             let d = u[c];
             d = `(shared with ${n.get(u.slice(0, c + 1).join(`
@@ -1507,14 +1507,14 @@ var init_xterm = __esm({
             let p = n.get(u.slice(0, c).join(`
 `)), m = co([...p].map((f) => r(f)[c]), (f) => f);
             delete m[u[c]];
-            for (let [f, A] of Object.entries(m)) h19.unshift(`    - stacktraces of ${A.length} other leaks continue with ${f}`);
-            h19.unshift(d);
+            for (let [f, A] of Object.entries(m)) h20.unshift(`    - stacktraces of ${A.length} other leaks continue with ${f}`);
+            h20.unshift(d);
           }
           o += `
 
 
 ==================== Leaking disposable ${l}/${i.length}: ${a.value.constructor.name} ====================
-${h19.join(`
+${h20.join(`
 `)}
 ============================================================
 
@@ -1743,17 +1743,17 @@ ${h19.join(`
       }
       Qe.once = i;
       function r(y, T, g) {
-        return h19((w, E = null, x) => y((N) => w.call(E, T(N)), null, x), g);
+        return h20((w, E = null, x) => y((N) => w.call(E, T(N)), null, x), g);
       }
       Qe.map = r;
       function n(y, T, g) {
-        return h19((w, E = null, x) => y((N) => {
+        return h20((w, E = null, x) => y((N) => {
           T(N), w.call(E, N);
         }, null, x), g);
       }
       Qe.forEach = n;
       function o(y, T, g) {
-        return h19((w, E = null, x) => y((N) => T(N) && w.call(E, N), null, x), g);
+        return h20((w, E = null, x) => y((N) => T(N) && w.call(E, N), null, x), g);
       }
       Qe.filter = o;
       function l(y) {
@@ -1772,7 +1772,7 @@ ${h19.join(`
         return r(y, (x) => (E = T(E, x), E), w);
       }
       Qe.reduce = u;
-      function h19(y, T) {
+      function h20(y, T) {
         let g, w = { onWillAddFirstListener() {
           g = y(E.fire, E);
         }, onDidRemoveLastListener() {
@@ -2077,8 +2077,8 @@ ${h19.join(`
           if (this._leakageMon && this._size > this._leakageMon.threshold ** 2) {
             let a = `[${this._leakageMon.name}] REFUSES to accept new listeners because it exceeded its threshold by far (${this._size} vs ${this._leakageMon.threshold})`;
             console.warn(a);
-            let u = this._leakageMon.getMostFrequentStack() ?? ["UNKNOWN stack", -1], h19 = new Yn(`${a}. HINT: Stack shows most frequent listener (${u[1]}-times)`, u[0]);
-            return (this._options?.onListenerError || Lt)(h19), D.None;
+            let u = this._leakageMon.getMostFrequentStack() ?? ["UNKNOWN stack", -1], h20 = new Yn(`${a}. HINT: Stack shows most frequent listener (${u[1]}-times)`, u[0]);
+            return (this._options?.onListenerError || Lt)(h20), D.None;
           }
           if (this._disposed) return D.None;
           e && (t2 = t2.bind(e));
@@ -2698,8 +2698,8 @@ ${h19.join(`
         let t2 = Cr2._bigBlock32, e = this._buffDV;
         for (let c = 0; c < 64; c += 4) t2.setUint32(c, e.getUint32(c, false), false);
         for (let c = 64; c < 320; c += 4) t2.setUint32(c, rs(t2.getUint32(c - 12, false) ^ t2.getUint32(c - 32, false) ^ t2.getUint32(c - 56, false) ^ t2.getUint32(c - 64, false), 1), false);
-        let i = this._h0, r = this._h1, n = this._h2, o = this._h3, l = this._h4, a, u, h19;
-        for (let c = 0; c < 80; c++) c < 20 ? (a = r & n | ~r & o, u = 1518500249) : c < 40 ? (a = r ^ n ^ o, u = 1859775393) : c < 60 ? (a = r & n | r & o | n & o, u = 2400959708) : (a = r ^ n ^ o, u = 3395469782), h19 = rs(i, 5) + a + l + u + t2.getUint32(c * 4, false) & 4294967295, l = o, o = n, n = rs(r, 30), r = i, i = h19;
+        let i = this._h0, r = this._h1, n = this._h2, o = this._h3, l = this._h4, a, u, h20;
+        for (let c = 0; c < 80; c++) c < 20 ? (a = r & n | ~r & o, u = 1518500249) : c < 40 ? (a = r ^ n ^ o, u = 1859775393) : c < 60 ? (a = r & n | r & o | n & o, u = 2400959708) : (a = r ^ n ^ o, u = 3395469782), h20 = rs(i, 5) + a + l + u + t2.getUint32(c * 4, false) & 4294967295, l = o, o = n, n = rs(r, 30), r = i, i = h20;
         this._h0 = this._h0 + i & 4294967295, this._h1 = this._h1 + r & 4294967295, this._h2 = this._h2 + n & 4294967295, this._h3 = this._h3 + o & 4294967295, this._h4 = this._h4 + l & 4294967295;
       }
     };
@@ -2784,13 +2784,13 @@ ${h19.join(`
         i.set(n, false);
       };
       mt = (n, o, l = 0) => {
-        let a = Oo(n), u = new Di(o, l), h19 = s15.get(a);
-        return h19 || (h19 = [], s15.set(a, h19)), h19.push(u), e.get(a) || (e.set(a, true), n.requestAnimationFrame(() => r(a))), u;
+        let a = Oo(n), u = new Di(o, l), h20 = s15.get(a);
+        return h20 || (h20 = [], s15.set(a, h20)), h20.push(u), e.get(a) || (e.set(a, true), n.requestAnimationFrame(() => r(a))), u;
       }, wa = (n, o, l) => {
         let a = Oo(n);
         if (i.get(a)) {
-          let u = new Di(o, l), h19 = t2.get(a);
-          return h19 || (h19 = [], t2.set(a, h19)), h19.push(u), u;
+          let u = new Di(o, l), h20 = t2.get(a);
+          return h20 || (h20 = [], t2.set(a, h20)), h20.push(u), u;
         } else return mt(n, o, l);
       };
     })();
@@ -3077,11 +3077,11 @@ ${h19.join(`
             console.warn("move of an UNKNOWN touch", a);
             continue;
           }
-          let u = this.activeTouches[a.identifier], h19 = Date.now() - u.initialTimeStamp;
-          if (h19 < Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
+          let u = this.activeTouches[a.identifier], h20 = Date.now() - u.initialTimeStamp;
+          if (h20 < Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
             let c = this.newGestureEvent(He.Tap, u.initialTarget);
             c.pageX = Se(u.rollingPageX), c.pageY = Se(u.rollingPageY), this.dispatchEvent(c);
-          } else if (h19 >= Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
+          } else if (h20 >= Q2.HOLD_DELAY && Math.abs(u.initialPageX - Se(u.rollingPageX)) < 30 && Math.abs(u.initialPageY - Se(u.rollingPageY)) < 30) {
             let c = this.newGestureEvent(He.Contextmenu, u.initialTarget);
             c.pageX = Se(u.rollingPageX), c.pageY = Se(u.rollingPageY), this.dispatchEvent(c);
           } else if (n === 1) {
@@ -3113,12 +3113,12 @@ ${h19.join(`
           for (let [r, n] of i) n.dispatchEvent(e), this.dispatched = true;
         }
       }
-      inertia(e, i, r, n, o, l, a, u, h19) {
+      inertia(e, i, r, n, o, l, a, u, h20) {
         this.handle = mt(e, () => {
           let c = Date.now(), d = c - r, _ = 0, p = 0, m = true;
           n += Q2.SCROLL_FRICTION * d, a += Q2.SCROLL_FRICTION * d, n > 0 && (m = false, _ = o * n * d), a > 0 && (m = false, p = u * a * d);
           let f = this.newGestureEvent(He.Change);
-          f.translationX = _, f.translationY = p, i.forEach((A) => A.dispatchEvent(f)), m || this.inertia(e, i, c, n, o, l + _, a, u, h19 + p);
+          f.translationX = _, f.translationY = p, i.forEach((A) => A.dispatchEvent(f)), m || this.inertia(e, i, c, n, o, l + _, a, u, h20 + p);
         });
       }
       onTouchMove(e) {
@@ -3464,8 +3464,8 @@ ${h19.join(`
       static _computeValues(t2, e, i, r, n) {
         let o = Math.max(0, i - t2), l = Math.max(0, o - 2 * e), a = r > 0 && r > i;
         if (!a) return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(l), computedSliderRatio: 0, computedSliderPosition: 0 };
-        let u = Math.round(Math.max(20, Math.floor(i * l / r))), h19 = (l - u) / (r - i), c = n * h19;
-        return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(u), computedSliderRatio: h19, computedSliderPosition: Math.round(c) };
+        let u = Math.round(Math.max(20, Math.floor(i * l / r))), h20 = (l - u) / (r - i), c = n * h20;
+        return { computedAvailableSize: Math.round(o), computedIsNeeded: a, computedSliderSize: Math.round(u), computedSliderRatio: h20, computedSliderPosition: Math.round(c) };
       }
       _refreshComputedValues() {
         let t2 = s11._computeValues(this._oppositeScrollbarSize, this._arrowSize, this._visibleSize, this._scrollSize, this._scrollPosition);
@@ -3608,8 +3608,8 @@ ${h19.join(`
         if (Math.abs(t2.deltaX) > 0 && Math.abs(t2.deltaY) > 0) return 1;
         let i = 0.5;
         if ((!this._isAlmostInt(t2.deltaX) || !this._isAlmostInt(t2.deltaY)) && (i += 0.25), e) {
-          let r = Math.abs(t2.deltaX), n = Math.abs(t2.deltaY), o = Math.abs(e.deltaX), l = Math.abs(e.deltaY), a = Math.max(Math.min(r, o), 1), u = Math.max(Math.min(n, l), 1), h19 = Math.max(r, o), c = Math.max(n, l);
-          h19 % a === 0 && c % u === 0 && (i -= 0.5);
+          let r = Math.abs(t2.deltaX), n = Math.abs(t2.deltaY), o = Math.abs(e.deltaX), l = Math.abs(e.deltaY), a = Math.max(Math.min(r, o), 1), u = Math.max(Math.min(n, l), 1), h20 = Math.max(r, o), c = Math.max(n, l);
+          h20 % a === 0 && c % u === 0 && (i -= 0.5);
         }
         return Math.min(Math.max(i, 0), 1);
       }
@@ -3682,16 +3682,16 @@ ${h19.join(`
           this._options.scrollPredominantAxis && (this._options.scrollYToX && l + o === 0 ? l = o = 0 : Math.abs(o) >= Math.abs(l) ? l = 0 : o = 0), this._options.flipAxes && ([o, l] = [l, o]);
           let a = !Te && e.browserEvent && e.browserEvent.shiftKey;
           (this._options.scrollYToX || a) && !l && (l = o, o = 0), e.browserEvent && e.browserEvent.altKey && (l = l * this._options.fastScrollSensitivity, o = o * this._options.fastScrollSensitivity);
-          let u = this._scrollable.getFutureScrollPosition(), h19 = {};
+          let u = this._scrollable.getFutureScrollPosition(), h20 = {};
           if (o) {
             let c = Ko * o, d = u.scrollTop - (c < 0 ? Math.floor(c) : Math.ceil(c));
-            this._verticalScrollbar.writeScrollPosition(h19, d);
+            this._verticalScrollbar.writeScrollPosition(h20, d);
           }
           if (l) {
             let c = Ko * l, d = u.scrollLeft - (c < 0 ? Math.floor(c) : Math.ceil(c));
-            this._horizontalScrollbar.writeScrollPosition(h19, d);
+            this._horizontalScrollbar.writeScrollPosition(h20, d);
           }
-          h19 = this._scrollable.validateScrollPosition(h19), (u.scrollLeft !== h19.scrollLeft || u.scrollTop !== h19.scrollTop) && (zo && this._options.mouseWheelSmoothScroll && i.isPhysicalMouseWheel() ? this._scrollable.setScrollPositionSmooth(h19) : this._scrollable.setScrollPositionNow(h19), r = true);
+          h20 = this._scrollable.validateScrollPosition(h20), (u.scrollLeft !== h20.scrollLeft || u.scrollTop !== h20.scrollTop) && (zo && this._options.mouseWheelSmoothScroll && i.isPhysicalMouseWheel() ? this._scrollable.setScrollPositionSmooth(h20) : this._scrollable.setScrollPositionNow(h20), r = true);
         }
         let n = r;
         !n && this._options.alwaysConsumeMouseWheel && (n = true), !n && this._options.consumeMouseWheelIfScrollbarIsNeeded && (this._verticalScrollbar.isNeeded() || this._horizontalScrollbar.isNeeded()) && (n = true), n && (e.preventDefault(), e.stopPropagation());
@@ -3753,10 +3753,10 @@ ${h19.join(`
         this._isSyncing = false;
         this._isHandlingScroll = false;
         this._suppressOnScrollHandler = false;
-        let h19 = this._register(new Ri({ forceIntegerValues: false, smoothScrollDuration: this._optionsService.rawOptions.smoothScrollDuration, scheduleAtNextAnimationFrame: (c) => mt(n.window, c) }));
+        let h20 = this._register(new Ri({ forceIntegerValues: false, smoothScrollDuration: this._optionsService.rawOptions.smoothScrollDuration, scheduleAtNextAnimationFrame: (c) => mt(n.window, c) }));
         this._register(this._optionsService.onSpecificOptionChange("smoothScrollDuration", () => {
-          h19.setSmoothScrollDuration(this._optionsService.rawOptions.smoothScrollDuration);
-        })), this._scrollableElement = this._register(new Kr(i, { vertical: 1, horizontal: 2, useShadows: false, mouseWheelSmoothScroll: true, ...this._getChangeOptions() }, h19)), this._register(this._optionsService.onMultipleOptionChange(["scrollSensitivity", "fastScrollSensitivity", "overviewRuler"], () => this._scrollableElement.updateOptions(this._getChangeOptions()))), this._register(o.onProtocolChange((c) => {
+          h20.setSmoothScrollDuration(this._optionsService.rawOptions.smoothScrollDuration);
+        })), this._scrollableElement = this._register(new Kr(i, { vertical: 1, horizontal: 2, useShadows: false, mouseWheelSmoothScroll: true, ...this._getChangeOptions() }, h20)), this._register(this._optionsService.onMultipleOptionChange(["scrollSensitivity", "fastScrollSensitivity", "overviewRuler"], () => this._scrollableElement.updateOptions(this._getChangeOptions()))), this._register(o.onProtocolChange((c) => {
           this._scrollableElement.updateOptions({ handleMouseWheel: !(c & 16) });
         })), this._scrollableElement.setScrollDimensions({ height: 0, scrollHeight: 0 }), this._register($.runAndSubscribe(l.onChangeColors, () => {
           this._scrollableElement.getDomNode().style.backgroundColor = l.colors.background.css;
@@ -3908,8 +3908,8 @@ ${h19.join(`
         this._shouldUpdateAnchor = true;
         this._lastKnownBufferLength = 0;
         this._canvas = this._coreBrowserService.mainDocument.createElement("canvas"), this._canvas.classList.add("xterm-decoration-overview-ruler"), this._refreshCanvasDimensions(), this._viewportElement.parentElement?.insertBefore(this._canvas, this._viewportElement), this._register(C(() => this._canvas?.remove()));
-        let h19 = this._canvas.getContext("2d");
-        if (h19) this._ctx = h19;
+        let h20 = this._canvas.getContext("2d");
+        if (h20) this._ctx = h20;
         else throw new Error("Ctx cannot be null");
         this._register(this._decorationService.onDecorationRegistered(() => this._queueRefresh(void 0, true))), this._register(this._decorationService.onDecorationRemoved(() => this._queueRefresh(void 0, true))), this._register(this._renderService.onRenderedViewportChange(() => this._queueRefresh())), this._register(this._bufferService.buffers.onBufferActivate(() => {
           this._canvas.style.display = this._bufferService.buffer === this._bufferService.buffers.alt ? "none" : "block";
@@ -4050,8 +4050,8 @@ ${h19.join(`
     ((l) => {
       function s15(a, u) {
         if (J = (u.rgba & 255) / 255, J === 1) return { css: u.css, rgba: u.rgba };
-        let h19 = u.rgba >> 24 & 255, c = u.rgba >> 16 & 255, d = u.rgba >> 8 & 255, _ = a.rgba >> 24 & 255, p = a.rgba >> 16 & 255, m = a.rgba >> 8 & 255;
-        ue = _ + Math.round((h19 - _) * J), he = p + Math.round((c - p) * J), de = m + Math.round((d - m) * J);
+        let h20 = u.rgba >> 24 & 255, c = u.rgba >> 16 & 255, d = u.rgba >> 8 & 255, _ = a.rgba >> 24 & 255, p = a.rgba >> 16 & 255, m = a.rgba >> 8 & 255;
+        ue = _ + Math.round((h20 - _) * J), he = p + Math.round((c - p) * J), de = m + Math.round((d - m) * J);
         let f = j.toCss(ue, he, de), A = j.toRgba(ue, he, de);
         return { css: f, rgba: A };
       }
@@ -4060,8 +4060,8 @@ ${h19.join(`
         return (a.rgba & 255) === 255;
       }
       l.isOpaque = t2;
-      function e(a, u, h19) {
-        let c = $r.ensureContrastRatio(a.rgba, u.rgba, h19);
+      function e(a, u, h20) {
+        let c = $r.ensureContrastRatio(a.rgba, u.rgba, h20);
         if (c) return j.toColor(c >> 24 & 255, c >> 16 & 255, c >> 8 & 255);
       }
       l.ensureContrastRatio = e;
@@ -4118,22 +4118,22 @@ ${h19.join(`
       }
       e.relativeLuminance = s15;
       function t2(i, r, n) {
-        let o = i / 255, l = r / 255, a = n / 255, u = o <= 0.03928 ? o / 12.92 : Math.pow((o + 0.055) / 1.055, 2.4), h19 = l <= 0.03928 ? l / 12.92 : Math.pow((l + 0.055) / 1.055, 2.4), c = a <= 0.03928 ? a / 12.92 : Math.pow((a + 0.055) / 1.055, 2.4);
-        return u * 0.2126 + h19 * 0.7152 + c * 0.0722;
+        let o = i / 255, l = r / 255, a = n / 255, u = o <= 0.03928 ? o / 12.92 : Math.pow((o + 0.055) / 1.055, 2.4), h20 = l <= 0.03928 ? l / 12.92 : Math.pow((l + 0.055) / 1.055, 2.4), c = a <= 0.03928 ? a / 12.92 : Math.pow((a + 0.055) / 1.055, 2.4);
+        return u * 0.2126 + h20 * 0.7152 + c * 0.0722;
       }
       e.relativeLuminance2 = t2;
     })(ve ||= {});
     ((n) => {
       function s15(o, l) {
         if (J = (l & 255) / 255, J === 1) return l;
-        let a = l >> 24 & 255, u = l >> 16 & 255, h19 = l >> 8 & 255, c = o >> 24 & 255, d = o >> 16 & 255, _ = o >> 8 & 255;
-        return ue = c + Math.round((a - c) * J), he = d + Math.round((u - d) * J), de = _ + Math.round((h19 - _) * J), j.toRgba(ue, he, de);
+        let a = l >> 24 & 255, u = l >> 16 & 255, h20 = l >> 8 & 255, c = o >> 24 & 255, d = o >> 16 & 255, _ = o >> 8 & 255;
+        return ue = c + Math.round((a - c) * J), he = d + Math.round((u - d) * J), de = _ + Math.round((h20 - _) * J), j.toRgba(ue, he, de);
       }
       n.blend = s15;
       function t2(o, l, a) {
-        let u = ve.relativeLuminance(o >> 8), h19 = ve.relativeLuminance(l >> 8);
-        if (Xe(u, h19) < a) {
-          if (h19 < u) {
+        let u = ve.relativeLuminance(o >> 8), h20 = ve.relativeLuminance(l >> 8);
+        if (Xe(u, h20) < a) {
+          if (h20 < u) {
             let p = e(o, l, a), m = Xe(u, ve.relativeLuminance(p >> 8));
             if (m < a) {
               let f = i(o, l, a), A = Xe(u, ve.relativeLuminance(f >> 8));
@@ -4151,14 +4151,14 @@ ${h19.join(`
       }
       n.ensureContrastRatio = t2;
       function e(o, l, a) {
-        let u = o >> 24 & 255, h19 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h19, c));
-        for (; m < a && (d > 0 || _ > 0 || p > 0); ) d -= Math.max(0, Math.ceil(d * 0.1)), _ -= Math.max(0, Math.ceil(_ * 0.1)), p -= Math.max(0, Math.ceil(p * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h19, c));
+        let u = o >> 24 & 255, h20 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h20, c));
+        for (; m < a && (d > 0 || _ > 0 || p > 0); ) d -= Math.max(0, Math.ceil(d * 0.1)), _ -= Math.max(0, Math.ceil(_ * 0.1)), p -= Math.max(0, Math.ceil(p * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h20, c));
         return (d << 24 | _ << 16 | p << 8 | 255) >>> 0;
       }
       n.reduceLuminance = e;
       function i(o, l, a) {
-        let u = o >> 24 & 255, h19 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h19, c));
-        for (; m < a && (d < 255 || _ < 255 || p < 255); ) d = Math.min(255, d + Math.ceil((255 - d) * 0.1)), _ = Math.min(255, _ + Math.ceil((255 - _) * 0.1)), p = Math.min(255, p + Math.ceil((255 - p) * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h19, c));
+        let u = o >> 24 & 255, h20 = o >> 16 & 255, c = o >> 8 & 255, d = l >> 24 & 255, _ = l >> 16 & 255, p = l >> 8 & 255, m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h20, c));
+        for (; m < a && (d < 255 || _ < 255 || p < 255); ) d = Math.min(255, d + Math.ceil((255 - d) * 0.1)), _ = Math.min(255, _ + Math.ceil((255 - _) * 0.1)), p = Math.min(255, p + Math.ceil((255 - p) * 0.1)), m = Xe(ve.relativeLuminance2(d, _, p), ve.relativeLuminance2(u, h20, c));
         return (d << 24 | _ << 16 | p << 8 | 255) >>> 0;
       }
       n.increaseLuminance = i;
@@ -4212,19 +4212,19 @@ ${h19.join(`
         let e = this._bufferService.buffer.lines.get(t2);
         if (!e || e.length === 0) return [];
         let i = [], r = e.translateToString(true), n = 0, o = 0, l = 0, a = e.getFg(0), u = e.getBg(0);
-        for (let h19 = 0; h19 < e.getTrimmedLength(); h19++) if (e.loadCell(h19, this._workCell), this._workCell.getWidth() !== 0) {
+        for (let h20 = 0; h20 < e.getTrimmedLength(); h20++) if (e.loadCell(h20, this._workCell), this._workCell.getWidth() !== 0) {
           if (this._workCell.fg !== a || this._workCell.bg !== u) {
-            if (h19 - n > 1) {
+            if (h20 - n > 1) {
               let c = this._getJoinedRanges(r, l, o, e, n);
               for (let d = 0; d < c.length; d++) i.push(c[d]);
             }
-            n = h19, l = o, a = this._workCell.fg, u = this._workCell.bg;
+            n = h20, l = o, a = this._workCell.fg, u = this._workCell.bg;
           }
           o += this._workCell.getChars().length || we.length;
         }
         if (this._bufferService.cols - n > 1) {
-          let h19 = this._getJoinedRanges(r, l, o, e, n);
-          for (let c = 0; c < h19.length; c++) i.push(h19[c]);
+          let h20 = this._getJoinedRanges(r, l, o, e, n);
+          for (let c = 0; c < h20.length; c++) i.push(h20[c]);
         }
         return i;
       }
@@ -4237,7 +4237,7 @@ ${h19.join(`
         }
         for (let a = 1; a < this._characterJoiners.length; a++) try {
           let u = this._characterJoiners[a].handler(o);
-          for (let h19 = 0; h19 < u.length; h19++) ct._mergeRanges(l, u[h19]);
+          for (let h20 = 0; h20 < u.length; h20++) ct._mergeRanges(l, u[h20]);
         } catch (u) {
           console.error(u);
         }
@@ -4247,13 +4247,13 @@ ${h19.join(`
         let r = 0, n = false, o = 0, l = t2[r];
         if (l) {
           for (let a = i; a < this._bufferService.cols; a++) {
-            let u = e.getWidth(a), h19 = e.getString(a).length || we.length;
+            let u = e.getWidth(a), h20 = e.getString(a).length || we.length;
             if (u !== 0) {
               if (!n && l[0] <= o && (l[0] = a, n = true), l[1] <= o) {
                 if (l[1] = a, l = t2[++r], !l) break;
                 l[0] <= o ? (l[0] = a, n = true) : n = false;
               }
-              o += h19;
+              o += h20;
             }
           }
           l && (l[1] = this._bufferService.cols);
@@ -4294,10 +4294,10 @@ ${h19.join(`
       handleSelectionChanged(t2, e, i) {
         this._selectionStart = t2, this._selectionEnd = e, this._columnSelectMode = i;
       }
-      createRow(t2, e, i, r, n, o, l, a, u, h19, c) {
+      createRow(t2, e, i, r, n, o, l, a, u, h20, c) {
         let d = [], _ = this._characterJoinerService.getJoinedCharacters(e), p = this._themeService.colors, m = t2.getNoBgTrimmedLength();
         i && m < o + 1 && (m = o + 1);
-        let f, A = 0, R = "", O = 0, I = 0, k = 0, P = 0, oe = false, Me = 0, Pe = false, Ke = 0, di = 0, V = [], Qe = h19 !== -1 && c !== -1;
+        let f, A = 0, R = "", O = 0, I = 0, k = 0, P = 0, oe = false, Me = 0, Pe = false, Ke = 0, di = 0, V = [], Qe = h20 !== -1 && c !== -1;
         for (let y = 0; y < m; y++) {
           t2.loadCell(y, this._workCell);
           let T = this._workCell.getWidth();
@@ -4308,7 +4308,7 @@ ${h19.join(`
             for (O = W[0] + 1; O < W[1]; O++) w &&= An === this._isCellInSelection(O, e);
             w &&= !i || o < W[0] || o >= W[1], w ? (g = true, x = new Vr(this._workCell, t2.translateToString(true, W[0], W[1]), W[1] - W[0]), E = W[1] - 1, T = x.getWidth()) : di = W[1];
           }
-          let N = this._isCellInSelection(y, e), Z = i && y === o, te = Qe && y >= h19 && y <= c, Oe = false;
+          let N = this._isCellInSelection(y, e), Z = i && y === o, te = Qe && y >= h20 && y <= c, Oe = false;
           this._decorationService.forEachDecorationAtCell(y, e, void 0, (W) => {
             Oe = true;
           });
@@ -4477,7 +4477,7 @@ ${h19.join(`
       }
     };
     _s = "xterm-dom-renderer-owner-", Le = "xterm-rows", jr = "xterm-fg-", jo = "xterm-bg-", ki = "xterm-focus", Xr = "xterm-selection", Na = 1, Yt = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h19, c, d, _, p, m) {
+      constructor(e, i, r, n, o, l, a, u, h20, c, d, _, p, m) {
         super();
         this._terminal = e;
         this._document = i;
@@ -4486,7 +4486,7 @@ ${h19.join(`
         this._viewportElement = o;
         this._helperContainer = l;
         this._linkifier2 = a;
-        this._charSizeService = h19;
+        this._charSizeService = h20;
         this._optionsService = c;
         this._bufferService = d;
         this._coreService = _;
@@ -4547,11 +4547,11 @@ ${h19.join(`
         if (this._selectionContainer.replaceChildren(), this._rowFactory.handleSelectionChanged(e, i, r), this.renderRows(0, this._bufferService.rows - 1), !e || !i || (this._selectionRenderModel.update(this._terminal, e, i, r), !this._selectionRenderModel.hasSelection)) return;
         let n = this._selectionRenderModel.viewportStartRow, o = this._selectionRenderModel.viewportEndRow, l = this._selectionRenderModel.viewportCappedStartRow, a = this._selectionRenderModel.viewportCappedEndRow, u = this._document.createDocumentFragment();
         if (r) {
-          let h19 = e[0] > i[0];
-          u.appendChild(this._createSelectionElement(l, h19 ? i[0] : e[0], h19 ? e[0] : i[0], a - l + 1));
+          let h20 = e[0] > i[0];
+          u.appendChild(this._createSelectionElement(l, h20 ? i[0] : e[0], h20 ? e[0] : i[0], a - l + 1));
         } else {
-          let h19 = n === l ? e[0] : 0, c = l === o ? i[0] : this._bufferService.cols;
-          u.appendChild(this._createSelectionElement(l, h19, c));
+          let h20 = n === l ? e[0] : 0, c = l === o ? i[0] : this._bufferService.cols;
+          u.appendChild(this._createSelectionElement(l, h20, c));
           let d = a - l - 1;
           if (u.appendChild(this._createSelectionElement(l + 1, 0, this._bufferService.cols, d)), l !== a) {
             let _ = o === a ? i[0] : this._bufferService.cols;
@@ -4574,8 +4574,8 @@ ${h19.join(`
       }
       renderRows(e, i) {
         let r = this._bufferService.buffer, n = r.ybase + r.y, o = Math.min(r.x, this._bufferService.cols - 1), l = this._coreService.decPrivateModes.cursorBlink ?? this._optionsService.rawOptions.cursorBlink, a = this._coreService.decPrivateModes.cursorStyle ?? this._optionsService.rawOptions.cursorStyle, u = this._optionsService.rawOptions.cursorInactiveStyle;
-        for (let h19 = e; h19 <= i; h19++) {
-          let c = h19 + r.ydisp, d = this._rowElements[h19], _ = r.lines.get(c);
+        for (let h20 = e; h20 <= i; h20++) {
+          let c = h20 + r.ydisp, d = this._rowElements[h20], _ = r.lines.get(c);
           if (!d || !_) break;
           d.replaceChildren(...this._rowFactory.createRow(_, c, c === n, a, u, o, l, this.dimensions.css.cell.width, this._widthCache, -1, -1));
         }
@@ -4593,11 +4593,11 @@ ${h19.join(`
         r < 0 && (e = 0), n < 0 && (i = 0);
         let a = this._bufferService.rows - 1;
         r = Math.max(Math.min(r, a), 0), n = Math.max(Math.min(n, a), 0), o = Math.min(o, this._bufferService.cols);
-        let u = this._bufferService.buffer, h19 = u.ybase + u.y, c = Math.min(u.x, o - 1), d = this._optionsService.rawOptions.cursorBlink, _ = this._optionsService.rawOptions.cursorStyle, p = this._optionsService.rawOptions.cursorInactiveStyle;
+        let u = this._bufferService.buffer, h20 = u.ybase + u.y, c = Math.min(u.x, o - 1), d = this._optionsService.rawOptions.cursorBlink, _ = this._optionsService.rawOptions.cursorStyle, p = this._optionsService.rawOptions.cursorInactiveStyle;
         for (let m = r; m <= n; ++m) {
           let f = m + u.ydisp, A = this._rowElements[m], R = u.lines.get(f);
           if (!A || !R) break;
-          A.replaceChildren(...this._rowFactory.createRow(R, f, f === h19, _, p, c, d, this.dimensions.css.cell.width, this._widthCache, l ? m === r ? e : 0 : -1, l ? (m === n ? i : o) - 1 : -1));
+          A.replaceChildren(...this._rowFactory.createRow(R, f, f === h20, _, p, c, d, this.dimensions.css.cell.width, this._widthCache, l ? m === r ? e : 0 : -1, l ? (m === n ? i : o) - 1 : -1));
         }
       }
     };
@@ -4830,7 +4830,7 @@ ${h19.join(`
       }
     };
     Qt = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h19) {
+      constructor(e, i, r, n, o, l, a, u, h20) {
         super();
         this._rowCount = e;
         this._optionsService = r;
@@ -4857,7 +4857,7 @@ ${h19.join(`
         this.onRefreshRequest = this._onRefreshRequest.event;
         this._renderDebouncer = new en((c, d) => this._renderRows(c, d), this._coreBrowserService), this._register(this._renderDebouncer), this._syncOutputHandler = new xs(this._coreBrowserService, this._coreService, () => this._fullRefresh()), this._register(C(() => this._syncOutputHandler.dispose())), this._register(this._coreBrowserService.onDprChange(() => this.handleDevicePixelRatioChange())), this._register(a.onResize(() => this._fullRefresh())), this._register(a.buffers.onBufferActivate(() => this._renderer.value?.clear())), this._register(this._optionsService.onOptionChange(() => this._handleOptionsChanged())), this._register(this._charSizeService.onCharSizeChange(() => this.handleCharSizeChanged())), this._register(l.onDecorationRegistered(() => this._fullRefresh())), this._register(l.onDecorationRemoved(() => this._fullRefresh())), this._register(this._optionsService.onMultipleOptionChange(["customGlyphs", "drawBoldTextInBrightColors", "letterSpacing", "lineHeight", "fontFamily", "fontSize", "fontWeight", "fontWeightBold", "minimumContrastRatio", "rescaleOverlappingGlyphs"], () => {
           this.clear(), this.handleResize(a.cols, a.rows), this._fullRefresh();
-        })), this._register(this._optionsService.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(a.buffer.y, a.buffer.y, true))), this._register(h19.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(this._coreBrowserService.window, i), this._register(this._coreBrowserService.onWindowChange((c) => this._registerIntersectionObserver(c, i)));
+        })), this._register(this._optionsService.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(a.buffer.y, a.buffer.y, true))), this._register(h20.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(this._coreBrowserService.window, i), this._register(this._coreBrowserService.onWindowChange((c) => this._registerIntersectionObserver(c, i)));
       }
       get dimensions() {
         return this._renderer.value.dimensions;
@@ -5001,7 +5001,7 @@ ${h19.join(`
     };
     Ds = 50, Ya = 15, ja = 50, Xa = 500, Za = " ", Ja = new RegExp(Za, "g");
     ei = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h19) {
+      constructor(e, i, r, n, o, l, a, u, h20) {
         super();
         this._element = e;
         this._screenElement = i;
@@ -5011,7 +5011,7 @@ ${h19.join(`
         this._mouseService = l;
         this._optionsService = a;
         this._renderService = u;
-        this._coreBrowserService = h19;
+        this._coreBrowserService = h20;
         this._dragScrollAmount = 0;
         this._enabled = true;
         this._workCell = new q();
@@ -5062,15 +5062,15 @@ ${h19.join(`
           if (e[0] === i[0]) return "";
           let l = e[0] < i[0] ? e[0] : i[0], a = e[0] < i[0] ? i[0] : e[0];
           for (let u = e[1]; u <= i[1]; u++) {
-            let h19 = r.translateBufferLineToString(u, true, l, a);
-            n.push(h19);
+            let h20 = r.translateBufferLineToString(u, true, l, a);
+            n.push(h20);
           }
         } else {
           let l = e[1] === i[1] ? i[0] : void 0;
           n.push(r.translateBufferLineToString(e[1], true, e[0], l));
           for (let a = e[1] + 1; a <= i[1] - 1; a++) {
-            let u = r.lines.get(a), h19 = r.translateBufferLineToString(a, true);
-            u?.isWrapped ? n[n.length - 1] += h19 : n.push(h19);
+            let u = r.lines.get(a), h20 = r.translateBufferLineToString(a, true);
+            u?.isWrapped ? n[n.length - 1] += h20 : n.push(h20);
           }
           if (e[1] !== i[1]) {
             let a = r.lines.get(i[1]), u = r.translateBufferLineToString(i[1], true, 0, i[0]);
@@ -5227,28 +5227,28 @@ ${h19.join(`
         if (e[0] >= this._bufferService.cols) return;
         let o = this._bufferService.buffer, l = o.lines.get(e[1]);
         if (!l) return;
-        let a = o.translateBufferLineToString(e[1], false), u = this._convertViewportColToCharacterIndex(l, e[0]), h19 = u, c = e[0] - u, d = 0, _ = 0, p = 0, m = 0;
+        let a = o.translateBufferLineToString(e[1], false), u = this._convertViewportColToCharacterIndex(l, e[0]), h20 = u, c = e[0] - u, d = 0, _ = 0, p = 0, m = 0;
         if (a.charAt(u) === " ") {
           for (; u > 0 && a.charAt(u - 1) === " "; ) u--;
-          for (; h19 < a.length && a.charAt(h19 + 1) === " "; ) h19++;
+          for (; h20 < a.length && a.charAt(h20 + 1) === " "; ) h20++;
         } else {
           let R = e[0], O = e[0];
           l.getWidth(R) === 0 && (d++, R--), l.getWidth(O) === 2 && (_++, O++);
           let I = l.getString(O).length;
-          for (I > 1 && (m += I - 1, h19 += I - 1); R > 0 && u > 0 && !this._isCharWordSeparator(l.loadCell(R - 1, this._workCell)); ) {
+          for (I > 1 && (m += I - 1, h20 += I - 1); R > 0 && u > 0 && !this._isCharWordSeparator(l.loadCell(R - 1, this._workCell)); ) {
             l.loadCell(R - 1, this._workCell);
             let k = this._workCell.getChars().length;
             this._workCell.getWidth() === 0 ? (d++, R--) : k > 1 && (p += k - 1, u -= k - 1), u--, R--;
           }
-          for (; O < l.length && h19 + 1 < a.length && !this._isCharWordSeparator(l.loadCell(O + 1, this._workCell)); ) {
+          for (; O < l.length && h20 + 1 < a.length && !this._isCharWordSeparator(l.loadCell(O + 1, this._workCell)); ) {
             l.loadCell(O + 1, this._workCell);
             let k = this._workCell.getChars().length;
-            this._workCell.getWidth() === 2 ? (_++, O++) : k > 1 && (m += k - 1, h19 += k - 1), h19++, O++;
+            this._workCell.getWidth() === 2 ? (_++, O++) : k > 1 && (m += k - 1, h20 += k - 1), h20++, O++;
           }
         }
-        h19++;
-        let f = u + c - d + p, A = Math.min(this._bufferService.cols, h19 - u + d + _ - p - m);
-        if (!(!i && a.slice(u, h19).trim() === "")) {
+        h20++;
+        let f = u + c - d + p, A = Math.min(this._bufferService.cols, h20 - u + d + _ - p - m);
+        if (!(!i && a.slice(u, h20).trim() === "")) {
           if (r && f === 0 && l.getCodePoint(0) !== 32) {
             let R = o.lines.get(e[1] - 1);
             if (R && l.isWrapped && R.getCodePoint(this._bufferService.cols - 1) !== 32) {
@@ -5859,7 +5859,7 @@ ${h19.join(`
             let I = this.ybase + this.y;
             if (I >= l && I < l + u.length) continue;
           }
-          let h19 = u[u.length - 1].getTrimmedLength(), c = al(u, this._cols, t2), d = c.length - u.length, _;
+          let h20 = u[u.length - 1].getTrimmedLength(), c = al(u, this._cols, t2), d = c.length - u.length, _;
           this.ybase === 0 && this.y !== this.lines.length - 1 ? _ = Math.max(0, this.y - this.lines.maxLength + d) : _ = Math.max(0, this.lines.length - this.lines.maxLength + d);
           let p = [];
           for (let I = 0; I < d; I++) {
@@ -5869,7 +5869,7 @@ ${h19.join(`
           p.length > 0 && (n.push({ start: l + u.length + o, newLines: p }), o += p.length), u.push(...p);
           let m = c.length - 1, f = c[m];
           f === 0 && (m--, f = c[m]);
-          let A = u.length - d - 1, R = h19;
+          let A = u.length - d - 1, R = h20;
           for (; A >= 0; ) {
             let I = Math.min(R, f);
             if (u[m] === void 0) break;
@@ -5887,13 +5887,13 @@ ${h19.join(`
         if (n.length > 0) {
           let l = [], a = [];
           for (let f = 0; f < this.lines.length; f++) a.push(this.lines.get(f));
-          let u = this.lines.length, h19 = u - 1, c = 0, d = n[c];
+          let u = this.lines.length, h20 = u - 1, c = 0, d = n[c];
           this.lines.length = Math.min(this.lines.maxLength, this.lines.length + o);
           let _ = 0;
-          for (let f = Math.min(this.lines.maxLength - 1, u + o - 1); f >= 0; f--) if (d && d.start > h19 + _) {
+          for (let f = Math.min(this.lines.maxLength - 1, u + o - 1); f >= 0; f--) if (d && d.start > h20 + _) {
             for (let A = d.newLines.length - 1; A >= 0; A--) this.lines.set(f--, d.newLines[A]);
-            f++, l.push({ index: h19 + 1, amount: d.newLines.length }), _ += d.newLines.length, d = n[++c];
-          } else this.lines.set(f, a[h19--]);
+            f++, l.push({ index: h20 + 1, amount: d.newLines.length }), _ += d.newLines.length, d = n[++c];
+          } else this.lines.set(f, a[h20--]);
           let p = 0;
           for (let f = l.length - 1; f >= 0; f--) l[f].index += p, this.lines.onInsertEmitter.fire(l[f]), p += l[f].amount;
           let m = Math.max(0, u + o - this.lines.maxLength);
@@ -6683,17 +6683,17 @@ ${h19.join(`
         if (this._parseStack.state) if (this._parseStack.state === 2) this._parseStack.state = 0, l = this._parseStack.chunkPos + 1;
         else {
           if (r === void 0 || this._parseStack.state === 1) throw this._parseStack.state = 1, new Error("improper continuation due to previous async handler, giving up parsing");
-          let u = this._parseStack.handlers, h19 = this._parseStack.handlerPos - 1;
+          let u = this._parseStack.handlers, h20 = this._parseStack.handlerPos - 1;
           switch (this._parseStack.state) {
             case 3:
-              if (r === false && h19 > -1) {
-                for (; h19 >= 0 && (a = u[h19](this._params), a !== true); h19--) if (a instanceof Promise) return this._parseStack.handlerPos = h19, a;
+              if (r === false && h20 > -1) {
+                for (; h20 >= 0 && (a = u[h20](this._params), a !== true); h20--) if (a instanceof Promise) return this._parseStack.handlerPos = h20, a;
               }
               this._parseStack.handlers = [];
               break;
             case 4:
-              if (r === false && h19 > -1) {
-                for (; h19 >= 0 && (a = u[h19](), a !== true); h19--) if (a instanceof Promise) return this._parseStack.handlerPos = h19, a;
+              if (r === false && h20 > -1) {
+                for (; h20 >= 0 && (a = u[h20](), a !== true); h20--) if (a instanceof Promise) return this._parseStack.handlerPos = h20, a;
               }
               this._parseStack.handlers = [];
               break;
@@ -6803,7 +6803,7 @@ ${h19.join(`
     dc = /^([\da-f])\/([\da-f])\/([\da-f])$|^([\da-f]{2})\/([\da-f]{2})\/([\da-f]{2})$|^([\da-f]{3})\/([\da-f]{3})\/([\da-f]{3})$|^([\da-f]{4})\/([\da-f]{4})\/([\da-f]{4})$/, fc = /^[\da-f]+$/;
     mc = { "(": 0, ")": 1, "*": 2, "+": 3, "-": 1, ".": 2 }, ut = 131072, _l = 10;
     vl = 5e3, gl = 0, vn = class extends D {
-      constructor(e, i, r, n, o, l, a, u, h19 = new bn()) {
+      constructor(e, i, r, n, o, l, a, u, h20 = new bn()) {
         super();
         this._bufferService = e;
         this._charsetService = i;
@@ -6813,7 +6813,7 @@ ${h19.join(`
         this._oscLinkService = l;
         this._coreMouseService = a;
         this._unicodeService = u;
-        this._parser = h19;
+        this._parser = h20;
         this._parseBuffer = new Uint32Array(4096);
         this._stringDecoder = new er();
         this._utf8Decoder = new tr();
@@ -6895,11 +6895,11 @@ ${h19.join(`
           if (r = this._parser.parse(this._parseBuffer, c)) return this._preserveStack(n, o, c, 0), this._logSlowResolvingAsync(r), r;
         }
         (this._activeBuffer.x !== n || this._activeBuffer.y !== o) && this._onCursorMove.fire();
-        let u = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h19 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
-        h19 < this._bufferService.rows && this._onRequestRefreshRows.fire({ start: Math.min(h19, this._bufferService.rows - 1), end: Math.min(u, this._bufferService.rows - 1) });
+        let u = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h20 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
+        h20 < this._bufferService.rows && this._onRequestRefreshRows.fire({ start: Math.min(h20, this._bufferService.rows - 1), end: Math.min(u, this._bufferService.rows - 1) });
       }
       print(e, i, r) {
-        let n, o, l = this._charsetService.charset, a = this._optionsService.rawOptions.screenReaderMode, u = this._bufferService.cols, h19 = this._coreService.decPrivateModes.wraparound, c = this._coreService.modes.insertMode, d = this._curAttrData, _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+        let n, o, l = this._charsetService.charset, a = this._optionsService.rawOptions.screenReaderMode, u = this._bufferService.cols, h20 = this._coreService.decPrivateModes.wraparound, c = this._coreService.modes.insertMode, d = this._curAttrData, _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
         this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._activeBuffer.x && r - i > 0 && _.getWidth(this._activeBuffer.x - 1) === 2 && _.setCellFromCodepoint(this._activeBuffer.x - 1, 0, 1, d);
         let p = this._parser.precedingJoinState;
         for (let m = i; m < r; ++m) {
@@ -6911,7 +6911,7 @@ ${h19.join(`
           o = Ae.extractWidth(f);
           let A = Ae.extractShouldJoin(f), R = A ? Ae.extractWidth(p) : 0;
           if (p = f, a && this._onA11yChar.fire(Ce(n)), this._getCurrentLinkId() && this._oscLinkService.addLineToLink(this._getCurrentLinkId(), this._activeBuffer.ybase + this._activeBuffer.y), this._activeBuffer.x + o - R > u) {
-            if (h19) {
+            if (h20) {
               let O = _, I = this._activeBuffer.x - R;
               for (this._activeBuffer.x = R, this._activeBuffer.y++, this._activeBuffer.y === this._activeBuffer.scrollBottom + 1 ? (this._activeBuffer.y--, this._bufferService.scroll(this._eraseAttrData(), true)) : (this._activeBuffer.y >= this._bufferService.rows && (this._activeBuffer.y = this._bufferService.rows - 1), this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).isWrapped = true), _ = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y), R > 0 && _ instanceof Ze && _.copyCellsFrom(O, I, 0, R, false); I < u; ) O.setCellFromCodepoint(I++, 0, 1, d);
             } else if (this._activeBuffer.x = u - 1, o === 2) continue;
@@ -7168,13 +7168,13 @@ ${h19.join(`
       repeatPrecedingCharacter(e) {
         let i = this._parser.precedingJoinState;
         if (!i) return true;
-        let r = e.params[0] || 1, n = Ae.extractWidth(i), o = this._activeBuffer.x - n, a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(o), u = new Uint32Array(a.length * r), h19 = 0;
+        let r = e.params[0] || 1, n = Ae.extractWidth(i), o = this._activeBuffer.x - n, a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(o), u = new Uint32Array(a.length * r), h20 = 0;
         for (let d = 0; d < a.length; ) {
           let _ = a.codePointAt(d) || 0;
-          u[h19++] = _, d += _ > 65535 ? 2 : 1;
+          u[h20++] = _, d += _ > 65535 ? 2 : 1;
         }
-        let c = h19;
-        for (let d = 1; d < r; ++d) u.copyWithin(c, 0, h19), c += h19;
+        let c = h20;
+        for (let d = 1; d < r; ++d) u.copyWithin(c, 0, h20), c += h20;
         return this.print(u, 0, c), true;
       }
       sendDeviceAttributesPrimary(e) {
@@ -7349,8 +7349,8 @@ ${h19.join(`
       requestMode(e, i) {
         let r;
         ((P) => (P[P.NOT_RECOGNIZED = 0] = "NOT_RECOGNIZED", P[P.SET = 1] = "SET", P[P.RESET = 2] = "RESET", P[P.PERMANENTLY_SET = 3] = "PERMANENTLY_SET", P[P.PERMANENTLY_RESET = 4] = "PERMANENTLY_RESET"))(r ||= {});
-        let n = this._coreService.decPrivateModes, { activeProtocol: o, activeEncoding: l } = this._coreMouseService, a = this._coreService, { buffers: u, cols: h19 } = this._bufferService, { active: c, alt: d } = u, _ = this._optionsService.rawOptions, p = (A, R) => (a.triggerDataEvent(`${b.ESC}[${i ? "" : "?"}${A};${R}$y`), true), m = (A) => A ? 1 : 2, f = e.params[0];
-        return i ? f === 2 ? p(f, 4) : f === 4 ? p(f, m(a.modes.insertMode)) : f === 12 ? p(f, 3) : f === 20 ? p(f, m(_.convertEol)) : p(f, 0) : f === 1 ? p(f, m(n.applicationCursorKeys)) : f === 3 ? p(f, _.windowOptions.setWinLines ? h19 === 80 ? 2 : h19 === 132 ? 1 : 0 : 0) : f === 6 ? p(f, m(n.origin)) : f === 7 ? p(f, m(n.wraparound)) : f === 8 ? p(f, 3) : f === 9 ? p(f, m(o === "X10")) : f === 12 ? p(f, m(_.cursorBlink)) : f === 25 ? p(f, m(!a.isCursorHidden)) : f === 45 ? p(f, m(n.reverseWraparound)) : f === 66 ? p(f, m(n.applicationKeypad)) : f === 67 ? p(f, 4) : f === 1e3 ? p(f, m(o === "VT200")) : f === 1002 ? p(f, m(o === "DRAG")) : f === 1003 ? p(f, m(o === "ANY")) : f === 1004 ? p(f, m(n.sendFocus)) : f === 1005 ? p(f, 4) : f === 1006 ? p(f, m(l === "SGR")) : f === 1015 ? p(f, 4) : f === 1016 ? p(f, m(l === "SGR_PIXELS")) : f === 1048 ? p(f, 1) : f === 47 || f === 1047 || f === 1049 ? p(f, m(c === d)) : f === 2004 ? p(f, m(n.bracketedPasteMode)) : f === 2026 ? p(f, m(n.synchronizedOutput)) : p(f, 0);
+        let n = this._coreService.decPrivateModes, { activeProtocol: o, activeEncoding: l } = this._coreMouseService, a = this._coreService, { buffers: u, cols: h20 } = this._bufferService, { active: c, alt: d } = u, _ = this._optionsService.rawOptions, p = (A, R) => (a.triggerDataEvent(`${b.ESC}[${i ? "" : "?"}${A};${R}$y`), true), m = (A) => A ? 1 : 2, f = e.params[0];
+        return i ? f === 2 ? p(f, 4) : f === 4 ? p(f, m(a.modes.insertMode)) : f === 12 ? p(f, 3) : f === 20 ? p(f, m(_.convertEol)) : p(f, 0) : f === 1 ? p(f, m(n.applicationCursorKeys)) : f === 3 ? p(f, _.windowOptions.setWinLines ? h20 === 80 ? 2 : h20 === 132 ? 1 : 0 : 0) : f === 6 ? p(f, m(n.origin)) : f === 7 ? p(f, m(n.wraparound)) : f === 8 ? p(f, 3) : f === 9 ? p(f, m(o === "X10")) : f === 12 ? p(f, m(_.cursorBlink)) : f === 25 ? p(f, m(!a.isCursorHidden)) : f === 45 ? p(f, m(n.reverseWraparound)) : f === 66 ? p(f, m(n.applicationKeypad)) : f === 67 ? p(f, 4) : f === 1e3 ? p(f, m(o === "VT200")) : f === 1002 ? p(f, m(o === "DRAG")) : f === 1003 ? p(f, m(o === "ANY")) : f === 1004 ? p(f, m(n.sendFocus)) : f === 1005 ? p(f, 4) : f === 1006 ? p(f, m(l === "SGR")) : f === 1015 ? p(f, 4) : f === 1016 ? p(f, m(l === "SGR_PIXELS")) : f === 1048 ? p(f, 1) : f === 47 || f === 1047 || f === 1049 ? p(f, m(c === d)) : f === 2004 ? p(f, m(n.bracketedPasteMode)) : f === 2026 ? p(f, m(n.synchronizedOutput)) : p(f, 0);
       }
       _updateAttrColor(e, i, r, n, o) {
         return i === 2 ? (e |= 50331648, e &= -16777216, e |= De.fromColorRGB([r, n, o])) : i === 5 && (e &= -50331904, e |= 33554432 | r & 255), e;
@@ -8020,8 +8020,8 @@ ${h19.join(`
       _renderRows(e, i) {
         let r = this._terminal.buffer, n = r.lines.length.toString();
         for (let o = e; o <= i; o++) {
-          let l = r.lines.get(r.ydisp + o), a = [], u = l?.translateToString(true, void 0, void 0, a) || "", h19 = (r.ydisp + o + 1).toString(), c = this._rowElements[o];
-          c && (u.length === 0 ? (c.textContent = " ", this._rowColumns.set(c, [0, 1])) : (c.textContent = u, this._rowColumns.set(c, a)), c.setAttribute("aria-posinset", h19), c.setAttribute("aria-setsize", n), this._alignRowWidth(c));
+          let l = r.lines.get(r.ydisp + o), a = [], u = l?.translateToString(true, void 0, void 0, a) || "", h20 = (r.ydisp + o + 1).toString(), c = this._rowElements[o];
+          c && (u.length === 0 ? (c.textContent = " ", this._rowColumns.set(c, [0, 1])) : (c.textContent = u, this._rowColumns.set(c, a)), c.setAttribute("aria-posinset", h20), c.setAttribute("aria-setsize", n), this._alignRowWidth(c));
         }
         this._announceCharacters();
       }
@@ -8033,11 +8033,11 @@ ${h19.join(`
         if (o === l || e.relatedTarget !== n) return;
         let a, u;
         if (i === 0 ? (a = r, u = this._rowElements.pop(), this._rowContainer.removeChild(u)) : (a = this._rowElements.shift(), u = r, this._rowContainer.removeChild(a)), a.removeEventListener("focus", this._topBoundaryFocusListener), u.removeEventListener("focus", this._bottomBoundaryFocusListener), i === 0) {
-          let h19 = this._createAccessibilityTreeNode();
-          this._rowElements.unshift(h19), this._rowContainer.insertAdjacentElement("afterbegin", h19);
+          let h20 = this._createAccessibilityTreeNode();
+          this._rowElements.unshift(h20), this._rowContainer.insertAdjacentElement("afterbegin", h20);
         } else {
-          let h19 = this._createAccessibilityTreeNode();
-          this._rowElements.push(h19), this._rowContainer.appendChild(h19);
+          let h20 = this._createAccessibilityTreeNode();
+          this._rowElements.push(h20), this._rowContainer.appendChild(h20);
         }
         this._rowElements[0].addEventListener("focus", this._topBoundaryFocusListener), this._rowElements[this._rowElements.length - 1].addEventListener("focus", this._bottomBoundaryFocusListener), this._terminal.scrollLines(i === 0 ? -1 : 1), this._rowElements[i === 0 ? 1 : this._rowElements.length - 2].focus(), e.preventDefault(), e.stopImmediatePropagation();
       }
@@ -8057,12 +8057,12 @@ ${h19.join(`
         if ((i.node.compareDocumentPosition(r.node) & Node.DOCUMENT_POSITION_PRECEDING || i.node === r.node && i.offset > r.offset) && ([i, r] = [r, i]), i.node.compareDocumentPosition(this._rowElements[0]) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING) && (i = { node: this._rowElements[0].childNodes[0], offset: 0 }), !this._rowContainer.contains(i.node)) return;
         let n = this._rowElements.slice(-1)[0];
         if (r.node.compareDocumentPosition(n) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_PRECEDING) && (r = { node: n, offset: n.textContent?.length ?? 0 }), !this._rowContainer.contains(r.node)) return;
-        let o = ({ node: u, offset: h19 }) => {
+        let o = ({ node: u, offset: h20 }) => {
           let c = u instanceof Text ? u.parentNode : u, d = parseInt(c?.getAttribute("aria-posinset"), 10) - 1;
           if (isNaN(d)) return console.warn("row is invalid. Race condition?"), null;
           let _ = this._rowColumns.get(c);
           if (!_) return console.warn("columns is null. Race condition?"), null;
-          let p = h19 < _.length ? _[h19] : _.slice(-1)[0] + 1;
+          let p = h20 < _.length ? _[h20] : _.slice(-1)[0] + 1;
           return p >= this._terminal.cols && (++d, p = 0), { row: d, column: p };
         }, l = o(i), a = o(r);
         if (!(!l || !a)) {
@@ -8163,8 +8163,8 @@ ${h19.join(`
         for (let n = 0; n < i.size; n++) {
           let o = i.get(n);
           if (o) for (let l = 0; l < o.length; l++) {
-            let a = o[l], u = a.link.range.start.y < e ? 0 : a.link.range.start.x, h19 = a.link.range.end.y > e ? this._bufferService.cols : a.link.range.end.x;
-            for (let c = u; c <= h19; c++) {
+            let a = o[l], u = a.link.range.start.y < e ? 0 : a.link.range.start.x, h20 = a.link.range.end.y > e ? this._bufferService.cols : a.link.range.end.x;
+            for (let c = u; c <= h20; c++) {
               if (r.has(c)) {
                 o.splice(l--, 1);
                 break;
@@ -8405,27 +8405,27 @@ ${h19.join(`
         function r(l) {
           let a = e._mouseService.getMouseReportCoords(l, e.screenElement);
           if (!a) return false;
-          let u, h19;
+          let u, h20;
           switch (l.overrideType || l.type) {
             case "mousemove":
-              h19 = 32, l.buttons === void 0 ? (u = 3, l.button !== void 0 && (u = l.button < 3 ? l.button : 3)) : u = l.buttons & 1 ? 0 : l.buttons & 4 ? 1 : l.buttons & 2 ? 2 : 3;
+              h20 = 32, l.buttons === void 0 ? (u = 3, l.button !== void 0 && (u = l.button < 3 ? l.button : 3)) : u = l.buttons & 1 ? 0 : l.buttons & 4 ? 1 : l.buttons & 2 ? 2 : 3;
               break;
             case "mouseup":
-              h19 = 0, u = l.button < 3 ? l.button : 3;
+              h20 = 0, u = l.button < 3 ? l.button : 3;
               break;
             case "mousedown":
-              h19 = 1, u = l.button < 3 ? l.button : 3;
+              h20 = 1, u = l.button < 3 ? l.button : 3;
               break;
             case "wheel":
               if (e._customWheelEventHandler && e._customWheelEventHandler(l) === false) return false;
               let c = l.deltaY;
               if (c === 0 || e.coreMouseService.consumeWheelEvent(l, e._renderService?.dimensions?.device?.cell?.height, e._coreBrowserService?.dpr) === 0) return false;
-              h19 = c < 0 ? 0 : 1, u = 4;
+              h20 = c < 0 ? 0 : 1, u = 4;
               break;
             default:
               return false;
           }
-          return h19 === void 0 || u === void 0 || u > 4 ? false : e.coreMouseService.triggerMouseEvent({ col: a.col, row: a.row, x: a.x, y: a.y, button: u, action: h19, ctrl: l.ctrlKey, alt: l.altKey, shift: l.shiftKey });
+          return h20 === void 0 || u === void 0 || u > 4 ? false : e.coreMouseService.triggerMouseEvent({ col: a.col, row: a.row, x: a.x, y: a.y, button: u, action: h20, ctrl: l.ctrlKey, alt: l.altKey, shift: l.shiftKey });
         }
         let n = { mouseup: null, wheel: null, mousedrag: null, mousemove: null }, o = { mouseup: (l) => (r(l), l.buttons || (this._document.removeEventListener("mouseup", n.mouseup), n.mousedrag && this._document.removeEventListener("mousemove", n.mousedrag)), this.cancel(l)), wheel: (l) => (r(l), this.cancel(l, true)), mousedrag: (l) => {
           l.buttons && r(l);
@@ -8442,8 +8442,8 @@ ${h19.join(`
             if (!this.buffer.hasScrollback) {
               if (l.deltaY === 0) return false;
               if (e.coreMouseService.consumeWheelEvent(l, e._renderService?.dimensions?.device?.cell?.height, e._coreBrowserService?.dpr) === 0) return this.cancel(l, true);
-              let h19 = b.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (l.deltaY < 0 ? "A" : "B");
-              return this.coreService.triggerDataEvent(h19, true), this.cancel(l, true);
+              let h20 = b.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (l.deltaY < 0 ? "A" : "B");
+              return this.coreService.triggerDataEvent(h20, true), this.cancel(l, true);
             }
           }
         }, { passive: false }));
@@ -11363,14 +11363,97 @@ function telegramChat(detail) {
 }
 var stepState = (index, at2) => index < at2 ? "done" : index === at2 ? "now" : void 0;
 
-// src/client/channel-connect-live.js
+// src/client/meta-webhook-setup.js
 var import_react3 = require("react");
+function MetaWebhookSetup({ request = call, initiallyOpen = false, writable = true }) {
+  const [open, setOpen] = (0, import_react3.useState)(initiallyOpen);
+  const [setup, setSetup] = (0, import_react3.useState)(null);
+  const [revealed, setRevealed] = (0, import_react3.useState)(false);
+  const [problem, setProblem] = (0, import_react3.useState)("");
+  const [copied, setCopied] = (0, import_react3.useState)("");
+  const [attempt, setAttempt] = (0, import_react3.useState)(0);
+  (0, import_react3.useEffect)(() => {
+    if (!open || !writable) return;
+    let live = true;
+    setSetup(null);
+    setRevealed(false);
+    setProblem("");
+    setCopied("");
+    request("omni-wab-webhook-setup").then((reply) => {
+      if (live) setSetup(reply);
+    }, () => {
+      if (live) setProblem(t("Could not load webhook setup. Try again or ask an admin."));
+    });
+    return () => {
+      live = false;
+    };
+  }, [open, writable, request, attempt]);
+  const copy = async (name, value) => {
+    setCopied("");
+    setProblem("");
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(name);
+    } catch {
+      setProblem(t("Could not copy. Reveal or select the value and copy it manually."));
+    }
+  };
+  const allowed = writable && setup?.authorized === true;
+  return (0, import_react3.createElement)(
+    "section",
+    { className: "oc-fix", "aria-label": "Meta webhook setup" },
+    (0, import_react3.createElement)("h3", null, t("Meta webhook setup")),
+    !open ? (0, import_react3.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => setOpen(true) }, t("Show webhook setup")) : (0, import_react3.createElement)(
+      import_react3.Fragment,
+      null,
+      !writable || setup?.authorized === false ? (0, import_react3.createElement)("p", null, t("Callback URL unavailable. To view webhook setup, ask an admin.")) : !setup && !problem ? (0, import_react3.createElement)("p", { role: "status" }, t("Loading webhook setup…")) : null,
+      allowed ? (0, import_react3.createElement)(
+        import_react3.Fragment,
+        null,
+        (0, import_react3.createElement)(
+          "label",
+          { className: "oc-field" },
+          (0, import_react3.createElement)("span", null, t("Callback URL")),
+          (0, import_react3.createElement)("input", { "aria-label": "Callback URL", readOnly: true, value: setup.callbackUrl ?? "", placeholder: t("Not configured") })
+        ),
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-secondary", disabled: !setup.callbackUrl, onClick: () => copy("url", setup.callbackUrl) }, t("Copy callback URL")),
+        !setup.callbackUrl ? (0, import_react3.createElement)("p", null, t("Ask an admin to set server.public_url or OMNI_PUBLIC_URL to the public HTTPS address of this Omni.")) : null,
+        (0, import_react3.createElement)(
+          "label",
+          { className: "oc-field" },
+          (0, import_react3.createElement)("span", null, t("Verify token")),
+          (0, import_react3.createElement)("input", { "aria-label": "Verify token", readOnly: true, autoComplete: "off", type: revealed ? "text" : "password", value: setup.verifyToken ? revealed ? setup.verifyToken : "••••••••" : "", placeholder: t("Not configured") })
+        ),
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-secondary", disabled: !setup.verifyToken, onClick: () => setRevealed((value) => !value) }, revealed ? t("Hide verify token") : t("Reveal verify token")),
+        (0, import_react3.createElement)("button", { type: "button", className: "oc-secondary", disabled: !setup.verifyToken, onClick: () => copy("token", setup.verifyToken) }, t("Copy verify token")),
+        !setup.verifyToken ? (0, import_react3.createElement)("p", null, t("Ask an admin to configure META_VERIFY_TOKEN on the Omni server.")) : null,
+        !setup.appSecretConfigured ? (0, import_react3.createElement)("p", null, t("Ask an admin to configure META_APP_SECRET on the Omni server before receiving webhooks.")) : null,
+        (0, import_react3.createElement)("p", null, t("Open Meta Developers, choose your app and its WhatsApp webhook configuration. Paste Callback URL and Verify token into the matching fields, then verify and save.")),
+        (0, import_react3.createElement)("a", { href: "https://developers.facebook.com/apps/", target: "_blank", rel: "noreferrer" }, t("Open Meta Developers")),
+        (0, import_react3.createElement)("p", { className: "oc-fine" }, t("The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.")),
+        copied ? (0, import_react3.createElement)("p", { role: "status" }, copied === "url" ? t("Callback URL copied") : t("Verify token copied")) : null
+      ) : null,
+      problem ? (0, import_react3.createElement)("p", { role: "alert" }, problem) : null,
+      writable ? (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setAttempt((value) => value + 1) }, t("Reload webhook setup")) : null,
+      (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
+        setOpen(false);
+        setSetup(null);
+        setRevealed(false);
+        setCopied("");
+        setProblem("");
+      } }, t("Close webhook setup"))
+    )
+  );
+}
+
+// src/client/channel-connect-live.js
+var import_react4 = require("react");
 var { ChevronLeftIcon } = icons;
 var POLL_MS2 = 2e3;
 function LiveConnectFlow({ state, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const { type } = state.page;
-  const [supported, setSupported] = (0, import_react3.useState)(void 0);
-  (0, import_react3.useEffect)(() => {
+  const [supported, setSupported] = (0, import_react4.useState)(void 0);
+  (0, import_react4.useEffect)(() => {
     let live = true;
     call("omni-channel-types").then((reply) => {
       if (live) setSupported(reply.types ?? null);
@@ -11382,7 +11465,7 @@ function LiveConnectFlow({ state, omni: omni2, Tile: Tile2, PreviewChip: Preview
     };
   }, []);
   if (type === null) {
-    return (0, import_react3.createElement)(AddGrid, {
+    return (0, import_react4.createElement)(AddGrid, {
       types: supported === void 0 ? [] : offered(supported),
       loading: supported === void 0,
       writable: canWrite(state),
@@ -11393,32 +11476,32 @@ function LiveConnectFlow({ state, omni: omni2, Tile: Tile2, PreviewChip: Preview
     });
   }
   const props = { key: type, type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 };
-  if (type === "slack") return (0, import_react3.createElement)(SlackFlow, props);
-  if (type === "whatsapp-business") return (0, import_react3.createElement)(BusinessFlow, props);
-  if (type === "telegram" || type === "discord") return (0, import_react3.createElement)(TokenFlow, props);
-  return (0, import_react3.createElement)(WhatsAppFlow, props);
+  if (type === "slack") return (0, import_react4.createElement)(SlackFlow, props);
+  if (type === "whatsapp-business") return (0, import_react4.createElement)(BusinessFlow, props);
+  if (type === "telegram" || type === "discord") return (0, import_react4.createElement)(TokenFlow, props);
+  return (0, import_react4.createElement)(WhatsAppFlow, props);
 }
 function AddGrid({ types, loading = false, writable = true, onPick, onBack, Tile: Tile2, PreviewChip: PreviewChip2 }) {
-  return (0, import_react3.createElement)(
-    import_react3.Fragment,
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
     null,
-    (0, import_react3.createElement)("button", { type: "button", className: "oc-back", onClick: onBack }, (0, import_react3.createElement)(ChevronLeftIcon), t("Channels")),
-    (0, import_react3.createElement)("header", { className: "oc-head" }, (0, import_react3.createElement)(
+    (0, import_react4.createElement)("button", { type: "button", className: "oc-back", onClick: onBack }, (0, import_react4.createElement)(ChevronLeftIcon), t("Channels")),
+    (0, import_react4.createElement)("header", { className: "oc-head" }, (0, import_react4.createElement)(
       "div",
       null,
-      (0, import_react3.createElement)("h1", null, t("Add a channel"), (0, import_react3.createElement)(PreviewChip2)),
-      (0, import_react3.createElement)("p", null, writable ? t("Pick where people talk to you. Every option connects from here.") : t("This device's key can't change channels; ask your Omni's owner."))
+      (0, import_react4.createElement)("h1", null, t("Add a channel"), (0, import_react4.createElement)(PreviewChip2)),
+      (0, import_react4.createElement)("p", null, writable ? t("Pick where people talk to you. Every option connects from here.") : t("This device's key can't change channels; ask your Omni's owner."))
     )),
-    loading ? (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Looking at what this Omni offers…")) : null,
-    (0, import_react3.createElement)("div", { className: "oc-types" }, types.map((id) => {
+    loading ? (0, import_react4.createElement)("span", { className: "oc-qr-wait" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Looking at what this Omni offers…")) : null,
+    (0, import_react4.createElement)("div", { className: "oc-types" }, types.map((id) => {
       const info = CHANNEL_TYPES[id];
       const add = ADD[id];
-      return (0, import_react3.createElement)(
+      return (0, import_react4.createElement)(
         "button",
         { key: id, type: "button", className: "oc-type", disabled: !writable, onClick: () => onPick(id) },
-        (0, import_react3.createElement)("span", { className: "oc-type-top" }, (0, import_react3.createElement)(Tile2, { type: id, size: 44 }), (0, import_react3.createElement)("strong", null, info.label), (0, import_react3.createElement)("span", { className: "oc-type-time" }, add.time)),
-        (0, import_react3.createElement)("span", { className: "oc-type-blurb" }, t(info.blurb)),
-        (0, import_react3.createElement)("span", { className: "oc-type-how" }, (0, import_react3.createElement)("span", null, t("How")), (0, import_react3.createElement)("b", null, t(add.how), " →"))
+        (0, import_react4.createElement)("span", { className: "oc-type-top" }, (0, import_react4.createElement)(Tile2, { type: id, size: 44 }), (0, import_react4.createElement)("strong", null, info.label), (0, import_react4.createElement)("span", { className: "oc-type-time" }, add.time)),
+        (0, import_react4.createElement)("span", { className: "oc-type-blurb" }, t(info.blurb)),
+        (0, import_react4.createElement)("span", { className: "oc-type-how" }, (0, import_react4.createElement)("span", null, t("How")), (0, import_react4.createElement)("b", null, t(add.how), " →"))
       );
     }))
   );
@@ -11426,43 +11509,43 @@ function AddGrid({ types, loading = false, writable = true, onPick, onBack, Tile
 function FlowShell({ type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack, children }) {
   const info = CHANNEL_TYPES[type];
   const add = ADD[type];
-  return (0, import_react3.createElement)(
-    import_react3.Fragment,
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
     null,
-    (0, import_react3.createElement)("button", { type: "button", className: "oc-back", onClick: onBack }, (0, import_react3.createElement)(ChevronLeftIcon), t("All channels")),
-    (0, import_react3.createElement)("header", { className: "oc-head" }, (0, import_react3.createElement)(
+    (0, import_react4.createElement)("button", { type: "button", className: "oc-back", onClick: onBack }, (0, import_react4.createElement)(ChevronLeftIcon), t("All channels")),
+    (0, import_react4.createElement)("header", { className: "oc-head" }, (0, import_react4.createElement)(
       "div",
       null,
-      (0, import_react3.createElement)("h1", null, (0, import_react3.createElement)(Tile2, { type, size: 34 }), info.label, (0, import_react3.createElement)(PreviewChip2)),
-      (0, import_react3.createElement)("p", null, t("About {time}. You can disconnect any time from the channel's page.", { time: add.time }))
+      (0, import_react4.createElement)("h1", null, (0, import_react4.createElement)(Tile2, { type, size: 34 }), info.label, (0, import_react4.createElement)(PreviewChip2)),
+      (0, import_react4.createElement)("p", null, t("About {time}. You can disconnect any time from the channel's page.", { time: add.time }))
     )),
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)(
       "div",
       { className: "oc-guide" },
-      (0, import_react3.createElement)("ol", { className: "oc-guide-steps" }, add.steps.map((label, index) => (0, import_react3.createElement)(
+      (0, import_react4.createElement)("ol", { className: "oc-guide-steps" }, add.steps.map((label, index) => (0, import_react4.createElement)(
         "li",
         { key: label, "data-state": stepState(index, at2) },
-        (0, import_react3.createElement)("span", null, index < at2 ? "✓" : String(index + 1)),
+        (0, import_react4.createElement)("span", null, index < at2 ? "✓" : String(index + 1)),
         t(label)
       ))),
-      (0, import_react3.createElement)("section", { className: "oc-guide-pane" }, children)
+      (0, import_react4.createElement)("section", { className: "oc-guide-pane" }, children)
     )
   );
 }
-var Problem = ({ text }) => text ? (0, import_react3.createElement)("p", { className: "oc-problem", role: "alert" }, text) : null;
-var Spinner = ({ text }) => (0, import_react3.createElement)("span", { className: "oc-qr-wait" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), text);
+var Problem = ({ text }) => text ? (0, import_react4.createElement)("p", { className: "oc-problem", role: "alert" }, text) : null;
+var Spinner = ({ text }) => (0, import_react4.createElement)("span", { className: "oc-qr-wait" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), text);
 function useUnfinished() {
-  const unfinished = (0, import_react3.useRef)(null);
-  (0, import_react3.useEffect)(() => () => {
+  const unfinished = (0, import_react4.useRef)(null);
+  (0, import_react4.useEffect)(() => () => {
     if (unfinished.current) void call("omni-channel-cancel", { id: unfinished.current }).catch(() => {
     });
   }, []);
   return unfinished;
 }
 function usePairing(channel, on2, onConnected) {
-  const [pairing, setPairing] = (0, import_react3.useState)(null);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
-  (0, import_react3.useEffect)(() => {
+  const [pairing, setPairing] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  (0, import_react4.useEffect)(() => {
     if (!on2 || !channel) return void 0;
     let live = true;
     let timer = 0;
@@ -11488,22 +11571,22 @@ function usePairing(channel, on2, onConnected) {
 }
 function Connected({ type, channel, detail, omni: omni2, children }) {
   const info = CHANNEL_TYPES[type];
-  return (0, import_react3.createElement)(
-    import_react3.Fragment,
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
     null,
-    (0, import_react3.createElement)("h2", null, t("{app} is connected", { app: info.label })),
-    (0, import_react3.createElement)("p", null, [detail, t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.")].filter(Boolean).join(" · ")),
+    (0, import_react4.createElement)("h2", null, t("{app} is connected", { app: info.label })),
+    (0, import_react4.createElement)("p", null, [detail, t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.")].filter(Boolean).join(" · ")),
     children,
-    (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, channel.name, channel.id) }, t("See its health")))
+    (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, channel.name, channel.id) }, t("See its health")))
   );
 }
 function WhatsAppFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const info = CHANNEL_TYPES[type];
-  const [name, setName] = (0, import_react3.useState)("");
-  const [channel, setChannel] = (0, import_react3.useState)(null);
-  const [done, setDone] = (0, import_react3.useState)(null);
-  const [busy, setBusy] = (0, import_react3.useState)(false);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [name, setName] = (0, import_react4.useState)("");
+  const [channel, setChannel] = (0, import_react4.useState)(null);
+  const [done, setDone] = (0, import_react4.useState)(null);
+  const [busy, setBusy] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
   const unfinished = useUnfinished();
   const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => {
     unfinished.current = null;
@@ -11523,15 +11606,15 @@ function WhatsAppFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
     }
   };
   const at2 = done ? 2 : channel ? 1 : 0;
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     FlowShell,
     { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
-    done ? (0, import_react3.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 }) : channel ? (0, import_react3.createElement)(QrStep, { info, channel, pairing }) : (0, import_react3.createElement)(
-      import_react3.Fragment,
+    done ? (0, import_react4.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 }) : channel ? (0, import_react4.createElement)(QrStep, { info, channel, pairing }) : (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("Name this number")),
-      (0, import_react3.createElement)("p", null, t("So you can tell your channels apart, for example Sales or Personal.")),
-      (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Name")), (0, import_react3.createElement)("input", {
+      (0, import_react4.createElement)("h2", null, t("Name this number")),
+      (0, import_react4.createElement)("p", null, t("So you can tell your channels apart, for example Sales or Personal.")),
+      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Name")), (0, import_react4.createElement)("input", {
         value: name,
         placeholder: info.label,
         autoFocus: true,
@@ -11540,16 +11623,16 @@ function WhatsAppFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
           if (event.key === "Enter" && !busy) void start();
         }
       })),
-      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: busy, onClick: start }, busy ? t("Starting…") : t("Show the code")))
+      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: busy, onClick: start }, busy ? t("Starting…") : t("Show the code")))
     ),
-    (0, import_react3.createElement)(Problem, { text: problem ?? pollProblem })
+    (0, import_react4.createElement)(Problem, { text: problem ?? pollProblem })
   );
 }
 function QrStep({ info, channel, pairing }) {
-  const [byPhone, setByPhone] = (0, import_react3.useState)(false);
-  const [phone, setPhone] = (0, import_react3.useState)("");
-  const [code, setCode] = (0, import_react3.useState)(null);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [byPhone, setByPhone] = (0, import_react4.useState)(false);
+  const [phone, setPhone] = (0, import_react4.useState)("");
+  const [code, setCode] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
   const askCode = async () => {
     setProblem(null);
     try {
@@ -11559,99 +11642,99 @@ function QrStep({ info, channel, pairing }) {
     }
   };
   if (byPhone) {
-    return (0, import_react3.createElement)(
-      import_react3.Fragment,
+    return (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("Link with a phone number")),
-      code === null ? (0, import_react3.createElement)(
-        import_react3.Fragment,
+      (0, import_react4.createElement)("h2", null, t("Link with a phone number")),
+      code === null ? (0, import_react4.createElement)(
+        import_react4.Fragment,
         null,
-        (0, import_react3.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
-        (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Phone number with country code")), (0, import_react3.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
-        (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: askCode }, t("Get code")))
-      ) : (0, import_react3.createElement)(
-        import_react3.Fragment,
+        (0, import_react4.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
+        (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Phone number with country code")), (0, import_react4.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
+        (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: askCode }, t("Get code")))
+      ) : (0, import_react4.createElement)(
+        import_react4.Fragment,
         null,
-        (0, import_react3.createElement)(
+        (0, import_react4.createElement)(
           "ol",
           { className: "oc-howto" },
-          (0, import_react3.createElement)("li", null, t("On your phone, open {app} → Linked devices → Link a device", { app: info.label })),
-          (0, import_react3.createElement)("li", null, t("Tap “Link with phone number instead”")),
-          (0, import_react3.createElement)("li", null, t("Type this code"))
+          (0, import_react4.createElement)("li", null, t("On your phone, open {app} → Linked devices → Link a device", { app: info.label })),
+          (0, import_react4.createElement)("li", null, t("Tap “Link with phone number instead”")),
+          (0, import_react4.createElement)("li", null, t("Type this code"))
         ),
-        (0, import_react3.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react3.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
-        (0, import_react3.createElement)(Spinner, { text: t("Waiting for your phone…") })
+        (0, import_react4.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react4.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
+        (0, import_react4.createElement)(Spinner, { text: t("Waiting for your phone…") })
       ),
-      (0, import_react3.createElement)(Problem, { text: problem }),
-      (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
+      (0, import_react4.createElement)(Problem, { text: problem }),
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
         setByPhone(false);
         setCode(null);
       } }, t("Scan a QR code instead"))
     );
   }
-  return (0, import_react3.createElement)(
+  return (0, import_react4.createElement)(
     "div",
     { className: "oc-qr-row" },
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)(
       "div",
       { className: "oc-qr" },
-      pairing?.qr ? (0, import_react3.createElement)("span", { className: "oc-qr-code" }, (0, import_react3.createElement)(QrSvg, { text: pairing.qr, size: 196 })) : (0, import_react3.createElement)("span", { className: "oc-qr-empty" }, (0, import_react3.createElement)("span", { className: "oc-spinner", "aria-hidden": true }))
+      pairing?.qr ? (0, import_react4.createElement)("span", { className: "oc-qr-code" }, (0, import_react4.createElement)(QrSvg, { text: pairing.qr, size: 196 })) : (0, import_react4.createElement)("span", { className: "oc-qr-empty" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }))
     ),
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)(
       "div",
       { className: "oc-qr-side" },
-      (0, import_react3.createElement)("h2", null, t("Scan with your phone")),
-      (0, import_react3.createElement)(
+      (0, import_react4.createElement)("h2", null, t("Scan with your phone")),
+      (0, import_react4.createElement)(
         "ol",
         { className: "oc-howto" },
-        (0, import_react3.createElement)("li", null, t("Open {app} → Settings → Linked devices", { app: info.label })),
-        (0, import_react3.createElement)("li", null, t("Tap Link a device and point the camera here"))
+        (0, import_react4.createElement)("li", null, t("Open {app} → Settings → Linked devices", { app: info.label })),
+        (0, import_react4.createElement)("li", null, t("Tap Link a device and point the camera here"))
       ),
-      (0, import_react3.createElement)(Spinner, { text: pairing?.qr ? t("The code refreshes by itself") : t("Waiting for a code…") }),
-      (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("No camera? Link with your number instead"))
+      (0, import_react4.createElement)(Spinner, { text: pairing?.qr ? t("The code refreshes by itself") : t("Waiting for a code…") }),
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("No camera? Link with your number instead"))
     )
   );
 }
 var TOKEN_HELP = {
-  telegram: () => (0, import_react3.createElement)(
-    import_react3.Fragment,
+  telegram: () => (0, import_react4.createElement)(
+    import_react4.Fragment,
     null,
-    (0, import_react3.createElement)("h2", null, t("Make a Telegram bot for Omni")),
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)("h2", null, t("Make a Telegram bot for Omni")),
+    (0, import_react4.createElement)(
       "ol",
       { className: "oc-numbered" },
-      (0, import_react3.createElement)("li", null, rich("Open {bot} in Telegram", { bot: (0, import_react3.createElement)("a", { href: "https://t.me/BotFather", target: "_blank", rel: "noreferrer" }, "@BotFather") })),
-      (0, import_react3.createElement)("li", null, rich("Send {command}, then pick a name and a username", { command: (0, import_react3.createElement)("code", null, "/newbot") })),
-      (0, import_react3.createElement)("li", null, t("Copy the token it sends you and paste it here"))
+      (0, import_react4.createElement)("li", null, rich("Open {bot} in Telegram", { bot: (0, import_react4.createElement)("a", { href: "https://t.me/BotFather", target: "_blank", rel: "noreferrer" }, "@BotFather") })),
+      (0, import_react4.createElement)("li", null, rich("Send {command}, then pick a name and a username", { command: (0, import_react4.createElement)("code", null, "/newbot") })),
+      (0, import_react4.createElement)("li", null, t("Copy the token it sends you and paste it here"))
     )
   ),
-  discord: () => (0, import_react3.createElement)(
-    import_react3.Fragment,
+  discord: () => (0, import_react4.createElement)(
+    import_react4.Fragment,
     null,
-    (0, import_react3.createElement)("h2", null, t("Connect your Discord bot")),
-    (0, import_react3.createElement)(
+    (0, import_react4.createElement)("h2", null, t("Connect your Discord bot")),
+    (0, import_react4.createElement)(
       "ol",
       { className: "oc-numbered" },
-      (0, import_react3.createElement)("li", null, rich("In the {portal}, open your app → Bot", { portal: (0, import_react3.createElement)("a", { href: "https://discord.com/developers/applications", target: "_blank", rel: "noreferrer" }, t("Discord Developer Portal")) })),
-      (0, import_react3.createElement)("li", null, t("Turn on Message Content Intent, then Reset Token and copy it"))
+      (0, import_react4.createElement)("li", null, rich("In the {portal}, open your app → Bot", { portal: (0, import_react4.createElement)("a", { href: "https://discord.com/developers/applications", target: "_blank", rel: "noreferrer" }, t("Discord Developer Portal")) })),
+      (0, import_react4.createElement)("li", null, t("Turn on Message Content Intent, then Reset Token and copy it"))
     )
   )
 };
 function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const info = CHANNEL_TYPES[type];
-  const [token, setToken] = (0, import_react3.useState)("");
-  const [copied, setCopied] = (0, import_react3.useState)(null);
-  const [channel, setChannel] = (0, import_react3.useState)(null);
-  const [done, setDone] = (0, import_react3.useState)(null);
-  const [invited, setInvited] = (0, import_react3.useState)(false);
-  const [busy, setBusy] = (0, import_react3.useState)(false);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [token, setToken] = (0, import_react4.useState)("");
+  const [copied, setCopied] = (0, import_react4.useState)(null);
+  const [channel, setChannel] = (0, import_react4.useState)(null);
+  const [done, setDone] = (0, import_react4.useState)(null);
+  const [invited, setInvited] = (0, import_react4.useState)(false);
+  const [busy, setBusy] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
   const unfinished = useUnfinished();
   const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => {
     unfinished.current = null;
     setDone(reply);
   });
-  (0, import_react3.useEffect)(() => {
+  (0, import_react4.useEffect)(() => {
     if (type !== "telegram" || channel) return void 0;
     const onFocus = () => {
       if (token.trim() !== "" || !navigator.clipboard?.readText) return;
@@ -11678,43 +11761,43 @@ function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   let body;
   if (done && type === "telegram") {
     const chat = telegramChat(done.detail);
-    body = (0, import_react3.createElement)(
+    body = (0, import_react4.createElement)(
       Connected,
       { type, channel, detail: done.detail, omni: omni2 },
-      chat ? (0, import_react3.createElement)("a", { className: "oc-secondary", href: chat, target: "_blank", rel: "noreferrer" }, t("Say hi to your bot")) : null
+      chat ? (0, import_react4.createElement)("a", { className: "oc-secondary", href: chat, target: "_blank", rel: "noreferrer" }, t("Say hi to your bot")) : null
     );
   } else if (done && type === "discord" && !invited) {
-    body = (0, import_react3.createElement)(
-      import_react3.Fragment,
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("Invite it to a server")),
-      (0, import_react3.createElement)("p", null, t("One click: Discord asks which server, with the permissions Omni needs filled in.")),
-      (0, import_react3.createElement)(
+      (0, import_react4.createElement)("h2", null, t("Invite it to a server")),
+      (0, import_react4.createElement)("p", null, t("One click: Discord asks which server, with the permissions Omni needs filled in.")),
+      (0, import_react4.createElement)(
         "div",
         { className: "oc-row" },
-        channel.inviteUrl ? (0, import_react3.createElement)("a", { className: "oc-primary", href: channel.inviteUrl, target: "_blank", rel: "noreferrer", onClick: () => setInvited(true) }, t("Invite to a server")) : null,
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setInvited(true) }, channel.inviteUrl ? t("It is already on my server") : t("Continue"))
+        channel.inviteUrl ? (0, import_react4.createElement)("a", { className: "oc-primary", href: channel.inviteUrl, target: "_blank", rel: "noreferrer", onClick: () => setInvited(true) }, t("Invite to a server")) : null,
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: () => setInvited(true) }, channel.inviteUrl ? t("It is already on my server") : t("Continue"))
       )
     );
   } else if (done) {
-    body = (0, import_react3.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 });
+    body = (0, import_react4.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 });
   } else if (channel) {
-    body = (0, import_react3.createElement)(import_react3.Fragment, null, (0, import_react3.createElement)("h2", null, t("Connecting…")), (0, import_react3.createElement)(Spinner, { text: pairing?.message ?? t("Waiting for Omni to say the bot is up") }));
+    body = (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)("h2", null, t("Connecting…")), (0, import_react4.createElement)(Spinner, { text: pairing?.message ?? t("Waiting for Omni to say the bot is up") }));
   } else {
-    body = (0, import_react3.createElement)(
-      import_react3.Fragment,
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
       TOKEN_HELP[type](),
-      copied ? (0, import_react3.createElement)(
+      copied ? (0, import_react4.createElement)(
         "div",
         { className: "oc-suggest" },
-        (0, import_react3.createElement)("span", null, t("Use the token you just copied?")),
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
+        (0, import_react4.createElement)("span", null, t("Use the token you just copied?")),
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
           setToken(copied);
           setCopied(null);
         } }, t("Use it"))
       ) : null,
-      (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, t("Bot token")), (0, import_react3.createElement)("input", {
+      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Bot token")), (0, import_react4.createElement)("input", {
         type: "password",
         value: token,
         autoComplete: "off",
@@ -11725,19 +11808,19 @@ function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
           if (event.key === "Enter" && token.trim().length >= 8 && !busy) void connect();
         }
       })),
-      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim().length < 8 || busy, onClick: connect }, busy ? t("Connecting…") : type === "discord" ? t("Continue") : t("Connect"))),
-      (0, import_react3.createElement)("p", { className: "oc-fine" }, type === "telegram" ? t("Next we show a link to your bot so you can send it a first message.") : t("Next: one click to invite it to your server."))
+      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim().length < 8 || busy, onClick: connect }, busy ? t("Connecting…") : type === "discord" ? t("Continue") : t("Connect"))),
+      (0, import_react4.createElement)("p", { className: "oc-fine" }, type === "telegram" ? t("Next we show a link to your bot so you can send it a first message.") : t("Next: one click to invite it to your server."))
     );
   }
-  return (0, import_react3.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react3.createElement)(Problem, { text: problem ?? pollProblem }));
+  return (0, import_react4.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react4.createElement)(Problem, { text: problem ?? pollProblem }));
 }
 function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
-  const [app, setApp] = (0, import_react3.useState)(void 0);
-  const [mode, setMode] = (0, import_react3.useState)("bot");
-  const [flow, setFlow] = (0, import_react3.useState)(null);
-  const [done, setDone] = (0, import_react3.useState)(null);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
-  (0, import_react3.useEffect)(() => {
+  const [app, setApp] = (0, import_react4.useState)(void 0);
+  const [mode, setMode] = (0, import_react4.useState)("bot");
+  const [flow, setFlow] = (0, import_react4.useState)(null);
+  const [done, setDone] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  (0, import_react4.useEffect)(() => {
     let live = true;
     call("omni-slack-app").then((reply) => {
       if (live) setApp(reply.configured);
@@ -11748,7 +11831,7 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
       live = false;
     };
   }, []);
-  (0, import_react3.useEffect)(() => {
+  (0, import_react4.useEffect)(() => {
     if (!flow) return void 0;
     let live = true;
     let timer = 0;
@@ -11787,65 +11870,65 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   const channel = done ? { id: done.id, name: "Slack" } : null;
   let body;
   if (app === false) {
-    body = (0, import_react3.createElement)(
-      import_react3.Fragment,
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("Slack isn't set up on this Omni yet")),
-      (0, import_react3.createElement)("p", null, t("Your Omni's owner sets up its Slack app once in Omni's settings. After that, everyone connects with one button here."))
+      (0, import_react4.createElement)("h2", null, t("Slack isn't set up on this Omni yet")),
+      (0, import_react4.createElement)("p", null, t("Your Omni's owner sets up its Slack app once in Omni's settings. After that, everyone connects with one button here."))
     );
   } else if (done) {
-    body = (0, import_react3.createElement)(Connected, { type, channel, detail: mode === "bot" ? t("As a bot") : t("As you"), omni: omni2 });
+    body = (0, import_react4.createElement)(Connected, { type, channel, detail: mode === "bot" ? t("As a bot") : t("As you"), omni: omni2 });
   } else if (flow) {
-    body = (0, import_react3.createElement)(
-      import_react3.Fragment,
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("Approve in Slack")),
-      (0, import_react3.createElement)("p", null, t("Slack opened in your browser. Pick the workspace and allow Omni; this page goes on by itself.")),
-      (0, import_react3.createElement)(Spinner, { text: t("Waiting for Slack…") }),
-      (0, import_react3.createElement)(
+      (0, import_react4.createElement)("h2", null, t("Approve in Slack")),
+      (0, import_react4.createElement)("p", null, t("Slack opened in your browser. Pick the workspace and allow Omni; this page goes on by itself.")),
+      (0, import_react4.createElement)(Spinner, { text: t("Waiting for Slack…") }),
+      (0, import_react4.createElement)(
         "div",
         { className: "oc-row" },
-        (0, import_react3.createElement)("a", { className: "oc-link", href: flow.authorizeUrl, target: "_blank", rel: "noreferrer" }, t("Open Slack again")),
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-link", onClick: () => setFlow(null) }, t("Start over"))
+        (0, import_react4.createElement)("a", { className: "oc-link", href: flow.authorizeUrl, target: "_blank", rel: "noreferrer" }, t("Open Slack again")),
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: () => setFlow(null) }, t("Start over"))
       )
     );
   } else {
-    body = (0, import_react3.createElement)(
-      import_react3.Fragment,
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("How should Omni join your workspace?")),
-      (0, import_react3.createElement)("p", null, t("You can change this later by connecting again.")),
-      (0, import_react3.createElement)(
+      (0, import_react4.createElement)("h2", null, t("How should Omni join your workspace?")),
+      (0, import_react4.createElement)("p", null, t("You can change this later by connecting again.")),
+      (0, import_react4.createElement)(
         "div",
         { className: "oc-seg", role: "radiogroup", "aria-label": t("How Omni joins Slack") },
         [
           ["bot", t("As a bot"), t("Omni shows up as its own app. People @mention it, and it only sees channels it is invited to.")],
           ["user", t("As yourself"), t("Omni reads and replies as you, in your DMs and channels, and can search them.")]
-        ].map(([value, title, text]) => (0, import_react3.createElement)("button", {
+        ].map(([value, title, text]) => (0, import_react4.createElement)("button", {
           key: value,
           type: "button",
           role: "radio",
           "aria-checked": mode === value,
           className: "oc-seg-opt",
           onClick: () => setMode(value)
-        }, (0, import_react3.createElement)("strong", null, title), (0, import_react3.createElement)("span", null, text)))
+        }, (0, import_react4.createElement)("strong", null, title), (0, import_react4.createElement)("span", null, text)))
       ),
-      (0, import_react3.createElement)(
+      (0, import_react4.createElement)(
         "div",
         { className: "oc-row" },
-        (0, import_react3.createElement)("button", { type: "button", className: "oc-brand", style: { background: "#4A154B" }, disabled: app === void 0, onClick: start }, t("Connect with Slack")),
-        (0, import_react3.createElement)("span", { className: "oc-fine" }, t("Opens Slack in your browser."))
+        (0, import_react4.createElement)("button", { type: "button", className: "oc-brand", style: { background: "#4A154B" }, disabled: app === void 0, onClick: start }, t("Connect with Slack")),
+        (0, import_react4.createElement)("span", { className: "oc-fine" }, t("Opens Slack in your browser."))
       )
     );
   }
-  return (0, import_react3.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react3.createElement)(Problem, { text: problem }));
+  return (0, import_react4.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react4.createElement)(Problem, { text: problem }));
 }
 function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const info = CHANNEL_TYPES[type];
-  const [fields, setFields] = (0, import_react3.useState)({ accessToken: "", phoneNumberId: "", wabaId: "" });
-  const [channel, setChannel] = (0, import_react3.useState)(null);
-  const [busy, setBusy] = (0, import_react3.useState)(false);
-  const [problem, setProblem] = (0, import_react3.useState)(null);
+  const [fields, setFields] = (0, import_react4.useState)({ accessToken: "", phoneNumberId: "", wabaId: "" });
+  const [channel, setChannel] = (0, import_react4.useState)(null);
+  const [busy, setBusy] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
   const set3 = (key) => (event) => setFields((value) => ({ ...value, [key]: event.target.value }));
   const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim());
   const connect = async () => {
@@ -11861,22 +11944,22 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
       setBusy(false);
     }
   };
-  const field = (key, label, extra) => (0, import_react3.createElement)("label", { className: "oc-field" }, (0, import_react3.createElement)("span", null, label), (0, import_react3.createElement)("input", { value: fields[key], onChange: set3(key), autoComplete: "off", ...extra }));
-  return (0, import_react3.createElement)(
+  const field = (key, label, extra) => (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, label), (0, import_react4.createElement)("input", { value: fields[key], onChange: set3(key), autoComplete: "off", ...extra }));
+  return (0, import_react4.createElement)(
     FlowShell,
     { type, at: channel ? 1 : 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
-    channel ? (0, import_react3.createElement)(Connected, { type, channel, omni: omni2 }) : (0, import_react3.createElement)(
-      import_react3.Fragment,
+    channel ? (0, import_react4.createElement)(Connected, { type, channel, omni: omni2 }, (0, import_react4.createElement)(MetaWebhookSetup, { initiallyOpen: true })) : (0, import_react4.createElement)(
+      import_react4.Fragment,
       null,
-      (0, import_react3.createElement)("h2", null, t("Connect your Business number")),
-      (0, import_react3.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react3.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
+      (0, import_react4.createElement)("h2", null, t("Connect your Business number")),
+      (0, import_react4.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react4.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
       field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
       field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
       field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
-      (0, import_react3.createElement)("div", { className: "oc-row" }, (0, import_react3.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
-      (0, import_react3.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages."))
+      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
+      (0, import_react4.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages."))
     ),
-    (0, import_react3.createElement)(Problem, { text: problem })
+    (0, import_react4.createElement)(Problem, { text: problem })
   );
 }
 
@@ -11957,19 +12040,19 @@ var fieldText = (field, value) => value === void 0 ? "" : field.kind === "json" 
 
 // src/client/channel-settings.js
 var SettingsReact = __toESM(require("react"), 1);
-var { createElement: h4, useEffect: useEffect4, useRef: useRef3, useState: useState3 } = SettingsReact;
+var { createElement: h5, useEffect: useEffect5, useRef: useRef3, useState: useState4 } = SettingsReact;
 function ChannelSettings({ channel, writable, request = call, refresh = () => refreshLive(call) }) {
-  const [record, setRecord] = useState3(null);
-  const [draft, setDraft] = useState3({});
-  const [agents, setAgents] = useState3([]);
-  const [agentError, setAgentError] = useState3("");
-  const [error, setError] = useState3("");
-  const [saved, setSaved] = useState3(false);
-  const [busy, setBusy] = useState3(false);
-  const [token, setToken] = useState3("");
+  const [record, setRecord] = useState4(null);
+  const [draft, setDraft] = useState4({});
+  const [agents, setAgents] = useState4([]);
+  const [agentError, setAgentError] = useState4("");
+  const [error, setError] = useState4("");
+  const [saved, setSaved] = useState4(false);
+  const [busy, setBusy] = useState4(false);
+  const [token, setToken] = useState4("");
   const alive = useRef3(false);
   const inFlight = useRef3(false);
-  useEffect4(() => {
+  useEffect5(() => {
     alive.current = true;
     request("omni-channel-settings", { id: channel.id }).then((reply) => {
       if (alive.current) setRecord(reply.settings);
@@ -12043,13 +12126,13 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
       onChange: (event) => edit(key, event.target.value)
     };
     const options = field.options ?? (field.kind === "boolean" ? ["true", "false"] : null);
-    return h4(
+    return h5(
       "label",
       { key, className: "oc-field" },
-      h4("span", null, key.replace(/([a-z])([A-Z])/g, "$1 $2")),
-      field.readOnly ? h4("output", null, current ?? t("Not set")) : options ? h4("select", props, h4("option", { value: "" }, current === null ? t("Inherited / not set") : t("Not provided")), options.map((option) => h4("option", { key: option, value: option }, option))) : field.kind === "json" ? h4("textarea", { ...props, rows: 3, placeholder: "JSON" }) : h4("input", { ...props, type: field.kind === "number" ? "number" : "text", min: field.kind === "number" ? 0 : void 0, placeholder: current === null ? "null" : t("Not provided") }),
-      field.example ? h4("small", { className: "oc-fine" }, `${t("Example")}: ${field.example}`) : null,
-      field.nullable && !field.readOnly ? h4("button", { type: "button", className: "oc-link", disabled: !writable || busy, onClick: () => edit(key, null) }, t("Clear override (null)")) : null
+      h5("span", null, key.replace(/([a-z])([A-Z])/g, "$1 $2")),
+      field.readOnly ? h5("output", null, current ?? t("Not set")) : options ? h5("select", props, h5("option", { value: "" }, current === null ? t("Inherited / not set") : t("Not provided")), options.map((option) => h5("option", { key: option, value: option }, option))) : field.kind === "json" ? h5("textarea", { ...props, rows: 3, placeholder: "JSON" }) : h5("input", { ...props, type: field.kind === "number" ? "number" : "text", min: field.kind === "number" ? 0 : void 0, placeholder: current === null ? "null" : t("Not provided") }),
+      field.example ? h5("small", { className: "oc-fine" }, `${t("Example")}: ${field.example}`) : null,
+      field.nullable && !field.readOnly ? h5("button", { type: "button", className: "oc-link", disabled: !writable || busy, onClick: () => edit(key, null) }, t("Clear override (null)")) : null
     );
   };
   const repair = () => {
@@ -12070,83 +12153,84 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
       setError(failure.message);
     }
   };
-  return h4(
+  return h5(
     "section",
     { "aria-label": t("Channel settings") },
-    h4("h2", { className: "oc-section" }, t("Channel settings")),
-    error ? h4("p", { role: "alert", className: "oc-problem" }, error) : null,
-    saved ? h4("p", { role: "status" }, t("Settings saved")) : null,
-    !record ? h4("p", null, error ? t("Settings unavailable") : t("Loading settings…")) : h4(
+    h5("h2", { className: "oc-section" }, t("Channel settings")),
+    channel.type === "whatsapp-business" ? h5(MetaWebhookSetup, { request, writable }) : null,
+    error ? h5("p", { role: "alert", className: "oc-problem" }, error) : null,
+    saved ? h5("p", { role: "status" }, t("Settings saved")) : null,
+    !record ? h5("p", null, error ? t("Settings unavailable") : t("Loading settings…")) : h5(
       "div",
       null,
-      h4(
+      h5(
         "label",
         { className: "oc-field" },
-        h4("span", null, t("Assigned agent")),
-        h4(
+        h5("span", null, t("Assigned agent")),
+        h5(
           "select",
           { "aria-label": "agentId", value: value("agentId") ?? "", disabled: !writable || busy, onChange: (event) => edit("agentId", event.target.value || null) },
-          h4("option", { value: "" }, t("No agent")),
-          value("agentId") && !agents.some((agent) => agent.id === value("agentId")) ? h4("option", { value: value("agentId") }, value("agentId")) : null,
-          agents.map((agent) => h4("option", { key: agent.id, value: agent.id }, `${agent.name} · ${agent.id}`))
+          h5("option", { value: "" }, t("No agent")),
+          value("agentId") && !agents.some((agent) => agent.id === value("agentId")) ? h5("option", { value: value("agentId") }, value("agentId")) : null,
+          agents.map((agent) => h5("option", { key: agent.id, value: agent.id }, `${agent.name} · ${agent.id}`))
         )
       ),
-      h4("label", { className: "oc-field" }, t("Agent UUID (empty unassigns; list shows up to 200 agents)"), h4("input", { "aria-label": "Agent UUID", value: value("agentId") ?? "", disabled: !writable || busy, onChange: (event) => edit("agentId", event.target.value.trim() || null) })),
-      agentError ? h4("p", { role: "status" }, agentError) : null,
-      GROUPS.filter((group) => group.label !== "Meta connection" || channel.type === "whatsapp-business").map((group) => h4(
+      h5("label", { className: "oc-field" }, t("Agent UUID (empty unassigns; list shows up to 200 agents)"), h5("input", { "aria-label": "Agent UUID", value: value("agentId") ?? "", disabled: !writable || busy, onChange: (event) => edit("agentId", event.target.value.trim() || null) })),
+      agentError ? h5("p", { role: "status" }, agentError) : null,
+      GROUPS.filter((group) => group.label !== "Meta connection" || channel.type === "whatsapp-business").map((group) => h5(
         "details",
         { key: group.label },
-        h4("summary", null, t(group.label)),
+        h5("summary", null, t(group.label)),
         group.keys.map(control)
       )),
-      h4("p", { className: "oc-fine" }, t("JSON fields accept JSON values. Clear override sends null; untouched fields are never reset. Some settings apply on the next connection.")),
-      h4("p", { className: "oc-fine" }, t("outboundPacingOverride requires a full-access key to enable. Meta API version is a provisioning snapshot; the runtime environment takes precedence.")),
-      writable ? h4("button", { type: "button", className: "oc-primary", disabled: busy || Object.keys(draft).length === 0, onClick: save }, busy ? t("Saving…") : t("Save settings")) : null,
-      channel.type === "whatsapp-business" && writable ? h4(
+      h5("p", { className: "oc-fine" }, t("JSON fields accept JSON values. Clear override sends null; untouched fields are never reset. Some settings apply on the next connection.")),
+      h5("p", { className: "oc-fine" }, t("outboundPacingOverride requires a full-access key to enable. Meta API version is a provisioning snapshot; the runtime environment takes precedence.")),
+      writable ? h5("button", { type: "button", className: "oc-primary", disabled: busy || Object.keys(draft).length === 0, onClick: save }, busy ? t("Saving…") : t("Save settings")) : null,
+      channel.type === "whatsapp-business" && writable ? h5(
         "div",
         { className: "oc-fix" },
-        h4("p", null, t("Repair this Business connection using the Meta identifiers above. Re-enter the access token; the existing channel and its chats are kept.")),
-        h4("label", { className: "oc-field" }, h4("span", null, t("Access token")), h4("input", { type: "password", "aria-label": "Access token", autoComplete: "off", value: token, disabled: busy, onChange: (event) => setToken(event.target.value) })),
-        h4("button", { type: "button", className: "oc-secondary", disabled: busy || !token.trim(), onClick: repair }, t("Repair and reconnect"))
+        h5("p", null, t("Repair this Business connection using the Meta identifiers above. Re-enter the access token; the existing channel and its chats are kept.")),
+        h5("label", { className: "oc-field" }, h5("span", null, t("Access token")), h5("input", { type: "password", "aria-label": "Access token", autoComplete: "off", value: token, disabled: busy, onChange: (event) => setToken(event.target.value) })),
+        h5("button", { type: "button", className: "oc-secondary", disabled: busy || !token.trim(), onClick: repair }, t("Repair and reconnect"))
       ) : null
     )
   );
 }
 
 // src/client/channels.js
-var import_react4 = require("react");
+var import_react5 = require("react");
 var { ArrowUpIcon, ChevronLeftIcon: ChevronLeftIcon2, ChevronRightIcon, PlusIcon } = icons;
-var useOmni = () => (0, import_react4.useSyncExternalStore)(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot);
-var useActions = (actions) => (0, import_react4.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
+var useOmni = () => (0, import_react5.useSyncExternalStore)(omniStore.subscribe, omniStore.getSnapshot, omniStore.getSnapshot);
+var useActions = (actions) => (0, import_react5.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
 var stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.9, strokeLinecap: "round", strokeLinejoin: "round" };
 var GLYPHS = {
   whatsapp: () => [
-    (0, import_react4.createElement)("path", { key: "b", d: "M12 3.6a8.4 8.4 0 0 0-7.2 12.8L3.7 20.3l4-1.1A8.4 8.4 0 1 0 12 3.6z", ...stroke }),
-    (0, import_react4.createElement)("path", { key: "p", d: "M9.2 8.3c-.3 0-.7.1-.9.5-.3.5-.5 1.2-.2 2.1.6 1.8 2.3 3.5 4.1 4.1.9.3 1.6.1 2.1-.2.4-.2.5-.6.5-.9l-.1-.4-1.6-.8-.9 1c-1-.4-1.9-1.3-2.3-2.3l1-.9-.8-1.6z", fill: "currentColor" })
+    (0, import_react5.createElement)("path", { key: "b", d: "M12 3.6a8.4 8.4 0 0 0-7.2 12.8L3.7 20.3l4-1.1A8.4 8.4 0 1 0 12 3.6z", ...stroke }),
+    (0, import_react5.createElement)("path", { key: "p", d: "M9.2 8.3c-.3 0-.7.1-.9.5-.3.5-.5 1.2-.2 2.1.6 1.8 2.3 3.5 4.1 4.1.9.3 1.6.1 2.1-.2.4-.2.5-.6.5-.9l-.1-.4-1.6-.8-.9 1c-1-.4-1.9-1.3-2.3-2.3l1-.9-.8-1.6z", fill: "currentColor" })
   ],
   telegram: () => [
-    (0, import_react4.createElement)("path", { key: "a", d: "M20.5 4.5 3.5 11.2l5.3 1.9 2 6.1 3-3.3 4.4 3.3z", ...stroke }),
-    (0, import_react4.createElement)("path", { key: "b", d: "M8.8 13.1 16.8 8", ...stroke })
+    (0, import_react5.createElement)("path", { key: "a", d: "M20.5 4.5 3.5 11.2l5.3 1.9 2 6.1 3-3.3 4.4 3.3z", ...stroke }),
+    (0, import_react5.createElement)("path", { key: "b", d: "M8.8 13.1 16.8 8", ...stroke })
   ],
-  slack: () => [(0, import_react4.createElement)("path", { key: "a", d: "M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6", ...stroke, strokeWidth: 2.8 })],
-  chat: () => [(0, import_react4.createElement)("path", { key: "a", d: "M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z", ...stroke })],
+  slack: () => [(0, import_react5.createElement)("path", { key: "a", d: "M9.5 4.5v6M14.5 13.5v6M4.5 14.5h6M13.5 9.5h6", ...stroke, strokeWidth: 2.8 })],
+  chat: () => [(0, import_react5.createElement)("path", { key: "a", d: "M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5A1.5 1.5 0 0 1 19 17H10l-4.5 3.5V17H5a1.5 1.5 0 0 1-1.5-1.5V7A1.5 1.5 0 0 1 5 5.5z", ...stroke })],
   discord: () => [
-    (0, import_react4.createElement)("path", { key: "a", d: "M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z", ...stroke }),
-    (0, import_react4.createElement)("circle", { key: "l", cx: 9.6, cy: 12.4, r: 1.3, fill: "currentColor" }),
-    (0, import_react4.createElement)("circle", { key: "r", cx: 14.4, cy: 12.4, r: 1.3, fill: "currentColor" })
+    (0, import_react5.createElement)("path", { key: "a", d: "M7.6 7.2c2.9-1.2 5.9-1.2 8.8 0 1.5 2.4 2.1 5 1.9 8-1.6 1.2-3.1 1.8-4.2 2l-.8-1.5m-2.6 0-.8 1.5c-1.1-.2-2.6-.8-4.2-2-.2-3 .4-5.6 1.9-8z", ...stroke }),
+    (0, import_react5.createElement)("circle", { key: "l", cx: 9.6, cy: 12.4, r: 1.3, fill: "currentColor" }),
+    (0, import_react5.createElement)("circle", { key: "r", cx: 14.4, cy: 12.4, r: 1.3, fill: "currentColor" })
   ]
 };
 function Tile({ type, size = 40, ring = false }) {
-  return (0, import_react4.createElement)("span", {
+  return (0, import_react5.createElement)("span", {
     className: `oc-tile${ring ? " oc-tile-ring" : ""}`,
     style: { width: size, height: size, borderRadius: Math.round(size * 0.32), background: typeOf(type).tile }
-  }, (0, import_react4.createElement)("svg", { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()));
+  }, (0, import_react5.createElement)("svg", { width: Math.round(size * 0.62), height: Math.round(size * 0.62), viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (GLYPHS[typeOf(type).glyph] ?? GLYPHS.chat)()));
 }
-var StatusDot = ({ status }) => (0, import_react4.createElement)("span", { className: "oc-dot", "data-tone": STATUS[status].tone, "aria-hidden": true });
-var StatusPill = ({ status }) => (0, import_react4.createElement)(
+var StatusDot = ({ status }) => (0, import_react5.createElement)("span", { className: "oc-dot", "data-tone": STATUS[status].tone, "aria-hidden": true });
+var StatusPill = ({ status }) => (0, import_react5.createElement)(
   "span",
   { className: "oc-pill", "data-tone": STATUS[status].tone },
-  (0, import_react4.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }),
+  (0, import_react5.createElement)("span", { className: "oc-pill-dot", "aria-hidden": true }),
   t(STATUS[status].label)
 );
 var HUES = [168, 200, 222, 262, 290, 330, 18, 38, 140];
@@ -12157,32 +12241,32 @@ function hueOf(name) {
 }
 function ChatAvatar({ chat, channel, size = 36 }) {
   const hue = hueOf(chat.name);
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "span",
     { className: "oc-ava", style: { width: size, height: size, "--oc-hue": hue } },
-    (0, import_react4.createElement)("span", { className: "oc-ava-face", style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
-    chat.avatarUrl ? (0, import_react4.createElement)("img", { className: "oc-ava-img", src: chat.avatarUrl, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
+    (0, import_react5.createElement)("span", { className: "oc-ava-face", style: { fontSize: Math.round(size * 0.34) } }, chat.initials),
+    chat.avatarUrl ? (0, import_react5.createElement)("img", { className: "oc-ava-img", src: chat.avatarUrl, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
       event.currentTarget.remove();
     } }) : null,
-    channel ? (0, import_react4.createElement)("span", { className: "oc-ava-badge" }, (0, import_react4.createElement)(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null
+    channel ? (0, import_react5.createElement)("span", { className: "oc-ava-badge" }, (0, import_react5.createElement)(Tile, { type: channel.type, size: Math.round(size * 0.4) })) : null
   );
 }
 function PreviewChip() {
   const source = useOmni().source;
   if (source.kind === "live") {
-    return (0, import_react4.createElement)(
+    return (0, import_react5.createElement)(
       "span",
       { className: "oc-preview-chip oc-live-chip", "data-error": source.error ? true : void 0, title: source.error ?? t("Read from omni every 15 seconds.") },
-      (0, import_react4.createElement)("span", { className: "oc-live-dot", "aria-hidden": true }),
+      (0, import_react5.createElement)("span", { className: "oc-live-dot", "aria-hidden": true }),
       source.error ? t("Live · last refresh failed") : t("Live · {origin}", { origin: source.origin })
     );
   }
   const missing = source.missing?.join(", ");
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "button",
     { type: "button", className: "oc-preview-chip oc-chip-action", onClick: openConnectWizard, title: missing ? t("Sample data until DSH has {missing}.", { missing }) : t("Nothing here reaches a real channel yet.") },
     t("Preview · sample data"),
-    (0, import_react4.createElement)("span", { className: "oc-chip-go" }, t("Connect your Omni"))
+    (0, import_react5.createElement)("span", { className: "oc-chip-go" }, t("Connect your Omni"))
   );
 }
 var dayKey = (at2) => new Date(at2).toDateString();
@@ -12196,8 +12280,8 @@ var DRAWN = { image: "Picture", audio: "Voice note", video: "Video", document: "
 var drawnMedia = (message) => message.hasMedia === true && Object.hasOwn(DRAWN, message.type);
 var NEAR = "600px 0px";
 function useNear(ref, watching) {
-  const [near, setNear] = (0, import_react4.useState)(false);
-  (0, import_react4.useEffect)(() => {
+  const [near, setNear] = (0, import_react5.useState)(false);
+  (0, import_react5.useEffect)(() => {
     const node = ref.current;
     if (!watching || near || !node) return void 0;
     if (typeof IntersectionObserver !== "function") {
@@ -12219,8 +12303,8 @@ var blobOf = (data, mime) => {
   return new Blob([bytes], { type: mime });
 };
 function useMediaFile(id, wanted) {
-  const [file, setFile] = (0, import_react4.useState)(null);
-  (0, import_react4.useEffect)(() => {
+  const [file, setFile] = (0, import_react5.useState)(null);
+  (0, import_react5.useEffect)(() => {
     if (!wanted) return void 0;
     let on2 = true;
     let url = null;
@@ -12242,35 +12326,35 @@ function useMediaFile(id, wanted) {
   }, [id, wanted]);
   return file;
 }
-var PlayMark = () => (0, import_react4.createElement)("svg", { width: 22, height: 22, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (0, import_react4.createElement)("path", { d: "M8 5.5v13l10.5-6.5z", fill: "currentColor" }));
-var DocMark = () => (0, import_react4.createElement)(
+var PlayMark = () => (0, import_react5.createElement)("svg", { width: 22, height: 22, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" }, (0, import_react5.createElement)("path", { d: "M8 5.5v13l10.5-6.5z", fill: "currentColor" }));
+var DocMark = () => (0, import_react5.createElement)(
   "svg",
   { width: 22, height: 22, viewBox: "0 0 24 24", "aria-hidden": true, focusable: "false" },
-  (0, import_react4.createElement)("path", { d: "M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM13.5 3.5V8H18", ...stroke })
+  (0, import_react5.createElement)("path", { d: "M7 3.5h6.5L18 8v11a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19V5a1.5 1.5 0 0 1 1-1.5zM13.5 3.5V8H18", ...stroke })
 );
 function MediaPart({ message, onSized }) {
   const kind = message.type;
-  const [played, setPlayed] = (0, import_react4.useState)(false);
-  const spot = (0, import_react4.useRef)(null);
+  const [played, setPlayed] = (0, import_react5.useState)(false);
+  const spot = (0, import_react5.useRef)(null);
   const near = useNear(spot, kind !== "video" && kind !== "document");
   const file = useMediaFile(message.id, kind === "video" ? played : kind !== "document" && near);
   const label = t(DRAWN[kind]);
   if (kind === "document") {
-    return (0, import_react4.createElement)("div", { className: "oc-media-doc" }, (0, import_react4.createElement)(DocMark), (0, import_react4.createElement)("span", null, message.fileName ?? label));
+    return (0, import_react5.createElement)("div", { className: "oc-media-doc" }, (0, import_react5.createElement)(DocMark), (0, import_react5.createElement)("span", null, message.fileName ?? label));
   }
-  if (file?.failed) return (0, import_react4.createElement)("div", { className: "oc-media-miss", title: file.failed }, label, " · ", t("not available"));
+  if (file?.failed) return (0, import_react5.createElement)("div", { className: "oc-media-miss", title: file.failed }, label, " · ", t("not available"));
   if (kind === "video" && !played) {
-    return (0, import_react4.createElement)("button", { type: "button", className: "oc-media-still", "aria-label": t("Play video"), onClick: () => setPlayed(true) }, (0, import_react4.createElement)("span", { className: "oc-media-play" }, (0, import_react4.createElement)(PlayMark)));
+    return (0, import_react5.createElement)("button", { type: "button", className: "oc-media-still", "aria-label": t("Play video"), onClick: () => setPlayed(true) }, (0, import_react5.createElement)("span", { className: "oc-media-play" }, (0, import_react5.createElement)(PlayMark)));
   }
-  if (!file) return (0, import_react4.createElement)("div", { ref: spot, className: `oc-media-wait oc-media-wait-${kind}`, role: "status", "aria-label": t("Loading…") }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }));
-  if (kind === "audio") return (0, import_react4.createElement)("audio", { className: "oc-media-audio", controls: true, preload: "metadata", src: file.url, onLoadedMetadata: onSized });
-  if (kind === "video") return (0, import_react4.createElement)("video", { className: "oc-media-img", controls: true, autoPlay: true, playsInline: true, src: file.url, onLoadedMetadata: onSized });
-  return (0, import_react4.createElement)("img", { className: kind === "sticker" ? "oc-media-sticker" : "oc-media-img", src: file.url, alt: message.mediaText ?? label, onLoad: onSized });
+  if (!file) return (0, import_react5.createElement)("div", { ref: spot, className: `oc-media-wait oc-media-wait-${kind}`, role: "status", "aria-label": t("Loading…") }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }));
+  if (kind === "audio") return (0, import_react5.createElement)("audio", { className: "oc-media-audio", controls: true, preload: "metadata", src: file.url, onLoadedMetadata: onSized });
+  if (kind === "video") return (0, import_react5.createElement)("video", { className: "oc-media-img", controls: true, autoPlay: true, playsInline: true, src: file.url, onLoadedMetadata: onSized });
+  return (0, import_react5.createElement)("img", { className: kind === "sticker" ? "oc-media-sticker" : "oc-media-img", src: file.url, alt: message.mediaText ?? label, onLoad: onSized });
 }
 function useStayAtEnd(chatId, count) {
-  const scroller = (0, import_react4.useRef)(null);
-  const atEnd = (0, import_react4.useRef)(true);
-  (0, import_react4.useLayoutEffect)(() => {
+  const scroller = (0, import_react5.useRef)(null);
+  const atEnd = (0, import_react5.useRef)(true);
+  (0, import_react5.useLayoutEffect)(() => {
     const node = scroller.current;
     if (node) node.scrollTop = node.scrollHeight;
     atEnd.current = true;
@@ -12290,18 +12374,18 @@ function ChatMessages({ messages, onSized }) {
     const mine = message.from !== "them";
     const newDay = index === 0 || dayKey(messages[index - 1].at) !== dayKey(message.at);
     const first = newDay || messages[index - 1].from !== message.from || messages[index - 1].author !== message.author;
-    return (0, import_react4.createElement)(import_react4.Fragment, { key: message.id }, newDay ? (0, import_react4.createElement)("div", { className: "oc-day" }, dayLabel(message.at)) : null, (0, import_react4.createElement)(
+    return (0, import_react5.createElement)(import_react5.Fragment, { key: message.id }, newDay ? (0, import_react5.createElement)("div", { className: "oc-day" }, dayLabel(message.at)) : null, (0, import_react5.createElement)(
       "div",
       { className: `oc-msg oc-msg-${message.from}${first ? " oc-msg-first" : ""}` },
-      first && !mine && message.author ? (0, import_react4.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
-      first && message.from === "omni" ? (0, import_react4.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react4.createElement)(OmniMark, { size: 12 }), "Omni") : null,
-      (0, import_react4.createElement)(
+      first && !mine && message.author ? (0, import_react5.createElement)("span", { className: "oc-msg-author" }, message.author) : null,
+      first && message.from === "omni" ? (0, import_react5.createElement)("span", { className: "oc-msg-author oc-msg-omni" }, (0, import_react5.createElement)(OmniMark, { size: 12 }), "Omni") : null,
+      (0, import_react5.createElement)(
         "div",
         { className: "oc-bubble", "data-sending": message.sending || void 0, "data-media": drawnMedia(message) ? message.type : void 0 },
-        drawnMedia(message) ? (0, import_react4.createElement)(MediaPart, { message, onSized }) : null,
-        drawnMedia(message) ? message.text ? (0, import_react4.createElement)("span", { className: "oc-media-caption" }, message.text) : null : message.text,
-        drawnMedia(message) && message.mediaText ? (0, import_react4.createElement)("span", { className: "oc-media-text" }, message.mediaText) : null,
-        (0, import_react4.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
+        drawnMedia(message) ? (0, import_react5.createElement)(MediaPart, { message, onSized }) : null,
+        drawnMedia(message) ? message.text ? (0, import_react5.createElement)("span", { className: "oc-media-caption" }, message.text) : null : message.text,
+        drawnMedia(message) && message.mediaText ? (0, import_react5.createElement)("span", { className: "oc-media-text" }, message.mediaText) : null,
+        (0, import_react5.createElement)("time", null, message.sending ? t("Sending…") : new Date(message.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))
       )
     ));
   });
@@ -12315,12 +12399,12 @@ function ChatPage({ actions }) {
   const loading = chat !== void 0 && loaded === void 0 && !state.preview;
   const messages = chat ? loaded ?? (state.preview ? [{ id: "preview", from: "them", text: chat.preview, at: chat.at }] : []) : [];
   const { scroller, onScroll, onSized } = useStayAtEnd(chat?.id, messages.length);
-  const [draft, setDraft] = (0, import_react4.useState)("");
-  (0, import_react4.useEffect)(() => {
+  const [draft, setDraft] = (0, import_react5.useState)("");
+  (0, import_react5.useEffect)(() => {
     setDraft("");
   }, [chat?.id]);
   if (!chat || !channel) {
-    return (0, import_react4.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react4.createElement)(OmniMark, { size: 40 }), (0, import_react4.createElement)("p", null, t("Pick a chat under your Bots.")));
+    return (0, import_react5.createElement)("div", { className: "oc-page oc-chat-empty" }, (0, import_react5.createElement)(OmniMark, { size: 40 }), (0, import_react5.createElement)("p", null, t("Pick a chat under your Bots.")));
   }
   const type = typeOf(channel.type);
   const writable = canSend(state);
@@ -12330,51 +12414,51 @@ function ChatPage({ actions }) {
     setDraft("");
   };
   const failed = state.sendError?.chatId === chat.id ? state.sendError : null;
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "div",
     { className: "oc-page oc-chat" },
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "header",
       { className: "oc-chat-head" },
-      (0, import_react4.createElement)(ChatAvatar, { chat, channel, size: 40 }),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(ChatAvatar, { chat, channel, size: 40 }),
+      (0, import_react5.createElement)(
         "div",
         { className: "oc-chat-who" },
-        (0, import_react4.createElement)("strong", null, chat.name),
-        (0, import_react4.createElement)("span", null, `${type.label} · ${channel.name}`)
+        (0, import_react5.createElement)("strong", null, chat.name),
+        (0, import_react5.createElement)("span", null, `${type.label} · ${channel.name}`)
       ),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "span",
         { className: "oc-answer", "data-by": channel.answeredBy === "Omni" ? "omni" : "you" },
-        channel.answeredBy === "Omni" ? (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)(OmniMark, { size: 14 }), t("Omni answers here")) : t("You answer here")
+        channel.answeredBy === "Omni" ? (0, import_react5.createElement)(import_react5.Fragment, null, (0, import_react5.createElement)(OmniMark, { size: 14 }), t("Omni answers here")) : t("You answer here")
       ),
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => omni2.openChannels("channel", channel.id) }, (0, import_react4.createElement)(StatusDot, { status: channel.status }), t("Channel health")),
-      (0, import_react4.createElement)(PreviewChip)
+      (0, import_react5.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => omni2.openChannels("channel", channel.id) }, (0, import_react5.createElement)(StatusDot, { status: channel.status }), t("Channel health")),
+      (0, import_react5.createElement)(PreviewChip)
     ),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "div",
       { ref: scroller, className: "oc-thread", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name: chat.name }) },
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "div",
         { className: "oc-thread-in" },
-        loading ? (0, import_react4.createElement)("div", { className: "oc-day" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
-        (0, import_react4.createElement)(ChatMessages, { messages, onSized })
+        loading ? (0, import_react5.createElement)("div", { className: "oc-day" }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
+        (0, import_react5.createElement)(ChatMessages, { messages, onSized })
       )
     ),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "footer",
       { className: "oc-compose-wrap" },
-      failed ? (0, import_react4.createElement)("button", { type: "button", className: "oc-compose-note oc-compose-fail", role: "alert", onClick: () => setDraft(failed.text) }, t("Not sent: {reason}", { reason: failed.message }), " ", (0, import_react4.createElement)("u", null, t("Put it back"))) : null,
-      !writable ? (0, import_react4.createElement)("div", { className: "oc-compose-note oc-compose-info" }, t("This device's key can't send messages; ask your Omni's owner.")) : live ? null : (0, import_react4.createElement)(
+      failed ? (0, import_react5.createElement)("button", { type: "button", className: "oc-compose-note oc-compose-fail", role: "alert", onClick: () => setDraft(failed.text) }, t("Not sent: {reason}", { reason: failed.message }), " ", (0, import_react5.createElement)("u", null, t("Put it back"))) : null,
+      !writable ? (0, import_react5.createElement)("div", { className: "oc-compose-note oc-compose-info" }, t("This device's key can't send messages; ask your Omni's owner.")) : live ? null : (0, import_react5.createElement)(
         "button",
         { type: "button", className: "oc-compose-note", onClick: () => omni2.openChannels("channel", channel.id) },
-        (0, import_react4.createElement)(StatusDot, { status: channel.status }),
+        (0, import_react5.createElement)(StatusDot, { status: channel.status }),
         t("{name} is not connected. Fix it to reply.", { name: channel.name })
       ),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "div",
         { className: "oc-compose", "data-off": live ? void 0 : true },
-        (0, import_react4.createElement)("textarea", {
+        (0, import_react5.createElement)("textarea", {
           rows: 1,
           value: draft,
           disabled: !live,
@@ -12388,7 +12472,7 @@ function ChatPage({ actions }) {
             }
           }
         }),
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-send", disabled: !live || draft.trim() === "", "aria-label": t("Send"), onClick: send }, (0, import_react4.createElement)(ArrowUpIcon))
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-send", disabled: !live || draft.trim() === "", "aria-label": t("Send"), onClick: send }, (0, import_react5.createElement)(ArrowUpIcon))
       )
     )
   );
@@ -12398,13 +12482,13 @@ function ChannelsPage({ actions }) {
   const omni2 = useActions(actions);
   const { page } = state;
   const channel = page.view === "channel" ? channelOf(state, page.channelId) : void 0;
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "div",
     { className: "oc-page oc-channels" },
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "div",
       { className: "oc-channels-in" },
-      page.view === "connect" ? (0, import_react4.createElement)(ConnectFlow, { state, omni: omni2 }) : channel ? (0, import_react4.createElement)(ChannelDetail, { key: channel.id, channel, state, omni: omni2 }) : (0, import_react4.createElement)(Overview, { state, omni: omni2 })
+      page.view === "connect" ? (0, import_react5.createElement)(ConnectFlow, { state, omni: omni2 }) : channel ? (0, import_react5.createElement)(ChannelDetail, { key: channel.id, channel, state, omni: omni2 }) : (0, import_react5.createElement)(Overview, { state, omni: omni2 })
     )
   );
 }
@@ -12413,83 +12497,83 @@ function Overview({ state, omni: omni2 }) {
   const troubled = state.channels.filter((channel) => channel.status === "attention" || channel.status === "connecting");
   const replies = state.channels.map((channel) => channel.health?.replyMedianSec).filter((value) => typeof value === "number");
   const median = replies.length === 0 ? null : Math.round(replies.reduce((a, b2) => a + b2, 0) / replies.length);
-  return (0, import_react4.createElement)(
-    import_react4.Fragment,
+  return (0, import_react5.createElement)(
+    import_react5.Fragment,
     null,
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "header",
       { className: "oc-head" },
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "div",
         null,
-        (0, import_react4.createElement)("h1", null, t("Channels"), (0, import_react4.createElement)(PreviewChip)),
-        (0, import_react4.createElement)("p", null, t("Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots."))
+        (0, import_react5.createElement)("h1", null, t("Channels"), (0, import_react5.createElement)(PreviewChip)),
+        (0, import_react5.createElement)("p", null, t("Connect the apps people already use to reach you. Omni answers there, and every chat shows up under your Bots."))
       ),
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !canWrite(state), title: canWrite(state) ? void 0 : t("This device's key can't change channels; ask your Omni's owner."), onClick: () => omni2.showPage({ view: "connect", type: null, step: 0 }) }, (0, import_react4.createElement)(PlusIcon), t("Add channel"))
+      (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: !canWrite(state), title: canWrite(state) ? void 0 : t("This device's key can't change channels; ask your Omni's owner."), onClick: () => omni2.showPage({ view: "connect", type: null, step: 0 }) }, (0, import_react5.createElement)(PlusIcon), t("Add channel"))
     ),
     // Sample data means no Omni is linked yet: connecting one comes first, in the Connect
     // wizard (wizard.js). A linked one says when an update is out.
-    state.preview ? (0, import_react4.createElement)(ConnectPrompt) : (0, import_react4.createElement)(UpdateBar, { origin: state.source.origin }),
-    troubled.map((channel) => (0, import_react4.createElement)(
+    state.preview ? (0, import_react5.createElement)(ConnectPrompt) : (0, import_react5.createElement)(UpdateBar, { origin: state.source.origin }),
+    troubled.map((channel) => (0, import_react5.createElement)(
       "button",
       { key: channel.id, type: "button", className: "oc-callout", "data-tone": STATUS[channel.status].tone, onClick: () => omni2.showPage({ view: "channel", channelId: channel.id }) },
-      (0, import_react4.createElement)(Tile, { type: channel.type, size: 36 }),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(Tile, { type: channel.type, size: 36 }),
+      (0, import_react5.createElement)(
         "span",
         { className: "oc-callout-text" },
-        (0, import_react4.createElement)("strong", null, t("{name} needs attention", { name: `${typeOf(channel.type).label} · ${channel.name}` })),
-        (0, import_react4.createElement)("span", null, channel.problem ?? t(STATUS[channel.status].label))
+        (0, import_react5.createElement)("strong", null, t("{name} needs attention", { name: `${typeOf(channel.type).label} · ${channel.name}` })),
+        (0, import_react5.createElement)("span", null, channel.problem ?? t(STATUS[channel.status].label))
       ),
-      (0, import_react4.createElement)("span", { className: "oc-callout-go" }, t("Fix now"), (0, import_react4.createElement)(ChevronRightIcon))
+      (0, import_react5.createElement)("span", { className: "oc-callout-go" }, t("Fix now"), (0, import_react5.createElement)(ChevronRightIcon))
     )),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "div",
       { className: "oc-stats" },
-      (0, import_react4.createElement)(Stat, { value: `${summary.connected}/${summary.total}`, label: t("connected") }),
-      (0, import_react4.createElement)(Stat, { value: String(summary.attention), label: t("need attention"), tone: summary.attention > 0 ? "warn" : void 0 }),
-      state.preview ? (0, import_react4.createElement)(Stat, { value: String(summary.messagesToday), label: t("messages today") }) : (0, import_react4.createElement)(Stat, { value: String(state.chats.length), label: t("recent chats") }),
-      state.preview ? (0, import_react4.createElement)(Stat, { value: median === null ? "–" : median < 60 ? t("{n} s", { n: median }) : t("{n} min", { n: Math.round(median / 60) }), label: t("typical reply") }) : (0, import_react4.createElement)(Stat, { value: String(unreadOf(state)), label: t("unread") })
+      (0, import_react5.createElement)(Stat, { value: `${summary.connected}/${summary.total}`, label: t("connected") }),
+      (0, import_react5.createElement)(Stat, { value: String(summary.attention), label: t("need attention"), tone: summary.attention > 0 ? "warn" : void 0 }),
+      state.preview ? (0, import_react5.createElement)(Stat, { value: String(summary.messagesToday), label: t("messages today") }) : (0, import_react5.createElement)(Stat, { value: String(state.chats.length), label: t("recent chats") }),
+      state.preview ? (0, import_react5.createElement)(Stat, { value: median === null ? "–" : median < 60 ? t("{n} s", { n: median }) : t("{n} min", { n: Math.round(median / 60) }), label: t("typical reply") }) : (0, import_react5.createElement)(Stat, { value: String(unreadOf(state)), label: t("unread") })
     ),
-    (0, import_react4.createElement)("h2", { className: "oc-section" }, t("Your channels")),
-    state.channels.length === 0 ? (0, import_react4.createElement)("div", { className: "oc-empty" }, t("No channels yet. Add one to start.")) : (0, import_react4.createElement)("div", { className: "oc-cards" }, state.channels.map((channel) => (0, import_react4.createElement)(ChannelCard, { key: channel.id, channel, state, omni: omni2 })))
+    (0, import_react5.createElement)("h2", { className: "oc-section" }, t("Your channels")),
+    state.channels.length === 0 ? (0, import_react5.createElement)("div", { className: "oc-empty" }, t("No channels yet. Add one to start.")) : (0, import_react5.createElement)("div", { className: "oc-cards" }, state.channels.map((channel) => (0, import_react5.createElement)(ChannelCard, { key: channel.id, channel, state, omni: omni2 })))
   );
 }
-var Stat = ({ value, label, tone }) => (0, import_react4.createElement)("div", { className: "oc-stat", "data-tone": tone }, (0, import_react4.createElement)("strong", null, value), (0, import_react4.createElement)("span", null, label));
+var Stat = ({ value, label, tone }) => (0, import_react5.createElement)("div", { className: "oc-stat", "data-tone": tone }, (0, import_react5.createElement)("strong", null, value), (0, import_react5.createElement)("span", null, label));
 function Spark({ week }) {
   const top = Math.max(1, ...week);
-  return (0, import_react4.createElement)("span", { className: "oc-spark", "aria-hidden": true }, week.map((value, index) => (0, import_react4.createElement)("span", { key: index, style: { height: `${Math.max(8, value / top * 100)}%` }, "data-zero": value === 0 || void 0 })));
+  return (0, import_react5.createElement)("span", { className: "oc-spark", "aria-hidden": true }, week.map((value, index) => (0, import_react5.createElement)("span", { key: index, style: { height: `${Math.max(8, value / top * 100)}%` }, "data-zero": value === 0 || void 0 })));
 }
 function ChannelCard({ channel, state, omni: omni2 }) {
   const unread = unreadOf(state, channel.id);
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "button",
     { type: "button", className: "oc-card", onClick: () => omni2.showPage({ view: "channel", channelId: channel.id }) },
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "span",
       { className: "oc-card-top" },
-      (0, import_react4.createElement)(Tile, { type: channel.type, size: 42 }),
-      (0, import_react4.createElement)("span", { className: "oc-card-who" }, (0, import_react4.createElement)("strong", null, channel.name), (0, import_react4.createElement)("span", null, `${typeOf(channel.type).label} · ${channel.detail}`)),
-      (0, import_react4.createElement)(StatusPill, { status: channel.status })
+      (0, import_react5.createElement)(Tile, { type: channel.type, size: 42 }),
+      (0, import_react5.createElement)("span", { className: "oc-card-who" }, (0, import_react5.createElement)("strong", null, channel.name), (0, import_react5.createElement)("span", null, `${typeOf(channel.type).label} · ${channel.detail}`)),
+      (0, import_react5.createElement)(StatusPill, { status: channel.status })
     ),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "span",
       { className: "oc-card-bottom" },
-      channel.health.week ? (0, import_react4.createElement)(Spark, { week: channel.health.week }) : null,
-      (0, import_react4.createElement)(
+      channel.health.week ? (0, import_react5.createElement)(Spark, { week: channel.health.week }) : null,
+      (0, import_react5.createElement)(
         "span",
         { className: "oc-card-facts" },
-        channel.health.messagesToday === null ? null : (0, import_react4.createElement)("span", null, t("{n} today", { n: channel.health.messagesToday })),
-        (0, import_react4.createElement)("span", null, channel.health.lastEventAt ? t("last message {time}", { time: relativeShort(channel.health.lastEventAt) }) : t("no messages yet")),
-        unread > 0 ? (0, import_react4.createElement)("span", { className: "oc-card-unread" }, t("{n} unread", { n: unread })) : null
+        channel.health.messagesToday === null ? null : (0, import_react5.createElement)("span", null, t("{n} today", { n: channel.health.messagesToday })),
+        (0, import_react5.createElement)("span", null, channel.health.lastEventAt ? t("last message {time}", { time: relativeShort(channel.health.lastEventAt) }) : t("no messages yet")),
+        unread > 0 ? (0, import_react5.createElement)("span", { className: "oc-card-unread" }, t("{n} unread", { n: unread })) : null
       )
     )
   );
 }
 var replyText = (seconds) => seconds === null ? "–" : seconds < 60 ? t("{n} s", { n: seconds }) : t("{n} min", { n: Math.round(seconds / 60) });
 function ChannelDetail({ channel, state, omni: omni2 }) {
-  const [confirming, setConfirming] = (0, import_react4.useState)(false);
-  const [settingsOpen, setSettingsOpen] = (0, import_react4.useState)(false);
-  (0, import_react4.useEffect)(() => {
+  const [confirming, setConfirming] = (0, import_react5.useState)(false);
+  const [settingsOpen, setSettingsOpen] = (0, import_react5.useState)(false);
+  (0, import_react5.useEffect)(() => {
     setConfirming(false);
   }, [channel.id]);
   const type = typeOf(channel.type);
@@ -12498,104 +12582,104 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
   const firstChat = visibleChats({ ...state, filter: channel.id })[0];
   const chats = state.chats.filter((chat) => chat.channelId === channel.id);
   const troubled = channel.status === "attention" || channel.status === "connecting";
-  return (0, import_react4.createElement)(
-    import_react4.Fragment,
+  return (0, import_react5.createElement)(
+    import_react5.Fragment,
     null,
-    (0, import_react4.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview", channelId: null }) }, (0, import_react4.createElement)(ChevronLeftIcon2), t("Channels")),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ view: "overview", channelId: null }) }, (0, import_react5.createElement)(ChevronLeftIcon2), t("Channels")),
+    (0, import_react5.createElement)(
       "header",
       { className: "oc-detail-head" },
-      (0, import_react4.createElement)(Tile, { type: channel.type, size: 56 }),
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(Tile, { type: channel.type, size: 56 }),
+      (0, import_react5.createElement)(
         "div",
         { className: "oc-detail-who" },
-        (0, import_react4.createElement)("h1", null, channel.name),
-        (0, import_react4.createElement)("p", null, `${type.label} · ${channel.detail}`)
+        (0, import_react5.createElement)("h1", null, channel.name),
+        (0, import_react5.createElement)("p", null, `${type.label} · ${channel.detail}`)
       ),
-      (0, import_react4.createElement)(StatusPill, { status: channel.status })
+      (0, import_react5.createElement)(StatusPill, { status: channel.status })
     ),
-    troubled ? (0, import_react4.createElement)(
+    troubled ? (0, import_react5.createElement)(
       "div",
       { className: "oc-callout oc-callout-static", "data-tone": STATUS[channel.status].tone },
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "span",
         { className: "oc-callout-text" },
-        (0, import_react4.createElement)("strong", null, channel.status === "connecting" ? t("Reconnecting…") : t("This channel stopped working")),
-        (0, import_react4.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channel.problem)
+        (0, import_react5.createElement)("strong", null, channel.status === "connecting" ? t("Reconnecting…") : t("This channel stopped working")),
+        (0, import_react5.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channel.problem)
       ),
-      writable && channel.status === "attention" && type.pairing !== "token" ? (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: Boolean(channel.busy), onClick: () => omni2.reconnect(channel.id) }, channel.busy === "reconnect" ? t("Reconnecting…") : t("Reconnect")) : null,
-      channel.status === "connecting" || channel.busy ? (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }) : null
+      writable && channel.status === "attention" && type.pairing !== "token" ? (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: Boolean(channel.busy), onClick: () => omni2.reconnect(channel.id) }, channel.busy === "reconnect" ? t("Reconnecting…") : t("Reconnect")) : null,
+      channel.status === "connecting" || channel.busy ? (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }) : null
     ) : null,
-    channel.actionError ? (0, import_react4.createElement)("p", { className: "oc-problem", role: "alert" }, channel.actionError) : null,
-    writable && channel.status === "attention" && type.pairing === "token" ? (0, import_react4.createElement)(TokenFix, { channel, type, omni: omni2 }) : null,
-    (0, import_react4.createElement)(
+    channel.actionError ? (0, import_react5.createElement)("p", { className: "oc-problem", role: "alert" }, channel.actionError) : null,
+    writable && channel.status === "attention" && type.pairing === "token" ? (0, import_react5.createElement)(TokenFix, { channel, type, omni: omni2 }) : null,
+    (0, import_react5.createElement)(
       "div",
       { className: "oc-actions" },
-      firstChat ? (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
+      firstChat ? (0, import_react5.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => {
         omni2.setFilter(channel.id);
         omni2.openChat(firstChat.id);
       } }, t("Open chats")) : null,
-      !writable ? null : channel.status === "paused" ? (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: Boolean(channel.busy), onClick: () => omni2.resume(channel.id) }, channel.busy === "resume" ? t("Resuming…") : t("Resume")) : channel.status === "connected" ? (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: Boolean(channel.busy), onClick: () => omni2.pause(channel.id) }, channel.busy === "pause" ? t("Pausing…") : t("Pause")) : null
+      !writable ? null : channel.status === "paused" ? (0, import_react5.createElement)("button", { type: "button", className: "oc-secondary", disabled: Boolean(channel.busy), onClick: () => omni2.resume(channel.id) }, channel.busy === "resume" ? t("Resuming…") : t("Resume")) : channel.status === "connected" ? (0, import_react5.createElement)("button", { type: "button", className: "oc-secondary", disabled: Boolean(channel.busy), onClick: () => omni2.pause(channel.id) }, channel.busy === "pause" ? t("Pausing…") : t("Pause")) : null
     ),
-    (0, import_react4.createElement)("h2", { className: "oc-section" }, t("Health")),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)("h2", { className: "oc-section" }, t("Health")),
+    (0, import_react5.createElement)(
       "div",
       { className: "oc-stats" },
-      health.uptime === null ? (0, import_react4.createElement)(Stat, { value: t(STATUS[channel.status].label), label: t("right now"), tone: channel.status === "connected" ? void 0 : "warn" }) : (0, import_react4.createElement)(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t("online, last 7 days"), tone: health.uptime < 0.95 ? "warn" : void 0 }),
-      health.messagesToday === null ? (0, import_react4.createElement)(Stat, { value: String(chats.reduce((sum, chat) => sum + chat.unread, 0)), label: t("unread") }) : (0, import_react4.createElement)(Stat, { value: String(health.messagesToday), label: t("messages today") }),
-      health.replyMedianSec === null && health.lastSeenAt ? (0, import_react4.createElement)(Stat, { value: relativeShort(health.lastSeenAt), label: t("last seen online") }) : (0, import_react4.createElement)(Stat, { value: replyText(health.replyMedianSec), label: t("typical reply") }),
-      (0, import_react4.createElement)(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : "–", label: t("last message") })
+      health.uptime === null ? (0, import_react5.createElement)(Stat, { value: t(STATUS[channel.status].label), label: t("right now"), tone: channel.status === "connected" ? void 0 : "warn" }) : (0, import_react5.createElement)(Stat, { value: `${(health.uptime * 100).toFixed(health.uptime === 1 ? 0 : 1)}%`, label: t("online, last 7 days"), tone: health.uptime < 0.95 ? "warn" : void 0 }),
+      health.messagesToday === null ? (0, import_react5.createElement)(Stat, { value: String(chats.reduce((sum, chat) => sum + chat.unread, 0)), label: t("unread") }) : (0, import_react5.createElement)(Stat, { value: String(health.messagesToday), label: t("messages today") }),
+      health.replyMedianSec === null && health.lastSeenAt ? (0, import_react5.createElement)(Stat, { value: relativeShort(health.lastSeenAt), label: t("last seen online") }) : (0, import_react5.createElement)(Stat, { value: replyText(health.replyMedianSec), label: t("typical reply") }),
+      (0, import_react5.createElement)(Stat, { value: health.lastEventAt ? relativeShort(health.lastEventAt) : "–", label: t("last message") })
     ),
-    health.week ? (0, import_react4.createElement)(WeekChart, { week: health.week }) : null,
-    !state.preview ? (0, import_react4.createElement)(
+    health.week ? (0, import_react5.createElement)(WeekChart, { week: health.week }) : null,
+    !state.preview ? (0, import_react5.createElement)(
       "details",
       { open: settingsOpen, onToggle: (event) => setSettingsOpen(event.currentTarget.open) },
-      (0, import_react4.createElement)("summary", null, t("Channel settings")),
-      settingsOpen ? (0, import_react4.createElement)(ChannelSettings, { key: channel.id, channel, writable: writable && !channel.busy }) : null
+      (0, import_react5.createElement)("summary", null, t("Channel settings")),
+      settingsOpen ? (0, import_react5.createElement)(ChannelSettings, { key: channel.id, channel, writable: writable && !channel.busy }) : null
     ) : null,
-    (0, import_react4.createElement)("h2", { className: "oc-section" }, t("Who answers")),
+    (0, import_react5.createElement)("h2", { className: "oc-section" }, t("Who answers")),
     // Who answers is the agent omni routes a channel to; on a live Omni, Omni changes that by talking.
-    state.preview ? (0, import_react4.createElement)(
+    state.preview ? (0, import_react5.createElement)(
       "div",
       { className: "oc-seg", role: "radiogroup", "aria-label": t("Who answers") },
-      [["Omni", t("Omni answers"), t("Omni replies on its own and hands over when it should.")], ["You", t("You answer"), t("Chats wait for you. Omni only drafts.")]].map(([value, title, text]) => (0, import_react4.createElement)("button", {
+      [["Omni", t("Omni answers"), t("Omni replies on its own and hands over when it should.")], ["You", t("You answer"), t("Chats wait for you. Omni only drafts.")]].map(([value, title, text]) => (0, import_react5.createElement)("button", {
         key: value,
         type: "button",
         role: "radio",
         "aria-checked": channel.answeredBy === value,
         className: "oc-seg-opt",
         onClick: () => omni2.setAnsweredBy(channel.id, value)
-      }, (0, import_react4.createElement)("strong", null, value === "Omni" ? (0, import_react4.createElement)(OmniMark, { size: 16 }) : null, title), (0, import_react4.createElement)("span", null, text)))
-    ) : (0, import_react4.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)("strong", null, (0, import_react4.createElement)(OmniMark, { size: 16 }), t("Omni answers")), (0, import_react4.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)("strong", null, t("You answer")), (0, import_react4.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
-    state.preview ? (0, import_react4.createElement)(
+      }, (0, import_react5.createElement)("strong", null, value === "Omni" ? (0, import_react5.createElement)(OmniMark, { size: 16 }) : null, title), (0, import_react5.createElement)("span", null, text)))
+    ) : (0, import_react5.createElement)("div", { className: "oc-seg-opt oc-seg-static" }, channel.answeredBy === "Omni" ? (0, import_react5.createElement)(import_react5.Fragment, null, (0, import_react5.createElement)("strong", null, (0, import_react5.createElement)(OmniMark, { size: 16 }), t("Omni answers")), (0, import_react5.createElement)("span", null, t("An agent is assigned to this channel in omni."))) : (0, import_react5.createElement)(import_react5.Fragment, null, (0, import_react5.createElement)("strong", null, t("You answer")), (0, import_react5.createElement)("span", null, t("No agent is assigned to this channel in omni.")))),
+    state.preview ? (0, import_react5.createElement)(
       "div",
       { className: "oc-danger" },
-      (0, import_react4.createElement)("div", null, (0, import_react4.createElement)("strong", null, t("Disconnect {name}", { name: channel.name })), (0, import_react4.createElement)("span", null, t("Omni stops reading and answering here. Its chats leave the sidebar."))),
-      (0, import_react4.createElement)("button", {
+      (0, import_react5.createElement)("div", null, (0, import_react5.createElement)("strong", null, t("Disconnect {name}", { name: channel.name })), (0, import_react5.createElement)("span", null, t("Omni stops reading and answering here. Its chats leave the sidebar."))),
+      (0, import_react5.createElement)("button", {
         type: "button",
         className: confirming ? "oc-danger-go oc-danger-armed" : "oc-danger-go",
         onClick: () => confirming ? omni2.remove(channel.id) : setConfirming(true),
         onBlur: () => setConfirming(false)
       }, confirming ? t("Click again to disconnect") : t("Disconnect"))
-    ) : (0, import_react4.createElement)(
+    ) : (0, import_react5.createElement)(
       "section",
       { className: "oc-danger", "aria-label": t("Delete instance") },
-      (0, import_react4.createElement)(
+      (0, import_react5.createElement)(
         "div",
         null,
-        (0, import_react4.createElement)("strong", null, confirming ? t("Delete instance {name} ({id})?", { name: channel.name, id: channel.id }) : t("Delete instance")),
-        (0, import_react4.createElement)("span", null, t("Permanently deletes this instance configuration and its local chats and messages.")),
-        (0, import_react4.createElement)("span", null, t("Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.")),
-        channel.deleteError ? (0, import_react4.createElement)("p", { className: "oc-problem", role: "alert" }, t("Could not delete instance: {reason}. Check your access or connection, then try again.", { reason: channel.deleteError })) : null
+        (0, import_react5.createElement)("strong", null, confirming ? t("Delete instance {name} ({id})?", { name: channel.name, id: channel.id }) : t("Delete instance")),
+        (0, import_react5.createElement)("span", null, t("Permanently deletes this instance configuration and its local chats and messages.")),
+        (0, import_react5.createElement)("span", null, t("Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.")),
+        channel.deleteError ? (0, import_react5.createElement)("p", { className: "oc-problem", role: "alert" }, t("Could not delete instance: {reason}. Check your access or connection, then try again.", { reason: channel.deleteError })) : null
       ),
-      confirming ? (0, import_react4.createElement)(
-        import_react4.Fragment,
+      confirming ? (0, import_react5.createElement)(
+        import_react5.Fragment,
         null,
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: channel.busy === "delete", onClick: () => setConfirming(false) }, t("Cancel")),
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-danger-go oc-danger-armed", disabled: !writable || Boolean(channel.busy), onClick: () => {
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-secondary", disabled: channel.busy === "delete", onClick: () => setConfirming(false) }, t("Cancel")),
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-danger-go oc-danger-armed", disabled: !writable || Boolean(channel.busy), onClick: () => {
           if (writable && !channel.busy) void omni2.deleteInstance(channel.id);
         } }, channel.busy === "delete" ? t("Deleting instance…") : t("Permanently delete instance"))
-      ) : (0, import_react4.createElement)("button", { type: "button", className: "oc-danger-go", disabled: !writable || Boolean(channel.busy), title: writable ? void 0 : t("This device's key can't change channels; ask your Omni's owner."), onClick: () => {
+      ) : (0, import_react5.createElement)("button", { type: "button", className: "oc-danger-go", disabled: !writable || Boolean(channel.busy), title: writable ? void 0 : t("This device's key can't change channels; ask your Omni's owner."), onClick: () => {
         if (writable && !channel.busy) setConfirming(true);
       } }, t("Delete instance"))
     )
@@ -12604,49 +12688,49 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
 function WeekChart({ week }) {
   const days = [6, 5, 4, 3, 2, 1, 0].map((back) => new Date(Date.now() - back * 864e5).toLocaleDateString([], { weekday: "short" }));
   const top = Math.max(1, ...week);
-  return (0, import_react4.createElement)(
+  return (0, import_react5.createElement)(
     "div",
     { className: "oc-chart", role: "img", "aria-label": t("Messages per day, last 7 days: {list}", { list: week.join(", ") }) },
-    week.map((value, index) => (0, import_react4.createElement)(
+    week.map((value, index) => (0, import_react5.createElement)(
       "span",
       { key: index, className: "oc-chart-col" },
-      (0, import_react4.createElement)("span", { className: "oc-chart-n" }, value > 0 ? String(value) : ""),
-      (0, import_react4.createElement)("span", { className: "oc-chart-bar", style: { height: `${Math.max(3, value / top * 100)}%` }, "data-zero": value === 0 || void 0 }),
-      (0, import_react4.createElement)("span", { className: "oc-chart-day" }, days[index])
+      (0, import_react5.createElement)("span", { className: "oc-chart-n" }, value > 0 ? String(value) : ""),
+      (0, import_react5.createElement)("span", { className: "oc-chart-bar", style: { height: `${Math.max(3, value / top * 100)}%` }, "data-zero": value === 0 || void 0 }),
+      (0, import_react5.createElement)("span", { className: "oc-chart-day" }, days[index])
     ))
   );
 }
 function ConnectFlow({ state, omni: omni2 }) {
-  return state.preview ? (0, import_react4.createElement)(PreviewConnectFlow, { state, omni: omni2 }) : (0, import_react4.createElement)(LiveConnectFlow, { state, omni: omni2, Tile, PreviewChip });
+  return state.preview ? (0, import_react5.createElement)(PreviewConnectFlow, { state, omni: omni2 }) : (0, import_react5.createElement)(LiveConnectFlow, { state, omni: omni2, Tile, PreviewChip });
 }
 function PreviewConnectFlow({ state, omni: omni2 }) {
   const { type, step } = state.page;
-  const [name, setName] = (0, import_react4.useState)("");
-  const [token, setToken] = (0, import_react4.useState)("");
-  (0, import_react4.useEffect)(() => {
+  const [name, setName] = (0, import_react5.useState)("");
+  const [token, setToken] = (0, import_react5.useState)("");
+  (0, import_react5.useEffect)(() => {
     setName("");
     setToken("");
   }, [type]);
   if (type === null) {
-    return (0, import_react4.createElement)(AddGrid, { types: ORDER, onPick: (id) => omni2.showPage({ type: id, step: 0 }), onBack: () => omni2.showPage({ view: "overview" }), Tile, PreviewChip });
+    return (0, import_react5.createElement)(AddGrid, { types: ORDER, onPick: (id) => omni2.showPage({ type: id, step: 0 }), onBack: () => omni2.showPage({ view: "overview" }), Tile, PreviewChip });
   }
   const info = CHANNEL_TYPES[type];
   const steps = [t("Name it"), info.pairing === "qr" ? t("Scan") : info.pairing === "token" ? t("Paste token") : t("Sign in"), t("Done")];
-  return (0, import_react4.createElement)(
-    import_react4.Fragment,
+  return (0, import_react5.createElement)(
+    import_react5.Fragment,
     null,
-    (0, import_react4.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ type: null, step: 0 }) }, (0, import_react4.createElement)(ChevronLeftIcon2), t("All channels")),
-    (0, import_react4.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react4.createElement)("li", { key: label, "data-state": index < step ? "done" : index === step ? "now" : void 0 }, (0, import_react4.createElement)("span", null, index < step ? "✓" : String(index + 1)), label))),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)("button", { type: "button", className: "oc-back", onClick: () => omni2.showPage({ type: null, step: 0 }) }, (0, import_react5.createElement)(ChevronLeftIcon2), t("All channels")),
+    (0, import_react5.createElement)("ol", { className: "oc-steps" }, steps.map((label, index) => (0, import_react5.createElement)("li", { key: label, "data-state": index < step ? "done" : index === step ? "now" : void 0 }, (0, import_react5.createElement)("span", null, index < step ? "✓" : String(index + 1)), label))),
+    (0, import_react5.createElement)(
       "div",
       { className: "oc-flow" },
-      (0, import_react4.createElement)(Tile, { type, size: 64, ring: true }),
-      step === 0 ? (0, import_react4.createElement)(
-        import_react4.Fragment,
+      (0, import_react5.createElement)(Tile, { type, size: 64, ring: true }),
+      step === 0 ? (0, import_react5.createElement)(
+        import_react5.Fragment,
         null,
-        (0, import_react4.createElement)("h1", null, t("Connect {app}", { app: info.label })),
-        (0, import_react4.createElement)("p", null, info.blurb),
-        (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Name")), (0, import_react4.createElement)("input", {
+        (0, import_react5.createElement)("h1", null, t("Connect {app}", { app: info.label })),
+        (0, import_react5.createElement)("p", null, info.blurb),
+        (0, import_react5.createElement)("label", { className: "oc-field" }, (0, import_react5.createElement)("span", null, t("Name")), (0, import_react5.createElement)("input", {
           value: name,
           placeholder: t("For example: Sales, Support, Personal"),
           onChange: (event) => setName(event.target.value),
@@ -12655,47 +12739,47 @@ function PreviewConnectFlow({ state, omni: omni2 }) {
             if (event.key === "Enter") omni2.showPage({ step: 1 });
           }
         })),
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ step: 1 }) }, t("Continue"))
-      ) : step === 1 ? (0, import_react4.createElement)(Pairing, { info, token, setToken, onDone: () => omni2.showPage({ step: 2 }) }) : (0, import_react4.createElement)(
-        import_react4.Fragment,
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ step: 1 }) }, t("Continue"))
+      ) : step === 1 ? (0, import_react5.createElement)(Pairing, { info, token, setToken, onDone: () => omni2.showPage({ step: 2 }) }) : (0, import_react5.createElement)(
+        import_react5.Fragment,
         null,
-        (0, import_react4.createElement)("h1", null, state.preview ? t("{app} is connected", { app: info.label }) : t("That is the whole flow")),
-        (0, import_react4.createElement)("p", null, state.preview ? t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.") : t("Connecting from here is switched on after you approve it; this run changed nothing in omni.")),
-        state.preview ? (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, name.trim()) }, t("See its health")) : (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ view: "overview", type: null, step: 0 }) }, t("Back to channels"))
+        (0, import_react5.createElement)("h1", null, state.preview ? t("{app} is connected", { app: info.label }) : t("That is the whole flow")),
+        (0, import_react5.createElement)("p", null, state.preview ? t("New chats appear under your Bots. Nothing is sent to your contacts until Omni or you reply.") : t("Connecting from here is switched on after you approve it; this run changed nothing in omni.")),
+        state.preview ? (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.finishConnect(type, name.trim()) }, t("See its health")) : (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", onClick: () => omni2.showPage({ view: "overview", type: null, step: 0 }) }, t("Back to channels"))
       )
     )
   );
 }
 function Pairing({ info, token, setToken, onDone }) {
-  if (info.pairing === "qr") return (0, import_react4.createElement)(QrPairing, { info, onDone });
+  if (info.pairing === "qr") return (0, import_react5.createElement)(QrPairing, { info, onDone });
   if (info.pairing === "token") {
-    return (0, import_react4.createElement)(
-      import_react4.Fragment,
+    return (0, import_react5.createElement)(
+      import_react5.Fragment,
       null,
-      (0, import_react4.createElement)("h1", null, t("Paste the {app} token", { app: info.label })),
-      (0, import_react4.createElement)("p", null, info.label === "Telegram" ? t("Message @BotFather, send /newbot, and copy the token it gives you.") : t("Create the token in {app}'s settings and paste it here.", { app: info.label })),
-      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Token")), (0, import_react4.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: "123456:ABC-…", autoComplete: "off" })),
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: onDone }, t("Connect"))
+      (0, import_react5.createElement)("h1", null, t("Paste the {app} token", { app: info.label })),
+      (0, import_react5.createElement)("p", null, info.label === "Telegram" ? t("Message @BotFather, send /newbot, and copy the token it gives you.") : t("Create the token in {app}'s settings and paste it here.", { app: info.label })),
+      (0, import_react5.createElement)("label", { className: "oc-field" }, (0, import_react5.createElement)("span", null, t("Token")), (0, import_react5.createElement)("input", { type: "password", value: token, onChange: (event) => setToken(event.target.value), placeholder: "123456:ABC-…", autoComplete: "off" })),
+      (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "", onClick: onDone }, t("Connect"))
     );
   }
-  return (0, import_react4.createElement)(
-    import_react4.Fragment,
+  return (0, import_react5.createElement)(
+    import_react5.Fragment,
     null,
-    (0, import_react4.createElement)("h1", null, t("Sign in with {app}", { app: info.signIn })),
-    (0, import_react4.createElement)("p", null, t("A {app} window opens. Approve Omni there and come back.", { app: info.signIn })),
-    (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", onClick: onDone }, t("Continue to {app}", { app: info.signIn }))
+    (0, import_react5.createElement)("h1", null, t("Sign in with {app}", { app: info.signIn })),
+    (0, import_react5.createElement)("p", null, t("A {app} window opens. Approve Omni there and come back.", { app: info.signIn })),
+    (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", onClick: onDone }, t("Continue to {app}", { app: info.signIn }))
   );
 }
 function TokenFix({ channel, type, omni: omni2 }) {
-  const [token, setToken] = (0, import_react4.useState)("");
-  return (0, import_react4.createElement)(
+  const [token, setToken] = (0, import_react5.useState)("");
+  return (0, import_react5.createElement)(
     "div",
     { className: "oc-fix" },
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "label",
       { className: "oc-field" },
-      (0, import_react4.createElement)("span", null, t("New {app} token", { app: type.label })),
-      (0, import_react4.createElement)("input", {
+      (0, import_react5.createElement)("span", null, t("New {app} token", { app: type.label })),
+      (0, import_react5.createElement)("input", {
         type: "password",
         value: token,
         autoComplete: "off",
@@ -12706,75 +12790,75 @@ function TokenFix({ channel, type, omni: omni2 }) {
         }
       })
     ),
-    (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "" || Boolean(channel.busy), onClick: () => omni2.reconnect(channel.id, token.trim()) }, t("Reconnect"))
+    (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: token.trim() === "" || Boolean(channel.busy), onClick: () => omni2.reconnect(channel.id, token.trim()) }, t("Reconnect"))
   );
 }
 function useCountdown(seconds) {
-  const [left, setLeft] = (0, import_react4.useState)(seconds);
-  (0, import_react4.useEffect)(() => {
+  const [left, setLeft] = (0, import_react5.useState)(seconds);
+  (0, import_react5.useEffect)(() => {
     const timer = setInterval(() => setLeft((value) => value <= 1 ? seconds : value - 1), 1e3);
     return () => clearInterval(timer);
   }, [seconds]);
   return left;
 }
 function QrPairing({ info, onDone }) {
-  const [byPhone, setByPhone] = (0, import_react4.useState)(false);
-  const [phone, setPhone] = (0, import_react4.useState)("");
-  const [code, setCode] = (0, import_react4.useState)(null);
+  const [byPhone, setByPhone] = (0, import_react5.useState)(false);
+  const [phone, setPhone] = (0, import_react5.useState)("");
+  const [code, setCode] = (0, import_react5.useState)(null);
   const left = useCountdown(60);
   if (byPhone) {
-    return (0, import_react4.createElement)(
-      import_react4.Fragment,
+    return (0, import_react5.createElement)(
+      import_react5.Fragment,
       null,
-      (0, import_react4.createElement)("h1", null, t("Link with a phone number")),
-      code === null ? (0, import_react4.createElement)(
-        import_react4.Fragment,
+      (0, import_react5.createElement)("h1", null, t("Link with a phone number")),
+      code === null ? (0, import_react5.createElement)(
+        import_react5.Fragment,
         null,
-        (0, import_react4.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
-        (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Phone number with country code")), (0, import_react4.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: () => setCode("K7QX-4M2P") }, t("Get code"))
-      ) : (0, import_react4.createElement)(
-        import_react4.Fragment,
+        (0, import_react5.createElement)("p", null, t("Omni shows an 8-character code. Type it on your phone instead of scanning.")),
+        (0, import_react5.createElement)("label", { className: "oc-field" }, (0, import_react5.createElement)("span", null, t("Phone number with country code")), (0, import_react5.createElement)("input", { value: phone, inputMode: "tel", placeholder: "+55 11 91234-5678", onChange: (event) => setPhone(event.target.value), autoFocus: true })),
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: phone.replace(/\D/g, "").length < 8, onClick: () => setCode("K7QX-4M2P") }, t("Get code"))
+      ) : (0, import_react5.createElement)(
+        import_react5.Fragment,
         null,
-        (0, import_react4.createElement)(
+        (0, import_react5.createElement)(
           "ol",
           { className: "oc-howto" },
-          (0, import_react4.createElement)("li", null, t("On your phone, open {app} → Linked devices → Link a device", { app: info.label })),
-          (0, import_react4.createElement)("li", null, t("Tap “Link with phone number instead”")),
-          (0, import_react4.createElement)("li", null, t("Type this code"))
+          (0, import_react5.createElement)("li", null, t("On your phone, open {app} → Linked devices → Link a device", { app: info.label })),
+          (0, import_react5.createElement)("li", null, t("Tap “Link with phone number instead”")),
+          (0, import_react5.createElement)("li", null, t("Type this code"))
         ),
-        (0, import_react4.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react4.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
-        (0, import_react4.createElement)("span", { className: "oc-qr-wait" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone… the code works for {n} s", { n: left })),
-        (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I typed it"))
+        (0, import_react5.createElement)("div", { className: "oc-code", "aria-label": t("Pairing code") }, code.split("").map((char, index) => (0, import_react5.createElement)("span", { key: index, "data-dash": char === "-" || void 0 }, char))),
+        (0, import_react5.createElement)("span", { className: "oc-qr-wait" }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone… the code works for {n} s", { n: left })),
+        (0, import_react5.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I typed it"))
       ),
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
+      (0, import_react5.createElement)("button", { type: "button", className: "oc-link", onClick: () => {
         setByPhone(false);
         setCode(null);
       } }, t("Scan a QR code instead"))
     );
   }
-  return (0, import_react4.createElement)(
-    import_react4.Fragment,
+  return (0, import_react5.createElement)(
+    import_react5.Fragment,
     null,
-    (0, import_react4.createElement)("h1", null, t("Scan with your phone")),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)("h1", null, t("Scan with your phone")),
+    (0, import_react5.createElement)(
       "ol",
       { className: "oc-howto" },
-      (0, import_react4.createElement)("li", null, t("Open {app} on your phone", { app: info.label })),
-      (0, import_react4.createElement)("li", null, t("Tap Settings, then Linked devices")),
-      (0, import_react4.createElement)("li", null, t("Tap Link a device and point the camera here"))
+      (0, import_react5.createElement)("li", null, t("Open {app} on your phone", { app: info.label })),
+      (0, import_react5.createElement)("li", null, t("Tap Settings, then Linked devices")),
+      (0, import_react5.createElement)("li", null, t("Tap Link a device and point the camera here"))
     ),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "div",
       { className: "oc-qr" },
-      (0, import_react4.createElement)("span", { className: "oc-qr-code" }, (0, import_react4.createElement)(SampleQr, { seed: Math.floor(Date.now() / 6e4) }), (0, import_react4.createElement)("span", { className: "oc-qr-logo" }, (0, import_react4.createElement)(Tile, { type: "whatsapp-baileys", size: 34 }))),
-      (0, import_react4.createElement)("span", { className: "oc-qr-wait" }, (0, import_react4.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone · new code in {n} s", { n: left }))
+      (0, import_react5.createElement)("span", { className: "oc-qr-code" }, (0, import_react5.createElement)(SampleQr, { seed: Math.floor(Date.now() / 6e4) }), (0, import_react5.createElement)("span", { className: "oc-qr-logo" }, (0, import_react5.createElement)(Tile, { type: "whatsapp-baileys", size: 34 }))),
+      (0, import_react5.createElement)("span", { className: "oc-qr-wait" }, (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for your phone · new code in {n} s", { n: left }))
     ),
-    (0, import_react4.createElement)(
+    (0, import_react5.createElement)(
       "span",
       { className: "oc-alt" },
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("Use a phone number instead")),
-      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I scanned it"))
+      (0, import_react5.createElement)("button", { type: "button", className: "oc-link", onClick: () => setByPhone(true) }, t("Use a phone number instead")),
+      (0, import_react5.createElement)("button", { type: "button", className: "oc-link", onClick: onDone }, t("Preview: pretend I scanned it"))
     )
   );
 }
@@ -12787,31 +12871,31 @@ function SampleQr({ seed = 1 }) {
   for (let y = 0; y < N; y += 1) for (let x = 0; x < N; x += 1) {
     state = state * 1103515245 + 12345 >>> 0;
     if (finder(x, y) || logo(x, y) || (x === 7 || y === 7) && (x < 8 && y < 8 || x > N - 9 && y < 8 || x < 8 && y > N - 9)) continue;
-    if ((state >>> 16) % 100 < 48) cells.push((0, import_react4.createElement)("rect", { key: `${x}-${y}`, x, y, width: 1, height: 1, rx: 0.3 }));
+    if ((state >>> 16) % 100 < 48) cells.push((0, import_react5.createElement)("rect", { key: `${x}-${y}`, x, y, width: 1, height: 1, rx: 0.3 }));
   }
-  const eyes = [[0, 0], [N - 7, 0], [0, N - 7]].map(([x, y]) => (0, import_react4.createElement)(
+  const eyes = [[0, 0], [N - 7, 0], [0, N - 7]].map(([x, y]) => (0, import_react5.createElement)(
     "g",
     { key: `${x}-${y}` },
-    (0, import_react4.createElement)("rect", { x: x + 0.5, y: y + 0.5, width: 6, height: 6, rx: 1.6, fill: "none", stroke: "currentColor", strokeWidth: 1 }),
-    (0, import_react4.createElement)("rect", { x: x + 2, y: y + 2, width: 3, height: 3, rx: 0.9 })
+    (0, import_react5.createElement)("rect", { x: x + 0.5, y: y + 0.5, width: 6, height: 6, rx: 1.6, fill: "none", stroke: "currentColor", strokeWidth: 1 }),
+    (0, import_react5.createElement)("rect", { x: x + 2, y: y + 2, width: 3, height: 3, rx: 0.9 })
   ));
-  return (0, import_react4.createElement)("svg", { viewBox: `-1 -1 ${N + 2} ${N + 2}`, width: 196, height: 196, "aria-hidden": true }, (0, import_react4.createElement)("g", { fill: "currentColor" }, cells, eyes));
+  return (0, import_react5.createElement)("svg", { viewBox: `-1 -1 ${N + 2} ${N + 2}`, width: 196, height: 196, "aria-hidden": true }, (0, import_react5.createElement)("g", { fill: "currentColor" }, cells, eyes));
 }
 var TONES = "[data-tone=ok]{--oc-tone:#16a34a}[data-tone=busy]{--oc-tone:#0ea5e9}[data-tone=warn]{--oc-tone:#f59e0b}[data-tone=off]{--oc-tone:#94a3b8}";
 function ChannelsFooter({ wide, actions }) {
   const state = useOmni();
-  (0, import_react4.useEffect)(() => {
+  (0, import_react5.useEffect)(() => {
     startLive(call);
   }, []);
   if (!wide) return null;
   const summary = healthSummary(state);
   const label = summary.attention > 0 ? t("{n} channel needs attention", { n: summary.attention }) : t("Channels and their health");
-  return (0, import_react4.createElement)("span", { className: "bt-connect-wrap" }, (0, import_react4.createElement)(
+  return (0, import_react5.createElement)("span", { className: "bt-connect-wrap" }, (0, import_react5.createElement)(
     "button",
     { type: "button", className: "bt-connect bt-connect-foot bt-channels-foot", title: label, "aria-label": `${t("Channels")}, ${label}`, onClick: () => actions.selectPanel(CHANNELS_PANEL) },
-    (0, import_react4.createElement)("span", { className: "bt-channels-tiles", "aria-hidden": true }, state.channels.slice(0, 4).map((channel) => (0, import_react4.createElement)(Tile, { key: channel.id, type: channel.type, size: 18 }))),
+    (0, import_react5.createElement)("span", { className: "bt-channels-tiles", "aria-hidden": true }, state.channels.slice(0, 4).map((channel) => (0, import_react5.createElement)(Tile, { key: channel.id, type: channel.type, size: 18 }))),
     t("Channels"),
-    summary.attention > 0 ? (0, import_react4.createElement)("span", { className: "oc-warn-dot", "aria-hidden": true }) : (0, import_react4.createElement)("span", { className: "bt-channels-count" }, `${summary.connected}/${summary.total}`)
+    summary.attention > 0 ? (0, import_react5.createElement)("span", { className: "oc-warn-dot", "aria-hidden": true }) : (0, import_react5.createElement)("span", { className: "bt-channels-count" }, `${summary.connected}/${summary.total}`)
   ));
 }
 var CHANNELS_CSS = `
@@ -13045,7 +13129,7 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 `;
 
 // src/client/omni-peek.js
-var import_react5 = require("react");
+var import_react6 = require("react");
 var PREVIEW = 4;
 var HUES2 = [168, 200, 222, 262, 290, 330, 18, 38, 140];
 var hueOf2 = (name) => {
@@ -13055,19 +13139,19 @@ var hueOf2 = (name) => {
 };
 var initialsOf = (name) => String(name ?? "?").replace(/[^\p{L}\p{N} ]/gu, "").trim().split(/\s+/).slice(0, 2).map((word) => word[0] ?? "").join("").toUpperCase() || "?";
 function Avatar({ name, url, size = 28 }) {
-  return (0, import_react5.createElement)(
+  return (0, import_react6.createElement)(
     "span",
     { className: "op-ava", style: { width: size, height: size, "--op-hue": hueOf2(name), fontSize: Math.round(size * 0.38) } },
     initialsOf(name),
-    url ? (0, import_react5.createElement)("img", { src: url, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
+    url ? (0, import_react6.createElement)("img", { src: url, alt: "", loading: "lazy", referrerPolicy: "no-referrer", onError: (event) => {
       event.currentTarget.remove();
     } }) : null
   );
 }
 var still = () => typeof window !== "undefined" && (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches || document.body?.dataset.btMotion === "quiet");
 function useCountUp(to2) {
-  const [shown, setShown] = (0, import_react5.useState)(still() ? to2 : 0);
-  (0, import_react5.useEffect)(() => {
+  const [shown, setShown] = (0, import_react6.useState)(still() ? to2 : 0);
+  (0, import_react6.useEffect)(() => {
     if (still() || !Number.isFinite(to2)) {
       setShown(to2);
       return void 0;
@@ -13103,7 +13187,7 @@ var ICONS = {
   write: "M13.5 3.5l3 3L7 16H4v-3z",
   remove: "M5 6h10M8 6V4h4v2M6.5 6l.7 10h5.6l.7-10"
 };
-var Icon = ({ kind }) => (0, import_react5.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react5.createElement)("path", { d: ICONS[kind] ?? ICONS.records }));
+var Icon = ({ kind }) => (0, import_react6.createElement)("svg", { width: 16, height: 16, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true }, (0, import_react6.createElement)("path", { d: ICONS[kind] ?? ICONS.records }));
 var listOf = (data) => Array.isArray(data) ? data : Array.isArray(data?.items) ? data.items : null;
 function kindOf(items) {
   const item = items.find((entry) => entry && typeof entry === "object") ?? {};
@@ -13115,22 +13199,22 @@ function kindOf(items) {
   if ("displayName" in item || "primaryPhone" in item) return "people";
   return "records";
 }
-var Row = ({ index, children, className = "" }) => (0, import_react5.createElement)("div", { className: `op-row ${className}`, style: { "--i": index } }, children);
+var Row = ({ index, children, className = "" }) => (0, import_react6.createElement)("div", { className: `op-row ${className}`, style: { "--i": index } }, children);
 function MessageRows({ items }) {
   return items.map((item, index) => {
     const mine = item.isFromMe === true || item.from === "you";
     const name = mine ? t("You") : item.senderDisplayName ?? item.from ?? item.senderName ?? t("Someone");
     const text = item.textContent ?? item.text ?? item.transcription ?? (item.hasMedia ? `[${item.messageType ?? "media"}]` : "");
-    return (0, import_react5.createElement)(
+    return (0, import_react6.createElement)(
       Row,
       { key: item.id ?? index, index, className: mine ? "op-msg op-msg-mine" : "op-msg" },
-      mine ? null : (0, import_react5.createElement)(Avatar, { name, size: 26 }),
-      (0, import_react5.createElement)(
+      mine ? null : (0, import_react6.createElement)(Avatar, { name, size: 26 }),
+      (0, import_react6.createElement)(
         "div",
         { className: "op-bubble" },
-        mine ? null : (0, import_react5.createElement)("span", { className: "op-bubble-who" }, name),
-        (0, import_react5.createElement)("span", { className: "op-bubble-text" }, String(text || "…").slice(0, 220)),
-        (0, import_react5.createElement)("span", { className: "op-bubble-at" }, when(item.platformTimestamp ?? item.at ?? item.createdAt))
+        mine ? null : (0, import_react6.createElement)("span", { className: "op-bubble-who" }, name),
+        (0, import_react6.createElement)("span", { className: "op-bubble-text" }, String(text || "…").slice(0, 220)),
+        (0, import_react6.createElement)("span", { className: "op-bubble-at" }, when(item.platformTimestamp ?? item.at ?? item.createdAt))
       )
     );
   });
@@ -13143,104 +13227,104 @@ var kindTag = (item) => {
 function ChatRows({ items }) {
   return items.map((item, index) => {
     const unread = item.unread ?? item.unreadCount ?? 0;
-    return (0, import_react5.createElement)(
+    return (0, import_react6.createElement)(
       Row,
       { key: item.id ?? index, index, className: "op-chat" },
-      (0, import_react5.createElement)(Avatar, { name: item.name, url: item.avatarUrl, size: 30 }),
-      (0, import_react5.createElement)(
+      (0, import_react6.createElement)(Avatar, { name: item.name, url: item.avatarUrl, size: 30 }),
+      (0, import_react6.createElement)(
         "div",
         { className: "op-chat-body" },
-        (0, import_react5.createElement)("span", { className: "op-chat-name" }, (0, import_react5.createElement)("span", { className: "op-chat-name-text" }, item.name ?? t("Chat")), kindTag(item) ? (0, import_react5.createElement)("span", { className: "op-tag" }, t(kindTag(item))) : null),
-        (0, import_react5.createElement)("span", { className: "op-chat-preview" }, String(item.preview ?? item.lastMessagePreview ?? "").slice(0, 120))
+        (0, import_react6.createElement)("span", { className: "op-chat-name" }, (0, import_react6.createElement)("span", { className: "op-chat-name-text" }, item.name ?? t("Chat")), kindTag(item) ? (0, import_react6.createElement)("span", { className: "op-tag" }, t(kindTag(item))) : null),
+        (0, import_react6.createElement)("span", { className: "op-chat-preview" }, String(item.preview ?? item.lastMessagePreview ?? "").slice(0, 120))
       ),
-      (0, import_react5.createElement)(
+      (0, import_react6.createElement)(
         "div",
         { className: "op-chat-side" },
-        (0, import_react5.createElement)("span", { className: "op-chat-at" }, when(item.lastMessageAt)),
-        unread > 0 ? (0, import_react5.createElement)("span", { className: "op-unread" }, unread > 99 ? "99+" : unread) : null
+        (0, import_react6.createElement)("span", { className: "op-chat-at" }, when(item.lastMessageAt)),
+        unread > 0 ? (0, import_react6.createElement)("span", { className: "op-unread" }, unread > 99 ? "99+" : unread) : null
       )
     );
   });
 }
 function ChannelTiles({ items }) {
-  return (0, import_react5.createElement)("div", { className: "op-tiles" }, items.map((item, index) => {
+  return (0, import_react6.createElement)("div", { className: "op-tiles" }, items.map((item, index) => {
     const state = item.state ?? (item.isActive === false ? "paused" : "unknown");
-    return (0, import_react5.createElement)(
+    return (0, import_react6.createElement)(
       "div",
       { key: item.id ?? index, className: "op-tile", style: { "--i": index }, "data-state": state },
-      (0, import_react5.createElement)(Tile, { type: item.channel, size: 30 }),
-      (0, import_react5.createElement)("span", { className: "op-tile-name" }, item.name),
-      (0, import_react5.createElement)("span", { className: "op-tile-state" }, (0, import_react5.createElement)("i", { "aria-hidden": true }), item.profile ?? item.profileName ?? state)
+      (0, import_react6.createElement)(Tile, { type: item.channel, size: 30 }),
+      (0, import_react6.createElement)("span", { className: "op-tile-name" }, item.name),
+      (0, import_react6.createElement)("span", { className: "op-tile-state" }, (0, import_react6.createElement)("i", { "aria-hidden": true }), item.profile ?? item.profileName ?? state)
     );
   }));
 }
 function EventLine({ items }) {
-  return (0, import_react5.createElement)("div", { className: "op-events" }, items.map((item, index) => (0, import_react5.createElement)(
+  return (0, import_react6.createElement)("div", { className: "op-events" }, items.map((item, index) => (0, import_react6.createElement)(
     Row,
     { key: item.id ?? index, index, className: "op-event" },
-    (0, import_react5.createElement)("span", { className: "op-event-dot", "aria-hidden": true }),
-    (0, import_react5.createElement)("span", { className: "op-event-type" }, item.eventType),
-    (0, import_react5.createElement)("span", { className: "op-event-text" }, String(item.textContent ?? item.chatName ?? item.source ?? "").slice(0, 100)),
-    (0, import_react5.createElement)("span", { className: "op-event-at" }, when(item.receivedAt ?? item.createdAt ?? item.timestamp))
+    (0, import_react6.createElement)("span", { className: "op-event-dot", "aria-hidden": true }),
+    (0, import_react6.createElement)("span", { className: "op-event-type" }, item.eventType),
+    (0, import_react6.createElement)("span", { className: "op-event-text" }, String(item.textContent ?? item.chatName ?? item.source ?? "").slice(0, 100)),
+    (0, import_react6.createElement)("span", { className: "op-event-at" }, when(item.receivedAt ?? item.createdAt ?? item.timestamp))
   )));
 }
 function NamedRows({ items, kind }) {
-  return items.map((item, index) => (0, import_react5.createElement)(
+  return items.map((item, index) => (0, import_react6.createElement)(
     Row,
     { key: item.id ?? index, index, className: "op-named" },
-    kind === "people" ? (0, import_react5.createElement)(Avatar, { name: item.displayName ?? item.name, size: 26 }) : (0, import_react5.createElement)("span", { className: "op-named-icon" }, (0, import_react5.createElement)(Icon, { kind })),
-    (0, import_react5.createElement)("span", { className: "op-named-name" }, String(item.displayName ?? item.name ?? item.title ?? item.id ?? "—").slice(0, 80)),
-    (0, import_react5.createElement)("span", { className: "op-named-meta" }, String(item.status ?? item.state ?? item.type ?? item.triggerType ?? item.channel ?? "").slice(0, 40))
+    kind === "people" ? (0, import_react6.createElement)(Avatar, { name: item.displayName ?? item.name, size: 26 }) : (0, import_react6.createElement)("span", { className: "op-named-icon" }, (0, import_react6.createElement)(Icon, { kind })),
+    (0, import_react6.createElement)("span", { className: "op-named-name" }, String(item.displayName ?? item.name ?? item.title ?? item.id ?? "—").slice(0, 80)),
+    (0, import_react6.createElement)("span", { className: "op-named-meta" }, String(item.status ?? item.state ?? item.type ?? item.triggerType ?? item.channel ?? "").slice(0, 40))
   ));
 }
 function RecordFields({ record }) {
   const pairs = Object.entries(record).filter(([, value]) => value !== null && value !== void 0 && value !== "" && typeof value !== "object").slice(0, 8);
-  return (0, import_react5.createElement)("dl", { className: "op-fields" }, pairs.map(([key, value], index) => (0, import_react5.createElement)(
-    import_react5.Fragment,
+  return (0, import_react6.createElement)("dl", { className: "op-fields" }, pairs.map(([key, value], index) => (0, import_react6.createElement)(
+    import_react6.Fragment,
     { key },
-    (0, import_react5.createElement)("dt", { style: { "--i": index } }, key),
-    (0, import_react5.createElement)("dd", { style: { "--i": index } }, String(value).slice(0, 120))
+    (0, import_react6.createElement)("dt", { style: { "--i": index } }, key),
+    (0, import_react6.createElement)("dd", { style: { "--i": index } }, String(value).slice(0, 120))
   )));
 }
 function Seen({ data, kind: forced }) {
-  const [all, setAll] = (0, import_react5.useState)(false);
+  const [all, setAll] = (0, import_react6.useState)(false);
   const list = listOf(data);
   if (list === null) {
     const record = data?.data ?? data;
-    return record && typeof record === "object" ? (0, import_react5.createElement)(RecordFields, { record }) : null;
+    return record && typeof record === "object" ? (0, import_react6.createElement)(RecordFields, { record }) : null;
   }
-  if (list.length === 0) return (0, import_react5.createElement)("p", { className: "op-empty" }, t("Nothing came back."));
+  if (list.length === 0) return (0, import_react6.createElement)("p", { className: "op-empty" }, t("Nothing came back."));
   const kind = forced ?? kindOf(list);
   const shown = list.slice(0, PREVIEW);
   const rest = list.length - shown.length;
-  const view = kind === "messages" ? (0, import_react5.createElement)(MessageRows, { items: shown }) : kind === "chats" ? (0, import_react5.createElement)(ChatRows, { items: shown }) : kind === "channels" ? (0, import_react5.createElement)(ChannelTiles, { items: shown }) : kind === "events" ? (0, import_react5.createElement)(EventLine, { items: shown }) : (0, import_react5.createElement)(NamedRows, { items: shown, kind });
-  return (0, import_react5.createElement)(
-    import_react5.Fragment,
+  const view = kind === "messages" ? (0, import_react6.createElement)(MessageRows, { items: shown }) : kind === "chats" ? (0, import_react6.createElement)(ChatRows, { items: shown }) : kind === "channels" ? (0, import_react6.createElement)(ChannelTiles, { items: shown }) : kind === "events" ? (0, import_react6.createElement)(EventLine, { items: shown }) : (0, import_react6.createElement)(NamedRows, { items: shown, kind });
+  return (0, import_react6.createElement)(
+    import_react6.Fragment,
     null,
-    (0, import_react5.createElement)("div", { className: "op-seen", "data-kind": kind }, view),
-    rest > 0 || kind === "records" ? (0, import_react5.createElement)(
+    (0, import_react6.createElement)("div", { className: "op-seen", "data-kind": kind }, view),
+    rest > 0 || kind === "records" ? (0, import_react6.createElement)(
       "div",
       { className: "op-more" },
-      (0, import_react5.createElement)("button", { type: "button", className: "op-more-btn", onClick: () => setAll((value) => !value) }, all ? t("Hide") : t("Show all {count}", { count: list.length }))
+      (0, import_react6.createElement)("button", { type: "button", className: "op-more-btn", onClick: () => setAll((value) => !value) }, all ? t("Hide") : t("Show all {count}", { count: list.length }))
     ) : null,
-    all ? (0, import_react5.createElement)("div", { className: "op-all" }, (0, import_react5.createElement)(DataView2, { value: data })) : null
+    all ? (0, import_react6.createElement)("div", { className: "op-all" }, (0, import_react6.createElement)(DataView2, { value: data })) : null
   );
 }
 function PeekCard({ kind = "records", verb, title, count, unit, chips = [], state, failure, children, accent = false }) {
   const shownCount = useCountUp(Number.isFinite(count) ? count : 0);
-  return (0, import_react5.createElement)(
+  return (0, import_react6.createElement)(
     "section",
     { className: "op-card", "data-state": state, "data-accent": accent || void 0 },
-    (0, import_react5.createElement)(
+    (0, import_react6.createElement)(
       "header",
       { className: "op-head" },
-      (0, import_react5.createElement)("span", { className: "op-icon", "data-kind": kind }, (0, import_react5.createElement)(Icon, { kind })),
-      (0, import_react5.createElement)("span", { className: "op-verb" }, verb),
-      (0, import_react5.createElement)("span", { className: "op-title" }, title),
-      state === "working" ? (0, import_react5.createElement)("span", { className: "op-working" }, t("looking…")) : state === "failed" ? (0, import_react5.createElement)("span", { className: "op-failed" }, t("failed")) : Number.isFinite(count) ? (0, import_react5.createElement)("span", { className: "op-count" }, (0, import_react5.createElement)("b", null, shownCount), " ", unit ?? (count === 1 ? t("item") : t("items"))) : null
+      (0, import_react6.createElement)("span", { className: "op-icon", "data-kind": kind }, (0, import_react6.createElement)(Icon, { kind })),
+      (0, import_react6.createElement)("span", { className: "op-verb" }, verb),
+      (0, import_react6.createElement)("span", { className: "op-title" }, title),
+      state === "working" ? (0, import_react6.createElement)("span", { className: "op-working" }, t("looking…")) : state === "failed" ? (0, import_react6.createElement)("span", { className: "op-failed" }, t("failed")) : Number.isFinite(count) ? (0, import_react6.createElement)("span", { className: "op-count" }, (0, import_react6.createElement)("b", null, shownCount), " ", unit ?? (count === 1 ? t("item") : t("items"))) : null
     ),
-    chips.length > 0 ? (0, import_react5.createElement)("div", { className: "op-chips" }, chips.map(([key, value]) => (0, import_react5.createElement)("span", { key, className: "op-chip" }, (0, import_react5.createElement)("span", null, key), chipText(value)))) : null,
-    state === "working" ? (0, import_react5.createElement)("div", { className: "op-skeleton", "aria-hidden": true }, [0, 1, 2].map((index) => (0, import_react5.createElement)("span", { key: index, style: { "--i": index } }))) : state === "failed" ? (0, import_react5.createElement)("p", { className: "op-problem", role: "alert" }, failure) : children ? (0, import_react5.createElement)("div", { className: "op-body" }, children) : null
+    chips.length > 0 ? (0, import_react6.createElement)("div", { className: "op-chips" }, chips.map(([key, value]) => (0, import_react6.createElement)("span", { key, className: "op-chip" }, (0, import_react6.createElement)("span", null, key), chipText(value)))) : null,
+    state === "working" ? (0, import_react6.createElement)("div", { className: "op-skeleton", "aria-hidden": true }, [0, 1, 2].map((index) => (0, import_react6.createElement)("span", { key: index, style: { "--i": index } }))) : state === "failed" ? (0, import_react6.createElement)("p", { className: "op-problem", role: "alert" }, failure) : children ? (0, import_react6.createElement)("div", { className: "op-body" }, children) : null
   );
 }
 var OMNI_PEEK_CSS = `
@@ -13324,10 +13408,10 @@ body[data-bt-motion=quiet] :is(.op-card,.op-row,.op-tile,.op-fields dt,.op-field
 `;
 
 // src/client/omni-live.js
-var import_react6 = require("react");
+var import_react7 = require("react");
 function useOmniGet(path, every = 0) {
-  const [state, setState] = (0, import_react6.useState)({ loading: true, data: null, error: null });
-  (0, import_react6.useEffect)(() => {
+  const [state, setState] = (0, import_react7.useState)({ loading: true, data: null, error: null });
+  (0, import_react7.useEffect)(() => {
     if (!path) return void 0;
     let live = true;
     let timer;
@@ -13363,31 +13447,31 @@ var STATE = {
   attention: { tone: "bad", label: "Not connected" }
 };
 var phoneOf = (owner) => typeof owner === "string" ? owner.replace(/[:@].*$/, "").replace(/^(\d{6,})$/, "+$1") : "";
-var Badge = ({ text, tone = "muted" }) => (0, import_react6.createElement)("span", { className: "ou-badge", "data-tone": tone }, text);
-var Problem2 = ({ text }) => (0, import_react6.createElement)("p", { className: "ou-problem", role: "alert" }, text);
+var Badge = ({ text, tone = "muted" }) => (0, import_react7.createElement)("span", { className: "ou-badge", "data-tone": tone }, text);
+var Problem2 = ({ text }) => (0, import_react7.createElement)("p", { className: "ou-problem", role: "alert" }, text);
 function LiveChannel({ id }) {
   const instance = useOmniGet(id ? `/instances/${encodeURIComponent(id)}` : null, 3e4);
   const status = useOmniGet(id ? `/instances/${encodeURIComponent(id)}/status` : null, 8e3);
   const record = instance.data?.data;
   const live = status.data?.data;
-  if (instance.error) return (0, import_react6.createElement)(Problem2, { text: instance.error });
-  if (!record) return (0, import_react6.createElement)("div", { className: "ou-card ou-loading" }, t("Loading channel…"));
+  if (instance.error) return (0, import_react7.createElement)(Problem2, { text: instance.error });
+  if (!record) return (0, import_react7.createElement)("div", { className: "ou-card ou-loading" }, t("Loading channel…"));
   const state = stateOf(record, live);
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "ou-card ou-channel" },
-    (0, import_react6.createElement)(Tile, { type: record.channel, size: 38 }),
-    (0, import_react6.createElement)(
+    (0, import_react7.createElement)(Tile, { type: record.channel, size: 38 }),
+    (0, import_react7.createElement)(
       "div",
       { className: "ou-channel-body" },
-      (0, import_react6.createElement)("strong", null, record.name),
-      (0, import_react6.createElement)("span", { className: "ou-muted" }, [typeOf(record.channel).label ?? record.channel, live?.profileName ?? record.profileName, phoneOf(live?.ownerIdentifier ?? record.ownerIdentifier)].filter(Boolean).join(" · "))
+      (0, import_react7.createElement)("strong", null, record.name),
+      (0, import_react7.createElement)("span", { className: "ou-muted" }, [typeOf(record.channel).label ?? record.channel, live?.profileName ?? record.profileName, phoneOf(live?.ownerIdentifier ?? record.ownerIdentifier)].filter(Boolean).join(" · "))
     ),
-    (0, import_react6.createElement)(Badge, { text: t(STATE[state].label), tone: STATE[state].tone })
+    (0, import_react7.createElement)(Badge, { text: t(STATE[state].label), tone: STATE[state].tone })
   );
 }
 function QrSvg({ text, size = 208 }) {
-  const path = (0, import_react6.useMemo)(() => {
+  const path = (0, import_react7.useMemo)(() => {
     const code = qrcode_default(0, "L");
     code.addData(text);
     code.make();
@@ -13396,11 +13480,11 @@ function QrSvg({ text, size = 208 }) {
     for (let row = 0; row < count; row += 1) for (let col = 0; col < count; col += 1) if (code.isDark(row, col)) d += `M${col} ${row}h1v1h-1z`;
     return { d, count };
   }, [text]);
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "svg",
     { className: "ou-qr-svg", width: size, height: size, viewBox: `-2 -2 ${path.count + 4} ${path.count + 4}`, role: "img", "aria-label": t("QR code"), shapeRendering: "crispEdges" },
-    (0, import_react6.createElement)("rect", { x: -2, y: -2, width: path.count + 4, height: path.count + 4, fill: "#fff" }),
-    (0, import_react6.createElement)("path", { d: path.d, fill: "#000" })
+    (0, import_react7.createElement)("rect", { x: -2, y: -2, width: path.count + 4, height: path.count + 4, fill: "#fff" }),
+    (0, import_react7.createElement)("path", { d: path.d, fill: "#000" })
   );
 }
 function LiveQr({ channelId }) {
@@ -13411,24 +13495,24 @@ function LiveQr({ channelId }) {
   const code = qr2.data?.data?.qr;
   if (connected) {
     const live = status.data.data;
-    return (0, import_react6.createElement)(
+    return (0, import_react7.createElement)(
       "div",
       { className: "ou-card ou-qr ou-qr-done" },
-      (0, import_react6.createElement)("span", { className: "ou-qr-check", "aria-hidden": true }, "✓"),
-      (0, import_react6.createElement)("strong", null, t("Connected")),
-      (0, import_react6.createElement)("span", { className: "ou-muted" }, [live.profileName, phoneOf(live.ownerIdentifier)].filter(Boolean).join(" · "))
+      (0, import_react7.createElement)("span", { className: "ou-qr-check", "aria-hidden": true }, "✓"),
+      (0, import_react7.createElement)("strong", null, t("Connected")),
+      (0, import_react7.createElement)("span", { className: "ou-muted" }, [live.profileName, phoneOf(live.ownerIdentifier)].filter(Boolean).join(" · "))
     );
   }
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "ou-card ou-qr" },
-    code ? (0, import_react6.createElement)(QrSvg, { text: code }) : (0, import_react6.createElement)("div", { className: "ou-qr-wait" }, qr2.error ? (0, import_react6.createElement)(Problem2, { text: qr2.error }) : t("Waiting for a code…")),
-    (0, import_react6.createElement)(
+    code ? (0, import_react7.createElement)(QrSvg, { text: code }) : (0, import_react7.createElement)("div", { className: "ou-qr-wait" }, qr2.error ? (0, import_react7.createElement)(Problem2, { text: qr2.error }) : t("Waiting for a code…")),
+    (0, import_react7.createElement)(
       "div",
       { className: "ou-qr-help" },
-      (0, import_react6.createElement)("strong", null, t("Scan with WhatsApp")),
-      (0, import_react6.createElement)("span", { className: "ou-muted" }, t("On the phone: Settings → Linked devices → Link a device.")),
-      (0, import_react6.createElement)("span", { className: "ou-live" }, (0, import_react6.createElement)("span", { className: "ou-live-dot", "aria-hidden": true }), qr2.data?.data?.message || t("Live · refreshes by itself"))
+      (0, import_react7.createElement)("strong", null, t("Scan with WhatsApp")),
+      (0, import_react7.createElement)("span", { className: "ou-muted" }, t("On the phone: Settings → Linked devices → Link a device.")),
+      (0, import_react7.createElement)("span", { className: "ou-live" }, (0, import_react7.createElement)("span", { className: "ou-live-dot", "aria-hidden": true }), qr2.data?.data?.message || t("Live · refreshes by itself"))
     )
   );
 }
@@ -13436,24 +13520,24 @@ function LiveChat({ id, limit = 8 }) {
   const chat = useOmniGet(id ? `/chats/${encodeURIComponent(id)}` : null, 6e4);
   const messages = useOmniGet(id ? `/chats/${encodeURIComponent(id)}/messages?limit=${Math.min(30, Math.max(1, limit))}` : null, 1e4);
   const record = chat.data?.data;
-  if (chat.error) return (0, import_react6.createElement)(Problem2, { text: chat.error });
+  if (chat.error) return (0, import_react7.createElement)(Problem2, { text: chat.error });
   const items = [...messages.data?.items ?? []].sort((a, b2) => (Date.parse(a.platformTimestamp ?? a.createdAt) || 0) - (Date.parse(b2.platformTimestamp ?? b2.createdAt) || 0));
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "ou-card ou-chat" },
-    (0, import_react6.createElement)(
+    (0, import_react7.createElement)(
       "div",
       { className: "ou-chat-head" },
-      (0, import_react6.createElement)(Tile, { type: record?.channel, size: 26 }),
-      (0, import_react6.createElement)("strong", null, record?.name ?? t("Chat")),
-      record?.isGroup ? (0, import_react6.createElement)(Badge, { text: t("Group") }) : null
+      (0, import_react7.createElement)(Tile, { type: record?.channel, size: 26 }),
+      (0, import_react7.createElement)("strong", null, record?.name ?? t("Chat")),
+      record?.isGroup ? (0, import_react7.createElement)(Badge, { text: t("Group") }) : null
     ),
-    items.length === 0 ? (0, import_react6.createElement)("span", { className: "ou-muted" }, messages.loading ? t("Loading messages…") : t("no messages yet")) : (0, import_react6.createElement)("div", { className: "ou-chat-lines" }, items.map((message) => (0, import_react6.createElement)(
+    items.length === 0 ? (0, import_react7.createElement)("span", { className: "ou-muted" }, messages.loading ? t("Loading messages…") : t("no messages yet")) : (0, import_react7.createElement)("div", { className: "ou-chat-lines" }, items.map((message) => (0, import_react7.createElement)(
       "div",
       { key: message.id, className: "ou-chat-line", "data-me": message.isFromMe ? "" : void 0 },
-      message.isFromMe ? null : (0, import_react6.createElement)("span", { className: "ou-chat-who" }, message.senderDisplayName ?? ""),
-      (0, import_react6.createElement)("span", { className: "ou-chat-text" }, message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? "media"}]` : "")),
-      (0, import_react6.createElement)("span", { className: "ou-chat-at" }, relativeShort(Date.parse(message.platformTimestamp ?? message.createdAt) || Date.now()))
+      message.isFromMe ? null : (0, import_react7.createElement)("span", { className: "ou-chat-who" }, message.senderDisplayName ?? ""),
+      (0, import_react7.createElement)("span", { className: "ou-chat-text" }, message.textContent || message.transcription || (message.hasMedia ? `[${message.messageType ?? "media"}]` : "")),
+      (0, import_react7.createElement)("span", { className: "ou-chat-at" }, relativeShort(Date.parse(message.platformTimestamp ?? message.createdAt) || Date.now()))
     )))
   );
 }
@@ -13470,38 +13554,38 @@ var FIRST = ["name", "title", "displayName", "channel", "status", "state", "type
 function DataView2({ value }) {
   const list = Array.isArray(value) ? value : Array.isArray(value?.items) ? value.items : null;
   if (list) {
-    if (list.length === 0) return (0, import_react6.createElement)("span", { className: "ou-muted" }, t("Nothing here."));
-    if (!list.every((item) => item && typeof item === "object" && !Array.isArray(item))) return (0, import_react6.createElement)("span", null, list.slice(0, ROWS_MAX).map(cell).join(", "));
+    if (list.length === 0) return (0, import_react7.createElement)("span", { className: "ou-muted" }, t("Nothing here."));
+    if (!list.every((item) => item && typeof item === "object" && !Array.isArray(item))) return (0, import_react7.createElement)("span", null, list.slice(0, ROWS_MAX).map(cell).join(", "));
     const keys = new Set(list.slice(0, 20).flatMap((item) => Object.keys(item).filter((key) => PLAIN(item[key]))));
     const columns = [...FIRST.filter((key) => keys.has(key)), ...[...keys].filter((key) => !FIRST.includes(key))].slice(0, COLUMNS_MAX);
-    return (0, import_react6.createElement)(
-      import_react6.Fragment,
+    return (0, import_react7.createElement)(
+      import_react7.Fragment,
       null,
-      (0, import_react6.createElement)(Table, { columns, rows: list.slice(0, ROWS_MAX).map((item) => columns.map((key) => item[key])) }),
-      list.length > ROWS_MAX || value?.meta?.hasMore ? (0, import_react6.createElement)("span", { className: "ou-muted" }, t("First {count} shown.", { count: Math.min(list.length, ROWS_MAX) })) : null
+      (0, import_react7.createElement)(Table, { columns, rows: list.slice(0, ROWS_MAX).map((item) => columns.map((key) => item[key])) }),
+      list.length > ROWS_MAX || value?.meta?.hasMore ? (0, import_react7.createElement)("span", { className: "ou-muted" }, t("First {count} shown.", { count: Math.min(list.length, ROWS_MAX) })) : null
     );
   }
   const record = value && typeof value === "object" && !Array.isArray(value) ? value.data ?? value : null;
   if (record && typeof record === "object") {
     const pairs = Object.entries(record).filter(([, item]) => item !== null && item !== void 0 && item !== "").slice(0, 24);
-    return (0, import_react6.createElement)(KeyValue, { pairs: pairs.map(([label, item]) => ({ label, value: item })) });
+    return (0, import_react7.createElement)(KeyValue, { pairs: pairs.map(([label, item]) => ({ label, value: item })) });
   }
-  return (0, import_react6.createElement)("span", null, cell(value));
+  return (0, import_react7.createElement)("span", null, cell(value));
 }
 function Table({ columns, rows }) {
-  return (0, import_react6.createElement)(
+  return (0, import_react7.createElement)(
     "div",
     { className: "ou-table-wrap" },
-    (0, import_react6.createElement)(
+    (0, import_react7.createElement)(
       "table",
       { className: "ou-table" },
-      (0, import_react6.createElement)("thead", null, (0, import_react6.createElement)("tr", null, columns.map((column, index) => (0, import_react6.createElement)("th", { key: index }, column)))),
-      (0, import_react6.createElement)("tbody", null, rows.map((row, index) => (0, import_react6.createElement)("tr", { key: index }, columns.map((_, col) => (0, import_react6.createElement)("td", { key: col }, cell(row[col]))))))
+      (0, import_react7.createElement)("thead", null, (0, import_react7.createElement)("tr", null, columns.map((column, index) => (0, import_react7.createElement)("th", { key: index }, column)))),
+      (0, import_react7.createElement)("tbody", null, rows.map((row, index) => (0, import_react7.createElement)("tr", { key: index }, columns.map((_, col) => (0, import_react7.createElement)("td", { key: col }, cell(row[col]))))))
     )
   );
 }
 function KeyValue({ pairs }) {
-  return (0, import_react6.createElement)("dl", { className: "ou-kv" }, pairs.map(({ label, value }, index) => (0, import_react6.createElement)(import_react6.Fragment, { key: index }, (0, import_react6.createElement)("dt", null, label), (0, import_react6.createElement)("dd", null, cell(value)))));
+  return (0, import_react7.createElement)("dl", { className: "ou-kv" }, pairs.map(({ label, value }, index) => (0, import_react7.createElement)(import_react7.Fragment, { key: index }, (0, import_react7.createElement)("dt", null, label), (0, import_react7.createElement)("dd", null, cell(value)))));
 }
 var VERB = { GET: "Read", POST: "Ran", PUT: "Set", PATCH: "Changed", DELETE: "Deleted" };
 var INSTANCE = /^\/instances\/([0-9a-f-]{36})(?:\/(connect|pair|qr|restart|status|disconnect|logout))?$/i;
@@ -13537,14 +13621,14 @@ function OmniCallCard({ method, path, query, result, done }) {
   if (method === "GET" && action !== "qr") {
     const list = listOf(result?.data);
     const kind = kindOfPath(path) ?? (list ? kindOf(list) : "records");
-    return (0, import_react6.createElement)(
+    return (0, import_react7.createElement)(
       PeekCard,
       { kind, verb, title, count: list?.length, chips: chipsOf(query), state, failure },
-      state === "done" ? (0, import_react6.createElement)(Seen, { data: result?.data, kind: list && kind !== "records" ? kind : void 0 }) : null
+      state === "done" ? (0, import_react7.createElement)(Seen, { data: result?.data, kind: list && kind !== "records" ? kind : void 0 }) : null
     );
   }
-  const live = state !== "done" ? null : instance && ["connect", "pair", "qr", "restart"].includes(action) ? (0, import_react6.createElement)(LiveQr, { channelId: instance }) : instance ? (0, import_react6.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react6.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react6.createElement)(Seen, { data: result?.data });
-  return (0, import_react6.createElement)(PeekCard, { kind: method === "DELETE" ? "remove" : "write", verb, title, chips: chipsOf(query), state, failure, accent: true }, live);
+  const live = state !== "done" ? null : instance && ["connect", "pair", "qr", "restart"].includes(action) ? (0, import_react7.createElement)(LiveQr, { channelId: instance }) : instance ? (0, import_react7.createElement)(LiveChannel, { id: instance }) : method === "POST" && path === "/instances" && result?.data?.data?.id ? (0, import_react7.createElement)(LiveChannel, { id: result.data.data.id }) : (0, import_react7.createElement)(Seen, { data: result?.data });
+  return (0, import_react7.createElement)(PeekCard, { kind: method === "DELETE" ? "remove" : "write", verb, title, chips: chipsOf(query), state, failure, accent: true }, live);
 }
 var ACTED = { omni_send: "Sent a message", omni_react: "Reacted", omni_media: "Opened a file", omni_delete: "Deleted a message" };
 function OmniToolCard({ tool, arg, content, done }) {
@@ -13558,37 +13642,37 @@ function OmniToolCard({ tool, arg, content, done }) {
   const state = callState(done, failure);
   const items = result?.data?.items ?? [];
   if (tool === "omni_channels") {
-    return (0, import_react6.createElement)(
+    return (0, import_react7.createElement)(
       PeekCard,
       { kind: "channels", verb: t("Read"), title: t("Channels"), count: done ? items.length : void 0, unit: t("channels"), state, failure },
-      state === "done" ? (0, import_react6.createElement)(Seen, { data: items, kind: "channels" }) : null
+      state === "done" ? (0, import_react7.createElement)(Seen, { data: items, kind: "channels" }) : null
     );
   }
   if (tool === "omni_chats") {
     const chips = [["channel", arg("channel")], ["search", arg("search")], ["unread only", arg("unread_only") === "true" || arg("unread_only") === true ? t("yes") : void 0], ["limit", arg("limit")]].filter(([, value]) => value !== void 0 && value !== null && value !== "");
-    return (0, import_react6.createElement)(
+    return (0, import_react7.createElement)(
       PeekCard,
       { kind: "chats", verb: t("Read"), title: t("Chats"), count: done ? items.length : void 0, unit: t("chats"), chips, state, failure },
-      state === "done" ? (0, import_react6.createElement)(Seen, { data: items, kind: "chats" }) : null
+      state === "done" ? (0, import_react7.createElement)(Seen, { data: items, kind: "chats" }) : null
     );
   }
   if (tool === "omni_messages") {
     const chat = result?.data?.chat;
-    return (0, import_react6.createElement)(
+    return (0, import_react7.createElement)(
       PeekCard,
       { kind: "messages", verb: t("Read"), title: chat?.name ?? t("Chat"), count: done ? items.length : void 0, unit: t("messages"), state, failure },
-      state === "done" ? (0, import_react6.createElement)(Seen, { data: items, kind: "messages" }) : null
+      state === "done" ? (0, import_react7.createElement)(Seen, { data: items, kind: "messages" }) : null
     );
   }
   if (tool === "omni_connect") {
-    return (0, import_react6.createElement)(
+    return (0, import_react7.createElement)(
       PeekCard,
       { kind: "channels", verb: t("Ran"), title: t("Connect channel"), state, failure, accent: true },
-      state === "done" && result?.channelId ? (0, import_react6.createElement)(LiveQr, { channelId: result.channelId }) : null
+      state === "done" && result?.channelId ? (0, import_react7.createElement)(LiveQr, { channelId: result.channelId }) : null
     );
   }
   const acted = ACTED[tool];
-  if (acted) return (0, import_react6.createElement)(PeekCard, { kind: "messages", verb: t("Ran"), title: t(acted), state, failure, accent: true });
+  if (acted) return (0, import_react7.createElement)(PeekCard, { kind: "messages", verb: t("Ran"), title: t(acted), state, failure, accent: true });
   return null;
 }
 var OMNI_LIVE_CSS = `
@@ -13931,7 +14015,7 @@ var xterm_default = `/**
 `;
 
 // src/client/omni-terminal.js
-var import_react7 = require("react");
+var import_react8 = require("react");
 var READ_MS = 150;
 var ROWS = 12;
 var FONT = "13px ui-monospace, SFMono-Regular, Menlo, monospace";
@@ -13982,11 +14066,11 @@ function footFor({ state, step, entered, exitCode, error }) {
   return t("It stopped with exit code {code}. Read what it printed above, then try again.", { code: exitCode ?? "?" });
 }
 function InlineTerminal({ kind, id, title, onEnded, onClose }) {
-  const box = (0, import_react7.useRef)(null);
-  const [status, setStatus] = (0, import_react7.useState)({ state: "preparing", step: null, entered: false });
-  const ended = (0, import_react7.useRef)(onEnded);
+  const box = (0, import_react8.useRef)(null);
+  const [status, setStatus] = (0, import_react8.useState)({ state: "preparing", step: null, entered: false });
+  const ended = (0, import_react8.useRef)(onEnded);
   ended.current = onEnded;
-  (0, import_react7.useEffect)(() => {
+  (0, import_react8.useEffect)(() => {
     let alive = true;
     let timer = 0;
     let terminal = null;
@@ -14062,18 +14146,18 @@ function InlineTerminal({ kind, id, title, onEnded, onClose }) {
     };
   }, [kind, id]);
   const stopped = status.state === "failed" || status.state === "cancelled";
-  return (0, import_react7.createElement)(
+  return (0, import_react8.createElement)(
     "div",
     { className: `ot-term${stopped ? " ot-stopped" : ""}` },
-    (0, import_react7.createElement)(
+    (0, import_react8.createElement)(
       "div",
       { className: "ot-bar" },
-      (0, import_react7.createElement)("span", { className: "ot-dots", "aria-hidden": true }, (0, import_react7.createElement)("i"), (0, import_react7.createElement)("i"), (0, import_react7.createElement)("i")),
-      (0, import_react7.createElement)("span", { className: "ot-title" }, title),
-      onClose ? (0, import_react7.createElement)("button", { type: "button", className: "ot-close", onClick: onClose, "aria-label": t("Close the terminal") }, "×") : (0, import_react7.createElement)("span")
+      (0, import_react8.createElement)("span", { className: "ot-dots", "aria-hidden": true }, (0, import_react8.createElement)("i"), (0, import_react8.createElement)("i"), (0, import_react8.createElement)("i")),
+      (0, import_react8.createElement)("span", { className: "ot-title" }, title),
+      onClose ? (0, import_react8.createElement)("button", { type: "button", className: "ot-close", onClick: onClose, "aria-label": t("Close the terminal") }, "×") : (0, import_react8.createElement)("span")
     ),
-    (0, import_react7.createElement)("div", { className: "ot-screen", ref: box, role: "application", "aria-label": t("{title} terminal", { title }) }),
-    (0, import_react7.createElement)("div", { className: "ot-foot", role: "status" }, footFor(status))
+    (0, import_react8.createElement)("div", { className: "ot-screen", ref: box, role: "application", "aria-label": t("{title} terminal", { title }) }),
+    (0, import_react8.createElement)("div", { className: "ot-foot", role: "status" }, footFor(status))
   );
 }
 var OMNI_TERMINAL_CSS = xterm_default + `
@@ -14089,7 +14173,7 @@ var OMNI_TERMINAL_CSS = xterm_default + `
 `;
 
 // src/client/omni-connect.js
-var import_react8 = require("react");
+var import_react9 = require("react");
 var DEFAULT_POLL_MS = 2e3;
 var PAIRING_EVENT = "omni:pairing";
 var REMOTE = "remote";
@@ -14171,24 +14255,24 @@ function readRemote(text) {
   return { kind: "address", url: value };
 }
 function Choice({ id, open, icon, accent, title, sub, badge, tone, onToggle, children }) {
-  return (0, import_react8.createElement)(
+  return (0, import_react9.createElement)(
     "li",
     { className: `ox-choice${open ? " ox-open" : ""}` },
-    (0, import_react8.createElement)(
+    (0, import_react9.createElement)(
       "button",
       { type: "button", className: "ox-head", "aria-expanded": open, "aria-controls": `ox-body-${id}`, onClick: onToggle },
-      (0, import_react8.createElement)("span", { className: `ox-icon${accent ? " ox-accent" : ""}`, "aria-hidden": true }, icon),
-      (0, import_react8.createElement)("span", { className: "ox-what" }, (0, import_react8.createElement)("strong", null, title), sub ? (0, import_react8.createElement)("small", null, sub) : null),
-      badge ? (0, import_react8.createElement)("span", { className: `ox-badge ox-${tone}` }, badge) : null,
-      (0, import_react8.createElement)("span", { className: "ox-chev", "aria-hidden": true }, "›")
+      (0, import_react9.createElement)("span", { className: `ox-icon${accent ? " ox-accent" : ""}`, "aria-hidden": true }, icon),
+      (0, import_react9.createElement)("span", { className: "ox-what" }, (0, import_react9.createElement)("strong", null, title), sub ? (0, import_react9.createElement)("small", null, sub) : null),
+      badge ? (0, import_react9.createElement)("span", { className: `ox-badge ox-${tone}` }, badge) : null,
+      (0, import_react9.createElement)("span", { className: "ox-chev", "aria-hidden": true }, "›")
     ),
-    open ? (0, import_react8.createElement)("div", { className: "ox-body", id: `ox-body-${id}` }, children) : null
+    open ? (0, import_react9.createElement)("div", { className: "ox-body", id: `ox-body-${id}` }, children) : null
   );
 }
 function KeyEntry({ hint, disabled, onConnect, startOpen = false }) {
-  const [open, setOpen] = (0, import_react8.useState)(startOpen);
-  const [value, setValue] = (0, import_react8.useState)("");
-  if (!open) return (0, import_react8.createElement)("button", { type: "button", className: "ox-link", onClick: () => setOpen(true) }, t("Use it with an API key"));
+  const [open, setOpen] = (0, import_react9.useState)(startOpen);
+  const [value, setValue] = (0, import_react9.useState)("");
+  if (!open) return (0, import_react9.createElement)("button", { type: "button", className: "ox-link", onClick: () => setOpen(true) }, t("Use it with an API key"));
   const submit = (event) => {
     event.preventDefault();
     const key = value.trim();
@@ -14196,38 +14280,38 @@ function KeyEntry({ hint, disabled, onConnect, startOpen = false }) {
     setValue("");
     onConnect(key);
   };
-  return (0, import_react8.createElement)(
+  return (0, import_react9.createElement)(
     "form",
     { className: "ox-keyform", onSubmit: submit },
-    (0, import_react8.createElement)("p", { className: "ox-muted" }, t("Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.")),
-    hint ? (0, import_react8.createElement)("p", { className: "ox-muted" }, t("Find the key where that app keeps its settings.")) : null,
-    (0, import_react8.createElement)(
+    (0, import_react9.createElement)("p", { className: "ox-muted" }, t("Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.")),
+    hint ? (0, import_react9.createElement)("p", { className: "ox-muted" }, t("Find the key where that app keeps its settings.")) : null,
+    (0, import_react9.createElement)(
       "div",
       { className: "ox-field" },
-      (0, import_react8.createElement)("input", { className: "ox-input", type: "password", autoComplete: "off", spellCheck: false, value, placeholder: t("API key"), "aria-label": t("API key for this Omni"), onChange: (event) => setValue(event.target.value) }),
-      (0, import_react8.createElement)("button", { type: "submit", className: "oc-primary", disabled: disabled || value.trim() === "" }, t("Connect"))
+      (0, import_react9.createElement)("input", { className: "ox-input", type: "password", autoComplete: "off", spellCheck: false, value, placeholder: t("API key"), "aria-label": t("API key for this Omni"), onChange: (event) => setValue(event.target.value) }),
+      (0, import_react9.createElement)("button", { type: "submit", className: "oc-primary", disabled: disabled || value.trim() === "" }, t("Connect"))
     )
   );
 }
-var Linked = ({ text }) => (0, import_react8.createElement)("p", { className: "ox-linked", role: "status" }, (0, import_react8.createElement)("span", { "aria-hidden": true }, "✓"), text);
+var Linked = ({ text }) => (0, import_react9.createElement)("p", { className: "ox-linked", role: "status" }, (0, import_react9.createElement)("span", { "aria-hidden": true }, "✓"), text);
 function ConnectOmni({ onPaired, embedded = false } = {}) {
   const mac = onMac();
-  const [found, setFound] = (0, import_react8.useState)(null);
-  const [sandbox, setSandbox] = (0, import_react8.useState)(null);
-  const [open, setOpen] = (0, import_react8.useState)(null);
-  const [remote, setRemote] = (0, import_react8.useState)("");
-  const [pairing, setPairing] = (0, import_react8.useState)(null);
-  const [busy, setBusy] = (0, import_react8.useState)(null);
-  const [problem, setProblem] = (0, import_react8.useState)(null);
-  const [note, setNote] = (0, import_react8.useState)(null);
-  const [linked, setLinked] = (0, import_react8.useState)(null);
-  const [terminal, setTerminal] = (0, import_react8.useState)(null);
-  const [remoteKey, setRemoteKey] = (0, import_react8.useState)(null);
-  const alive = (0, import_react8.useRef)(true);
-  (0, import_react8.useEffect)(() => () => {
+  const [found, setFound] = (0, import_react9.useState)(null);
+  const [sandbox, setSandbox] = (0, import_react9.useState)(null);
+  const [open, setOpen] = (0, import_react9.useState)(null);
+  const [remote, setRemote] = (0, import_react9.useState)("");
+  const [pairing, setPairing] = (0, import_react9.useState)(null);
+  const [busy, setBusy] = (0, import_react9.useState)(null);
+  const [problem, setProblem] = (0, import_react9.useState)(null);
+  const [note, setNote] = (0, import_react9.useState)(null);
+  const [linked, setLinked] = (0, import_react9.useState)(null);
+  const [terminal, setTerminal] = (0, import_react9.useState)(null);
+  const [remoteKey, setRemoteKey] = (0, import_react9.useState)(null);
+  const alive = (0, import_react9.useRef)(true);
+  (0, import_react9.useEffect)(() => () => {
     alive.current = false;
   }, []);
-  (0, import_react8.useEffect)(() => {
+  (0, import_react9.useEffect)(() => {
     call("omni-link").then((link) => {
       if (alive.current && link?.pairing) setPairing(link.pairing);
     }, () => {
@@ -14252,7 +14336,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     window.addEventListener(PAIRING_EVENT, onPairing);
     return () => window.removeEventListener(PAIRING_EVENT, onPairing);
   }, []);
-  const pairingRow = (0, import_react8.useRef)(REMOTE);
+  const pairingRow = (0, import_react9.useRef)(REMOTE);
   const finish = async (row, origin, version = null) => {
     setPairing(null);
     setTerminal(null);
@@ -14262,7 +14346,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     });
     if (alive.current) onPaired?.(origin);
   };
-  (0, import_react8.useEffect)(() => {
+  (0, import_react9.useEffect)(() => {
     if (!pairing) return void 0;
     let timer = 0;
     const tick = async () => {
@@ -14337,32 +14421,32 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     });
   };
   if (pairing) {
-    return (0, import_react8.createElement)(
+    return (0, import_react9.createElement)(
       "section",
       { className: "ox-card", "aria-live": "polite" },
-      (0, import_react8.createElement)(
+      (0, import_react9.createElement)(
         "div",
         { className: "ox-steps" },
-        (0, import_react8.createElement)("h2", null, t("Approve this device")),
-        (0, import_react8.createElement)("p", { className: "ox-muted" }, pairing.waLink ? t("Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.") : t("Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.")),
-        (0, import_react8.createElement)("div", { className: "ox-code", "aria-label": t("Pairing code") }, pairing.code),
+        (0, import_react9.createElement)("h2", null, t("Approve this device")),
+        (0, import_react9.createElement)("p", { className: "ox-muted" }, pairing.waLink ? t("Scan the QR with your phone: it opens your WhatsApp chat with yourself with the code typed. Send it, and this page goes live.") : t("Open the approval page on your phone or here, and approve with Face ID, Touch ID, your fingerprint or a code.")),
+        (0, import_react9.createElement)("div", { className: "ox-code", "aria-label": t("Pairing code") }, pairing.code),
         // The operator owns the Omni, so approving from its own terminal works without a phone.
-        (0, import_react8.createElement)("p", { className: "ox-muted" }, t("Or, on the computer that runs that Omni:"), " ", (0, import_react8.createElement)("code", null, `omni approve ${pairing.code}`)),
-        (0, import_react8.createElement)(
+        (0, import_react9.createElement)("p", { className: "ox-muted" }, t("Or, on the computer that runs that Omni:"), " ", (0, import_react9.createElement)("code", null, `omni approve ${pairing.code}`)),
+        (0, import_react9.createElement)(
           "div",
           { className: "ox-row" },
-          pairing.waLink ? (0, import_react8.createElement)("a", { className: "oc-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, t("Open WhatsApp")) : null,
-          pairing.approveUrl ? (0, import_react8.createElement)("a", { className: pairing.waLink ? "oc-ghost" : "oc-primary", href: pairing.approveUrl, target: "_blank", rel: "noreferrer" }, t("Approve with Face ID or fingerprint")) : null,
-          (0, import_react8.createElement)("button", { type: "button", className: "oc-ghost", onClick: cancelPairing }, t("Cancel"))
+          pairing.waLink ? (0, import_react9.createElement)("a", { className: "oc-primary", href: pairing.waLink, target: "_blank", rel: "noreferrer" }, t("Open WhatsApp")) : null,
+          pairing.approveUrl ? (0, import_react9.createElement)("a", { className: pairing.waLink ? "oc-ghost" : "oc-primary", href: pairing.approveUrl, target: "_blank", rel: "noreferrer" }, t("Approve with Face ID or fingerprint")) : null,
+          (0, import_react9.createElement)("button", { type: "button", className: "oc-ghost", onClick: cancelPairing }, t("Cancel"))
         ),
-        (0, import_react8.createElement)("span", { className: "ox-wait" }, (0, import_react8.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for the code to arrive at {origin}…", { origin: pairing.origin })),
-        problem ? (0, import_react8.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
+        (0, import_react9.createElement)("span", { className: "ox-wait" }, (0, import_react9.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Waiting for the code to arrive at {origin}…", { origin: pairing.origin })),
+        problem ? (0, import_react9.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
       ),
-      (0, import_react8.createElement)(
+      (0, import_react9.createElement)(
         "div",
         { className: "ox-qr" },
-        (0, import_react8.createElement)(QrSvg, { text: pairing.waLink ?? pairing.approveUrl, size: 168 }),
-        (0, import_react8.createElement)("span", { className: "ox-muted" }, pairing.waLink ? t("Scan to send it on WhatsApp") : t("Scan to approve on your phone"))
+        (0, import_react9.createElement)(QrSvg, { text: pairing.waLink ?? pairing.approveUrl, size: 168 }),
+        (0, import_react9.createElement)("span", { className: "ox-muted" }, pairing.waLink ? t("Scan to send it on WhatsApp") : t("Scan to approve on your phone"))
       )
     );
   }
@@ -14370,13 +14454,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
   const hasSandbox = omnis.some((omni2) => omni2.source === "sandbox");
   const anyBusy = busy !== null || terminal !== null;
   const toggle = (row) => () => setOpen((current) => current === row ? null : row);
-  const terminalOn = (row) => terminal?.row === row ? (0, import_react8.createElement)(InlineTerminal, { key: `${terminal.kind}:${terminal.id ?? ""}`, kind: terminal.kind, id: terminal.id, title: terminal.title, onEnded: terminalEnded, onClose: () => setTerminal(null) }) : null;
-  const primary = (label, onClick, disabled = false) => (0, import_react8.createElement)("button", { type: "button", className: "oc-primary", disabled: disabled || anyBusy, onClick }, label);
-  const whatRuns = (command) => (0, import_react8.createElement)(
+  const terminalOn = (row) => terminal?.row === row ? (0, import_react9.createElement)(InlineTerminal, { key: `${terminal.kind}:${terminal.id ?? ""}`, kind: terminal.kind, id: terminal.id, title: terminal.title, onEnded: terminalEnded, onClose: () => setTerminal(null) }) : null;
+  const primary = (label, onClick, disabled = false) => (0, import_react9.createElement)("button", { type: "button", className: "oc-primary", disabled: disabled || anyBusy, onClick }, label);
+  const whatRuns = (command) => (0, import_react9.createElement)(
     "details",
     { className: "ox-more" },
-    (0, import_react8.createElement)("summary", null, t("What runs")),
-    (0, import_react8.createElement)("code", null, command),
+    (0, import_react9.createElement)("summary", null, t("What runs")),
+    (0, import_react9.createElement)("code", null, command),
     " ",
     t("runs in a terminal you can watch. Nothing runs until you press Enter.")
   );
@@ -14384,22 +14468,22 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     const isLinked = linked?.row === omni2.id;
     const view = foundRow(omni2, { mac, linked: isLinked });
     let body;
-    if (isLinked) body = (0, import_react8.createElement)(Linked, { text: linked.version ? t("Connected to Omni {version}", { version: linked.version }) : t("Connected to {origin}", { origin: linked.origin }) });
+    if (isLinked) body = (0, import_react9.createElement)(Linked, { text: linked.version ? t("Connected to Omni {version}", { version: linked.version }) : t("Connected to {origin}", { origin: linked.origin }) });
     else if (terminal?.row === omni2.id) body = terminalOn(omni2.id);
     else {
-      const action = view.action === "update" ? (0, import_react8.createElement)("div", null, primary(t("Update and connect"), () => openTerminal(omni2.id, "update", omni2.id)), whatRuns("omni update --yes")) : view.action === "reinstall" ? (0, import_react8.createElement)("div", null, primary(t("Update and connect"), () => openTerminal(omni2.id, "install")), whatRuns(`bun x --bun @automagik/omni@${omni2.updateTo} install --sandbox --at-login`)) : view.action === "use" ? primary(busy === omni2.id ? t("Connecting…") : t("Use it"), () => run(omni2.id, "omni-discover-use", { id: omni2.id })) : view.action === "connect" ? primary(busy === omni2.id ? t("Connecting…") : t("Connect"), () => run(omni2.id, "omni-discover-use", { id: omni2.id })) : view.action === "elsewhere" && !hasSandbox ? (0, import_react8.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => setOpen(LOCAL) }, mac ? t("Run Omni on this Mac") : t("Run Omni on this computer")) : null;
-      body = (0, import_react8.createElement)(
+      const action = view.action === "update" ? (0, import_react9.createElement)("div", null, primary(t("Update and connect"), () => openTerminal(omni2.id, "update", omni2.id)), whatRuns("omni update --yes")) : view.action === "reinstall" ? (0, import_react9.createElement)("div", null, primary(t("Update and connect"), () => openTerminal(omni2.id, "install")), whatRuns(`bun x --bun @automagik/omni@${omni2.updateTo} install --sandbox --at-login`)) : view.action === "use" ? primary(busy === omni2.id ? t("Connecting…") : t("Use it"), () => run(omni2.id, "omni-discover-use", { id: omni2.id })) : view.action === "connect" ? primary(busy === omni2.id ? t("Connecting…") : t("Connect"), () => run(omni2.id, "omni-discover-use", { id: omni2.id })) : view.action === "elsewhere" && !hasSandbox ? (0, import_react9.createElement)("button", { type: "button", className: "oc-ghost", onClick: () => setOpen(LOCAL) }, mac ? t("Run Omni on this Mac") : t("Run Omni on this computer")) : null;
+      body = (0, import_react9.createElement)(
         "div",
         null,
-        view.note ? (0, import_react8.createElement)("p", { className: "ox-muted" }, view.note) : null,
-        action ? (0, import_react8.createElement)("div", { className: "ox-row ox-act" }, action) : null,
-        view.keyEntry ? (0, import_react8.createElement)(KeyEntry, { hint: view.keyHint, disabled: anyBusy, onConnect: (apiKey) => run(omni2.id, "omni-discover-key", { id: omni2.id, apiKey }) }) : null
+        view.note ? (0, import_react9.createElement)("p", { className: "ox-muted" }, view.note) : null,
+        action ? (0, import_react9.createElement)("div", { className: "ox-row ox-act" }, action) : null,
+        view.keyEntry ? (0, import_react9.createElement)(KeyEntry, { hint: view.keyHint, disabled: anyBusy, onConnect: (apiKey) => run(omni2.id, "omni-discover-key", { id: omni2.id, apiKey }) }) : null
       );
     }
-    return (0, import_react8.createElement)(Choice, { key: omni2.id, id: omni2.id, open: open === omni2.id, icon: "◉", title: view.title, sub: view.sub, badge: view.badge, tone: view.tone, onToggle: toggle(omni2.id) }, body);
+    return (0, import_react9.createElement)(Choice, { key: omni2.id, id: omni2.id, open: open === omni2.id, icon: "◉", title: view.title, sub: view.sub, badge: view.badge, tone: view.tone, onToggle: toggle(omni2.id) }, body);
   });
   const remoteLinked = linked?.row === REMOTE;
-  rows.push((0, import_react8.createElement)(Choice, {
+  rows.push((0, import_react9.createElement)(Choice, {
     key: REMOTE,
     id: REMOTE,
     open: open === REMOTE,
@@ -14409,13 +14493,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     badge: remoteLinked ? t("Connected") : null,
     tone: "ok",
     onToggle: toggle(REMOTE)
-  }, remoteLinked ? (0, import_react8.createElement)(Linked, { text: t("Connected to {origin}", { origin: linked.origin }) }) : (0, import_react8.createElement)(
+  }, remoteLinked ? (0, import_react9.createElement)(Linked, { text: t("Connected to {origin}", { origin: linked.origin }) }) : (0, import_react9.createElement)(
     "div",
     null,
-    (0, import_react8.createElement)(
+    (0, import_react9.createElement)(
       "form",
       { className: "ox-field", onSubmit: submitRemote },
-      (0, import_react8.createElement)("input", {
+      (0, import_react9.createElement)("input", {
         className: "ox-input",
         type: "text",
         inputMode: "url",
@@ -14429,14 +14513,14 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
           setRemoteKey(null);
         }
       }),
-      (0, import_react8.createElement)("button", { type: "submit", className: "oc-primary", disabled: anyBusy || readRemote(remote) === null }, busy === REMOTE ? t("Connecting…") : t("Continue"))
+      (0, import_react9.createElement)("button", { type: "submit", className: "oc-primary", disabled: anyBusy || readRemote(remote) === null }, busy === REMOTE ? t("Connecting…") : t("Continue"))
     ),
-    (0, import_react8.createElement)("p", { className: "ox-muted ox-hint" }, t("No address? Text connect to yourself on WhatsApp, and your Omni replies with a link that connects this app.")),
-    remoteKey ? (0, import_react8.createElement)(KeyEntry, { key: remoteKey.url, startOpen: true, disabled: anyBusy, onConnect: (apiKey) => run(REMOTE, "omni-discover-key", { url: remoteKey.url, apiKey }) }) : null
+    (0, import_react9.createElement)("p", { className: "ox-muted ox-hint" }, t("No address? Text connect to yourself on WhatsApp, and your Omni replies with a link that connects this app.")),
+    remoteKey ? (0, import_react9.createElement)(KeyEntry, { key: remoteKey.url, startOpen: true, disabled: anyBusy, onConnect: (apiKey) => run(REMOTE, "omni-discover-key", { url: remoteKey.url, apiKey }) }) : null
   )));
   if (!hasSandbox) {
     const localLinked = linked?.row === LOCAL;
-    rows.push((0, import_react8.createElement)(Choice, {
+    rows.push((0, import_react9.createElement)(Choice, {
       key: LOCAL,
       id: LOCAL,
       open: open === LOCAL,
@@ -14447,27 +14531,27 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       badge: localLinked ? t("Connected") : null,
       tone: "ok",
       onToggle: toggle(LOCAL)
-    }, localLinked ? (0, import_react8.createElement)(Linked, { text: linked.version ? t("Connected to Omni {version}", { version: linked.version }) : t("Connected to {origin}", { origin: linked.origin }) }) : terminal?.row === LOCAL ? terminalOn(LOCAL) : (0, import_react8.createElement)(
+    }, localLinked ? (0, import_react9.createElement)(Linked, { text: linked.version ? t("Connected to Omni {version}", { version: linked.version }) : t("Connected to {origin}", { origin: linked.origin }) }) : terminal?.row === LOCAL ? terminalOn(LOCAL) : (0, import_react9.createElement)(
       "div",
       null,
-      (0, import_react8.createElement)("p", { className: "ox-muted" }, mac ? t("It starts with your Mac, stays on it, and never touches another Omni.") : t("It starts with your computer, stays on it, and never touches another Omni.")),
-      (0, import_react8.createElement)("div", { className: "ox-row ox-act" }, primary(t("Set it up"), () => openTerminal(LOCAL, "install"))),
-      sandbox?.home ? (0, import_react8.createElement)("details", { className: "ox-more" }, (0, import_react8.createElement)("summary", null, t("Where it lives")), t("{home}, with its own database, NATS and ports.", { home: sandbox.home })) : null
+      (0, import_react9.createElement)("p", { className: "ox-muted" }, mac ? t("It starts with your Mac, stays on it, and never touches another Omni.") : t("It starts with your computer, stays on it, and never touches another Omni.")),
+      (0, import_react9.createElement)("div", { className: "ox-row ox-act" }, primary(t("Set it up"), () => openTerminal(LOCAL, "install"))),
+      sandbox?.home ? (0, import_react9.createElement)("details", { className: "ox-more" }, (0, import_react9.createElement)("summary", null, t("Where it lives")), t("{home}, with its own database, NATS and ports.", { home: sandbox.home })) : null
     )));
   }
   const lede = linked ? null : omnis.length > 0 ? mac ? t("We found an Omni on this Mac. Use it, or pick another.") : t("We found an Omni on this computer. Use it, or pick another.") : t("Where does your Omni live?");
-  return (0, import_react8.createElement)(
+  return (0, import_react9.createElement)(
     "section",
     { className: "ox-card ox-start" },
-    embedded ? null : (0, import_react8.createElement)("span", { className: "ox-mark", "aria-hidden": true }, (0, import_react8.createElement)(OmniMark, { size: 34 })),
-    (0, import_react8.createElement)(
+    embedded ? null : (0, import_react9.createElement)("span", { className: "ox-mark", "aria-hidden": true }, (0, import_react9.createElement)(OmniMark, { size: 34 })),
+    (0, import_react9.createElement)(
       "div",
       { className: "ox-steps" },
-      embedded ? null : (0, import_react8.createElement)("h2", null, t("Connect your Omni")),
-      lede ? (0, import_react8.createElement)("p", { className: "ox-muted ox-lede" }, lede) : null,
-      found === null ? (0, import_react8.createElement)("span", { className: "ox-wait" }, (0, import_react8.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Looking for Omnis on this computer…")) : (0, import_react8.createElement)("ul", { className: "ox-choices" }, rows),
-      note ? (0, import_react8.createElement)("p", { className: "ox-muted ox-note", role: "status" }, note) : null,
-      problem ? (0, import_react8.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
+      embedded ? null : (0, import_react9.createElement)("h2", null, t("Connect your Omni")),
+      lede ? (0, import_react9.createElement)("p", { className: "ox-muted ox-lede" }, lede) : null,
+      found === null ? (0, import_react9.createElement)("span", { className: "ox-wait" }, (0, import_react9.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Looking for Omnis on this computer…")) : (0, import_react9.createElement)("ul", { className: "ox-choices" }, rows),
+      note ? (0, import_react9.createElement)("p", { className: "ox-muted ox-note", role: "status" }, note) : null,
+      problem ? (0, import_react9.createElement)("p", { className: "ox-problem", role: "alert" }, problem) : null
     )
   );
 }
@@ -14515,7 +14599,7 @@ var OMNI_CONNECT_CSS = OMNI_UPDATE_CSS + OMNI_TERMINAL_CSS + `
 `;
 
 // src/client/connect-step.js
-var import_react9 = require("react");
+var import_react10 = require("react");
 var import_react_dom = require("react-dom");
 var RAIL = [["omni-welcome", "Welcome"], ["omni-connect", "Connect Omni"], ["omni-connect-ai", "Connect AI"]];
 var ANNOUNCED = /* @__PURE__ */ Symbol.for("automagik.omni.onboarding-steps");
@@ -14546,10 +14630,10 @@ var OCTOPUS_SVG = `<svg class="oxs-octo" viewBox="0 0 100 100" aria-hidden="true
 <ellipse cx="31" cy="50" rx="5" ry="2.8" fill="#e98bbf" opacity=".55"/><ellipse cx="69" cy="50" rx="5" ry="2.8" fill="#e98bbf" opacity=".55"/>
 </svg>`;
 function useGlitch() {
-  const [on2, setOn] = (0, import_react9.useState)(false);
-  const timer = (0, import_react9.useRef)(0);
-  (0, import_react9.useEffect)(() => () => clearTimeout(timer.current), []);
-  const glitch = (0, import_react9.useCallback)(() => {
+  const [on2, setOn] = (0, import_react10.useState)(false);
+  const timer = (0, import_react10.useRef)(0);
+  (0, import_react10.useEffect)(() => () => clearTimeout(timer.current), []);
+  const glitch = (0, import_react10.useCallback)(() => {
     if (reducedMotion()) return;
     setOn(true);
     clearTimeout(timer.current);
@@ -14558,8 +14642,8 @@ function useGlitch() {
   return [on2, glitch];
 }
 function useTypewriter(text) {
-  const [shown, setShown] = (0, import_react9.useState)(() => reducedMotion() ? text : "");
-  (0, import_react9.useEffect)(() => {
+  const [shown, setShown] = (0, import_react10.useState)(() => reducedMotion() ? text : "");
+  (0, import_react10.useEffect)(() => {
     if (reducedMotion()) {
       setShown(text);
       return void 0;
@@ -14578,8 +14662,8 @@ function useTypewriter(text) {
   return shown;
 }
 function Stage({ title, speech, glitching, rail = true, children }) {
-  const titleRef = (0, import_react9.useRef)(null);
-  (0, import_react9.useEffect)(() => {
+  const titleRef = (0, import_react10.useRef)(null);
+  (0, import_react10.useEffect)(() => {
     const root = document.getElementById("root");
     if (root === null) return void 0;
     const previous = root.inert;
@@ -14588,44 +14672,44 @@ function Stage({ title, speech, glitching, rail = true, children }) {
       root.inert = previous;
     };
   }, []);
-  (0, import_react9.useEffect)(() => {
+  (0, import_react10.useEffect)(() => {
     titleRef.current?.focus();
   }, [title]);
   const shown = useTypewriter(speech);
-  return (0, import_react_dom.createPortal)((0, import_react9.createElement)(
+  return (0, import_react_dom.createPortal)((0, import_react10.createElement)(
     "div",
     { className: "oxs-overlay", role: "dialog", "aria-modal": "true", "aria-labelledby": "oxs-title" },
-    (0, import_react9.createElement)(
+    (0, import_react10.createElement)(
       "div",
       { className: `oxs-stage${glitching ? " oxs-glitch" : ""}` },
-      (0, import_react9.createElement)("div", { dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } }),
-      (0, import_react9.createElement)(
+      (0, import_react10.createElement)("div", { dangerouslySetInnerHTML: { __html: OCTOPUS_SVG } }),
+      (0, import_react10.createElement)(
         "div",
         { className: "oxs-bubble" },
-        (0, import_react9.createElement)("span", { className: "oxs-hidden", role: "status" }, speech),
-        (0, import_react9.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react9.createElement)("span", { className: "oxs-caret" }) : null)
+        (0, import_react10.createElement)("span", { className: "oxs-hidden", role: "status" }, speech),
+        (0, import_react10.createElement)("span", { "aria-hidden": "true" }, shown, shown.length < speech.length ? (0, import_react10.createElement)("span", { className: "oxs-caret" }) : null)
       ),
-      rail ? (0, import_react9.createElement)("ol", { className: "oxs-rail", "aria-label": t("Setup steps") }, railSteps().map(([id, label], index, steps) => {
+      rail ? (0, import_react10.createElement)("ol", { className: "oxs-rail", "aria-label": t("Setup steps") }, railSteps().map(([id, label], index, steps) => {
         const at2 = steps.findIndex(([step]) => step === CONNECT_STEP.id);
-        return (0, import_react9.createElement)("li", {
+        return (0, import_react10.createElement)("li", {
           key: id,
           className: index < at2 ? "oxs-done" : index === at2 ? "oxs-on" : "",
           "aria-current": index === at2 ? "step" : void 0
         }, t(label));
       })) : null,
-      (0, import_react9.createElement)(
+      (0, import_react10.createElement)(
         "main",
         { className: "oxs-card" },
-        (0, import_react9.createElement)("h1", { id: "oxs-title", ref: titleRef, tabIndex: -1 }, title),
+        (0, import_react10.createElement)("h1", { id: "oxs-title", ref: titleRef, tabIndex: -1 }, title),
         children
       )
     )
   ), document.body);
 }
 function useGate(props) {
-  const first = (0, import_react9.useRef)(props);
-  const [state, setState] = (0, import_react9.useState)(void 0);
-  (0, import_react9.useEffect)(() => {
+  const first = (0, import_react10.useRef)(props);
+  const [state, setState] = (0, import_react10.useState)(void 0);
+  (0, import_react10.useEffect)(() => {
     let alive = true;
     gateConnect(first.current, { request: call }).then((next) => {
       if (alive) setState(next);
@@ -14639,47 +14723,47 @@ function useGate(props) {
 function ConnectOmniStep(props) {
   const state = useGate(props);
   const [glitching, glitch] = useGlitch();
-  const [paired, setPaired] = (0, import_react9.useState)(null);
-  const finished = (0, import_react9.useRef)(false);
+  const [paired, setPaired] = (0, import_react10.useState)(null);
+  const finished = (0, import_react10.useRef)(false);
   const onDemand = props.onDemand === true;
-  (0, import_react9.useEffect)(() => {
+  (0, import_react10.useEffect)(() => {
     if (state) glitch();
   }, [state, glitch]);
-  (0, import_react9.useEffect)(() => state && !onDemand ? noteStepShown() : void 0, [state, onDemand]);
-  const complete = (0, import_react9.useCallback)(() => {
+  (0, import_react10.useEffect)(() => state && !onDemand ? noteStepShown() : void 0, [state, onDemand]);
+  const complete = (0, import_react10.useCallback)(() => {
     if (finished.current) return;
     finished.current = true;
     props.complete();
   }, [props]);
-  const skip = (0, import_react9.useCallback)(() => {
+  const skip = (0, import_react10.useCallback)(() => {
     if (finished.current) return;
     finished.current = true;
     if (onDemand) props.complete();
     else void skipConnect({ complete: props.complete });
   }, [props, onDemand]);
-  const onPaired = (0, import_react9.useCallback)((origin) => {
+  const onPaired = (0, import_react10.useCallback)((origin) => {
     setPaired(origin);
     glitch();
   }, [glitch]);
   if (!state) return null;
   if (isConnected(state.link) && !onDemand) {
     const origin = state.link.origin ?? "";
-    return (0, import_react9.createElement)(
+    return (0, import_react10.createElement)(
       Stage,
       { title: t("Omni connected"), speech: origin ? t("Connected to {origin}! Now I can see your channels.", { origin }) : t("Your Omni is connected. Now I can see your channels."), glitching },
-      (0, import_react9.createElement)("button", { type: "button", className: "oxs-primary", onClick: complete }, t("Continue"))
+      (0, import_react10.createElement)("button", { type: "button", className: "oxs-primary", onClick: complete }, t("Continue"))
     );
   }
   const next = continueButton(paired !== null, globalThis, { onDemand });
-  return (0, import_react9.createElement)(
+  return (0, import_react10.createElement)(
     Stage,
     { title: t("Connect your Omni"), speech: paired !== null ? t("Connected to {origin}! Now I can see your channels.", { origin: paired }) : t("Show me your Omni, so I can see your channels."), glitching, rail: !onDemand },
-    (0, import_react9.createElement)(ConnectOmni, { onPaired, embedded: true }),
-    (0, import_react9.createElement)(
+    (0, import_react10.createElement)(ConnectOmni, { onPaired, embedded: true }),
+    (0, import_react10.createElement)(
       "div",
       { className: "oxs-actions" },
-      (0, import_react9.createElement)("button", { type: "button", className: "oxs-quiet", onClick: skip }, onDemand ? t("Close") : t("Skip for now")),
-      (0, import_react9.createElement)("button", { type: "button", className: "oxs-primary", disabled: next.disabled, title: next.title, onClick: complete }, next.label)
+      (0, import_react10.createElement)("button", { type: "button", className: "oxs-quiet", onClick: skip }, onDemand ? t("Close") : t("Skip for now")),
+      (0, import_react10.createElement)("button", { type: "button", className: "oxs-primary", disabled: next.disabled, title: next.title, onClick: complete }, next.label)
     )
   );
 }
@@ -14791,7 +14875,7 @@ function registerConnectStep(ctx) {
 }
 
 // src/client/omni-settings.js
-var import_react10 = require("react");
+var import_react11 = require("react");
 var SETTINGS_SECTION = Object.freeze({ id: "omni", order: 60 });
 function settingsView(info, { confirming = false } = {}) {
   if (!info?.linked && !info?.configured) {
@@ -14886,14 +14970,14 @@ async function saveThreadDefault(id, value, { request = call } = {}) {
   return request("omni-thread-defaults-save", { [id]: id === "askFirstDefault" ? value !== "off" : value });
 }
 function ThreadDefaultsCard() {
-  const [defaults, setDefaults] = (0, import_react10.useState)(void 0);
-  const [busy, setBusy] = (0, import_react10.useState)(false);
-  const [note, setNote] = (0, import_react10.useState)(null);
-  const alive = (0, import_react10.useRef)(true);
-  (0, import_react10.useEffect)(() => () => {
+  const [defaults, setDefaults] = (0, import_react11.useState)(void 0);
+  const [busy, setBusy] = (0, import_react11.useState)(false);
+  const [note, setNote] = (0, import_react11.useState)(null);
+  const alive = (0, import_react11.useRef)(true);
+  (0, import_react11.useEffect)(() => () => {
     alive.current = false;
   }, []);
-  (0, import_react10.useEffect)(() => {
+  (0, import_react11.useEffect)(() => {
     call("omni-thread-defaults").then((reply) => {
       if (alive.current) setDefaults(reply);
     }, () => {
@@ -14915,41 +14999,41 @@ function ThreadDefaultsCard() {
     }
   };
   if (defaults === void 0) return null;
-  return (0, import_react10.createElement)(ThreadDefaultsFields, { view: threadDefaultsView(defaults), busy, note, onChange: change });
+  return (0, import_react11.createElement)(ThreadDefaultsFields, { view: threadDefaultsView(defaults), busy, note, onChange: change });
 }
 function ThreadDefaultsFields({ view, busy = false, note = null, onChange = () => {
 } }) {
-  return (0, import_react10.createElement)(
+  return (0, import_react11.createElement)(
     "section",
     { className: "oset-card" },
-    (0, import_react10.createElement)(
+    (0, import_react11.createElement)(
       "div",
       { className: "oset-text" },
-      (0, import_react10.createElement)("strong", null, view.title),
-      view.lines.map((line) => (0, import_react10.createElement)("p", { key: line, className: "oset-muted" }, line)),
-      view.readOnly ? (0, import_react10.createElement)("p", { className: "oset-problem", role: "status" }, hostText(view.readOnly)) : null,
-      view.fields.map((field) => (0, import_react10.createElement)(
+      (0, import_react11.createElement)("strong", null, view.title),
+      view.lines.map((line) => (0, import_react11.createElement)("p", { key: line, className: "oset-muted" }, line)),
+      view.readOnly ? (0, import_react11.createElement)("p", { className: "oset-problem", role: "status" }, hostText(view.readOnly)) : null,
+      view.fields.map((field) => (0, import_react11.createElement)(
         "label",
         { key: field.id, className: "oset-field" },
-        (0, import_react10.createElement)("span", { className: "oset-label" }, field.label),
-        (0, import_react10.createElement)(
+        (0, import_react11.createElement)("span", { className: "oset-label" }, field.label),
+        (0, import_react11.createElement)(
           "select",
           { className: "oset-select", value: field.value, disabled: busy || view.readOnly !== null, "data-setting": field.id, onChange: (event) => onChange(field.id, event.target.value) },
-          field.options.map((option) => (0, import_react10.createElement)("option", { key: option.value, value: option.value }, option.label))
+          field.options.map((option) => (0, import_react11.createElement)("option", { key: option.value, value: option.value }, option.label))
         ),
-        field.note ? (0, import_react10.createElement)("span", { className: "oset-muted" }, field.note) : null
+        field.note ? (0, import_react11.createElement)("span", { className: "oset-muted" }, field.note) : null
       )),
-      note ? (0, import_react10.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
+      note ? (0, import_react11.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
     )
   );
 }
 function FreeReactionsCard() {
-  const [list, setList] = (0, import_react10.useState)(void 0);
-  const [text, setText] = (0, import_react10.useState)("");
-  const [busy, setBusy] = (0, import_react10.useState)(false);
-  const [note, setNote] = (0, import_react10.useState)(null);
-  const alive = (0, import_react10.useRef)(true);
-  (0, import_react10.useEffect)(() => () => {
+  const [list, setList] = (0, import_react11.useState)(void 0);
+  const [text, setText] = (0, import_react11.useState)("");
+  const [busy, setBusy] = (0, import_react11.useState)(false);
+  const [note, setNote] = (0, import_react11.useState)(null);
+  const alive = (0, import_react11.useRef)(true);
+  (0, import_react11.useEffect)(() => () => {
     alive.current = false;
   }, []);
   const show = (reply) => {
@@ -14957,7 +15041,7 @@ function FreeReactionsCard() {
     setList(reply);
     setText(reply.freeReactions.join(" "));
   };
-  (0, import_react10.useEffect)(() => {
+  (0, import_react11.useEffect)(() => {
     call("omni-free-reactions").then(show, () => {
     });
   }, []);
@@ -14974,35 +15058,35 @@ function FreeReactionsCard() {
     }
   };
   if (list === void 0) return null;
-  return (0, import_react10.createElement)(
+  return (0, import_react11.createElement)(
     "section",
     { className: "oset-card" },
-    (0, import_react10.createElement)(
+    (0, import_react11.createElement)(
       "div",
       { className: "oset-text" },
-      (0, import_react10.createElement)("strong", null, t("Reactions without asking")),
-      (0, import_react10.createElement)("p", { className: "oset-muted" }, t("In a chat thread, these reactions go without asking you first. Any other reaction asks, unless you let every reaction go above or in the thread's menu.")),
-      (0, import_react10.createElement)("input", { className: "oset-input", value: text, disabled: busy, "aria-label": t("Reactions without asking"), onChange: (event) => setText(event.target.value) }),
-      note ? (0, import_react10.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
+      (0, import_react11.createElement)("strong", null, t("Reactions without asking")),
+      (0, import_react11.createElement)("p", { className: "oset-muted" }, t("In a chat thread, these reactions go without asking you first. Any other reaction asks, unless you let every reaction go above or in the thread's menu.")),
+      (0, import_react11.createElement)("input", { className: "oset-input", value: text, disabled: busy, "aria-label": t("Reactions without asking"), onChange: (event) => setText(event.target.value) }),
+      note ? (0, import_react11.createElement)("p", { className: note.ok ? "oset-muted" : "oset-problem", role: note.ok ? "status" : "alert" }, note.text) : null
     ),
-    (0, import_react10.createElement)(
+    (0, import_react11.createElement)(
       "div",
       { className: "oset-actions" },
-      (0, import_react10.createElement)("button", { type: "button", className: "oset-button oset-primary", disabled: busy, onClick: () => save(false) }, t("Save")),
-      (0, import_react10.createElement)("button", { type: "button", className: "oset-button", disabled: busy, onClick: () => save(true) }, t("Reset"))
+      (0, import_react11.createElement)("button", { type: "button", className: "oset-button oset-primary", disabled: busy, onClick: () => save(false) }, t("Save")),
+      (0, import_react11.createElement)("button", { type: "button", className: "oset-button", disabled: busy, onClick: () => save(true) }, t("Reset"))
     )
   );
 }
 function OmniSettingsSection({ close }) {
-  const [info, setInfo] = (0, import_react10.useState)(void 0);
-  const [confirming, setConfirming] = (0, import_react10.useState)(false);
-  const [busy, setBusy] = (0, import_react10.useState)(false);
-  const [problem, setProblem] = (0, import_react10.useState)(null);
-  const alive = (0, import_react10.useRef)(true);
-  (0, import_react10.useEffect)(() => () => {
+  const [info, setInfo] = (0, import_react11.useState)(void 0);
+  const [confirming, setConfirming] = (0, import_react11.useState)(false);
+  const [busy, setBusy] = (0, import_react11.useState)(false);
+  const [problem, setProblem] = (0, import_react11.useState)(null);
+  const alive = (0, import_react11.useRef)(true);
+  (0, import_react11.useEffect)(() => () => {
     alive.current = false;
   }, []);
-  (0, import_react10.useEffect)(() => {
+  (0, import_react11.useEffect)(() => {
     call("omni-link-info").then((reply) => {
       if (alive.current) setInfo(reply);
     }, () => {
@@ -15024,20 +15108,20 @@ function OmniSettingsSection({ close }) {
     }
   };
   const view = info === void 0 ? null : settingsView(info, { confirming });
-  return (0, import_react10.createElement)(
+  return (0, import_react11.createElement)(
     "div",
     { className: "oset-page" },
-    (0, import_react10.createElement)("h2", { className: "oset-heading" }, "Omni"),
-    view === null ? (0, import_react10.createElement)("p", { className: "oset-muted" }, t("Looking for your Omni…")) : (0, import_react10.createElement)(
+    (0, import_react11.createElement)("h2", { className: "oset-heading" }, "Omni"),
+    view === null ? (0, import_react11.createElement)("p", { className: "oset-muted" }, t("Looking for your Omni…")) : (0, import_react11.createElement)(
       "section",
       { className: "oset-card" },
-      (0, import_react10.createElement)(
+      (0, import_react11.createElement)(
         "div",
         { className: "oset-text" },
-        (0, import_react10.createElement)("strong", null, view.title),
-        view.lines.map((line) => (0, import_react10.createElement)("p", { key: line, className: "oset-muted" }, line))
+        (0, import_react11.createElement)("strong", null, view.title),
+        view.lines.map((line) => (0, import_react11.createElement)("p", { key: line, className: "oset-muted" }, line))
       ),
-      (0, import_react10.createElement)("div", { className: "oset-actions" }, view.actions.map((action) => (0, import_react10.createElement)("button", {
+      (0, import_react11.createElement)("div", { className: "oset-actions" }, view.actions.map((action) => (0, import_react11.createElement)("button", {
         key: action.id,
         type: "button",
         className: `oset-button${action.primary ? " oset-primary" : ""}${action.danger ? " oset-danger" : ""}`,
@@ -15045,9 +15129,9 @@ function OmniSettingsSection({ close }) {
         onClick: () => act(action.id)
       }, action.label)))
     ),
-    problem ? (0, import_react10.createElement)("p", { className: "oset-problem", role: "alert" }, problem) : null,
-    info?.linked ? (0, import_react10.createElement)(ThreadDefaultsCard) : null,
-    info?.linked ? (0, import_react10.createElement)(FreeReactionsCard) : null
+    problem ? (0, import_react11.createElement)("p", { className: "oset-problem", role: "alert" }, problem) : null,
+    info?.linked ? (0, import_react11.createElement)(ThreadDefaultsCard) : null,
+    info?.linked ? (0, import_react11.createElement)(FreeReactionsCard) : null
   );
 }
 var OMNI_SETTINGS_CSS = `
@@ -15081,7 +15165,7 @@ function registerSettings(ctx) {
 }
 
 // src/client/phone-frame.js
-var import_react11 = require("react");
+var import_react12 = require("react");
 var FRAME_SHELL = 16;
 var FRAME_BORDER = 1;
 var SCREEN_RADIUS_RATIO = 55 / 390;
@@ -15098,22 +15182,22 @@ var SIDE_BUTTONS = Object.freeze([
   { id: "power", side: "right", top: "36%", height: 52 }
 ]);
 function PhoneFrame({ label, children }) {
-  return (0, import_react11.createElement)(
+  return (0, import_react12.createElement)(
     "div",
     { className: "op-device" },
-    (0, import_react11.createElement)(
+    (0, import_react12.createElement)(
       "div",
       { className: "op-frame" },
-      SIDE_BUTTONS.map((button) => (0, import_react11.createElement)("span", { key: button.id, className: "op-button", "data-side": button.side, "aria-hidden": true, style: { [button.side]: -2, top: button.top, height: button.height } })),
-      (0, import_react11.createElement)("div", { className: "op-screen", role: "region", "aria-label": label }, children)
+      SIDE_BUTTONS.map((button) => (0, import_react12.createElement)("span", { key: button.id, className: "op-button", "data-side": button.side, "aria-hidden": true, style: { [button.side]: -2, top: button.top, height: button.height } })),
+      (0, import_react12.createElement)("div", { className: "op-screen", role: "region", "aria-label": label }, children)
     )
   );
 }
-var PhoneGlyph = () => (0, import_react11.createElement)(
+var PhoneGlyph = () => (0, import_react12.createElement)(
   "svg",
   { width: 14, height: 14, viewBox: "0 0 20 20", fill: "none", stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true, focusable: "false" },
-  (0, import_react11.createElement)("path", { d: "M7 2.75h6A1.75 1.75 0 0 1 14.75 4.5v11A1.75 1.75 0 0 1 13 17.25H7a1.75 1.75 0 0 1-1.75-1.75v-11A1.75 1.75 0 0 1 7 2.75z" }),
-  (0, import_react11.createElement)("path", { d: "M8.75 4.75h2.5" })
+  (0, import_react12.createElement)("path", { d: "M7 2.75h6A1.75 1.75 0 0 1 14.75 4.5v11A1.75 1.75 0 0 1 13 17.25H7a1.75 1.75 0 0 1-1.75-1.75v-11A1.75 1.75 0 0 1 7 2.75z" }),
+  (0, import_react12.createElement)("path", { d: "M8.75 4.75h2.5" })
 );
 var SCREEN_WIDTH = `(100cqi - ${2 * (FRAME_SHELL + FRAME_BORDER)}px)`;
 var SCREEN_RADIUS = `calc(${SCREEN_WIDTH} * 55 / 390)`;
@@ -15126,7 +15210,7 @@ var PHONE_FRAME_CSS = `
 `;
 
 // src/client/omni-phone.js
-var import_react12 = require("react");
+var import_react13 = require("react");
 var PHONE_KIND = "omni-phone";
 var PHONE_TAB_ID = "ds-bot/omni-phone";
 var phoneTabId = (threadId) => `${PHONE_TAB_ID}:${threadId}`;
@@ -15192,8 +15276,8 @@ function requestPhone(thread) {
   return null;
 }
 function useChatPoll(chatId, on2) {
-  const [read, setRead] = (0, import_react12.useState)({ chatId: null, messages: null, error: null });
-  (0, import_react12.useEffect)(() => {
+  const [read, setRead] = (0, import_react13.useState)({ chatId: null, messages: null, error: null });
+  (0, import_react13.useEffect)(() => {
     if (!chatId || !on2) return void 0;
     let stopped = false;
     let timer = 0;
@@ -15223,32 +15307,32 @@ function PhonePane({ params, sessionId, useRoster, visible = true }) {
   const { scroller, onScroll, onSized } = useStayAtEnd(thread?.chatId, messages.length);
   if (!thread) {
     const named = typeof params?.threadId === "string" || typeof params?.chatId === "string";
-    return (0, import_react12.createElement)("div", { className: "op-pane" }, (0, import_react12.createElement)("p", { className: "op-note" }, named ? t("This chat is no longer in the sidebar.") : t("Open the phone pane from a chat in the sidebar.")));
+    return (0, import_react13.createElement)("div", { className: "op-pane" }, (0, import_react13.createElement)("p", { className: "op-note" }, named ? t("This chat is no longer in the sidebar.") : t("Open the phone pane from a chat in the sidebar.")));
   }
   const loading = read.messages === null && read.error === null;
   const name = threadName(thread);
-  return (0, import_react12.createElement)(
+  return (0, import_react13.createElement)(
     "div",
     { className: "op-pane", "data-thread-id": thread.id },
-    (0, import_react12.createElement)(
+    (0, import_react13.createElement)(
       PhoneFrame,
       { label: t("{name} on the phone", { name }) },
-      (0, import_react12.createElement)(
+      (0, import_react13.createElement)(
         "header",
         { className: "op-head" },
-        (0, import_react12.createElement)("strong", null, name),
-        thread.connected === false && thread.reason ? (0, import_react12.createElement)("span", null, hostText(thread.reason)) : null
+        (0, import_react13.createElement)("strong", null, name),
+        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, hostText(thread.reason)) : null
       ),
-      (0, import_react12.createElement)(
+      (0, import_react13.createElement)(
         "div",
         { ref: scroller, className: "oc-thread op-log", onScroll, role: "log", "aria-label": t("Conversation with {name}", { name }) },
-        (0, import_react12.createElement)(
+        (0, import_react13.createElement)(
           "div",
           { className: "oc-thread-in" },
-          loading ? (0, import_react12.createElement)("div", { className: "oc-day" }, (0, import_react12.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
-          read.error ? (0, import_react12.createElement)("p", { className: "op-note", role: "alert" }, hostText(read.error)) : null,
-          read.messages?.length === 0 ? (0, import_react12.createElement)("p", { className: "op-note" }, t("No messages yet")) : null,
-          (0, import_react12.createElement)(ChatMessages, { messages, onSized })
+          loading ? (0, import_react13.createElement)("div", { className: "oc-day" }, (0, import_react13.createElement)("span", { className: "oc-spinner", "aria-hidden": true }), t("Loading messages…")) : null,
+          read.error ? (0, import_react13.createElement)("p", { className: "op-note", role: "alert" }, hostText(read.error)) : null,
+          read.messages?.length === 0 ? (0, import_react13.createElement)("p", { className: "op-note" }, t("No messages yet")) : null,
+          (0, import_react13.createElement)(ChatMessages, { messages, onSized })
         )
       )
     )
@@ -15280,17 +15364,17 @@ function PhoneTab({ useTabInfo, sessionId, useRoster }) {
   const tab = typeof useTabInfo === "function" ? useTabInfo()?.tab : void 0;
   const opened = tab?.navigation?.params;
   const where = `${sessionId ?? ""}/${tab?.id ?? ""}`;
-  const params = (0, import_react12.useMemo)(() => opened ?? keptParams(where), [where, opened]);
-  (0, import_react12.useEffect)(() => {
+  const params = (0, import_react13.useMemo)(() => opened ?? keptParams(where), [where, opened]);
+  (0, import_react13.useEffect)(() => {
     if (opened && typeof opened.threadId === "string") keepParams(where, opened);
   }, [where, opened]);
-  return (0, import_react12.createElement)(PhonePane, { key: phoneTabId(params?.threadId ?? ""), params, sessionId, useRoster, visible: tab?.visible !== false });
+  return (0, import_react13.createElement)(PhonePane, { key: phoneTabId(params?.threadId ?? ""), params, sessionId, useRoster, visible: tab?.visible !== false });
 }
 function PhoneDock({ sessionId, useRoster }) {
   const thread = useRoster((roster) => threadsIn(roster).find((item) => item.sessionId === sessionId) ?? null);
-  const [problem, setProblem] = (0, import_react12.useState)(null);
+  const [problem, setProblem] = (0, import_react13.useState)(null);
   const id = thread?.id ?? null;
-  (0, import_react12.useEffect)(() => {
+  (0, import_react13.useEffect)(() => {
     if (id === null || !hasPhoneIntent(id)) return;
     const mounted = phoneRight?.mounted;
     if (typeof mounted?.getSnapshot === "function" && mounted.getSnapshot() !== thread.sessionId) return;
@@ -15298,7 +15382,7 @@ function PhoneDock({ sessionId, useRoster }) {
     setProblem(openPhone(thread));
   }, [id]);
   if (problem === null) return null;
-  return (0, import_react12.createElement)("div", { className: "op-dock" }, (0, import_react12.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)));
+  return (0, import_react13.createElement)("div", { className: "op-dock" }, (0, import_react13.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)));
 }
 var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
@@ -15321,7 +15405,7 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 `;
 
 // src/client/subscriptions.js
-var import_react13 = require("react");
+var import_react14 = require("react");
 var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons;
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
@@ -15344,14 +15428,14 @@ function workerOf(worker, roster, where = {}) {
 }
 function WorkerMark({ worker, roster, where, size = 24 }) {
   const info = workerOf(worker, roster, where);
-  if (info.session) return (0, import_react13.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react13.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
-  if (info.chat !== void 0) return (0, import_react13.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
-  return (0, import_react13.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
+  if (info.session) return (0, import_react14.createElement)("span", { className: "os-session", style: { width: size, height: size } }, (0, import_react14.createElement)(OmniMark, { size: Math.round(size * 0.62) }));
+  if (info.chat !== void 0) return (0, import_react14.createElement)(ChatAvatar, { chat: { name: info.chat, initials: initials(info.chat) }, size });
+  return (0, import_react14.createElement)(BotMark, info.bot ? { bot: info.bot, size } : { look: info.look, size });
 }
-var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react13.createElement)(
+var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react14.createElement)(
   "span",
   { className: "os-trigger", "data-kind": trigger.kind, style: { width: size, height: size, fontSize: Math.round(size * 0.5), "--os-icon": `${Math.round(size * 0.52)}px` } },
-  trigger.kind === "reaction" ? trigger.emoji : (0, import_react13.createElement)(TRIGGER_ICONS[trigger.kind])
+  trigger.kind === "reaction" ? trigger.emoji : (0, import_react14.createElement)(TRIGGER_ICONS[trigger.kind])
 );
 function triggerText(trigger) {
   if (trigger.kind === "reaction") return t("you react");
@@ -15368,32 +15452,32 @@ function sourcesText(sources) {
   return [count(channels2, "1 channel", "{n} channels"), count(groups, "1 group", "{n} groups"), count(chats, "1 chat", "{n} chats")].filter(Boolean).join(" + ");
 }
 var initials = (name) => name.startsWith("#") ? "#" : name.split(/\s+/).filter(Boolean).slice(0, 2).map((word) => word[0]).join("").toUpperCase() || "?";
-var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react13.createElement)(Tile, { type: source.type, size }) : (0, import_react13.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
+var SourceMark = ({ source, size }) => source.kind === "channel" ? (0, import_react14.createElement)(Tile, { type: source.type, size }) : (0, import_react14.createElement)(ChatAvatar, { chat: { name: source.name, initials: initials(source.name) }, size });
 function SourceStack({ sources, size = 16 }) {
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "span",
     { className: "os-stack" },
-    sources.slice(0, 3).map((source) => (0, import_react13.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react13.createElement)(SourceMark, { source, size }))),
-    sources.length > 3 ? (0, import_react13.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
+    sources.slice(0, 3).map((source) => (0, import_react14.createElement)("span", { key: `${source.kind}-${source.id}`, className: "os-stack-item" }, (0, import_react14.createElement)(SourceMark, { source, size }))),
+    sources.length > 3 ? (0, import_react14.createElement)("span", { className: "os-stack-more" }, `+${sources.length - 3}`) : null
   );
 }
 function Sentence({ sub, roster }) {
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "p",
     { className: "os-sentence" },
-    (0, import_react13.createElement)("span", { className: "os-w" }, t("When")),
+    (0, import_react14.createElement)("span", { className: "os-w" }, t("When")),
     " ",
-    (0, import_react13.createElement)("span", { className: "os-chip os-chip-trigger" }, sub.trigger.kind === "reaction" ? (0, import_react13.createElement)("b", { className: "os-emoji" }, sub.trigger.emoji) : null, triggerText(sub.trigger)),
+    (0, import_react14.createElement)("span", { className: "os-chip os-chip-trigger" }, sub.trigger.kind === "reaction" ? (0, import_react14.createElement)("b", { className: "os-emoji" }, sub.trigger.emoji) : null, triggerText(sub.trigger)),
     " ",
-    (0, import_react13.createElement)("span", { className: "os-w" }, t("in")),
+    (0, import_react14.createElement)("span", { className: "os-w" }, t("in")),
     " ",
-    (0, import_react13.createElement)("span", { className: "os-chip" }, (0, import_react13.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
+    (0, import_react14.createElement)("span", { className: "os-chip" }, (0, import_react14.createElement)(SourceStack, { sources: sub.sources }), sourcesText(sub.sources)),
     " ",
-    (0, import_react13.createElement)("span", { className: "os-w" }, "→"),
+    (0, import_react14.createElement)("span", { className: "os-w" }, "→"),
     " ",
-    (0, import_react13.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react13.createElement)(WorkerMark, { worker: sub.worker, roster, where: sub, size: 18 }), workerOf(sub.worker, roster, sub).name),
-    sub.outputs.react ? (0, import_react13.createElement)(import_react13.Fragment, null, " ", (0, import_react13.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
-    sub.outputs.replyToMe ? (0, import_react13.createElement)(import_react13.Fragment, null, " ", (0, import_react13.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
+    (0, import_react14.createElement)("span", { className: "os-chip os-chip-worker" }, (0, import_react14.createElement)(WorkerMark, { worker: sub.worker, roster, where: sub, size: 18 }), workerOf(sub.worker, roster, sub).name),
+    sub.outputs.react ? (0, import_react14.createElement)(import_react14.Fragment, null, " ", (0, import_react14.createElement)("span", { className: "os-chip os-chip-soft" }, t("reacts 👀 then ✅"))) : null,
+    sub.outputs.replyToMe ? (0, import_react14.createElement)(import_react14.Fragment, null, " ", (0, import_react14.createElement)("span", { className: "os-chip os-chip-soft" }, t("replies to you"))) : null
   );
 }
 var RUN_STATUS = {
@@ -15407,17 +15491,17 @@ var RUN_STATUS = {
 var useWaiting = (useWork) => new Set((useWork ? useWork((work) => (work.approvals ?? []).map((entry) => entry.sessionId).join(",")) : "").split(",").filter(Boolean));
 function EventsBadge({ roster, useWork }) {
   const waiting = waitingRuns(roster, useWaiting(useWork));
-  return waiting > 0 ? (0, import_react13.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
+  return waiting > 0 ? (0, import_react14.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
 function SubscriptionsButton({ roster, onToggle, useWork }) {
   const count = headCount(roster);
   const waiting = waitingRuns(roster, useWaiting(useWork));
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "button",
     { type: "button", className: "os-head-btn", onClick: onToggle },
     t("Automations"),
-    count === null ? null : (0, import_react13.createElement)("span", { className: "os-head-count" }, String(count)),
-    waiting > 0 ? (0, import_react13.createElement)("span", { className: "os-pending" }, String(waiting)) : null
+    count === null ? null : (0, import_react14.createElement)("span", { className: "os-head-count" }, String(count)),
+    waiting > 0 ? (0, import_react14.createElement)("span", { className: "os-pending" }, String(waiting)) : null
   );
 }
 var SAVED = /^Saved (sub-[a-z0-9]+) · (.*?): when /;
@@ -15434,19 +15518,19 @@ function savedNotice({ askFirst, main }) {
 function SavedAutomationCard({ argValue, content, done, roster }) {
   if (!done) return null;
   const saved = savedOf(content, roster, argValue?.("ask_first"));
-  if (saved === null) return (0, import_react13.createElement)("div", { className: "bt-event", title: content }, String(content ?? "").slice(0, 160));
+  if (saved === null) return (0, import_react14.createElement)("div", { className: "bt-event", title: content }, String(content ?? "").slice(0, 160));
   const notice = savedNotice({ askFirst: saved.askFirst, main: roster?.byId?.[roster.eventsBotId]?.name ?? "Omni" });
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "div",
     { className: "os-saved", "data-loud": notice.loud || void 0 },
-    (0, import_react13.createElement)(
+    (0, import_react14.createElement)(
       "div",
       { className: "os-saved-top" },
-      saved.sub ? (0, import_react13.createElement)(TriggerBadge, { trigger: saved.sub.trigger, size: 22 }) : null,
-      (0, import_react13.createElement)("span", null, t("Saved automation")),
-      (0, import_react13.createElement)("strong", null, saved.name)
+      saved.sub ? (0, import_react14.createElement)(TriggerBadge, { trigger: saved.sub.trigger, size: 22 }) : null,
+      (0, import_react14.createElement)("span", null, t("Saved automation")),
+      (0, import_react14.createElement)("strong", null, saved.name)
     ),
-    (0, import_react13.createElement)("p", { className: "os-saved-note", role: notice.loud ? "alert" : void 0 }, (0, import_react13.createElement)(ShieldIcon), (0, import_react13.createElement)("span", null, notice.text))
+    (0, import_react14.createElement)("p", { className: "os-saved-note", role: notice.loud ? "alert" : void 0 }, (0, import_react14.createElement)(ShieldIcon), (0, import_react14.createElement)("span", null, notice.text))
   );
 }
 var BOARD_KIND = "omni-subscriptions";
@@ -15456,44 +15540,44 @@ function BoardTab({ useRoster, useWork, actions }) {
   const roster = useRoster((value) => value);
   const waiting = useWaiting(useWork);
   const bot = roster.byId?.[roster.eventsBotId];
-  if (!bot) return (0, import_react13.createElement)("div", { className: "os-board" }, (0, import_react13.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
-  return (0, import_react13.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
+  if (!bot) return (0, import_react14.createElement)("div", { className: "os-board" }, (0, import_react14.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
+  return (0, import_react14.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
 }
 function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   const omni2 = useOmni();
-  (0, import_react13.useEffect)(() => {
+  (0, import_react14.useEffect)(() => {
     startLive(call);
   }, []);
   const subs = roster.subscriptions ?? [];
   const runs = runsOf(roster);
   const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
   const listening = (roster.omniEvents?.listening ?? []).length > 0;
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "div",
     { className: "os-board" },
-    subs.length === 0 ? (0, import_react13.createElement)(Empty, { bot, live: omni2.source.kind === "live" }) : (0, import_react13.createElement)(
-      import_react13.Fragment,
+    subs.length === 0 ? (0, import_react14.createElement)(Empty, { bot, live: omni2.source.kind === "live" }) : (0, import_react14.createElement)(
+      import_react14.Fragment,
       null,
-      (0, import_react13.createElement)(
+      (0, import_react14.createElement)(
         "div",
         { className: "os-board-status" },
-        (0, import_react13.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
+        (0, import_react14.createElement)("span", { className: "oc-live-dot", "data-on": listening || void 0, "aria-hidden": true }),
         !subs.some((sub) => sub.on) ? t("Everything is paused.") : `${watched === 1 ? t("Watching 1 chat or channel.") : t("Watching {n} chats and channels.", { n: watched })} ${listening ? t("Listening to omni.") : t("Connecting to omni…")}`
       ),
-      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react13.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reactions and replies to you are not sent yet. Results stay in the runs below.")) : null,
-      (0, import_react13.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react13.createElement)(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
-      runs.length > 0 ? (0, import_react13.createElement)(
-        import_react13.Fragment,
+      subs.some((sub) => sub.on && (sub.outputs.react || sub.outputs.replyToMe)) ? (0, import_react14.createElement)("div", { className: "os-board-note os-board-pending" }, t("Reactions and replies to you are not sent yet. Results stay in the runs below.")) : null,
+      (0, import_react14.createElement)("div", { className: "os-list" }, subs.map((sub) => (0, import_react14.createElement)(AutomationRow, { key: sub.id, sub, roster, runs: runs.filter((run) => run.subId === sub.id) }))),
+      runs.length > 0 ? (0, import_react14.createElement)(
+        import_react14.Fragment,
         null,
-        (0, import_react13.createElement)("div", { className: "os-board-h" }, t("Runs")),
-        (0, import_react13.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react13.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
+        (0, import_react14.createElement)("div", { className: "os-board-h" }, t("Runs")),
+        (0, import_react14.createElement)("div", { className: "os-list" }, runs.slice(0, 20).map((run) => (0, import_react14.createElement)(RunRow, { key: run.id, run, sub: subs.find((sub) => sub.id === run.subId), roster, actions, asking: waiting?.has(run.sessionId) && run.status === "working" })))
       ) : null
     ),
-    (0, import_react13.createElement)(
+    (0, import_react14.createElement)(
       "div",
       { className: "os-safety" },
-      (0, import_react13.createElement)(ShieldIcon),
-      (0, import_react13.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.", { name: bot.name }))
+      (0, import_react14.createElement)(ShieldIcon),
+      (0, import_react14.createElement)("span", null, t("Anyone in a watched chat can write text that tries to steer a Bot. Work started by an event reads on its own and asks you before any shell command, file change, web or connector call, or message, unless you tell {name} otherwise. What you allow runs with that Bot's keys.", { name: bot.name }))
     )
   );
 }
@@ -15504,18 +15588,18 @@ var automationExamples = () => [
 ];
 function Empty({ bot, live }) {
   const examples2 = automationExamples().map((example) => example.text);
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "div",
     { className: "os-empty-board" },
-    (0, import_react13.createElement)(BotMark, { bot, size: 48, live: true }),
-    (0, import_react13.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
-    (0, import_react13.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
-    (0, import_react13.createElement)("ul", { className: "os-examples" }, examples2.map((text) => (0, import_react13.createElement)("li", { key: text }, text)))
+    (0, import_react14.createElement)(BotMark, { bot, size: 48, live: true }),
+    (0, import_react14.createElement)("strong", null, t("Tell {name} what to watch", { name: bot.name })),
+    (0, import_react14.createElement)("span", null, live ? t("Say it in the chat. {name} finds the chats, asks what is missing, and the subscription shows up here.", { name: bot.name }) : t("Omni is not connected to this DSH yet, so there is nothing to watch.")),
+    (0, import_react14.createElement)("ul", { className: "os-examples" }, examples2.map((text) => (0, import_react14.createElement)("li", { key: text }, text)))
   );
 }
 function AutomationRow({ sub, roster, runs, onOpen }) {
-  const [confirming, setConfirming] = (0, import_react13.useState)(false);
-  const [busy, setBusy] = (0, import_react13.useState)("");
+  const [confirming, setConfirming] = (0, import_react14.useState)(false);
+  const [busy, setBusy] = (0, import_react14.useState)("");
   const fresh = Date.now() - (sub.updatedAt ?? 0) < FRESH_MS;
   const run = async (endpoint, payload) => {
     setBusy(endpoint);
@@ -15526,18 +15610,18 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
     }
   };
   const last = runs[0];
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "div",
     { className: "os-row", "data-off": sub.on ? void 0 : true, "data-fresh": fresh || void 0 },
-    (0, import_react13.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
-    (0, import_react13.createElement)(
+    (0, import_react14.createElement)(TriggerBadge, { trigger: sub.trigger, size: 28 }),
+    (0, import_react14.createElement)(
       "div",
       { className: "os-row-body" },
-      (0, import_react13.createElement)(
+      (0, import_react14.createElement)(
         "div",
         { className: "os-row-top" },
-        onOpen ? (0, import_react13.createElement)("button", { type: "button", className: "os-row-name os-row-open", onClick: onOpen }, sub.name) : (0, import_react13.createElement)("span", { className: "os-row-name" }, sub.name),
-        (0, import_react13.createElement)("button", {
+        onOpen ? (0, import_react14.createElement)("button", { type: "button", className: "os-row-name os-row-open", onClick: onOpen }, sub.name) : (0, import_react14.createElement)("span", { className: "os-row-name" }, sub.name),
+        (0, import_react14.createElement)("button", {
           type: "button",
           role: "switch",
           "aria-checked": sub.on,
@@ -15545,23 +15629,23 @@ function AutomationRow({ sub, roster, runs, onOpen }) {
           disabled: busy !== "",
           "aria-label": sub.on ? t("Pause {name}", { name: sub.name }) : t("Resume {name}", { name: sub.name }),
           onClick: () => run("automation-set-on", { id: sub.id, on: !sub.on })
-        }, (0, import_react13.createElement)("span"))
+        }, (0, import_react14.createElement)("span"))
       ),
-      (0, import_react13.createElement)(Sentence, { sub, roster }),
-      (0, import_react13.createElement)(
+      (0, import_react14.createElement)(Sentence, { sub, roster }),
+      (0, import_react14.createElement)(
         "div",
         { className: "os-row-foot" },
-        (0, import_react13.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
-        sub.askFirst ? null : (0, import_react13.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
+        (0, import_react14.createElement)("span", null, last ? t("last run {time}", { time: relativeShort(last.at) }) : t("not fired yet")),
+        sub.askFirst ? null : (0, import_react14.createElement)("span", { className: "os-row-warn" }, t("acts without asking")),
         // Paused by the host, with why (a team without the hook, a worker it does not know).
-        !sub.on && sub.pausedReason ? (0, import_react13.createElement)("span", { className: "os-row-warn os-row-paused" }, hostText(sub.pausedReason)) : null,
+        !sub.on && sub.pausedReason ? (0, import_react14.createElement)("span", { className: "os-row-warn os-row-paused" }, hostText(sub.pausedReason)) : null,
         // What the host says about it, once (its worker moved to its chats' threads).
-        sub.note ? (0, import_react13.createElement)("span", { className: "os-row-note" }, hostText(sub.note)) : null,
-        (0, import_react13.createElement)(
+        sub.note ? (0, import_react14.createElement)("span", { className: "os-row-note" }, hostText(sub.note)) : null,
+        (0, import_react14.createElement)(
           "span",
           { className: "os-row-actions" },
-          (0, import_react13.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("automation-test", { id: sub.id }) }, t("Test")),
-          (0, import_react13.createElement)("button", {
+          (0, import_react14.createElement)("button", { type: "button", className: "os-link", disabled: busy !== "", onClick: () => run("automation-test", { id: sub.id }) }, t("Test")),
+          (0, import_react14.createElement)("button", {
             type: "button",
             className: confirming ? "os-link os-link-danger" : "os-link",
             disabled: busy !== "",
@@ -15578,22 +15662,22 @@ function RunRow({ run, sub, roster, actions, asking = false }) {
   const status = RUN_STATUS[asking ? "waiting" : run.status];
   const open = run.sessionId ? () => actions.openSession(run.sessionId) : void 0;
   const where = { sources: sub.sources, sessionId: run.sessionId ?? void 0 };
-  return (0, import_react13.createElement)(
+  return (0, import_react14.createElement)(
     "button",
     { type: "button", className: "os-run", "data-tone": status.tone, disabled: !open, onClick: open, title: open ? t("Open this run") : void 0 },
-    (0, import_react13.createElement)(WorkerMark, { worker: sub.worker, roster, where, size: 22 }),
-    (0, import_react13.createElement)(
+    (0, import_react14.createElement)(WorkerMark, { worker: sub.worker, roster, where, size: 22 }),
+    (0, import_react14.createElement)(
       "span",
       { className: "os-run-body" },
-      (0, import_react13.createElement)(
+      (0, import_react14.createElement)(
         "span",
         { className: "os-run-top" },
-        (0, import_react13.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster, where).name),
-        (0, import_react13.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
-        (0, import_react13.createElement)("time", null, relativeShort(run.at))
+        (0, import_react14.createElement)("span", { className: "os-run-name" }, workerOf(sub.worker, roster, where).name),
+        (0, import_react14.createElement)("span", { className: "os-run-status" }, run.test ? `${t("Test")} · ${t(status.label)}` : t(status.label)),
+        (0, import_react14.createElement)("time", null, relativeShort(run.at))
       ),
-      run.excerpt && !run.test ? (0, import_react13.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
-      (0, import_react13.createElement)("span", { className: "os-run-text" }, run.summary)
+      run.excerpt && !run.test ? (0, import_react14.createElement)("span", { className: "os-run-quote" }, run.from ? `${run.from}: ` : "", run.excerpt) : null,
+      (0, import_react14.createElement)("span", { className: "os-run-text" }, run.summary)
     )
   );
 }
@@ -15719,15 +15803,15 @@ function whenText(task) {
 }
 
 // src/client/automations-page.js
-var import_react14 = require("react");
+var import_react15 = require("react");
 var { ClockIcon, PlusIcon: PlusIcon2, SearchIcon } = icons;
 var AUTOMATIONS_PANEL = "omni-automations";
 function AutomationsPage({ useRoster, actions }) {
   const roster = useRoster((value) => value);
-  const [filter, setFilter] = (0, import_react14.useState)("all");
-  const [query, setQuery] = (0, import_react14.useState)("");
-  const [schedules, setSchedules] = (0, import_react14.useState)({ available: false, tasks: [] });
-  (0, import_react14.useEffect)(() => {
+  const [filter, setFilter] = (0, import_react15.useState)("all");
+  const [query, setQuery] = (0, import_react15.useState)("");
+  const [schedules, setSchedules] = (0, import_react15.useState)({ available: false, tasks: [] });
+  (0, import_react15.useEffect)(() => {
     let live = true;
     const load = () => call("schedules").then((value) => {
       if (live) setSchedules(value);
@@ -15744,7 +15828,7 @@ function AutomationsPage({ useRoster, actions }) {
   const runs = runsOf(roster);
   const autopilot = roster.byId?.[roster.eventsBotId];
   const needle = query.trim().toLowerCase();
-  const rows = (0, import_react14.useMemo)(() => {
+  const rows = (0, import_react15.useMemo)(() => {
     const list = [
       ...events.map((sub) => ({ kind: "event", id: sub.id, on: sub.on, title: sub.name, sort: sub.createdAt, sub })),
       ...schedules.tasks.map((task) => ({ kind: "schedule", id: `${task.sessionId}:${task.id}`, on: task.status === "active", title: task.title, sort: Date.parse(task.scheduledAt) || 0, task }))
@@ -15754,23 +15838,23 @@ function AutomationsPage({ useRoster, actions }) {
   const talk = () => {
     if (autopilot) actions.openSession(autopilot.id);
   };
-  return (0, import_react14.createElement)(
+  return (0, import_react15.createElement)(
     "div",
     { className: "oa-page" },
-    (0, import_react14.createElement)(
+    (0, import_react15.createElement)(
       "div",
       { className: "oa-in" },
-      (0, import_react14.createElement)(
+      (0, import_react15.createElement)(
         "header",
         { className: "oa-head" },
-        (0, import_react14.createElement)("h1", null, t("Automations")),
-        (0, import_react14.createElement)("button", { type: "button", className: "oa-new", disabled: !autopilot, onClick: talk, title: autopilot ? t("Tell {name} what to automate", { name: autopilot.name }) : void 0 }, (0, import_react14.createElement)(PlusIcon2), t("New"))
+        (0, import_react15.createElement)("h1", null, t("Automations")),
+        (0, import_react15.createElement)("button", { type: "button", className: "oa-new", disabled: !autopilot, onClick: talk, title: autopilot ? t("Tell {name} what to automate", { name: autopilot.name }) : void 0 }, (0, import_react15.createElement)(PlusIcon2), t("New"))
       ),
-      (0, import_react14.createElement)("p", { className: "oa-lede" }, autopilot ? t("Things that run on their own: when something happens in your chats, or on a schedule. Say what you want to {name}; it sets it up and it shows here.", { name: autopilot.name }) : t("Things that run on their own, on a schedule or when something happens in your chats.")),
-      (0, import_react14.createElement)(
+      (0, import_react15.createElement)("p", { className: "oa-lede" }, autopilot ? t("Things that run on their own: when something happens in your chats, or on a schedule. Say what you want to {name}; it sets it up and it shows here.", { name: autopilot.name }) : t("Things that run on their own, on a schedule or when something happens in your chats.")),
+      (0, import_react15.createElement)(
         "div",
         { className: "oa-filters", role: "radiogroup", "aria-label": t("Show") },
-        [["all", t("All")], ["enabled", t("Enabled")], ["inactive", t("Inactive")]].map(([value, label]) => (0, import_react14.createElement)("button", {
+        [["all", t("All")], ["enabled", t("Enabled")], ["inactive", t("Inactive")]].map(([value, label]) => (0, import_react15.createElement)("button", {
           key: value,
           type: "button",
           role: "radio",
@@ -15778,14 +15862,14 @@ function AutomationsPage({ useRoster, actions }) {
           onClick: () => setFilter(value)
         }, label))
       ),
-      (0, import_react14.createElement)("label", { className: "oa-search" }, (0, import_react14.createElement)(SearchIcon), (0, import_react14.createElement)("input", { value: query, placeholder: t("Search automations"), "aria-label": t("Search automations"), onChange: (event) => setQuery(event.target.value) })),
-      rows.length === 0 ? (0, import_react14.createElement)(
+      (0, import_react15.createElement)("label", { className: "oa-search" }, (0, import_react15.createElement)(SearchIcon), (0, import_react15.createElement)("input", { value: query, placeholder: t("Search automations"), "aria-label": t("Search automations"), onChange: (event) => setQuery(event.target.value) })),
+      rows.length === 0 ? (0, import_react15.createElement)(
         "div",
         { className: "oa-empty" },
-        (0, import_react14.createElement)(ClockIcon),
-        (0, import_react14.createElement)("span", null, events.length + schedules.tasks.length === 0 ? t("Nothing runs on its own yet.") : t("No automations match.")),
-        autopilot ? (0, import_react14.createElement)("button", { type: "button", className: "oa-empty-go", onClick: talk }, t("Tell {name} what to automate", { name: autopilot.name })) : null
-      ) : (0, import_react14.createElement)("div", { className: "oa-list" }, rows.map((row) => row.kind === "event" ? (0, import_react14.createElement)(AutomationRow, { key: row.id, sub: row.sub, roster, runs: runs.filter((run) => run.subId === row.id), onOpen: talk }) : (0, import_react14.createElement)(ScheduleRow, { key: row.id, task: row.task, roster, actions })))
+        (0, import_react15.createElement)(ClockIcon),
+        (0, import_react15.createElement)("span", null, events.length + schedules.tasks.length === 0 ? t("Nothing runs on its own yet.") : t("No automations match.")),
+        autopilot ? (0, import_react15.createElement)("button", { type: "button", className: "oa-empty-go", onClick: talk }, t("Tell {name} what to automate", { name: autopilot.name })) : null
+      ) : (0, import_react15.createElement)("div", { className: "oa-list" }, rows.map((row) => row.kind === "event" ? (0, import_react15.createElement)(AutomationRow, { key: row.id, sub: row.sub, roster, runs: runs.filter((run) => run.subId === row.id), onOpen: talk }) : (0, import_react15.createElement)(ScheduleRow, { key: row.id, task: row.task, roster, actions })))
     )
   );
 }
@@ -15793,30 +15877,30 @@ function ScheduleRow({ task, roster, actions }) {
   const owner = roster.byId?.[task.botId];
   const room = roster.roomsById?.[task.roomId];
   const active = task.status === "active";
-  return (0, import_react14.createElement)(
+  return (0, import_react15.createElement)(
     "button",
     { type: "button", className: "os-row oa-schedule", "data-off": active ? void 0 : true, onClick: () => actions.selectPanel("schedules"), title: t("Edit the timing in Automation tasks") },
-    (0, import_react14.createElement)("span", { className: "os-trigger", "data-kind": "schedule", style: { width: 28, height: 28, "--os-icon": "15px" } }, (0, import_react14.createElement)(ClockIcon)),
-    (0, import_react14.createElement)(
+    (0, import_react15.createElement)("span", { className: "os-trigger", "data-kind": "schedule", style: { width: 28, height: 28, "--os-icon": "15px" } }, (0, import_react15.createElement)(ClockIcon)),
+    (0, import_react15.createElement)(
       "span",
       { className: "os-row-body" },
-      (0, import_react14.createElement)(
+      (0, import_react15.createElement)(
         "span",
         { className: "os-row-top" },
-        (0, import_react14.createElement)("span", { className: "os-row-name" }, task.title),
-        (0, import_react14.createElement)("span", { className: "oa-tag" }, active ? t("Scheduled") : t("Inactive"))
+        (0, import_react15.createElement)("span", { className: "os-row-name" }, task.title),
+        (0, import_react15.createElement)("span", { className: "oa-tag" }, active ? t("Scheduled") : t("Inactive"))
       ),
-      (0, import_react14.createElement)(
+      (0, import_react15.createElement)(
         "span",
         { className: "os-sentence" },
-        (0, import_react14.createElement)("span", { className: "os-chip" }, whenText(task)),
-        (0, import_react14.createElement)("span", { className: "os-w" }, "→"),
-        (0, import_react14.createElement)("span", { className: "os-chip" }, owner ? (0, import_react14.createElement)(import_react14.Fragment, null, (0, import_react14.createElement)(BotMark, { bot: owner, size: 16 }), owner.name) : room?.name ?? t("a chat"))
+        (0, import_react15.createElement)("span", { className: "os-chip" }, whenText(task)),
+        (0, import_react15.createElement)("span", { className: "os-w" }, "→"),
+        (0, import_react15.createElement)("span", { className: "os-chip" }, owner ? (0, import_react15.createElement)(import_react15.Fragment, null, (0, import_react15.createElement)(BotMark, { bot: owner, size: 16 }), owner.name) : room?.name ?? t("a chat"))
       ),
-      (0, import_react14.createElement)(
+      (0, import_react15.createElement)(
         "span",
         { className: "os-row-foot" },
-        (0, import_react14.createElement)("span", null, active && task.scheduledAt ? t("next run {time}", { time: new Date(task.scheduledAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : task.lastDelivery ? t("last run {time}", { time: relativeShort(Date.parse(task.lastDelivery.deliveredAt ?? task.lastDelivery) || Date.now()) }) : t("not run yet"))
+        (0, import_react15.createElement)("span", null, active && task.scheduledAt ? t("next run {time}", { time: new Date(task.scheduledAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }) : task.lastDelivery ? t("last run {time}", { time: relativeShort(Date.parse(task.lastDelivery.deliveredAt ?? task.lastDelivery) || Date.now()) }) : t("not run yet"))
       )
     )
   );
@@ -15847,7 +15931,7 @@ var AUTOMATIONS_CSS = `
 `;
 
 // src/client/omni-tree.js
-var import_react15 = require("react");
+var import_react16 = require("react");
 var { ChevronRightIcon: ChevronRightIcon2, CloseIcon, DotsIcon, PlusIcon: PlusIcon3, SparkIcon } = icons;
 var OPEN_KEY = "omni.tree.open";
 var SEARCH_DELAY_MS = 250;
@@ -15920,12 +16004,12 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const asking = useStatus((map) => map.get(id)?.pendingInteraction !== void 0);
   const running = useStatus((map) => map.get(id)?.running === true);
   const active = useRetain(id, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
-  const [confirming, setConfirming] = (0, import_react15.useState)(false);
-  const [problem, setProblem] = (0, import_react15.useState)(null);
-  const [menu, setMenu] = (0, import_react15.useState)(false);
-  const row = (0, import_react15.useRef)(null);
+  const [confirming, setConfirming] = (0, import_react16.useState)(false);
+  const [problem, setProblem] = (0, import_react16.useState)(null);
+  const [menu, setMenu] = (0, import_react16.useState)(false);
+  const row = (0, import_react16.useRef)(null);
   const opens = teamReady(rowProps.roster);
-  (0, import_react15.useEffect)(() => {
+  (0, import_react16.useEffect)(() => {
     if (!menu || typeof document === "undefined" || typeof document.addEventListener !== "function") return void 0;
     const away = (event) => {
       if (!row.current?.contains?.(event.target)) setMenu(false);
@@ -15933,10 +16017,10 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     document.addEventListener("pointerdown", away, true);
     return () => document.removeEventListener("pointerdown", away, true);
   }, [menu]);
-  (0, import_react15.useEffect)(() => {
+  (0, import_react16.useEffect)(() => {
     if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem);
   }, [opens, thread.id]);
-  (0, import_react15.useEffect)(() => {
+  (0, import_react16.useEffect)(() => {
     if (!opens) return void 0;
     const opener = () => openThread(thread, actions, setProblem);
     rowOpeners.set(thread.id, opener);
@@ -15976,10 +16060,10 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     event.stopPropagation();
     setMenu(false);
   };
-  return (0, import_react15.createElement)(
+  return (0, import_react16.createElement)(
     "div",
     { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0 },
-    (0, import_react15.createElement)(
+    (0, import_react16.createElement)(
       "button",
       {
         type: "button",
@@ -15992,16 +16076,16 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         tabIndex: shown ? void 0 : -1,
         onClick
       },
-      (0, import_react15.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
-      (0, import_react15.createElement)("span", { className: "bt-thread-title" }, name),
-      reason ? (0, import_react15.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
-      free ? (0, import_react15.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react15.createElement)(SparkIcon)) : null,
-      dot ? (0, import_react15.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
+      (0, import_react16.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
+      (0, import_react16.createElement)("span", { className: "bt-thread-title" }, name),
+      reason ? (0, import_react16.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
+      free ? (0, import_react16.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react16.createElement)(SparkIcon)) : null,
+      dot ? (0, import_react16.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
     ),
-    (0, import_react15.createElement)(
+    (0, import_react16.createElement)(
       "span",
       { className: "ot-thread-acts", "data-on": confirming || menu || void 0 },
-      confirming ? null : (0, import_react15.createElement)("button", {
+      confirming ? null : (0, import_react16.createElement)("button", {
         type: "button",
         className: "ot-thread-more",
         "aria-label": t("Asking first in {name}", { name }),
@@ -16010,8 +16094,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         "aria-expanded": menu,
         tabIndex: shown ? void 0 : -1,
         onClick: () => setMenu((open) => !open)
-      }, (0, import_react15.createElement)(DotsIcon)),
-      (0, import_react15.createElement)("button", {
+      }, (0, import_react16.createElement)(DotsIcon)),
+      (0, import_react16.createElement)("button", {
         type: "button",
         className: "ot-thread-remove",
         "data-confirm": confirming || void 0,
@@ -16020,16 +16104,16 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         tabIndex: shown ? void 0 : -1,
         onClick: remove,
         onBlur: () => setConfirming(false)
-      }, confirming ? t("Remove") : (0, import_react15.createElement)(CloseIcon))
+      }, confirming ? t("Remove") : (0, import_react16.createElement)(CloseIcon))
     ),
-    menu ? (0, import_react15.createElement)(
+    menu ? (0, import_react16.createElement)(
       "div",
       { className: "ot-thread-menu", role: "menu", "aria-label": t("Asking first in {name}", { name }), onKeyDown: onMenuKey },
-      permissionMenuOf(thread).map((group) => (0, import_react15.createElement)(
+      permissionMenuOf(thread).map((group) => (0, import_react16.createElement)(
         "div",
         { key: group.field, className: "ot-thread-menu-group", role: "group", "aria-label": group.label },
-        (0, import_react15.createElement)("span", { className: "ot-thread-menu-head" }, group.label),
-        group.items.map((choice) => (0, import_react15.createElement)("button", {
+        (0, import_react16.createElement)("span", { className: "ot-thread-menu-head" }, group.label),
+        group.items.map((choice) => (0, import_react16.createElement)("button", {
           key: String(choice.value),
           type: "button",
           role: "menuitemradio",
@@ -16041,13 +16125,13 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         }, choice.label))
       ))
     ) : null,
-    problem ? (0, import_react15.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
+    problem ? (0, import_react16.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
   );
 }
 function PickerChat({ chat, busy, onPick }) {
   const name = chat.name ?? (chat.kind === "group" ? t("Group") : t("Chat"));
   const tag = chat.added ? t("Added") : busy === chat.id ? t("Adding…") : null;
-  return (0, import_react15.createElement)(
+  return (0, import_react16.createElement)(
     "button",
     {
       type: "button",
@@ -16061,36 +16145,36 @@ function PickerChat({ chat, busy, onPick }) {
         void onPick(chat);
       }
     },
-    (0, import_react15.createElement)(ChatAvatar, { chat: { ...chat, name }, size: 30 }),
-    (0, import_react15.createElement)(
+    (0, import_react16.createElement)(ChatAvatar, { chat: { ...chat, name }, size: 30 }),
+    (0, import_react16.createElement)(
       "span",
       { className: "ot-picker-body" },
-      (0, import_react15.createElement)(
+      (0, import_react16.createElement)(
         "span",
         { className: "ot-picker-top" },
-        (0, import_react15.createElement)("span", { className: "ot-picker-name" }, name),
-        tag ? (0, import_react15.createElement)("span", { className: "ot-picker-tag" }, tag) : chat.at > 0 ? (0, import_react15.createElement)("span", { className: "ot-picker-at" }, relativeShort(chat.at)) : null
+        (0, import_react16.createElement)("span", { className: "ot-picker-name" }, name),
+        tag ? (0, import_react16.createElement)("span", { className: "ot-picker-tag" }, tag) : chat.at > 0 ? (0, import_react16.createElement)("span", { className: "ot-picker-at" }, relativeShort(chat.at)) : null
       ),
-      chat.number ? (0, import_react15.createElement)("span", { className: "ot-picker-number" }, chat.number) : null,
-      chat.preview ? (0, import_react15.createElement)("span", { className: "ot-picker-preview" }, chat.preview) : null
+      chat.number ? (0, import_react16.createElement)("span", { className: "ot-picker-number" }, chat.number) : null,
+      chat.preview ? (0, import_react16.createElement)("span", { className: "ot-picker-preview" }, chat.preview) : null
     )
   );
 }
 function ThreadPicker({ channel, onPick, onClose }) {
-  const [query, setQuery] = (0, import_react15.useState)("");
-  const [list, setList] = (0, import_react15.useState)({ status: "loading", chats: [], error: null });
-  const [busy, setBusy] = (0, import_react15.useState)(null);
-  const [problem, setProblem] = (0, import_react15.useState)(null);
-  const asked = (0, import_react15.useRef)(0);
-  const alive = (0, import_react15.useRef)(true);
-  (0, import_react15.useEffect)(() => {
+  const [query, setQuery] = (0, import_react16.useState)("");
+  const [list, setList] = (0, import_react16.useState)({ status: "loading", chats: [], error: null });
+  const [busy, setBusy] = (0, import_react16.useState)(null);
+  const [problem, setProblem] = (0, import_react16.useState)(null);
+  const asked = (0, import_react16.useRef)(0);
+  const alive = (0, import_react16.useRef)(true);
+  (0, import_react16.useEffect)(() => {
     alive.current = true;
     return () => {
       alive.current = false;
     };
   }, []);
   const words = query.trim();
-  (0, import_react15.useEffect)(() => {
+  (0, import_react16.useEffect)(() => {
     const ticket = ++asked.current;
     const load = () => call("omni-thread-chats", words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
       (reply) => {
@@ -16126,13 +16210,13 @@ function ThreadPicker({ channel, onPick, onClose }) {
     onClose();
   };
   const empty = list.status === "ready" && list.chats.length === 0;
-  return (0, import_react15.createElement)(
+  return (0, import_react16.createElement)(
     "div",
     { className: "ot-picker", role: "group", "aria-label": t("Add a chat from {name}", { name: channel.name }), onKeyDown },
-    (0, import_react15.createElement)(
+    (0, import_react16.createElement)(
       "div",
       { className: "ot-picker-head" },
-      (0, import_react15.createElement)("input", {
+      (0, import_react16.createElement)("input", {
         type: "search",
         className: "ot-picker-search",
         value: query,
@@ -16141,22 +16225,22 @@ function ThreadPicker({ channel, onPick, onClose }) {
         autoFocus: true,
         onChange: (event) => setQuery(event.target.value)
       }),
-      (0, import_react15.createElement)("button", { type: "button", className: "ot-picker-close", "aria-label": t("Close"), title: t("Close"), onClick: onClose }, (0, import_react15.createElement)(CloseIcon))
+      (0, import_react16.createElement)("button", { type: "button", className: "ot-picker-close", "aria-label": t("Close"), title: t("Close"), onClick: onClose }, (0, import_react16.createElement)(CloseIcon))
     ),
-    problem ? (0, import_react15.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
-    list.status === "loading" ? (0, import_react15.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
-    list.status === "failed" ? (0, import_react15.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
-    empty ? (0, import_react15.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
-    list.chats.length > 0 ? (0, import_react15.createElement)(
+    problem ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
+    list.status === "loading" ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
+    list.status === "failed" ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
+    empty ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
+    list.chats.length > 0 ? (0, import_react16.createElement)(
       "div",
       { className: "ot-picker-list" },
-      list.chats.map((chat) => (0, import_react15.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
+      list.chats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
     ) : null
   );
 }
 var addThread = (channelId, chat) => call("omni-thread-add", { channelId, chatId: chat.id });
 function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, plus, open, picking, onToggle, onPlus, onClosePicker }) {
-  const plusButton = (0, import_react15.useRef)(null);
+  const plusButton = (0, import_react16.useRef)(null);
   const threads = threadsOf(roster, channel.id);
   const hasChats = state.chats.some((chat) => chat.channelId === channel.id);
   const unread = unreadOf(state, channel.id);
@@ -16175,13 +16259,13 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
     else openOnArrival.add(result.threadId);
     return result;
   });
-  return (0, import_react15.createElement)(
+  return (0, import_react16.createElement)(
     "div",
     { className: "ot-channel" },
-    (0, import_react15.createElement)(
+    (0, import_react16.createElement)(
       "div",
       { className: "ot-channel-head" },
-      (0, import_react15.createElement)(
+      (0, import_react16.createElement)(
         "button",
         {
           type: "button",
@@ -16191,12 +16275,12 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
           title: `${type.label} · ${channel.name}`,
           onClick: onToggle
         },
-        (0, import_react15.createElement)("span", { className: "ot-chevron", "aria-hidden": true }, (0, import_react15.createElement)(ChevronRightIcon2)),
-        (0, import_react15.createElement)(Tile, { type: channel.type, size: 18 }),
-        (0, import_react15.createElement)("span", { className: "ot-channel-name" }, channel.name),
-        unread > 0 ? (0, import_react15.createElement)("span", { className: "ot-count", "aria-label": t("{n} unread", { n: unread }) }, unread) : (0, import_react15.createElement)(StatusDot, { status: channel.status })
+        (0, import_react16.createElement)("span", { className: "ot-chevron", "aria-hidden": true }, (0, import_react16.createElement)(ChevronRightIcon2)),
+        (0, import_react16.createElement)(Tile, { type: channel.type, size: 18 }),
+        (0, import_react16.createElement)("span", { className: "ot-channel-name" }, channel.name),
+        unread > 0 ? (0, import_react16.createElement)("span", { className: "ot-count", "aria-label": t("{n} unread", { n: unread }) }, unread) : (0, import_react16.createElement)(StatusDot, { status: channel.status })
       ),
-      plus.offered ? (0, import_react15.createElement)("button", {
+      plus.offered ? (0, import_react16.createElement)("button", {
         ref: plusButton,
         type: "button",
         className: "ot-plus",
@@ -16204,18 +16288,18 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
         title: t("Add a chat"),
         "aria-expanded": picking,
         onClick: onPlus
-      }, (0, import_react15.createElement)(PlusIcon3)) : null
+      }, (0, import_react16.createElement)(PlusIcon3)) : null
     ),
-    (0, import_react15.createElement)(
+    (0, import_react16.createElement)(
       "div",
       { id: panelId, className: "ot-chats", "data-open": open || void 0 },
-      (0, import_react15.createElement)(
+      (0, import_react16.createElement)(
         "div",
         { className: "ot-chats-in" },
-        picking && plus.offered ? (0, import_react15.createElement)(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
-        !plus.offered && plus.reason ? (0, import_react15.createElement)("span", { className: "ot-empty" }, hostText(plus.reason)) : null,
-        threads.map((thread) => (0, import_react15.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
-        (0, import_react15.createElement)(
+        picking && plus.offered ? (0, import_react16.createElement)(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
+        !plus.offered && plus.reason ? (0, import_react16.createElement)("span", { className: "ot-empty" }, hostText(plus.reason)) : null,
+        threads.map((thread) => (0, import_react16.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
+        (0, import_react16.createElement)(
           "button",
           { type: "button", className: "ot-chat ot-all", tabIndex: open ? void 0 : -1, onClick: () => omni2.openChannels("channel", channel.id) },
           hasChats ? t("All chats") : t("Channel health")
@@ -16227,23 +16311,23 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
 function OmniTree(props) {
   const { bot, actions, roster } = props;
   const state = useOmni();
-  const omni2 = (0, import_react15.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
-  const [open, setOpen] = (0, import_react15.useState)(readOpen);
-  const [picking, setPicking] = (0, import_react15.useState)(null);
-  (0, import_react15.useEffect)(() => {
+  const omni2 = (0, import_react16.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
+  const [open, setOpen] = (0, import_react16.useState)(readOpen);
+  const [picking, setPicking] = (0, import_react16.useState)(null);
+  (0, import_react16.useEffect)(() => {
     startLive(call);
   }, []);
   if (!isOmniBot(bot)) return null;
   const rowProps = rowPropsOf(props, roster?.omniRowProps);
   const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
-  const others = (list) => list.length === 0 ? null : (0, import_react15.createElement)(
+  const others = (list) => list.length === 0 ? null : (0, import_react16.createElement)(
     "div",
     { className: "ot-others", role: "group", "aria-label": t("Other chats") },
-    (0, import_react15.createElement)("span", { className: "ot-empty" }, t("Other chats")),
-    list.map((thread) => (0, import_react15.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps }))
+    (0, import_react16.createElement)("span", { className: "ot-empty" }, t("Other chats")),
+    list.map((thread) => (0, import_react16.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps }))
   );
   if (state.preview) {
-    return (0, import_react15.createElement)("div", { className: "ot-tree" }, (0, import_react15.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react15.createElement)("span", { "aria-hidden": true }, " →")), others(threads));
+    return (0, import_react16.createElement)("div", { className: "ot-tree" }, (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row ot-link", onClick: openConnectWizard }, t("Connect Omni"), (0, import_react16.createElement)("span", { "aria-hidden": true }, " →")), others(threads));
   }
   const change = (id, show) => setOpen((before) => {
     const next = new Set(before);
@@ -16254,10 +16338,10 @@ function OmniTree(props) {
   });
   const plus = plusOf(roster, state);
   const listed = new Set(state.channels.map((channel) => channel.id));
-  return (0, import_react15.createElement)(
+  return (0, import_react16.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
-    state.channels.map((channel) => (0, import_react15.createElement)(ChannelItem, {
+    state.channels.map((channel) => (0, import_react16.createElement)(ChannelItem, {
       key: channel.id,
       channel,
       state,
@@ -16286,7 +16370,7 @@ function OmniTree(props) {
 var threadDocks = 0;
 function ThreadDock({ sessionId, useRoster }) {
   const thread = useRoster((roster) => isThreadSession(roster, sessionId));
-  (0, import_react15.useEffect)(() => {
+  (0, import_react16.useEffect)(() => {
     if (!thread || typeof document === "undefined") return void 0;
     threadDocks += 1;
     document.body.dataset.omniThread = "";
@@ -16375,7 +16459,7 @@ body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-
 `;
 
 // src/client/permissions.js
-var import_react16 = require("react");
+var import_react17 = require("react");
 var NONE = {};
 var ASKING_TOOLS = ["omni_messages", "omni_send", "omni_react", "omni_media", "omni_delete", "omni_call"];
 var KIND_OF = { chat: "chat", group: "group", self: "your own chat", channel: "channel" };
@@ -16408,17 +16492,17 @@ var CONFIRM_LABEL = { send: "Send", delete: "Delete", disconnect: "Disconnect", 
 function Preview({ entry }) {
   const preview = entry.preview ?? NONE;
   const lines = [];
-  if (entry.resource?.type === "call") lines.push((0, import_react16.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
-  if (preview.channel) lines.push((0, import_react16.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
-  if (preview.to) lines.push((0, import_react16.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
-  if (preview.emoji) lines.push((0, import_react16.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
-  if (preview.text) lines.push((0, import_react16.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
-  if (preview.body) lines.push((0, import_react16.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
-  return lines.length === 0 ? null : (0, import_react16.createElement)("div", { className: "om-perm-preview" }, lines);
+  if (entry.resource?.type === "call") lines.push((0, import_react17.createElement)("code", { key: "op", className: "om-perm-op" }, `${preview.method ?? ""} ${preview.path ?? ""}${preview.query ? ` ?${preview.query}` : ""}`.trim()));
+  if (preview.channel) lines.push((0, import_react17.createElement)("div", { key: "channel", className: "om-perm-to" }, t("From {channel}", { channel: preview.channel })));
+  if (preview.to) lines.push((0, import_react17.createElement)("div", { key: "to", className: "om-perm-to" }, t("To {to}", { to: preview.to })));
+  if (preview.emoji) lines.push((0, import_react17.createElement)("div", { key: "emoji", className: "om-perm-emoji" }, preview.emoji));
+  if (preview.text) lines.push((0, import_react17.createElement)("blockquote", { key: "text", className: "om-perm-text" }, preview.text));
+  if (preview.body) lines.push((0, import_react17.createElement)("pre", { key: "body", className: "om-perm-body" }, preview.body));
+  return lines.length === 0 ? null : (0, import_react17.createElement)("div", { className: "om-perm-preview" }, lines);
 }
 function ConsentCard({ bot, entry }) {
-  const [busy, setBusy] = (0, import_react16.useState)("");
-  const [error, setError] = (0, import_react16.useState)("");
+  const [busy, setBusy] = (0, import_react17.useState)("");
+  const [error, setError] = (0, import_react17.useState)("");
   const answer = (choice) => {
     if (busy) return;
     setBusy(choice);
@@ -16427,37 +16511,37 @@ function ConsentCard({ bot, entry }) {
   };
   const running = entry.status === "running";
   const confirm2 = entry.kind === "confirm";
-  const button = (choice, label, primary = false) => (0, import_react16.createElement)("button", {
+  const button = (choice, label, primary = false) => (0, import_react17.createElement)("button", {
     type: "button",
     className: primary ? "bt-q-submit" : "bt-q-btn",
     disabled: Boolean(busy) || running,
     onClick: () => answer(choice)
   }, busy === choice ? "…" : label);
-  return (0, import_react16.createElement)(
+  return (0, import_react17.createElement)(
     "div",
     { className: "bt-q om-perm", role: "group", "aria-label": askTitle(bot, entry), "data-kind": entry.kind },
-    (0, import_react16.createElement)(
+    (0, import_react17.createElement)(
       "div",
       { className: "bt-q-head" },
-      (0, import_react16.createElement)("span", { className: "om-perm-who" }, (0, import_react16.createElement)(BotMark, { bot, size: 28 })),
-      (0, import_react16.createElement)(
+      (0, import_react17.createElement)("span", { className: "om-perm-who" }, (0, import_react17.createElement)(BotMark, { bot, size: 28 })),
+      (0, import_react17.createElement)(
         "div",
         { className: "bt-q-text" },
-        (0, import_react16.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
-        (0, import_react16.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
+        (0, import_react17.createElement)("p", { className: "bt-q-title" }, askTitle(bot, entry)),
+        (0, import_react17.createElement)("div", { className: "bt-q-detail" }, reachText(entry))
       )
     ),
-    (0, import_react16.createElement)(Preview, { entry }),
-    error ? (0, import_react16.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
-    (0, import_react16.createElement)(
+    (0, import_react17.createElement)(Preview, { entry }),
+    error ? (0, import_react17.createElement)("div", { className: "om-perm-error", role: "alert" }, error) : null,
+    (0, import_react17.createElement)(
       "div",
       { className: "bt-q-foot" },
-      running ? (0, import_react16.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
-      confirm2 ? [(0, import_react16.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react16.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
-        (0, import_react16.createElement)("span", { key: "deny" }, button("deny", t("No"))),
-        (0, import_react16.createElement)("span", { key: "once" }, button("once", t("Once"))),
-        entry.resource?.channelId && entry.resource.channelName ? (0, import_react16.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
-        (0, import_react16.createElement)("span", { key: "always" }, button("always", t("Always"), true))
+      running ? (0, import_react17.createElement)("span", { className: "om-perm-running" }, t("Running…")) : null,
+      confirm2 ? [(0, import_react17.createElement)("span", { key: "deny" }, button("deny", t("Cancel"))), (0, import_react17.createElement)("span", { key: "once" }, button("once", t(CONFIRM_LABEL[entry.action] ?? "Allow"), true))] : [
+        (0, import_react17.createElement)("span", { key: "deny" }, button("deny", t("No"))),
+        (0, import_react17.createElement)("span", { key: "once" }, button("once", t("Once"))),
+        entry.resource?.channelId && entry.resource.channelName ? (0, import_react17.createElement)("span", { key: "channel" }, button("channel", t("Always, all of {channel}", { channel: entry.resource.channelName }))) : null,
+        (0, import_react17.createElement)("span", { key: "always" }, button("always", t("Always"), true))
       ]
     )
   );
@@ -16472,10 +16556,10 @@ var SETTLED = {
   replaced: "Asked again"
 };
 function Settled({ bot, entry }) {
-  return (0, import_react16.createElement)(
+  return (0, import_react17.createElement)(
     "div",
     { className: "bt-event om-perm-done", "data-status": entry.status },
-    (0, import_react16.createElement)(BotMark, { bot, size: 16 }),
+    (0, import_react17.createElement)(BotMark, { bot, size: 16 }),
     ` ${askTitle(bot, entry)} · ${t(SETTLED[entry.status] ?? entry.status)}`
   );
 }
@@ -16486,10 +16570,10 @@ function withConsent(render) {
     const callId = props.call?.callId;
     const entry = bot && callId ? entryAt(props.roster, bot, props.sessionId, callId) : void 0;
     if (entry === void 0) {
-      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react16.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
+      if (props.done && /^(consent|confirmation)_required:/.test(props.content ?? "")) return (0, import_react17.createElement)("div", { className: "bt-event" }, t("Asked you for permission in its chat"));
       return render ? render(props) : null;
     }
-    return (0, import_react16.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react16.createElement)(ConsentCard, { bot, entry }) : (0, import_react16.createElement)(Settled, { bot, entry }));
+    return (0, import_react17.createElement)("div", { className: "bt-q-inline" }, entry.status === "pending" || entry.status === "running" ? (0, import_react17.createElement)(ConsentCard, { bot, entry }) : (0, import_react17.createElement)(Settled, { bot, entry }));
   };
 }
 function ConsentDock({ sessionId, useRoster, useCards }) {
@@ -16500,7 +16584,7 @@ function ConsentDock({ sessionId, useRoster, useCards }) {
   const drawn = (entry) => entry.callId && entry.sessionId === sessionId && shown[entry.callId] > 0;
   const waiting = (roster.omniConsents?.[bot.id] ?? []).filter((entry) => (entry.status === "pending" || entry.status === "running") && !drawn(entry));
   if (waiting.length === 0) return null;
-  return (0, import_react16.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react16.createElement)(ConsentCard, { key: entry.id, bot, entry })));
+  return (0, import_react17.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react17.createElement)(ConsentCard, { key: entry.id, bot, entry })));
 }
 var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
 function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
@@ -16509,35 +16593,35 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
   const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
   const now = Date.now();
   if (main) {
-    return (0, import_react16.createElement)(
+    return (0, import_react17.createElement)(
       Card,
       { title: t("On Omni") },
-      (0, import_react16.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react16.createElement)(
+      (0, import_react17.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react17.createElement)(
         "span",
         { className: "bt-set-copy" },
-        (0, import_react16.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
-        (0, import_react16.createElement)("span", { className: "bt-set-hint" }, t("Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first."))
+        (0, import_react17.createElement)("span", { className: "bt-bs-label" }, t("All of Omni")),
+        (0, import_react17.createElement)("span", { className: "bt-set-hint" }, t("Omni and Main Bots operate Omni. Messaging a person, deleting and disconnecting still ask you first."))
       ))
     );
   }
-  return (0, import_react16.createElement)(
+  return (0, import_react17.createElement)(
     Card,
     { title: t("On Omni") },
-    grants.length === 0 ? (0, import_react16.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react16.createElement)(
+    grants.length === 0 ? (0, import_react17.createElement)("div", { className: "bt-set-row bt-bs-row" }, (0, import_react17.createElement)(
       "span",
       { className: "bt-set-copy" },
-      (0, import_react16.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
-      (0, import_react16.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
-    )) : grants.map((grant) => (0, import_react16.createElement)(
+      (0, import_react17.createElement)("span", { className: "bt-bs-label" }, t("Nothing yet")),
+      (0, import_react17.createElement)("span", { className: "bt-set-hint" }, t("When {bot} needs a chat, it asks you there, on a card.", { bot: bot.name }))
+    )) : grants.map((grant) => (0, import_react17.createElement)(
       "div",
       { key: grant.id, className: "om-grant" },
-      (0, import_react16.createElement)(SwitchRow, {
+      (0, import_react17.createElement)(SwitchRow, {
         label: `${grant.resource?.name ?? t("a chat")} · ${grant.actions.map((action) => t(ACTION_TEXT[action] ?? action)).join(", ")}`,
         hint: [kindText(grant.resource), typeof grant.expiresAt === "number" && grant.expiresAt <= now ? t("expired") : "", t("Ask each time")].filter(Boolean).join(" · "),
         on: grant.approval === "confirm",
         onChange: (on2) => run(call("omni-grant-approval", { id: grant.id, approval: on2 ? "confirm" : "auto" }))
       }),
-      (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
+      (0, import_react17.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm om-grant-revoke", onClick: () => run(call("omni-grant-revoke", { id: grant.id })) }, t("Revoke"))
     ))
   );
 }
@@ -17200,11 +17284,34 @@ var STRINGS = {
   "The phone pane needs DSH's right column.": "手机面板需要 DSH 的右侧栏。",
   "Open a conversation first; the phone pane opens beside it.": "请先打开一个对话；手机面板会在它旁边打开。",
   "This chat is no longer in the sidebar.": "这个聊天已不在侧边栏中。",
-  "Open the phone pane from a chat in the sidebar.": "请从侧边栏中的聊天打开手机面板。"
+  "Open the phone pane from a chat in the sidebar.": "请从侧边栏中的聊天打开手机面板。",
+  "Not configured": "未配置",
+  "Meta webhook setup": "Meta Webhook 设置",
+  "Show webhook setup": "显示 Webhook 设置",
+  "Loading webhook setup…": "正在加载 Webhook 设置…",
+  "Callback URL unavailable. To view webhook setup, ask an admin.": "回调 URL 不可用。请联系管理员查看 Webhook 设置。",
+  "Callback URL": "回调 URL",
+  "Copy callback URL": "复制回调 URL",
+  "Verify token": "验证令牌",
+  "Reveal verify token": "显示验证令牌",
+  "Hide verify token": "隐藏验证令牌",
+  "Copy verify token": "复制验证令牌",
+  "Callback URL copied": "已复制回调 URL",
+  "Verify token copied": "已复制验证令牌",
+  "Reload webhook setup": "重新加载 Webhook 设置",
+  "Close webhook setup": "关闭 Webhook 设置",
+  "Could not load webhook setup. Try again or ask an admin.": "无法加载 Webhook 设置。请重试或联系管理员。",
+  "Could not copy. Reveal or select the value and copy it manually.": "无法复制。请显示或选择该值并手动复制。",
+  "Ask an admin to set server.public_url or OMNI_PUBLIC_URL to the public HTTPS address of this Omni.": "请管理员将 server.public_url 或 OMNI_PUBLIC_URL 设置为此 Omni 的公共 HTTPS 地址。",
+  "Ask an admin to configure META_VERIFY_TOKEN on the Omni server.": "请管理员在 Omni 服务器上配置 META_VERIFY_TOKEN。",
+  "Ask an admin to configure META_APP_SECRET on the Omni server before receiving webhooks.": "接收 Webhook 前，请管理员在 Omni 服务器上配置 META_APP_SECRET。",
+  "Open Meta Developers, choose your app and its WhatsApp webhook configuration. Paste Callback URL and Verify token into the matching fields, then verify and save.": "打开 Meta 开发者平台，选择应用及其 WhatsApp Webhook 配置。将回调 URL 和验证令牌粘贴到对应字段，然后验证并保存。",
+  "Open Meta Developers": "打开 Meta 开发者平台",
+  "The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.": "验证令牌不是 Graph API 访问令牌。连接成功不代表 Webhook 已验证；Meta 必须能够访问此 HTTPS URL。"
 };
 
 // src/client/index.js
-var import_react17 = require("react");
+var import_react18 = require("react");
 var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
@@ -17246,8 +17353,8 @@ var PHRASES = {
   omni_media: () => ({ label: t("Opening a file"), state: "working" }),
   omni_delete: () => ({ label: t("Deleting a message"), state: "working" })
 };
-var callCard = ({ arg, content, done }) => (0, import_react17.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
-var toolCard = ({ tool, arg, content, done }) => (0, import_react17.createElement)(OmniToolCard, { tool, arg, content, done });
+var callCard = ({ arg, content, done }) => (0, import_react18.createElement)(OmniCallCard, { ...parseCall(arg, content), done });
+var toolCard = ({ tool, arg, content, done }) => (0, import_react18.createElement)(OmniToolCard, { tool, arg, content, done });
 function apply(ctx) {
   ctx.effect(() => addStrings(STRINGS), "ds-bot: channels copy");
   registerConnectStep(ctx);
@@ -17265,12 +17372,12 @@ function apply(ctx) {
   }
   if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
-  ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react17.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
-  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react17.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
+  ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react18.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
+  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react18.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
   if (botChildren) ctx.effect(() => botChildren.register({ id: "omni-channels", Component: OmniTree }), "ds-bot: Omni channels in the sidebar");
   ctx.effect(() => headerButtons.register({
     id: "omni-board",
-    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react17.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
+    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react18.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
   }), "ds-bot: automations button");
   if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: "omni-automations", order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), "ds-bot: automation suggestions");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");

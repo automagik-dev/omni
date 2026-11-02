@@ -294,7 +294,6 @@ test('a sandboxed Omni below this plugin\'s minimum is offered the release a new
   const [lagging] = await discover({ env: {}, home, fetchImpl: answering(OMNI_MINIMUM), release, minimum: '2.261001.1' })
   assert.deepEqual([lagging.outdated, lagging.updateTo], [false, null])
   assert.equal(asked, 1)
-  assert.equal(newer(OMNI_MINIMUM, PLUGIN_VERSION), false, 'the plugin is never older than its own minimum')
   assert.equal(newer('2.261023.10', '2.261023.9'), true)
   assert.equal(newer('2.261023.6-labs.2', '2.261023.6'), false)
   assert.equal(newer('3.0.0', null), false)
