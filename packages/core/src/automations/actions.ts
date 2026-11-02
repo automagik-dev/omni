@@ -9,7 +9,7 @@ import type { EventBus } from '../events/bus';
 import { resolveAmbientTenantId } from '../events/envelope';
 import { SCHEMA_VALIDATION_FAILED } from '../events/schema-registry';
 import { isConnectorEventType } from '../events/types';
-import type { CustomEventType, GenericEventPayload } from '../events/types';
+import type { CustomEventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
 import type { AgentUsage } from '../schemas/agent-usage';
@@ -191,6 +191,8 @@ export interface ActionDependencies {
    */
   claimExecution?: (eventId: string, automationId: string, trustedTenantId?: string | null) => Promise<boolean>;
   sendMessage?: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
+  /** Check an original buffered event before any batch context/prompt is rendered. */
+  admitAgentEvent?: (event: OmniEvent, trustedTenantId?: string | null) => Promise<boolean>;
   /**
    * Call an AI agent and return the response.
    * The response is stored in variables for use in subsequent actions.
@@ -798,6 +800,7 @@ function buildChatlessMessages(context: TemplateContext, promptOverride?: string
         id: context.event.id,
         type: context.event.type,
         payload: context.payload,
+        ...(context.debounce ? { debounce: context.debounce } : {}),
         metadata: context.event.metadata,
         timestamp: context.event.timestamp,
       }),

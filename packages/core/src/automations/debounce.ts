@@ -9,6 +9,7 @@
  * - presence: Extend timer on composing/recording events
  */
 
+import type { OmniEvent } from '../events/types';
 import { createLogger } from '../logger';
 import type { DebounceConfig } from './types';
 
@@ -22,6 +23,8 @@ export interface DebouncedMessage {
   text?: string;
   timestamp: number;
   payload: Record<string, unknown>;
+  /** Original ingress envelope, retained only for admission before batch rendering. */
+  event?: OmniEvent;
   /**
    * Id of the real event that entered the window (#956). The flush callback
    * builds a SYNTHETIC event, so without carrying the source identity the
