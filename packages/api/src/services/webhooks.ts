@@ -29,15 +29,18 @@ import {
   type WebhookPollConfig,
   type WebhookSource,
   omniEvents,
+  resolveEnforcementMode,
   webhookSources,
 } from '@omni/db';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { deriveIdempotencyKey, resolvePayloadPath } from '../lib/ingress-idempotency';
 import { requestProducerColumns } from '../lib/key-agent';
 import { executePoll, isPollAllowlistConfigured, isPollDue, resolveAllowedCommand } from '../lib/poll-connector';
-import { pairedAgentFlagState } from '../tenancy/feature-flag';
+import { isMultitenancyEnabled, pairedAgentFlagState } from '../tenancy/feature-flag';
+import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
-import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
+import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import type { DeadLetterService } from './dead-letters';
 import type { EventSchemaService } from './event-schemas';
 
@@ -202,7 +205,77 @@ export class WebhookService {
      */
     private readonly eventSchemas: EventSchemaService | null = null,
     private readonly deadLetters: DeadLetterService | null = null,
+    private readonly authPlaneDb: Database | null = null,
   ) {}
+
+  /** Bounded per-process cache, including unknown/ambiguous names. No secrets. */
+  private readonly ingressOwners = new Map<string, { tenantId: string | null | undefined; expiresAt: number }>();
+
+  private invalidateIngressOwners(): void {
+    runAfterTenantCommit(() => this.ingressOwners.clear());
+  }
+
+  /** Public ingress discovers only ownership, then verifies/receives in that scope. */
+  async receivePublic(
+    name: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string>,
+    options: WebhookReceiveOptions,
+  ): Promise<WebhookReceiveResult> {
+    const receive = () =>
+      this.receive(name, payload, headers, { ...options, autoCreate: false, requireSignature: true });
+    if (!isMultitenancyEnabled()) return receive();
+
+    const tenantId = await this.cachedIngressOwner(name);
+    if (tenantId === undefined) {
+      throw new OmniError({ code: ERROR_CODES.UNAUTHORIZED, message: 'Webhook verification failed' });
+    }
+    return tenantId ? runInWorkerTenantScope(this.pool, tenantId, receive) : receive();
+  }
+
+  private async cachedIngressOwner(name: string): Promise<string | null | undefined> {
+    let cached = this.ingressOwners.get(name);
+    if (cached && cached.expiresAt <= Date.now()) {
+      this.ingressOwners.delete(name);
+      cached = undefined;
+    }
+    if (!cached) {
+      const tenantId = await this.discoverIngressOwner(name);
+      cached = { tenantId: tenantId, expiresAt: Date.now() + 30000 };
+      // Evict oldest entries so random public names cannot grow memory without bound.
+      if (this.ingressOwners.size >= 1000) {
+        const oldest = this.ingressOwners.keys().next().value;
+        if (oldest !== undefined) this.ingressOwners.delete(oldest);
+      }
+      this.ingressOwners.set(name, cached);
+    }
+    return cached.tenantId;
+  }
+
+  /** One auth-plane enumeration and at most N narrow scoped name reads per miss. */
+  private async discoverIngressOwner(name: string): Promise<string | null | undefined> {
+    if (!this.authPlaneDb) throw new Error('Webhook ingress requires tenant discovery');
+    const candidates: Array<string | null> = [];
+    const lookup = async (tenantId: string | null) => {
+      const rows = await this.db
+        .select({ tenantId: webhookSources.tenantId })
+        .from(webhookSources)
+        .where(
+          and(
+            eq(webhookSources.name, name),
+            tenantId ? eq(webhookSources.tenantId, tenantId) : isNull(webhookSources.tenantId),
+          ),
+        )
+        .limit(2);
+      candidates.push(...rows.map((row) => row.tenantId));
+    };
+    for (const tenantId of await enumerateActiveWorkTenants(this.authPlaneDb)) {
+      await runInWorkerTenantScope(this.pool, tenantId, () => lookup(tenantId));
+      if (candidates.length > 1) break;
+    }
+    if (resolveEnforcementMode() !== 'enforced' && candidates.length <= 1) await lookup(null);
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
 
   /**
    * List all webhook sources
@@ -234,7 +307,12 @@ export class WebhookService {
    * Get webhook source by name
    */
   async getByName(name: string): Promise<WebhookSource | null> {
-    const [result] = await this.db.select().from(webhookSources).where(eq(webhookSources.name, name)).limit(1);
+    const tenantId = this.tenantId;
+    const [result] = await this.db
+      .select()
+      .from(webhookSources)
+      .where(and(eq(webhookSources.name, name), tenantId ? eq(webhookSources.tenantId, tenantId) : undefined))
+      .limit(1);
     return result ?? null;
   }
 
@@ -265,6 +343,7 @@ export class WebhookService {
       throw new Error('Failed to create webhook source');
     }
 
+    this.invalidateIngressOwners();
     return created;
   }
 
@@ -314,6 +393,7 @@ export class WebhookService {
       throw new NotFoundError('WebhookSource', id);
     }
 
+    this.invalidateIngressOwners();
     return updated;
   }
 
@@ -354,6 +434,7 @@ export class WebhookService {
     if (!result.length) {
       throw new NotFoundError('WebhookSource', id);
     }
+    this.invalidateIngressOwners();
   }
 
   /**
