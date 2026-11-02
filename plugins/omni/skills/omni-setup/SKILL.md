@@ -15,11 +15,13 @@ For an existing server:
 ```bash
 omni server list --json
 omni server add <name> <url>                  # registers the URL; obtains no credential
-omni auth login --server <name> --api-key <key>
+omni auth login --server <name> --api-key-stdin < /secure/path/omni-api-key
 omni server use <name>                       # or use --server <name> per command
 omni status --json
 omni auth status --json
 ```
+
+Read the key from a protected file as above or pipe it from your secret manager. If `OMNI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides that env var; do not combine the flags. Do not ask for a key in chat or paste its value into a command.
 
 An API key is still required. There is no CLI device-code sign-in: adding a keyless server entry only saves its address. `auth login` validates the supplied key and saves it in the targeted server entry. Currently owner-approved device keys cannot pass that validation because they lack `auth:validate`; ask the operator for an appropriate existing CLI credential rather than widening a key or disabling scope checks.
 

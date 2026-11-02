@@ -74,7 +74,7 @@ interface CliResult {
 /**
  * Run the CLI with given arguments
  */
-async function runCli(args: string[], env: Record<string, string> = {}): Promise<CliResult> {
+async function runCli(args: string[], env: Record<string, string> = {}, stdin?: string): Promise<CliResult> {
   const proc = spawn({
     cmd: ['bun', CLI_PATH, ...args],
     env: {
@@ -83,6 +83,7 @@ async function runCli(args: string[], env: Record<string, string> = {}): Promise
       PM2_HOME: TEST_PM2_HOME, // Isolate pm2 daemon from the host (issue #413)
       ...env,
     },
+    stdin: stdin === undefined ? 'ignore' : new Blob([stdin]),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -357,6 +358,19 @@ describe('CLI Integration Tests', () => {
       assertSuccess(result, 'auth login');
       expect(result.stdout).toContain('Logged in');
     });
+
+    for (const source of ['stdin', 'env'] as const) {
+      test(`auth login accepts ${source} through the root CLI without echoing the key`, async () => {
+        const result = await runCli(
+          ['auth', 'login', '--api-url', MOCK_URL, ...(source === 'stdin' ? ['--api-key-stdin'] : [])],
+          { OMNI_API_KEY: source === 'env' ? MOCK_API_KEY : '' },
+          source === 'stdin' ? `${MOCK_API_KEY}\n` : undefined,
+        );
+        assertSuccess(result, `auth login ${source}`);
+        expect(result.stdout).toContain('Logged in');
+        expect(result.stdout + result.stderr).not.toContain(MOCK_API_KEY);
+      });
+    }
 
     test('auth status shows authenticated', async () => {
       const result = await runCli(['auth', 'status']);

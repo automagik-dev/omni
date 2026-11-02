@@ -6,7 +6,7 @@
 omni server list --json                      # masked credentials; do not use --reveal in logs
 omni server current --json
 omni server add <name> <url>                  # registers the URL only; no device login
-omni auth login --server <name> --api-key <key>
+omni auth login --server <name> --api-key-stdin < /secure/path/omni-api-key
 omni server use <name>                       # persist the active server
 omni status --server <name> --json            # one-command target override
 omni server remove <name>                    # switch away first if active
@@ -19,11 +19,13 @@ Remote registry entries are distinct from `server.*`, which configure the locall
 ## Auth
 
 ```bash
-omni auth login --api-key <key> --api-url http://localhost:8882 --json
+omni auth login --api-url http://localhost:8882 --json --api-key-stdin < /secure/path/omni-api-key
 omni auth status --json
 omni auth recover --json             # recover API key via local PM2 access; add --rotate to rotate
 omni auth logout
 ```
+
+Prefer a protected-file redirect as above or a secret-manager pipe. With an already securely supplied `OMNI_API_KEY`, `omni auth login --server <name>` needs no key flag. Explicit `--api-key-stdin` or legacy `--api-key` overrides the environment; those flags are mutually exclusive. Do not paste secrets into commands, shell history, or chat. Stdin must contain one non-empty key; a trailing newline is accepted.
 
 ## CLI config
 

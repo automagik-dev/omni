@@ -1,7 +1,7 @@
 /**
  * Auth Commands
  *
- * omni auth login --api-key <key> [--api-url <url>]
+ * omni auth login [--api-key-stdin | --api-key <key>] [--api-url <url>] (or OMNI_API_KEY)
  * omni auth status
  * omni auth logout
  * omni auth recover
@@ -9,6 +9,7 @@
 
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import {
   deleteConfigValue,
   getConfigDir,
@@ -130,6 +131,30 @@ async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean;
 // ============================================================================
 // HELPERS - VALIDATION
 // ============================================================================
+
+interface LoginOptions {
+  apiKey?: string;
+  apiKeyStdin?: boolean;
+  apiUrl?: string;
+}
+
+/** Explicit input overrides ambient credentials; never include a supplied key in an error. */
+async function readLoginApiKey(options: LoginOptions): Promise<string> {
+  if (options.apiKey !== undefined && options.apiKeyStdin) {
+    throw new Error('Use only one of --api-key and --api-key-stdin');
+  }
+  let key = options.apiKey ?? process.env.OMNI_API_KEY;
+  if (options.apiKeyStdin) {
+    if (process.stdin.isTTY) throw new Error('--api-key-stdin requires piped stdin');
+    // Accept a single line from a secret manager or protected file, including CRLF.
+    key = (await Bun.stdin.text()).replace(/\r?\n$/, '');
+  }
+  const parsed = z.string().min(1).regex(/^\S+$/).safeParse(key);
+  if (!parsed.success) {
+    throw new Error('Provide one non-empty API key via --api-key-stdin, OMNI_API_KEY, or --api-key');
+  }
+  return parsed.data;
+}
 
 /** Validate an API key against the API. Returns true if valid. */
 async function validateKey(apiUrl: string, apiKey: string): Promise<boolean> {
@@ -312,24 +337,39 @@ export function createAuthCommand(): Command {
   auth
     .command('login')
     .description('Save API credentials into the targeted server entry')
-    .requiredOption('--api-key <key>', 'API key for authentication')
+    .option('--api-key <key>', 'API key (visible in history/process lists; prefer --api-key-stdin or OMNI_API_KEY)')
+    .option('--api-key-stdin', 'Read one API key from piped stdin (trailing newline stripped)')
     .option('--api-url <url>', 'API base URL (default: the targeted server entry URL)')
     .addHelpText(
       'after',
       `
 Credentials are written to the server entry this command targets — the active
 one, or the entry named by the global flag:
-  omni auth login --server prod --api-key <key>
+  omni auth login --server prod --api-key-stdin < /secure/path/omni-api-key
+
+Or supply OMNI_API_KEY securely through the environment and run:
+  omni auth login --server prod
+
+Explicit --api-key or --api-key-stdin overrides OMNI_API_KEY; do not combine the
+flags. Prefer a secret-manager pipe or protected file over pasting a key into
+shell history or chat. --api-key remains supported.
 `,
     )
-    .action(async (options: { apiKey: string; apiUrl?: string }) => {
+    .action(async (options: LoginOptions) => {
+      let apiKey: string;
+      try {
+        apiKey = await readLoginApiKey(options);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : 'Could not read API key input', undefined, 2);
+        return;
+      }
       // `loadConfig()` has already resolved the targeted entry (active, or the
       // one named by the global `--server` flag) into apiUrl/apiKey, and
       // `saveConfig()` writes back into that same entry — so login is
       // multi-server aware without any explicit plumbing here.
       const config = loadConfig();
       const serverName = getTargetServerName();
-      config.apiKey = options.apiKey;
+      config.apiKey = apiKey;
 
       if (options.apiUrl) {
         config.apiUrl = options.apiUrl;
@@ -376,7 +416,7 @@ one, or the entry named by the global flag:
 
       if (!config.apiKey) {
         output.error(
-          `Not logged in for server "${serverName}". Run: omni auth login --server ${serverName} --api-key <key>`,
+          `Not logged in for server "${serverName}". Run: omni auth login --server ${serverName} --api-key-stdin < /secure/path/omni-api-key`,
           undefined,
           2,
         );
