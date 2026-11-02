@@ -11,7 +11,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { EventBus, TypedOmniEvent } from '@omni/core';
 import { type Database, createDbHandle, globalSettings, loginUsers } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { type Login, createLogin, ownerOf } from '../../login';
@@ -41,12 +41,6 @@ const OWNER: OwnAccount = {
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const ADMIN_KEY_ID = '44444444-4444-4444-8444-444444444444';
 type Json = Record<string, unknown>;
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 postgresDescribe('pairing with nothing configured (real PostgreSQL)', () => {
   const dbName = `omni_login_op_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -143,7 +137,7 @@ postgresDescribe('pairing with nothing configured (real PostgreSQL)', () => {
     }
     process.env.TRUSTED_PROXY_HEADER = 'x-forwarded-for';
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 4 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
     close = handle.close;
     db = handle.db;
     const defaults = await resolveLoginDefaults(db);

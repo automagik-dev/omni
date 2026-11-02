@@ -416,6 +416,33 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
     );
     expect(response.status).toBe(400);
   });
+  test('flag on with NULL tenant: list, inspect, pull, ack, stream and delete pass for the real agent key', async () => {
+    const consumerName = name();
+    const response = await request('null-agent', '', 'POST', {
+      name: consumerName,
+      eventType: 'custom.null.*',
+      startFrom: 'beginning',
+    });
+    expect(response.status).toBe(201);
+    const [stored] = await db.select().from(durableConsumers).where(eq(durableConsumers.name, consumerName));
+    expect(stored).toMatchObject({ tenantId: null, agentId: legacyAgent, ownerKeyId: credential('null-agent').key.id });
+    const [event] = await db
+      .insert(omniEvents)
+      .values({ eventType: 'custom.null.proof', channel: 'internal', instanceId: legacyInstance, journalReady: true })
+      .returning();
+    if (!event) throw new Error('NULL tenant event missing');
+    expect(event.tenantId).toBeNull();
+    const list = listing.parse(await (await request('null-agent', '')).json());
+    expect(list.items.map((item) => item.name)).toContain(consumerName);
+    expect((await hit('null-agent', consumerName, 'inspect')).status).toBe(200);
+    const pulled = page.parse(await (await hit('null-agent', consumerName, 'pull')).json());
+    expect(pulled.items.map((item) => item.id)).toEqual([event.id]);
+    const stream = await hit('null-agent', consumerName, 'stream');
+    expect(stream.status).toBe(200);
+    expect(await streamText(stream)).toContain(event.id);
+    expect((await request('null-agent', `/${consumerName}/ack`, 'POST', { cursor: pulled.cursor })).status).toBe(200);
+    expect((await hit('null-agent', consumerName, 'delete')).status).toBe(200);
+  });
   test('an agent naming its own UUID in uppercase creates with canonical ownership', async () => {
     const response = await request(
       'a',

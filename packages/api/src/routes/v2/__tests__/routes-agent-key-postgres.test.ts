@@ -1,5 +1,5 @@
 /** Route writes must keep turn-dispatch keys aligned with default/route bindings. */
-import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, mock, test } from 'bun:test';
 import {
   type Agent,
   DEFAULT_ROLE_NAMES,
@@ -35,6 +35,13 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
   const dbName = `omni_route_keys_${crypto.randomUUID().replaceAll('-', '')}`;
   const closers: (() => Promise<void>)[] = [];
+  const previousEnv = { ...process.env };
+  afterEach(() => {
+    for (const name of ['OMNI_MULTITENANCY_ENABLED', 'OMNI_PAIRED_AGENT_CONSUMERS']) {
+      if (previousEnv[name] === undefined) Reflect.deleteProperty(process.env, name);
+      else process.env[name] = previousEnv[name];
+    }
+  });
   let db: Database;
   let keys: ApiKeyService;
   let resolver: RouteResolver;
@@ -384,6 +391,40 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
       runInWorkerTenantScope(runtime, foreignTenant, () => scopedRoutes.getById(route.id)),
     ).rejects.toThrow();
     await runInWorkerTenantScope(runtime, localTenant, () => syncRouteAgentKeys(runtime, target.id, [foreign.id]));
+    expect(await keys.getById(foreignKey.key.id)).toEqual(foreignKey.key);
+  }, 15_000);
+
+  test('multitenancy on without paired flag: route writer provisions and retires only its tenant agent key (#1488)', async () => {
+    process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+    Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+    const localTenant = crypto.randomUUID();
+    const foreign = await agent(crypto.randomUUID());
+    const local = await agent(localTenant);
+    const target = await instance(localTenant);
+    const other = await instance(foreign.tenantId, foreign.id);
+    const foreignKey = await keys.create({
+      name: keyName(foreign),
+      scopes: ['messages:send'],
+      instanceIds: [other.id],
+      createdBy: 'system:auto-provision',
+    });
+    const conversation = await chat(target.id);
+    const runtime = openDb(await enforcedRole());
+    await assertPgTestRole(runtime, DEFAULT_ROLE_NAMES.runtime);
+    const service = new RouteService(runtime, new RouteResolver(runtime));
+    const route = await runInWorkerTenantScope(runtime, localTenant, () =>
+      service.create(target.id, {
+        scope: 'chat',
+        chatId: conversation.id,
+        agentId: local.id,
+        priority: 0,
+        isActive: true,
+      }),
+    );
+    const key = await keys.findAgentKeyByName(keyName(local));
+    expect(key?.instanceIds).toEqual([target.id]);
+    await runInWorkerTenantScope(runtime, localTenant, () => service.delete(route.id));
+    expect((await keys.getById(key?.id ?? ''))?.status).toBe('revoked');
     expect(await keys.getById(foreignKey.key.id)).toEqual(foreignKey.key);
   }, 15_000);
 

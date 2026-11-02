@@ -198,6 +198,28 @@ deletion is reported separately, without treating deletion as failed
   `omniEventCursors`) stay in the team's `state.json`, saved through the team's lock; a DSH
   that only reads the team does not change them.
 
+## Meta webhook setup
+
+After WhatsApp Business connects, the setup panel shows the deployment's public HTTPS
+callback URL and a **Verify token**, masked until **Reveal verify token** is selected.
+Each value has its own copy button. Reopen it from the existing Business channel's
+**Channel settings → Show webhook setup**; this does not create or reconnect a channel.
+Paste the two values into the matching Meta Developers WhatsApp webhook fields, then
+verify and save. The Verify token is separate from the Graph API access token.
+
+Retrieval requires an unlocked global Omni key with `settings:write` (or `settings:*`
+or `*`) and a writable DSH host. Tenant-bound keys and keys with instance, chat or
+outbound locks are refused. Other callers see an unavailable URL state and **ask an
+admin**. No callback is inferred from a local API address or request headers.
+
+An administrator must configure `server.public_url` (with `OMNI_PUBLIC_URL` as fallback),
+`META_VERIFY_TOKEN` and `META_APP_SECRET` on the server. Missing configuration is shown
+explicitly. The endpoint returns only whether the app secret is configured, never its
+value or a Graph API access token. The verify token is shared across Meta instances,
+kept only in the open panel's memory, and the response is `Cache-Control: no-store`.
+Connection alone does not prove Meta can reach or verify the webhook. No automatic
+Meta registration or credential rotation is performed.
+
 ## Own-device voice and media automations
 
 Voice/media triggers are inbound-only by default. When the owner explicitly asks to

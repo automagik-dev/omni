@@ -24,8 +24,41 @@ export const ChannelCapabilitiesSchema = z.object({
 export const ChannelCapabilitiesMatrixSchema = z.object({ items: z.array(ChannelCapabilitiesSchema) });
 export type ChannelCapabilitiesMatrix = z.infer<typeof ChannelCapabilitiesMatrixSchema>;
 
+export const MetaWebhookSetupSchema = z.object({
+  callbackUrl: z
+    .string()
+    .url()
+    .nullable()
+    .describe('Configured public HTTPS callback, never inferred from request headers'),
+  verifyToken: z.string().nullable().describe('Active server META_VERIFY_TOKEN; not a Graph API access token'),
+  appSecretConfigured: z.boolean().describe('Whether META_APP_SECRET is set; its value is never returned'),
+  state: z
+    .enum(['ready', 'public_url_missing', 'verify_token_missing'])
+    .describe(
+      'Public URL absence takes precedence when both URL and token are missing; inspect both nullable fields and appSecretConfigured. Ready means URL/token configured, not successful Meta verification.',
+    ),
+});
+
 export function registerChannelSchemas(registry: OpenAPIRegistry): void {
   registry.register('ChannelCapabilities', ChannelCapabilitiesSchema);
+  registry.register('MetaWebhookSetup', MetaWebhookSetupSchema);
+  registry.registerPath({
+    method: 'get',
+    path: '/channels/whatsapp-business/webhook-setup',
+    operationId: 'getMetaWebhookSetup',
+    tags: ['Instances'],
+    summary: 'Read Meta webhook setup for this deployment',
+    description:
+      'Requires settings:write and an unlocked, non-tenant credential. Returns the configured public callback and active verification token (shared across Meta instances). Cache-Control: no-store. Never returns the app secret or Graph API access tokens.',
+    responses: {
+      200: {
+        description: 'Webhook configuration; missing configuration is explicit',
+        content: { 'application/json': { schema: z.object({ data: MetaWebhookSetupSchema }) } },
+      },
+      401: { description: 'Authentication required' },
+      403: { description: 'Global settings administrator required; tenant and locked credentials are refused' },
+    },
+  });
 
   registry.registerPath({
     method: 'get',
