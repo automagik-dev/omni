@@ -21,7 +21,7 @@ import {
   pgRoleUrl,
   provisionMigratedDatabase,
 } from '@omni/db/pg-migrated-template';
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { createApp } from '../app';
@@ -93,11 +93,17 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
       { id: B, name: 'c1-b', provider: 'claude' },
       { id: inactive, name: 'c1-inactive', provider: 'claude', isActive: false },
     ]);
+    // Match the existing agent-key fixtures: insert ownership has no creator parent,
+    // so apply the trusted additive-state backfill before creating tenant-root instances.
+    await owner
+      .update(agents)
+      .set({ tenantId: T })
+      .where(inArray(agents.id, [A, B, inactive]));
     await owner.insert(instances).values([
-      { id: IA, name: 'c1-a', channel: 'whatsapp-baileys', agentId: A },
-      { id: IB, name: 'c1-b', channel: 'whatsapp-baileys', agentId: B },
-      { id: II, name: 'c1-inactive', channel: 'whatsapp-baileys', agentId: inactive },
-      { id: unbound, name: 'c1-unbound', channel: 'whatsapp-baileys' },
+      { id: IA, name: 'c1-a', channel: 'whatsapp-baileys', agentId: A, tenantId: T },
+      { id: IB, name: 'c1-b', channel: 'whatsapp-baileys', agentId: B, tenantId: T },
+      { id: II, name: 'c1-inactive', channel: 'whatsapp-baileys', agentId: inactive, tenantId: T },
+      { id: unbound, name: 'c1-unbound', channel: 'whatsapp-baileys', tenantId: T },
     ]);
     const keys = new ApiKeyService(owner);
     async function key(label: string, scopes: string[], instanceIds?: string[], systemName?: string) {
@@ -140,6 +146,8 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
       },
       {
         id: sourcelessId,
+        // This instance-less row derives tenant ownership from a persisted agent.
+        agentId: B,
         eventType: 'custom.c1.sourceless',
         channel: 'internal',
         direction: 'internal',
@@ -158,6 +166,9 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
     await applyTenancyRoles(owner, passwords, DEFAULT_ROLE_NAMES, database);
     db = open({ name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
     await assertPgTestRole(db, DEFAULT_ROLE_NAMES.runtime);
+    const seededRows = await db.select({ tenantId: omniEvents.tenantId }).from(omniEvents);
+    expect(seededRows).toHaveLength(2);
+    expect(seededRows.every((row) => row.tenantId === T)).toBe(true);
     const application = createApp(db, null, null, null);
     app = application.app;
     // As in the pre-existing C15 route harness: the edge supplies a trusted tenant, never a caller hint.
