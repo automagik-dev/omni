@@ -52,16 +52,15 @@ for (const enforced of [false, true]) {
       reason = 'schema_validation_failed',
       payload: Record<string, unknown> = { orderId: 'order-1' },
     ) {
-      // The variable also works once #1503 removes the caller-owned eventId argument.
-      const input = {
-        eventId: crypto.randomUUID(),
-        eventType,
-        subject: eventType,
-        payload,
-        errors: ['original refusal'],
-        reason,
-      };
-      return inWorld(() => service.createSchemaValidationFailure(input));
+      return inWorld(() =>
+        service.createSchemaValidationFailure({
+          eventType,
+          subject: eventType,
+          payload,
+          errors: ['original refusal'],
+          reason,
+        }),
+      );
     }
 
     async function register(eventType: string, enabled = true) {
