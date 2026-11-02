@@ -213,7 +213,7 @@ format:
 # Per-package tests via turbo (#967): unchanged packages replay their cached
 # green run instead of re-executing, so an incremental `make check` pays only
 # for the packages the change touched. The turbo `test` task hashes
-# DATABASE_URL / TEST_DATABASE_URL / ENABLE_DB_TESTS / OMNI_* on top of each
+# DATABASE_URL / OMNI_* on top of each
 # package's files, so pointing at a different database invalidates the cache.
 # Env is loaded into the environment here because per-package `bun test` runs
 # have no --env-file.

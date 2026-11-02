@@ -5,8 +5,8 @@
  * WHY THIS FILE EXISTS SEPARATELY
  * ------------------------------
  * These assertions first shipped inside `follow-up-lifecycle.test.ts`, behind
- * `describeWithDb` → `ENABLE_DB_TESTS`, which nothing in this repository ever
- * sets. They therefore never executed anywhere, and the arm-epoch bug below
+ * the former database opt-in harness, which the repository did not enable.
+ * They therefore never executed anywhere, and the arm-epoch bug below
  * (a re-arm resets `sequenceIndex` to 0, colliding with the previous cycle's
  * claims and silently dropping a legitimate follow-up) shipped uncaught.
  *
