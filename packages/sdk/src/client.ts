@@ -35,21 +35,33 @@ export interface CreateConnectorBody {
   provider: string;
   name: string;
   credentials: Record<string, string>;
+  /** Write-only connector delivery secret. */
+  hookSecret?: string;
   config?: Record<string, unknown>;
 }
 
 export interface UpdateConnectorBody {
   name?: string;
   credentials?: Record<string, string>;
+  /** Write-only; setting this rotates the connector delivery secret. */
+  hookSecret?: string;
   config?: Record<string, unknown>;
 }
 
-export interface CreateConnectorSubscriptionBody {
-  eventKey: string;
-  filters?: Record<string, unknown>;
-  targetAutomationId: string;
-  verificationSecret: string;
-}
+export type CreateConnectorSubscriptionBody =
+  | {
+      ingress?: 'subscription';
+      eventKey: string;
+      filters?: Record<string, unknown>;
+      targetAutomationId: string;
+      verificationSecret: string;
+    }
+  | {
+      ingress: 'connector';
+      eventKey: string;
+      filters?: Record<string, unknown>;
+      targetAutomationId?: string;
+    };
 
 export interface UpdateConnectorSubscriptionBody {
   status?: 'active' | 'paused';
@@ -517,13 +529,12 @@ export interface ListProvidersParams {
  * Provider schema type
  * - agno: Agno AI orchestration platform
  * - webhook: Webhook-based agent provider
- * - openclaw: OpenClaw Gateway (WebSocket session-based agent runtime)
  * - ag-ui: AG-UI protocol
  * - claude-code: Claude Code agent provider
  * - a2a: Agent-to-Agent protocol provider
  * - nats-genie: NATS-based Genie provider (publishes to NATS topics)
  */
-export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
+export type ProviderSchema = 'agno' | 'webhook' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
 
 /**
  * Body for creating a provider
@@ -3263,7 +3274,7 @@ export function createOmniClient(config: OmniClientConfig) {
       },
 
       async create(body: CreateConnectorBody): Promise<Connector> {
-        const { data, error, response } = await client.POST('/connectors', { body: body as never });
+        const { data, error, response } = await client.POST('/connectors', { body });
         throwIfError(response, error);
         if (!data?.data)
           throw new OmniApiError('Failed to create connector', 'CREATE_FAILED', undefined, response.status);
@@ -3273,7 +3284,7 @@ export function createOmniClient(config: OmniClientConfig) {
       async update(id: string, body: UpdateConnectorBody): Promise<Connector> {
         const { data, error, response } = await client.PATCH('/connectors/{id}', {
           params: { path: { id } },
-          body: body as never,
+          body,
         });
         throwIfError(response, error);
         if (!data?.data)
@@ -3322,7 +3333,7 @@ export function createOmniClient(config: OmniClientConfig) {
         async add(connectorId: string, body: CreateConnectorSubscriptionBody): Promise<ConnectorEventSubscription> {
           const { data, error, response } = await client.POST('/connectors/{id}/subscriptions', {
             params: { path: { id: connectorId } },
-            body: body as never,
+            body,
           });
           throwIfError(response, error);
           if (!data?.data)

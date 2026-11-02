@@ -443,7 +443,7 @@ export interface OmniExecutionContext {
 /**
  * Unified agent provider interface
  *
- * All agent providers (Agno, OpenClaw webhook, Claude SDK, etc.)
+ * All agent providers (Agno, webhook, Claude SDK, etc.)
  * implement this interface for the agent dispatcher.
  */
 export interface IAgentProvider {
@@ -477,7 +477,7 @@ export interface IAgentProvider {
   dispose?(): Promise<void>;
 
   /** Optional: Reset/clear a session by session key.
-   *  chatId is provided so providers that build their own key format (e.g. OpenClaw)
+   *  chatId is provided so providers that build their own key format
    *  can reconstruct the correct session key.
    *  instanceId is provided for providers that scope persistence by instance. */
   resetSession?(sessionKey: string, chatId?: string, instanceId?: string): Promise<void>;

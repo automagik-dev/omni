@@ -38,6 +38,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertPgTestTarget } from '../packages/db/src/pg-migrated-template';
 import {
   createDisposableCluster,
   destroyDisposableCluster,
@@ -127,6 +128,7 @@ try {
     if (explicitUrl.includes('?') || parsed.hostname !== '127.0.0.1' || !isDisposablePgPort(Number(parsed.port))) {
       throw new Error('pg-gate: requires 127.0.0.1 on a disposable port (never 5432 or 15432)');
     }
+    assertPgTestTarget(explicitUrl, { ...process.env, OMNI_PG_TEST_TARGET: parsed.host });
   }
   if (!explicitUrl) {
     try {
@@ -145,6 +147,10 @@ try {
 
   const env: Record<string, string> = { ...(process.env as Record<string, string>) };
   for (const variable of POSTGRES_URL_VARS) env[variable] = url;
+  // Test helpers accept TCP only at this gate's explicitly acquired target.
+  env.OMNI_PG_TEST_TARGET = new URL(url).host;
+  // The shared preflight checks postgres.js resolved options without connecting.
+  assertPgTestTarget(url, env);
   // Mute the app logger under the gate unless the caller asked for logs (#967):
   // the suites intentionally exercise warn/error paths and the JSON flood is
   // pure I/O on green runs. bun test's own failure diagnostics are unaffected.

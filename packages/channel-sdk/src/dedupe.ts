@@ -7,7 +7,7 @@
  *
  * Cache key format: `${instanceId}:${externalId}`
  *
- * DEC-4: Defaults: 500 entries, 60-sec TTL (matches OpenClaw production config)
+ * DEC-4: Defaults: 500 entries, 60-sec TTL
  * DEC-5: Key validation with fail-open policy
  * DEC-7: Drops logged at AUDIT (info) level
  * DEC-8: Per-instance only (not distributed)

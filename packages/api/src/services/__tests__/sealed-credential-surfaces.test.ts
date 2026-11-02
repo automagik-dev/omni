@@ -10,7 +10,7 @@
  *     bot tokens and signing secrets. The tenant is the instance row's OWN
  *     persisted `tenant_id` (the G2 ownership root), so the binding needs no
  *     resolver seam at all.
- *   * `agent_providers.api_key` + the OpenClaw Ed25519 device key material in
+ *   * `agent_providers.api_key` + the legacy Ed25519 device key material in
  *     `schema_config` (`devicePrivateKey`, `deviceToken`). `agent_providers` is
  *     a G0-`split` table with no `tenant_id` yet, so the binding is the ACTIVE
  *     tenant scope — a provider configured inside tenant A's context is sealed
@@ -225,7 +225,7 @@ describe('(g) instances.* channel tokens', () => {
 });
 
 // ---------------------------------------------------------------------------
-// agent_providers.api_key + OpenClaw Ed25519 material in schema_config
+// agent_providers.api_key + legacy Ed25519 material in schema_config
 // ---------------------------------------------------------------------------
 
 function makeProvidersDb() {
@@ -270,7 +270,7 @@ function makeProvidersDb() {
   return { db: db as unknown as Database, rows };
 }
 
-describe('(g) agent_providers.api_key + OpenClaw device key', () => {
+describe('(g) agent_providers.api_key + legacy device key', () => {
   test('flag-off: api_key and device key stay plaintext', async () => {
     const { db, rows } = makeProvidersDb();
     const svc = new ProviderService(db);

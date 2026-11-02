@@ -31,7 +31,7 @@ Purpose: the agent backends Omni dispatches to — a live table with a gated cre
 
 Layout: entry-head ("Providers" / "Agent provider configuration, health, and discovery.") over a full-width Table.
 
-Columns (real fields): `name` (bold) · `schema` (`PillBadge`: `agno`/`webhook`/`openclaw`/`ag-ui`/`claude-code`/`a2a`/`nats-genie`) · `baseUrl` (mono) · Capabilities (`PillBadge` chips derived from `supportsStreaming`→stream, `supportsImages`→images, `supportsAudio`→audio, `supportsDocuments`→docs; `—` if none) · Status (`StatusBadge` green `active` / gray `inactive`, from `isActive`) · `id` (mono, 220w).
+Columns (real fields): `name` (bold) · `schema` (`PillBadge`: `agno`/`webhook`/`ag-ui`/`claude-code`/`a2a`/`nats-genie`) · `baseUrl` (mono) · Capabilities (`PillBadge` chips derived from `supportsStreaming`→stream, `supportsImages`→images, `supportsAudio`→audio, `supportsDocuments`→docs; `—` if none) · Status (`StatusBadge` green `active` / gray `inactive`, from `isActive`) · `id` (mono, 220w).
 
 Actions: `Refresh` (read-only) · `New provider` → create dialog · row-click → `/providers/:id`.
 
