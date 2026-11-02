@@ -525,6 +525,17 @@ any test skipped, when zero tests passed, or when the number of files that ran
 differs from the number of `*-postgres.test.ts` files discovered. Adding a new
 suite without wiring it fails the gate rather than silently skipping.
 
+The connection preflight is a static URL/driver-options check; it does not prove
+that a server belongs to the test run. The gate replaces inherited
+`OMNI_G*_POSTGRES_URL` values with its acquired disposable target. Direct suite
+runs retain import-time validation: a manual TCP run also needs
+`OMNI_PG_TEST_TARGET=127.0.0.1:<port>` matching its disposable cluster. Socket runs
+use `PGHOST` under a temporary directory and an explicit `PGPORT`.
+
+Raw whitespace, control characters, fragments, and raw `@` outside the authority
+are refused before connecting. This includes `@` in query values: percent-encode
+it as `%40` (for example, `?application_name=a%40b`) and encode spaces as `%20`.
+
 **Smoke Test steps:**
 1. Same setup as quality gate
 2. Build all packages
