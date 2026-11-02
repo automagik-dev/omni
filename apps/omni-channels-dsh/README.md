@@ -198,6 +198,30 @@ deletion is reported separately, without treating deletion as failed
   `omniEventCursors`) stay in the team's `state.json`, saved through the team's lock; a DSH
   that only reads the team does not change them.
 
+## Own-device voice and media automations
+
+Voice/media triggers are inbound-only by default. When the owner explicitly asks to
+include their own outbound media, use `save_automation` with `allow_outbound: true`
+(`trigger: "voice"` for audio; `"media"` for photos, videos, documents and stickers).
+The saved trigger records `allowOutbound`; later edits retain it unless explicitly
+changed or the trigger kind changes. Set `allow_outbound: false` to turn it off.
+The board and automation summary show when own-device media is included.
+
+Admission also reads the canonical message through the configured Omni credentials:
+it must match the watched chat and external ID, have an own-device platform receipt,
+and have no agent attribution. API-send records and `message.sent` never trigger it.
+Missing or malformed required lookups do not dispatch or advance the cursor. This
+currently admits WhatsApp Baileys own-device receipts; other channels without that
+receipt shape remain excluded. The existing channel echo guard stays in place.
+
+The worker gets the source chat/instance, a message/media reference and available
+transcription or processed content, under its existing permissions. If processing is
+disabled or still pending but a media URL exists, it receives that reference without
+inventing a transcript. Missing content and media references wait for a later read.
+Reaction triggers retain “you react” semantics and resolve the referenced message,
+including its available transcription. This does not replay already-acknowledged
+outbound events or change the stream's existing at-least-once delivery contract.
+
 ## Quiesce automation ingress before unloading
 
 The `omniChannels` host runtime exposes `await rt.quiesceOmniEvents()`. Call and await

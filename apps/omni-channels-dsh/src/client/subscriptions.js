@@ -54,7 +54,8 @@ const TriggerBadge = ({ trigger, size = 36 }) => h('span', { className: 'os-trig
 function triggerText(trigger) {
   if (trigger.kind === 'reaction') return t('you react')
   if (trigger.kind === 'keyword') return t('a message says {words}', { words: trigger.words.map(word => `“${word}”`).join(t(' or ')) })
-  return t(TRIGGERS[trigger.kind].label).toLowerCase()
+  const label = t(TRIGGERS[trigger.kind].label).toLowerCase()
+  return trigger.allowOutbound === true && ['voice', 'media'].includes(trigger.kind) ? `${label} ${t('(including your own device)')}` : label
 }
 
 function sourcesText(sources) {

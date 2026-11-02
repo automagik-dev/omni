@@ -14,12 +14,17 @@ const rowSchema = z.object({
   id: z.string(), eventType: z.string(), journalSeq: z.number().int().nonnegative().optional(),
   direction: optionalText, chatUuid: optionalText, instanceId: optionalText,
   externalId: optionalText, receivedAt: optionalText, contentType: optionalText, textContent: optionalText,
+  mediaUrl: optionalText, mediaMimeType: optionalText,
   rawPayload: z.object({ isFromMe: z.unknown().optional(), isMentioningInstance: z.unknown().optional() }).passthrough().nullish(),
   metadata: z.object({ from: optionalText, emoji: optionalText }).passthrough().nullish(),
 }).passthrough()
 const nameReplySchema = z.object({ data: z.object({ name: optionalText }).passthrough().nullish() })
 const messageReplySchema = z.object({ data: z.object({
+  id: optionalText, chatId: optionalText, externalId: optionalText, messageType: optionalText,
   textContent: optionalText, transcription: optionalText, senderDisplayName: optionalText,
+  senderAgentId: optionalText, isFromMe: z.boolean().nullish(), mediaUrl: optionalText, mediaMimeType: optionalText,
+  imageDescription: optionalText, videoDescription: optionalText, documentExtraction: optionalText,
+  rawPayload: z.object({ key: z.object({ id: optionalText, fromMe: z.boolean().optional() }).passthrough().nullish() }).passthrough().nullish(),
 }).passthrough().nullish() })
 const ackErrorSchema = z.object({ error: z.object({ code: z.literal('VALIDATION_ERROR'), message: z.string() }) })
 
@@ -53,8 +58,12 @@ export function matches(sub, row) {
     const own = row.rawPayload?.isFromMe === true || row.direction === 'outbound'
     return trigger.kind === 'reaction' && own && bare(row.textContent ?? row.metadata?.emoji) === bare(trigger.emoji)
   }
-  if (row.eventType !== 'message.received' || row.direction !== 'inbound') return false
+  if (row.eventType !== 'message.received') return false
   const type = row.contentType ?? 'text'
+  // This is only the subscription match. Own-device admission below also checks the
+  // canonical message; fromMe/direction alone never makes an API send eligible.
+  if (row.direction !== 'inbound' && !(row.direction === 'outbound' && trigger.allowOutbound === true
+    && ['voice', 'media'].includes(trigger.kind) && row.rawPayload?.isFromMe === true)) return false
   if (trigger.kind === 'message') return true
   if (trigger.kind === 'mention') return row.rawPayload?.isMentioningInstance === true
   if (trigger.kind === 'voice') return type === 'audio'
@@ -115,27 +124,67 @@ export function install(rt) {
     return value
   }
 
-  // What the worker gets: the message (for a reaction, the one reacted to), who wrote it,
-  // and where, with the ids of that chat and its channel (a chat-thread worker's thread is
-  // that chat's).
+  // Fresh reads: a missing message or unfinished transcription must not be frozen in
+  // the name cache for ten minutes. The API enforces the caller's chat/tenant scope.
+  async function messageOf(row, required = false) {
+    if (row.chatUuid && row.externalId) {
+      const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
+      if (response?.ok) {
+        const reply = messageReplySchema.safeParse(await response.json())
+        if (reply.success && reply.data.data) return reply.data.data
+      }
+    }
+    if (required) throw new Error('own-device media message is not available; no dispatch or ack')
+  }
+
+  // Canonical sent records retain the server's send shape and/or agent attribution.
+  // A phone receipt has its platform key. Missing/foreign records never admit an event.
+  function ownDeviceMedia(row, message) {
+    if (message.chatId !== row.chatUuid || message.externalId !== row.externalId) throw new Error('media message does not match its source')
+    return message.senderAgentId === null && message.isFromMe === true
+      && message.rawPayload?.key?.fromMe === true && message.rawPayload.key.id === row.externalId
+  }
+
+  function messageContext(row, message) {
+    return {
+      id: message?.id, externalId: row.externalId, type: message?.messageType ?? row.contentType,
+      mediaUrl: message?.mediaUrl ?? row.mediaUrl, mimeType: message?.mediaMimeType ?? row.mediaMimeType,
+    }
+  }
+
+  // What the worker gets: the message (for a reaction, the one reacted to), its
+  // processed content and media reference, and the ids of its chat and channel.
   async function eventOf(row) {
+    const outboundMedia = row.eventType === 'message.received' && row.direction === 'outbound'
+    const media = ['audio', 'image', 'video', 'document', 'sticker'].includes(row.contentType)
+    let message
+    if (outboundMedia) {
+      message = await messageOf(row, true)
+      if (!ownDeviceMedia(row, message)) {
+        rt.warn('ds-bot: refused generated or unattributed outbound media event %s', row.id)
+        return undefined
+      }
+    } else if (row.eventType === 'reaction.received' || media) {
+      try { message = await messageOf(row) } catch { /* inbound/reaction enrichment is optional */ }
+    }
+    const processedText = [...new Set([message?.textContent, message?.transcription, message?.imageDescription, message?.videoDescription, message?.documentExtraction].filter(Boolean))].join('\n')
+    const text = processedText || row.textContent || ''
+    const reference = messageContext(row, message)
+    if (outboundMedia && !text && !reference.mediaUrl) throw new Error('own-device media content is not ready; no dispatch or ack')
     const chat = row.chatUuid ? await lookup(`/chats/${row.chatUuid}`, nameReplySchema, reply => reply.data?.name) : undefined
     const channel = row.instanceId ? await lookup(`/instances/${row.instanceId}`, nameReplySchema, reply => reply.data?.name) : undefined
     const ids = { ...(row.chatUuid ? { chatId: row.chatUuid } : {}), ...(row.instanceId ? { instanceId: row.instanceId } : {}) }
     if (row.eventType === 'reaction.received') {
-      const message = row.chatUuid && row.externalId
-        ? await lookup(`/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`, messageReplySchema, reply => reply.data)
-        : undefined
       return {
         kind: `reaction ${row.textContent ?? ''}`.trim(), who: 'the user', chat, channel, ...ids, at: Date.parse(row.receivedAt) || Date.now(),
-        text: String(message?.textContent || message?.transcription || '').slice(0, TEXT_MAX),
-        author: message?.senderDisplayName ?? undefined,
+        text: String(processedText).slice(0, TEXT_MAX),
+        author: message?.senderDisplayName ?? undefined, ...(message ? { message: reference } : {}),
       }
     }
     return {
       kind: row.contentType === 'audio' ? 'voice note' : row.contentType && row.contentType !== 'text' ? row.contentType : 'message',
       who: row.metadata?.from ?? undefined, chat, channel, ...ids, at: Date.parse(row.receivedAt) || Date.now(),
-      text: String(row.textContent ?? '').slice(0, TEXT_MAX),
+      text: String(text).slice(0, TEXT_MAX), ...(media ? { message: reference } : {}),
     }
   }
 
@@ -144,6 +193,7 @@ export function install(rt) {
     const due = Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row))
     if (due.length === 0) return 'unmatched'
     const event = await eventOf(row)
+    if (event === undefined) return 'unmatched'
     if (cancelled(controller)) return 'cancelled'
     // Admission is the first dispatch, not the lookup. Once entered, finish this whole
     // captured row (even after stop), then ack it before the run can settle.

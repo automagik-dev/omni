@@ -15356,7 +15356,8 @@ var TriggerBadge = ({ trigger, size = 36 }) => (0, import_react13.createElement)
 function triggerText(trigger) {
   if (trigger.kind === "reaction") return t("you react");
   if (trigger.kind === "keyword") return t("a message says {words}", { words: trigger.words.map((word) => `“${word}”`).join(t(" or ")) });
-  return t(TRIGGERS[trigger.kind].label).toLowerCase();
+  const label = t(TRIGGERS[trigger.kind].label).toLowerCase();
+  return trigger.allowOutbound === true && ["voice", "media"].includes(trigger.kind) ? `${label} ${t("(including your own device)")}` : label;
 }
 function sourcesText(sources) {
   if (sources.length === 1) return sources[0].kind === "channel" ? t("anywhere on {name}", { name: sources[0].name }) : sources[0].name;
@@ -16557,6 +16558,7 @@ var PERMISSIONS_CSS = `
 
 // src/client/strings.js
 var STRINGS = {
+  "(including your own device)": "（包括你自己的设备）",
   "Example": "示例",
   "Credentials may have been saved. Reload this channel before retrying.": "凭据可能已保存。重试前请重新加载此频道。",
   "Could not load agents. The current assignment is unchanged.": "无法加载智能体。当前分配保持不变。",

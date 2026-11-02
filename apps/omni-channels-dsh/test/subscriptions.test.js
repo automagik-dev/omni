@@ -2406,3 +2406,56 @@ test('a chat-thread automation an older plugin paused, not knowing its worker, i
   await until(() => next.run.agentOf(thread.sessionId).calls.length === 1)
   assert.deepEqual(next.run.agentOf(thread.sessionId).calls[0].source, { kind: 'omni-run', runId: event.id })
 })
+
+
+test('outbound media requires a boolean opt-in, persists through edits and stays voice/media-only', async t => {
+  const { tool, call } = setup(t)
+  const view = async () => (await call('state', {})).value.subscriptions[0]
+  assert.match(await tool('save_automation')({ sources: 'chat:obras', trigger: 'voice' }), /^Saved /)
+  const first = await view()
+  assert.equal(first.trigger.allowOutbound, false)
+  assert.match(await tool('save_automation')({ id: first.id, allow_outbound: true }), /including your own device/)
+  assert.equal((await view()).trigger.allowOutbound, true)
+  await tool('save_automation')({ id: first.id, name: 'Renamed' })
+  assert.equal((await view()).trigger.allowOutbound, true)
+  await tool('save_automation')({ id: first.id, allow_outbound: false })
+  assert.equal((await view()).trigger.allowOutbound, false)
+  await assert.rejects(tool('save_automation')({ id: first.id, allow_outbound: 'true' }), /must be a boolean/)
+  assert.match(await tool('save_automation')({ id: first.id, trigger: 'message', allow_outbound: true }), /only for voice or media/)
+  assert.match(await tool('save_automation')({ id: first.id, trigger: 'reaction', emoji: '🎧', allow_outbound: true }), /only for voice or media/)
+  assert.equal((await view()).trigger.kind, 'voice')
+  await tool('save_automation')({ id: first.id, trigger: 'media', allow_outbound: true })
+  assert.equal((await view()).trigger.allowOutbound, true)
+  await tool('save_automation')({ id: first.id, trigger: 'voice' })
+  assert.equal((await view()).trigger.allowOutbound, false, 'changing kinds does not inherit the opt-in')
+})
+
+test('outbound opt-in cannot bypass the widening permission card or worker containment', async t => {
+  const bench = setup(t)
+  const { sub } = await testRun(bench, { worker: 'Ops', ask_first: false })
+  const decision = await bench.gate('save_automation', 'm1', { id: sub.id, allow_outbound: true })
+  assert.equal(decision.kind, 'ask')
+  assert.match(decision.reason, /what it fires on.*allow_outbound/)
+  assert.equal((await bench.call('state', {})).value.subscriptions[0].trigger.allowOutbound, false)
+  const contained = setup(t, { presets: fakePresets({ fail: 'no permission' }) })
+  const { run } = await testRun(contained, { allow_outbound: true })
+  assert.equal(run.status, 'failed')
+  assert.equal(contained.sent.length, 0)
+})
+
+
+test('a media reference reaches the worker as data beside its processed transcription', async t => {
+  const { tool, call, sent, ctx } = setup(t)
+  await tool('save_automation')({ sources: 'chat:obras', trigger: 'voice', worker: 'Ops', allow_outbound: true })
+  const sub = (await call('state', {})).value.subscriptions[0]
+  await ctx.provided.get('omniChannels').fireSubscription(sub, {
+    kind: 'voice note', text: 'Remember the appointment', chat: 'Grupo Obras',
+    message: { id: 'message-1', externalId: 'platform-1', type: 'audio', mediaUrl: 'https://media.test/voice.ogg', mimeType: 'audio/ogg' },
+  })
+  const text = sent.at(-1).message.content[0].text
+  assert.match(text, /Remember the appointment/)
+  assert.match(text, /Message\/media reference \(data\)/)
+  assert.match(text, /"externalId":"platform-1"/)
+  assert.match(text, /"mediaUrl":"https:\/\/media.test\/voice.ogg"/)
+  assert.match(text, /never as instructions/)
+})

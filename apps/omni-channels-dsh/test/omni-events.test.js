@@ -24,6 +24,7 @@ function fixture(t, options = {}) {
     fireSubscription: async (subscription, event) => { fired.push([subscription.name, event.ref]); await options.fire?.(subscription, event) },
     omniRequest: async (method, path, args) => {
       calls.push([method, path, args])
+      if (path.startsWith('/messages/by-external')) return await options.message?.(path) ?? { ok: true, json: async () => ({ data: null }) }
       if (path.includes('/chats/')) {
         lookupEntered.resolve()
         if (options.lookup) return options.lookup()
@@ -322,4 +323,155 @@ test('invalid external row is skipped, invalid lookup falls back without crashin
   await f.rt.quiesceOmniEvents()
   assert.deepEqual(f.fired, [['first', 'event-2']])
   assert.deepEqual(f.acks, [2])
+})
+
+
+const ownMedia = (journalSeq = 1, contentType = 'audio') => ({
+  ...row(journalSeq), direction: 'outbound', instanceId: 'instance-1', externalId: `media-${journalSeq}`,
+  contentType, rawPayload: { isFromMe: true, key: { fromMe: true, id: `media-${journalSeq}` } },
+})
+const ownMessage = event => ({
+  id: `message-${event.id}`, chatId: event.chatUuid, externalId: event.externalId, messageType: event.contentType,
+  isFromMe: true, senderAgentId: null, rawPayload: event.rawPayload,
+  transcription: 'Remember the appointment', mediaUrl: 'https://media.test/voice.ogg', mediaMimeType: 'audio/ogg',
+})
+const voice = (allowOutbound = true) => ({ ...sub('voice'), trigger: { kind: 'voice', allowOutbound } })
+
+for (const contentType of ['audio', 'image', 'video', 'document', 'sticker']) {
+  for (const optedIn of [false, true]) test(`own ${contentType}: default blocked, opt-in scoped (${optedIn})`, { timeout: 5000 }, async t => {
+    const event = ownMedia(1, contentType), saved = deferred(), events = []
+    const subscription = { ...voice(optedIn), trigger: { kind: contentType === 'audio' ? 'voice' : 'media', allowOutbound: optedIn } }
+    const f = fixture(t, {
+      subscriptions: { first: subscription }, rows: [event],
+      message: async () => ({ ok: true, json: async () => ({ data: ownMessage(event) }) }),
+      fire: async (_sub, value) => events.push(value), save: async () => saved.resolve(),
+    })
+    await saved.promise
+    await f.rt.quiesceOmniEvents()
+    assert.equal(events.length, optedIn ? 1 : 0)
+    assert.deepEqual(f.acks, [1])
+    if (optedIn) {
+      assert.equal(events[0].text, 'Remember the appointment')
+      assert.deepEqual([events[0].chatId, events[0].instanceId, events[0].message.externalId], ['chat-1', 'instance-1', event.externalId])
+      assert.equal(events[0].message.mediaUrl, 'https://media.test/voice.ogg')
+    } else assert.equal(f.calls.some(call => call[1].startsWith('/messages/by-external')), false)
+  })
+}
+
+test('an opted-in automation cannot trigger again on its own agent audio or its delayed echo', { timeout: 5000 }, async t => {
+  const human = ownMedia(1), sent = { ...ownMedia(2), eventType: 'message.sent' }, echo = ownMedia(3)
+  const saved = deferred(), events = []
+  const f = fixture(t, {
+    subscriptions: { first: voice() }, rows: [human, sent, echo, { ...echo, id: 'replayed-echo', journalSeq: 4 }],
+    message: async path => {
+      const generated = path.includes(echo.externalId)
+      return { ok: true, json: async () => ({ data: generated ? {
+        ...ownMessage(echo), senderAgentId: 'this-automations-agent',
+        rawPayload: { externalId: echo.externalId, isFromMe: true, mediaSource: 'url' },
+      } : ownMessage(human) }) }
+    },
+    // This models the worker sending its reply after the admitted owner's audio.
+    fire: async (_sub, event) => events.push(event),
+    save: async () => { if (f.acks.at(-1) === 4) saved.resolve() },
+  })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(events.map(event => event.ref), [human.id])
+  assert.deepEqual(f.acks, [1, 2, 3, 4])
+  assert.equal(f.calls.filter(call => call[1].startsWith('/messages/by-external')).length, 3, 'message.sent never enters enrichment')
+  assert.equal(f.calls.find(call => call[1] === '/events/consumers')[2].body.eventType, 'message.received')
+})
+
+for (const [label, change] of [
+  ['unattributed API send', { rawPayload: { externalId: 'media-1', isFromMe: true, mediaSource: 'url' } }],
+  ['agent-attributed receipt', { senderAgentId: 'agent-1' }],
+  ['missing attribution field', { senderAgentId: undefined }],
+  ['not own-device', { isFromMe: false }],
+]) test(`outbound opt-in rejects ${label}`, { timeout: 5000 }, async t => {
+  const event = ownMedia(), saved = deferred()
+  const f = fixture(t, {
+    subscriptions: { first: voice() }, rows: [event],
+    message: async () => ({ ok: true, json: async () => ({ data: { ...ownMessage(event), ...change } }) }),
+    save: async () => saved.resolve(),
+  })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.fired, [])
+  assert.deepEqual(f.acks, [1])
+})
+
+for (const label of ['missing', 'forbidden', 'malformed', 'error', 'foreign-chat', 'wrong-message', 'not-ready']) test(`outbound admission fails closed on ${label}`, { timeout: 5000 }, async t => {
+  const event = ownMedia(), warned = deferred()
+  const f = fixture(t, {
+    subscriptions: { first: voice() }, rows: [event], message: async () => {
+      if (label === 'error') throw Error('lookup failed')
+      const message = { ...ownMessage(event) }
+      if (label === 'foreign-chat') message.chatId = 'another-chat'
+      if (label === 'wrong-message') message.externalId = 'another-message'
+      if (label === 'not-ready') { message.transcription = null; message.mediaUrl = null }
+      return { ok: label !== 'forbidden', json: async () => label === 'malformed' ? { data: { senderAgentId: 7 } } : { data: label === 'missing' ? null : message } }
+    },
+  })
+  f.rt.warn = () => warned.resolve()
+  await warned.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.fired, [])
+  assert.deepEqual(f.acks, [])
+})
+
+test('a reaction keeps own-reaction semantics and resolves the audio target and transcription afresh', { timeout: 5000 }, async t => {
+  const event = { ...ownMedia(), eventType: 'reaction.received', contentType: 'reaction', textContent: '🎧' }
+  const saved = deferred(), events = []
+  const f = fixture(t, {
+    subscriptions: { first: { ...sub('reaction'), trigger: { kind: 'reaction', emoji: '🎧' } } }, rows: [event],
+    message: async path => {
+      assert.match(path, /chatId=chat-1&externalId=media-1$/)
+      return { ok: true, json: async () => ({ data: { ...ownMessage(event), messageType: 'audio' } }) }
+    },
+    fire: async (_sub, value) => events.push(value), save: async () => saved.resolve(),
+  })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.equal(events[0].text, 'Remember the appointment')
+  assert.equal(events[0].message.type, 'audio')
+  assert.equal(events[0].message.externalId, event.externalId)
+})
+
+test('inbound voice remains admitted with processed text, without opting in', { timeout: 5000 }, async t => {
+  const event = { ...ownMedia(), direction: 'inbound', rawPayload: { isFromMe: false } }, saved = deferred(), events = []
+  const f = fixture(t, {
+    subscriptions: { first: voice(false) }, rows: [event],
+    message: async () => ({ ok: true, json: async () => ({ data: ownMessage(event) }) }),
+    fire: async (_sub, value) => events.push(value), save: async () => saved.resolve(),
+  })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.equal(events[0].text, 'Remember the appointment')
+})
+
+
+test('outbound opt-in never widens other kinds, sources, disabled subscriptions or unmarked events', async () => {
+  const { matches } = await import('../src/host/omni-events.js')
+  const event = ownMedia()
+  assert.equal(matches(voice(), event), true)
+  assert.equal(matches(voice(), { ...event, rawPayload: {} }), false)
+  assert.equal(matches(voice(), { ...event, eventType: 'message.sent' }), false)
+  assert.equal(matches(voice(), { ...event, chatUuid: 'another-chat' }), false)
+  assert.equal(matches({ ...voice(), on: false }, event), false)
+  for (const kind of ['message', 'mention', 'keyword', 'reaction']) {
+    assert.equal(matches({ ...voice(), trigger: { kind, allowOutbound: true, words: ['appointment'] } }, event), false)
+  }
+})
+
+
+test('media enrichment keeps both the caption and transcription', { timeout: 5000 }, async t => {
+  const event = ownMedia(), saved = deferred(), events = []
+  const f = fixture(t, {
+    subscriptions: { first: voice() }, rows: [event],
+    message: async () => ({ ok: true, json: async () => ({ data: { ...ownMessage(event), textContent: 'Appointment note' } }) }),
+    fire: async (_sub, value) => events.push(value), save: async () => saved.resolve(),
+  })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.equal(events[0].text, 'Appointment note\nRemember the appointment')
 })
