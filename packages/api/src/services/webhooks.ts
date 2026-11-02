@@ -465,7 +465,13 @@ export class WebhookService {
       rawPayload: payload,
       idempotencyKey,
       receivedAt: new Date(),
-      metadata: { correlationId: eventId, source: 'webhook', fullEventType: eventType, webhookSource: sourceName },
+      metadata: {
+        correlationId: eventId,
+        source: 'webhook',
+        fullEventType: eventType,
+        webhookSource: sourceName,
+        webhookSourceId: source.id,
+      },
       ...(await requestProducerColumns(this.db)),
       ...(pairedAgentFlagState('consumers').enabled ? { sourceKind: 'webhook_source', sourceId: source.id } : {}),
     });
