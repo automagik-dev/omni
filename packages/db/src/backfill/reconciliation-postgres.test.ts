@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import { runBackfill } from './engine';
 import { classifyLegacyKeys } from './key-classification';
 import type { InstanceTenantMap } from './mapping-engine';
-import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 import { quarantineReport, reconcile } from './reconciliation';
 import { scanForSecrets } from './redaction';
 
@@ -88,7 +88,7 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       expect(JSON.stringify(images)).not.toContain(RAW_SECRET);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -121,7 +121,7 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       expect(report.tables.find((t) => t.table === 'chats')!.crossTenantFkViolations).toBe(1);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -138,7 +138,7 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       expect(scanForSecrets(report)).toEqual([]);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -160,7 +160,7 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       expect(god.requiresOwnerAndPurpose).toBe(true);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 });

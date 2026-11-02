@@ -28,7 +28,7 @@ import { EngineCrash, runBackfill } from './engine';
 import { findBySource } from './ledger';
 import type { InstanceTenantMap } from './mapping-engine';
 import { connect } from './pg-testing';
-import { dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 
 const base = superUrl();
 const maybe = base.length > 0 ? describe : describe.skip;
@@ -160,7 +160,7 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
         if (runtime) await runtime.close();
         await admin.close();
         await sql.end();
-        dropDatabase(base, database);
+        dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
       }
     }, 180000);
 
@@ -187,7 +187,7 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(await tenantOf(sql, 'chats', CHAT_A)).toBeNull();
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -233,7 +233,7 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(await tenantOf(sql, 'automations', '11110000-0000-4000-8000-000000000001')).toBeNull();
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -272,7 +272,7 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(done?.status).toBe('applied');
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -296,7 +296,7 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(second).toEqual(first);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -329,7 +329,7 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(await tenantOf(sql, 'instances', INSTANCE_A)).toBeNull();
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 });

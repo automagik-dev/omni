@@ -26,7 +26,7 @@ import type { ToolingSql } from './db';
 import { runBackfill } from './engine';
 import type { InstanceTenantMap } from './mapping-engine';
 import { personCloneId, runPersonCloning } from './person-clone';
-import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 import { assertZeroUnresolved, reconcile } from './reconciliation';
 import { assertTenantUniquesPresent, replacePreservedGlobalUniques } from './rehearsal';
 import { driveValidateOrdering } from './validate-ordering';
@@ -149,7 +149,7 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       expect(Number(stillPending[0]!.n)).toBe(0);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -170,7 +170,7 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       await expect(driveValidateOrdering(sql, report)).rejects.toThrow(/not zero/i);
     } finally {
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 
@@ -219,7 +219,7 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       if (runtime) await runtime.end();
       await provisioner.close();
       await sql.end();
-      dropDatabase(base, database);
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
     }
   });
 });
