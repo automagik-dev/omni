@@ -372,11 +372,11 @@ one, or the entry named by the global flag:
 Or supply OMNI_CLI_API_KEY securely through the environment and run:
   omni auth login --server prod
 
-Explicit --api-key or --api-key-stdin overrides OMNI_CLI_API_KEY; do not combine the
-flags. Prefer a secret-manager pipe or protected file over pasting a key into
-shell history or chat. --api-key remains supported. OMNI_API_KEY configures the
-API server primary key and is ignored by login. Stdin is limited to 8 KB including
-the optional trailing LF/CRLF. Successful login reports keySource (flag/stdin/env).
+Explicit input flags override OMNI_CLI_API_KEY; do not combine the two login
+input flags. Prefer a secret-manager pipe or protected file over pasting a key
+into shell history or chat. The legacy key flag remains supported. OMNI_API_KEY
+configures the API server primary key and is ignored by login. Stdin is limited
+to 8 KB including the optional trailing LF/CRLF. Successful login reports keySource (flag/stdin/env).
 `,
     )
     .action(async (options: LoginOptions) => {
