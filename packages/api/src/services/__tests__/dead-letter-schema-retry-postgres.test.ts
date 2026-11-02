@@ -24,6 +24,12 @@ const postgresDescribe = superUrl ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 const TENANT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
 const TENANT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
+const retryOutcomes = [
+  ['manual', false],
+  ['manual', true],
+  ['auto', false],
+  ['auto', true],
+] as const;
 const schema = { type: 'object', properties: { orderId: { type: 'string' } }, required: ['orderId'] };
 
 for (const enforced of [false, true]) {
@@ -552,45 +558,47 @@ for (const enforced of [false, true]) {
       return row;
     }
 
-    for (const mode of ['manual', 'auto'] as const) {
+    for (const [mode, publishFails] of retryOutcomes) {
       for (const action of ['resolve', 'abandon'] as const) {
-        for (const publishFails of [false, true]) {
-          test(`${mode} retry cannot overwrite operator ${action} after publish ${publishFails ? 'failure' : 'success'}`, async () => {
-            const row = await delivery();
-            const countBefore = published.length;
-            // Use the active request transaction in enforced mode: an external
-            // operator waits on its row lock until commit. Legacy uses the pool.
-            onRetryPublish = async () => {
-              if (action === 'resolve') await service.resolve(row.id, 'operator decision');
-              else await service.abandon(row.id);
-            };
-            failPublish = publishFails;
-            try {
-              if (mode === 'manual') {
-                expect((await inWorld(() => service.retry(row.id))).success).toBe(false);
-              } else {
-                expect(await inWorld(() => service.processAutoRetries())).toEqual({
-                  processed: 1,
-                  succeeded: 0,
-                  failed: 0,
-                });
-              }
-            } finally {
-              onRetryPublish = undefined;
-              failPublish = false;
+        test(`${mode} retry cannot overwrite operator ${action} after publish ${publishFails ? 'failure' : 'success'}`, async () => {
+          const row = await delivery();
+          const countBefore = published.length;
+          // Auto publication runs outside the claim transaction, so the
+          // operator commits separately. Manual requests retain their lock
+          // and exercise the same ordering on their active transaction.
+          const operatorDecision = async () => {
+            if (action === 'resolve') await service.resolve(row.id, 'operator decision');
+            else await service.abandon(row.id);
+          };
+          onRetryPublish = mode === 'auto' ? () => inWorld(operatorDecision) : operatorDecision;
+          failPublish = publishFails;
+          try {
+            if (mode === 'manual') {
+              expect((await inWorld(() => service.retry(row.id))).success).toBe(false);
+            } else {
+              expect(await service.processAutoRetries()).toEqual({
+                processed: 1,
+                succeeded: 0,
+                failed: 0,
+              });
             }
-            const after = await read(row.id);
-            expect(after.status).toBe(action === 'resolve' ? 'resolved' : 'abandoned');
-            expect(after.resolvedBy).toBe(action === 'resolve' ? 'operator decision' : null);
-            expect(after.error).toBe(row.error);
-            expect(after.autoRetryCount).toBe(0);
-            expect(after.manualRetryCount).toBe(0);
-            expect(after.nextAutoRetryAt).toBeNull();
-            expect(published.length).toBe(countBefore + (publishFails ? 0 : 1));
-          });
-        }
+          } finally {
+            onRetryPublish = undefined;
+            failPublish = false;
+          }
+          const after = await read(row.id);
+          expect(after.status).toBe(action === 'resolve' ? 'resolved' : 'abandoned');
+          expect(after.resolvedBy).toBe(action === 'resolve' ? 'operator decision' : null);
+          expect(after.error).toBe(row.error);
+          expect(after.autoRetryCount).toBe(0);
+          expect(after.manualRetryCount).toBe(0);
+          expect(after.nextAutoRetryAt).toBeNull();
+          expect(published.length).toBe(countBefore + (publishFails ? 0 : 1));
+        });
       }
+    }
 
+    for (const mode of ['manual', 'auto'] as const) {
       test(`${mode} published retry keeps its lease when resolved bookkeeping fails`, async () => {
         const row = await delivery();
         const countBefore = published.length;
@@ -598,7 +606,7 @@ for (const enforced of [false, true]) {
         const worker = workers[0];
         if (!worker) throw new Error('Missing retry worker');
         // A trigger aborts ONLY the final write. Auto work commits its claim
-        // before publish; manual runs outside a request transaction here.
+        // before publish; enforced manual finalization uses a savepoint.
         await admin.execute(
           sql.raw(`
           CREATE OR REPLACE FUNCTION fail_retry_resolution() RETURNS trigger LANGUAGE plpgsql AS $$
@@ -614,16 +622,8 @@ for (const enforced of [false, true]) {
         );
         try {
           if (mode === 'manual') {
-            onRetryPublish = enforced
-              ? async () => {
-                  await scopedHandle(db).execute('SAVEPOINT retry_completion');
-                }
-              : undefined;
             await inWorld(async () => {
               const result = await service.retry(row.id);
-              // Keep the request claim committed despite the injected SQL
-              // failure; production workers already use separate transactions.
-              if (enforced) await scopedHandle(db).execute('ROLLBACK TO SAVEPOINT retry_completion');
               expect(result.success).toBe(false);
             });
           } else {
@@ -650,7 +650,31 @@ for (const enforced of [false, true]) {
       const fresh = await delivery({ status: 'retrying', lastRetryAt: new Date() });
       const countBefore = published.length;
       const before = Date.now();
-      await Promise.all(workers.map((worker) => worker.service.processAutoRetries()));
+      const pids = await Promise.all(
+        workers.map(async (worker) => {
+          const [session] = await worker.db.execute(sql`SELECT pg_backend_pid() AS pid`);
+          return Number(session?.pid);
+        }),
+      );
+      const locked = barrier();
+      const release = barrier();
+      const blocker = admin.transaction(async (tx) => {
+        await tx.execute(sql`SELECT id FROM dead_letter_events WHERE id = ${row.id}::uuid FOR UPDATE`);
+        locked.release();
+        await release.promise;
+      });
+      const attempts: Array<ReturnType<DeadLetterService['processAutoRetries']>> = [];
+      try {
+        await locked.promise;
+        for (const worker of workers) attempts.push(worker.service.processAutoRetries());
+        // Both workers selected the same expired lease before either can reset it.
+        await Promise.all(pids.map(waitForClaim));
+        release.release();
+        await Promise.all([blocker, ...attempts]);
+      } finally {
+        release.release();
+        await Promise.allSettled([blocker, ...attempts]);
+      }
       const after = await read(row.id);
       expect(after.status).toBe('pending');
       expect(after.autoRetryCount).toBe(1);
@@ -696,31 +720,41 @@ for (const enforced of [false, true]) {
       expect(published.length).toBe(countBefore);
     });
 
-    test('a late retry cannot finalize a newer lease of the same row', async () => {
-      const row = await delivery();
-      const renewedAt = new Date(Date.now() + 60_000);
-      onRetryPublish = async () => {
-        await scopedHandle(db)
-          .update(deadLetterEvents)
-          .set({
-            status: 'retrying',
-            lastRetryAt: renewedAt,
-            autoRetryCount: 1,
-          })
-          .where(eq(deadLetterEvents.id, row.id));
-      };
-      try {
-        expect((await inWorld(() => service.retry(row.id))).success).toBe(false);
-      } finally {
-        onRetryPublish = undefined;
-      }
-      const after = await read(row.id);
-      expect(after.status).toBe('retrying');
-      expect(after.lastRetryAt?.getTime()).toBe(renewedAt.getTime());
-      expect(after.autoRetryCount).toBe(1);
-      expect(after.manualRetryCount).toBe(0);
-      await inWorld(() => service.abandon(row.id));
-    });
+    for (const [mode, publishFails] of retryOutcomes) {
+      test(`a late ${mode} retry cannot finalize a newer lease after publish ${publishFails ? 'failure' : 'success'}`, async () => {
+        const row = await delivery();
+        const renewedAt = new Date(Date.now() + 60_000);
+        const renewLease = async () => {
+          await scopedHandle(db)
+            .update(deadLetterEvents)
+            .set({
+              status: 'retrying',
+              lastRetryAt: renewedAt,
+              autoRetryCount: 1,
+            })
+            .where(eq(deadLetterEvents.id, row.id));
+        };
+        onRetryPublish = mode === 'auto' ? () => inWorld(renewLease) : renewLease;
+        failPublish = publishFails;
+        try {
+          if (mode === 'manual') {
+            expect((await inWorld(() => service.retry(row.id))).success).toBe(false);
+          } else {
+            expect(await service.processAutoRetries()).toEqual({ processed: 1, succeeded: 0, failed: 0 });
+          }
+        } finally {
+          onRetryPublish = undefined;
+          failPublish = false;
+        }
+        const after = await read(row.id);
+        expect(after.status).toBe('retrying');
+        expect(after.lastRetryAt?.getTime()).toBe(renewedAt.getTime());
+        expect(after.autoRetryCount).toBe(1);
+        expect(after.manualRetryCount).toBe(0);
+        expect(after.error).toBe(row.error);
+        await inWorld(() => service.abandon(row.id));
+      });
+    }
 
     if (enforced) {
       test('tenant B cannot recover tenant A stale retry lease', async () => {
@@ -733,9 +767,7 @@ for (const enforced of [false, true]) {
         expect((await read(row.id)).autoRetryCount).toBe(1);
         await inWorld(() => service.abandon(row.id));
       });
-    }
 
-    if (enforced) {
       test('tenant B cannot list, inspect, or retry A refusal; A can recover it', async () => {
         const eventType = type();
         await register(eventType);

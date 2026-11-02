@@ -425,16 +425,21 @@ export class DeadLetterService {
     now: Date,
     manualRetryCount?: number,
   ): Promise<boolean> {
-    const [updated] = await this.db
-      .update(deadLetterEvents)
-      .set({
-        status: 'resolved',
-        resolvedAt: now,
-        resolvedBy,
-        ...(manualRetryCount !== undefined ? { manualRetryCount } : {}),
-      })
-      .where(this.retryClaimPredicate(claim))
-      .returning({ id: deadLetterEvents.id });
+    // A request may own the claim in its outer tenant transaction. Isolate a
+    // failed final write so catching it does not roll the outer claim back
+    // to pending. Workers likewise keep their separately committed claim.
+    const [updated] = await this.db.transaction((tx) =>
+      tx
+        .update(deadLetterEvents)
+        .set({
+          status: 'resolved',
+          resolvedAt: now,
+          resolvedBy,
+          ...(manualRetryCount !== undefined ? { manualRetryCount } : {}),
+        })
+        .where(this.retryClaimPredicate(claim))
+        .returning({ id: deadLetterEvents.id }),
+    );
     return !!updated;
   }
 
