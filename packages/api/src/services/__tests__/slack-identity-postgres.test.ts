@@ -14,7 +14,7 @@ import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDbHandle } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { InstanceService } from '../instances';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -41,12 +41,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 const oauthRow = (name: string, slackUserId: string | null) => ({
   name,
   channel: 'slack' as const,
@@ -63,7 +57,7 @@ postgresDescribe('Slack OAuth identity uniqueness (real PostgreSQL)', () => {
 
   beforeAll(() => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    dbUrl = urlFor(superUrl, dbName);
+    dbUrl = pgRoleUrl(superUrl, dbName);
     const handle = createDbHandle({ url: dbUrl, maxConnections: 2 });
     close = handle.close;
     service = new InstanceService(handle.db, null);
