@@ -9,13 +9,13 @@
 
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError, OmniError } from '@omni/core';
-import type { Database, Instance } from '@omni/db';
+import { type Database, type Instance, createDbHandle } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
-import { describeWithDb, getTestDb } from './db-helper';
 
 // Helper to create a mock plugin with configurable capabilities
 function createMockPlugin(
@@ -70,8 +70,14 @@ function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> |
   };
 }
 
-describeWithDb('Read Receipt Endpoints', () => {
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Read Receipt Endpoints', () => {
   let db: Database;
+  const dbName = `omni_l1_${crypto.randomUUID().replaceAll('-', '')}`;
+  let close: (() => Promise<void>) | undefined;
   let testInstance: Instance;
   let testChat: { id: string; externalId: string };
   let testDmChat: { id: string; externalId: string };
@@ -82,7 +88,10 @@ describeWithDb('Read Receipt Endpoints', () => {
   const insertedMessageIds: string[] = [];
 
   beforeAll(async () => {
-    db = getTestDb();
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    close = handle.close;
+    db = handle.db;
 
     // Create a test instance
     const [instance] = await db
@@ -169,7 +178,8 @@ describeWithDb('Read Receipt Endpoints', () => {
     insertedMessageIds.push(dmMsg.id);
   });
 
-  afterAll(async () => {
+  async function cleanupRows() {
+    if (!db) return;
     // Clean up in reverse order (messages -> chats -> instances)
     for (const id of insertedMessageIds) {
       await db.delete(messages).where(eq(messages.id, id));
@@ -180,6 +190,41 @@ describeWithDb('Read Receipt Endpoints', () => {
     for (const id of insertedInstanceIds) {
       await db.delete(instances).where(eq(instances.id, id));
     }
+  }
+
+  afterAll(async () => {
+    const errors: unknown[] = [];
+    try {
+      await cleanupRows();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await close?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      const result = Bun.spawnSync({
+        cmd: [
+          psqlBin,
+          '-X',
+          '--no-psqlrc',
+          '--set',
+          'ON_ERROR_STOP=1',
+          '--dbname',
+          pgRoleUrl(superUrl, 'postgres'),
+          '-c',
+          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
+        ],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
   });
 
   function createTestApp(mockPlugin: ReturnType<typeof createMockPlugin> | null = createMockPlugin()) {
