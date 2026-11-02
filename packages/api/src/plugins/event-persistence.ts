@@ -43,7 +43,7 @@ import { and, eq } from 'drizzle-orm';
 import { resolveKeyAgent } from '../lib/key-agent';
 import { AccessService, accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import { ChatService } from '../services/chats';
-import { pairedAgentFlagState } from '../tenancy/feature-flag';
+import { isMultitenancyEnabled, pairedAgentFlagState } from '../tenancy/feature-flag';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext, runTenantWorkDb, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
@@ -725,8 +725,10 @@ async function journalInternalEvent(db: Database, event: OmniEvent): Promise<voi
     await runConsumerInTenantContext(db, event, async () => {
       const sdb = scopedHandle(db);
       // A direct claim already persisted the trusted columns before publishing.
-      // Consumers have no request holder: do not resolve that principal again for a no-op insert.
-      if (pairedAgentFlagState('consumers').enabled && event.id && isValidUuid(event.id)) {
+      // Avoid a second INSERT: RLS checks ownership before ON CONFLICT can discard it,
+      // and the consumer envelope need not repeat the claim's source-parent metadata.
+      // Keep legacy flag-off delivery on its existing single-write path.
+      if ((isMultitenancyEnabled() || pairedAgentFlagState('consumers').enabled) && event.id && isValidUuid(event.id)) {
         const [claimed] = await sdb
           .select({ id: omniEvents.id })
           .from(omniEvents)
