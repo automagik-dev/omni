@@ -35,7 +35,7 @@ import { sql } from 'drizzle-orm';
 import type { Sql } from 'postgres';
 import type { Database } from './client';
 import { unwrapDbError } from './errors';
-import { assertPgTestTarget } from './pg-test-target';
+import { POSTGRES_URL_VARS, assertPgTestTarget } from './pg-test-target';
 
 export { assertPgTestTarget } from './pg-test-target';
 
@@ -48,13 +48,7 @@ export {
 
 // Refuse unsafe suite configuration before setup OR teardown hooks register.
 // Some suites invoke psql directly during cleanup even if their setup failed.
-for (const variable of [
-  'OMNI_G1_POSTGRES_URL',
-  'OMNI_G2_POSTGRES_URL',
-  'OMNI_G3_POSTGRES_URL',
-  'OMNI_G4_POSTGRES_URL',
-  'OMNI_G6_POSTGRES_URL',
-]) {
+for (const variable of POSTGRES_URL_VARS) {
   const url = process.env[variable];
   if (url) assertPgTestTarget(url);
 }

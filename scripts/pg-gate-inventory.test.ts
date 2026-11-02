@@ -6,35 +6,44 @@
  */
 import { expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import ts from 'typescript';
 import {
-  POSTGRES_EXCLUDED_DIRS,
   POSTGRES_SUITE_ROOTS,
   POSTGRES_SUITE_SUFFIX,
   POSTGRES_URL_VARS,
   PSQL_BIN_VARS,
+  findPostgresSuites,
 } from './pg-gate';
 
 const root = resolve(import.meta.dir, '..');
 const deadNames = [['ENABLE', 'DB', 'TESTS'].join('_'), ['TEST', 'DATABASE', 'URL'].join('_')];
 const supplied = new Set<string>([...POSTGRES_URL_VARS, ...PSQL_BIN_VARS, 'OMNI_PG_TEST_TARGET', 'LOG_LEVEL']);
 const testSuffix = /[.-](?:test|spec)\.[cm]?[jt]sx?$/;
+/** The PostgreSQL test harness, by package subpath or relative path; importing it is a PG opt-in. */
+const harnessModule = /(^|\/)(pg-testing|pg-migrated-template)(\.[cm]?[jt]s)?$/;
 
-function discover(directory: string): string[] {
-  return readdirSync(join(root, directory)).flatMap((entry) => {
-    if (POSTGRES_EXCLUDED_DIRS.includes(entry)) return [];
-    const full = join(root, directory, entry);
-    if (statSync(full).isDirectory()) return discover(relative(root, full));
-    return POSTGRES_SUITE_SUFFIX.test(entry) ? [relative(root, full)] : [];
-  });
+/**
+ * Non-postgres tests that import the harness without a database, one reason
+ * each. The importers found must equal this list exactly.
+ */
+const harnessUnitTests: ReadonlyMap<string, string> = new Map([
+  [
+    'packages/db/src/pg-test-role.test.ts',
+    'unit tests of assertPgTestTarget, pgRoleUrl and the load-time URL refusal; psql is never run',
+  ],
+]);
+
+/** pg-gate's own discovery, over its own roots. */
+function discoverSuites(): Set<string> {
+  return new Set(POSTGRES_SUITE_ROOTS.flatMap((directory) => findPostgresSuites(join(root, directory))));
 }
 
 /** A no-lib, no-import-resolution program supplies lexical bindings, not regex aliases. */
 function analyze(
   files: Map<string, string>,
-): Map<string, { reads: Set<string>; gates: Set<string>; database: boolean }> {
+): Map<string, { reads: Set<string>; gates: Set<string>; database: boolean; harness: boolean }> {
   const sources = new Map(
     [...files].map(([file, text]) => [file, ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)]),
   );
@@ -165,6 +174,7 @@ function analyze(
       const reads = new Set<string>();
       const gates = new Set<string>();
       let database = false;
+      let harness = false;
       const addGate = (expression: ts.Node) => {
         for (const name of dependencies(expression)) gates.add(name);
       };
@@ -209,10 +219,18 @@ function analyze(
             }
           }
         }
+        // Static imports, re-exports and dynamic import() of the harness.
+        const specifier =
+          (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier
+            ? string(node.moduleSpecifier)
+            : ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword
+              ? string(node.arguments[0])
+              : undefined;
+        if (specifier !== undefined && harnessModule.test(specifier)) harness = true;
         ts.forEachChild(node, visit);
       }
       visit(source);
-      return [file, { reads, gates, database }];
+      return [file, { reads, gates, database, harness }];
     }),
   );
 }
@@ -221,7 +239,11 @@ function violations(files: Map<string, string>, discovered: Set<string>): string
   const errors: string[] = [];
   for (const [file, result] of analyze(files)) {
     const postgres = POSTGRES_SUITE_SUFFIX.test(file);
-    if (!postgres && ([...result.reads].some((name) => /^OMNI_G\d+_POSTGRES_URL$/.test(name)) || result.database))
+    const harness = result.harness && !harnessUnitTests.has(file);
+    if (
+      !postgres &&
+      ([...result.reads].some((name) => /^OMNI_G\d+_POSTGRES_URL$/.test(name)) || result.database || harness)
+    )
       errors.push(`${file}: PostgreSQL opt-in test must be named *-postgres.test.ts`);
     if (!postgres) continue;
     if (!discovered.has(file)) errors.push(`${file}: outside pg-gate discovery`);
@@ -236,8 +258,23 @@ function deadViolations(files: Map<string, string>): string[] {
   return [...files].flatMap(([file, text]) =>
     file.startsWith('.genie/')
       ? []
-      : deadNames.filter((name) => text.includes(name)).map((name) => `${file}: retired ${name}`),
+      : deadNames
+          .filter((name) => text.toLowerCase().includes(name.toLowerCase()))
+          .map((name) => `${file}: retired ${name}`),
   );
+}
+
+/** Non-postgres tests that import the harness, sorted. */
+function harnessImporters(tests: Map<string, string>): string[] {
+  const candidates = new Map(
+    [...tests].filter(
+      ([file, text]) => !POSTGRES_SUITE_SUFFIX.test(file) && /pg-testing|pg-migrated-template/.test(text),
+    ),
+  );
+  return [...analyze(candidates)]
+    .filter(([, result]) => result.harness)
+    .map(([file]) => file)
+    .sort();
 }
 
 /**
@@ -350,7 +387,7 @@ function trackedFiles(): Map<string, string> {
 test('tracked PostgreSQL tests are discoverable and use only pg-gate opt-ins', () => {
   const all = trackedFiles();
   const tests = new Map([...all].filter(([file]) => testSuffix.test(file)));
-  const discovered = new Set(POSTGRES_SUITE_ROOTS.flatMap(discover));
+  const discovered = discoverSuites();
   const pgAnalysis = analyze(new Map([...tests].filter(([file]) => discovered.has(file))));
   const optInsRead = [...pgAnalysis.values()].flatMap(({ reads }) => [...reads]).filter((name) => supplied.has(name));
   expect(optInsRead.length).toBeGreaterThan(0);
@@ -358,6 +395,38 @@ test('tracked PostgreSQL tests are discoverable and use only pg-gate opt-ins', (
   expect(POSTGRES_URL_VARS.length).toBeGreaterThan(0);
   for (const file of discovered) expect(tests.has(file)).toBe(true);
   expect(violations(tests, discovered)).toEqual([]);
+  expect(harnessImporters(tests)).toEqual([...harnessUnitTests.keys()].sort());
+});
+
+test('a non-postgres test importing the harness is a PG opt-in: static, re-export or dynamic', () => {
+  const file = 'packages/foo.test.ts';
+  for (const source of [
+    "import { dropDatabaseOrThrow } from '@omni/db/pg-testing';",
+    "import { pgRoleUrl } from '@omni/db/pg-migrated-template';",
+    "import { runSqlOn } from './backfill/pg-testing';",
+    "import type { PgSuperAccess } from '../../packages/db/src/pg-migrated-template';",
+    "export { pgRoleUrl } from './pg-migrated-template';",
+    "export * from '@omni/db/pg-testing';",
+    "const harness = await import('@omni/db/pg-testing');",
+    "const target = '@omni/db/pg-migrated-template'; const harness = await import(target);",
+  ]) {
+    expect(violations(new Map([[file, source]]), new Set())).toEqual([
+      `${file}: PostgreSQL opt-in test must be named *-postgres.test.ts`,
+    ]);
+  }
+  for (const source of [
+    "import { thing } from './pg-testing-notes';",
+    "import { thing } from '@omni/db';",
+    "const name = 'pg-testing';",
+  ]) {
+    expect(violations(new Map([[file, source]]), new Set())).toEqual([]);
+  }
+  const suite = 'packages/foo-postgres.test.ts';
+  const importing = "import { dropDatabaseOrThrow } from '@omni/db/pg-testing';";
+  expect(violations(new Map([[suite, importing]]), new Set([suite]))).toEqual([]);
+  const [acknowledged] = harnessUnitTests.keys();
+  expect(violations(new Map([[acknowledged as string, importing]]), new Set())).toEqual([]);
+  expect(harnessImporters(new Map([[file, importing]]))).toEqual([file]);
 });
 
 test('retired opt-in names cannot return in tracked files outside .genie', () => {
@@ -423,7 +492,7 @@ test('suffix alone cannot put a suite outside the real discovery roots or inside
 });
 
 test('postgres suites and test support drop databases only through dropDatabaseOrThrow or a checked exit', () => {
-  const discovered = new Set(POSTGRES_SUITE_ROOTS.flatMap(discover));
+  const discovered = discoverSuites();
   const scope = dropScope(trackedFiles(), discovered);
   expect(scope.has(dropHelperModule)).toBe(true);
   expect(scope.has(templateModule)).toBe(true);
@@ -492,5 +561,21 @@ test('dead-name scanning includes docs and config; only .genie is exempt', () =>
         ]),
       ),
     ).toEqual([`docs/guide.md: retired ${name}`, `turbo.json: retired ${name}`]);
+  }
+});
+
+test('dead-name scanning ignores case', () => {
+  for (const name of deadNames) {
+    const lower = name.toLowerCase();
+    const mixed = `${lower.slice(0, 1).toUpperCase()}${lower.slice(1)}`;
+    expect(
+      deadViolations(
+        new Map([
+          ['docs/lower.md', `set ${lower}=1`],
+          ['scripts/mixed.sh', mixed],
+          ['.genie/old.md', lower],
+        ]),
+      ),
+    ).toEqual([`docs/lower.md: retired ${name}`, `scripts/mixed.sh: retired ${name}`]);
   }
 });

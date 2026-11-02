@@ -266,6 +266,7 @@ test-pg-gate:
 # the ~15-20s initdb + role setup per iteration. Same gate, same zero-skip
 # contract. `make pg-gate-warm-stop` destroys the kept cluster.
 test-pg-gate-warm:
+	bun test scripts/pg-gate-report.test.ts scripts/pg-gate-inventory.test.ts
 	bun scripts/pg-gate-warm.ts run
 
 pg-gate-warm-stop:
