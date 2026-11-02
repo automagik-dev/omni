@@ -72,6 +72,29 @@ describe('PostgreSQL test target guard', () => {
     expect(() => pgRoleUrl(url, 'test_db', role, gateEnv)).toThrow('single-host URLs');
   });
 
+  test.each([' ', '\t', '\n', '\r', '\x00', '\x1f', '\x7f', '\u00a0'])(
+    'refuses raw whitespace/control characters before URL normalization: %j',
+    (character) => {
+      for (const url of [
+        `postgresql://${character}/postgres`,
+        `postgresql://127.0.0.1:77${character}77/db`,
+        `postgresql://127.0.0.1:7777/db?application_name=a${character}b`,
+      ]) {
+        expect(() => assertPgTestTarget(url, socketEnv)).toThrow('raw whitespace and control characters');
+        expect(() => pgRoleUrl(url, 'test_db', role, socketEnv)).toThrow('raw whitespace and control characters');
+      }
+    },
+  );
+
+  test('query values require percent-encoded whitespace and @', () => {
+    expect(() => assertPgTestTarget('postgresql://127.0.0.1:7777/db?application_name=a@b', gateEnv)).toThrow(
+      'inside the authority',
+    );
+    expect(() =>
+      assertPgTestTarget('postgresql://127.0.0.1:7777/db?application_name=a%40b%20c', gateEnv),
+    ).not.toThrow();
+  });
+
   test.each([
     'postgresql://127.0.0.1:7777#,localhost:5432/db',
     'postgresql://127.0.0.1:65432#,localhost:5432/db',
