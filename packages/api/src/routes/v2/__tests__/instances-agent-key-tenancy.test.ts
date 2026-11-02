@@ -112,8 +112,16 @@ function harness(options: {
   app.use('*', async (c, next) => {
     if (options.authContext) c.set('authContext', options.authContext);
     c.set('services', {
-      routes: { list: mock(async (id: string) => (options.routedAgents?.[id] ?? []).map((agentId) => ({ agentId }))) },
+      routes: {
+        withDatabase() {
+          return this;
+        },
+        list: mock(async (id: string) => (options.routedAgents?.[id] ?? []).map((agentId) => ({ agentId }))),
+      },
       instances: {
+        withDatabase() {
+          return this;
+        },
         create: mock(async (data: { agentId?: string }) => {
           if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
           return { ...data, id: INSTANCE_B, tenantId };
@@ -131,6 +139,9 @@ function harness(options: {
         }),
       },
       agents: {
+        withDatabase() {
+          return this;
+        },
         getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {

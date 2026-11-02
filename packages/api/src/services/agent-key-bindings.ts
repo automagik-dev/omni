@@ -130,9 +130,11 @@ export async function grantBindingKey(
 /** Called after the route mutation: keep an instance grant while either its
  * default or any remaining route names this agent, otherwise narrow/revoke.
  */
-export async function syncRouteAgentKey(pool: Database, instanceId: string, agentId: string): Promise<void> {
-  await new ApiKeyService(scopedHandle(pool)).withAgentKeyLock([agentId], async (keys, db) => {
-    await syncLockedRouteAgentKey(keys, db, instanceId, agentId);
+export async function syncRouteAgentKeys(pool: Database, instanceId: string, agentIds: string[]): Promise<void> {
+  const ids = [...new Set(agentIds)].sort();
+  if (ids.length === 0) return;
+  await new ApiKeyService(scopedHandle(pool)).withAgentKeyLock(ids, async (keys, db) => {
+    for (const agentId of ids) await syncLockedRouteAgentKey(keys, db, instanceId, agentId);
   });
 }
 

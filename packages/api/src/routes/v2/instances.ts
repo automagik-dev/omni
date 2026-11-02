@@ -1375,8 +1375,15 @@ async function handleAgentKeyProvisioning(
   tenantId: string | null,
 ) {
   const agentIds = [oldAgentId, newAgentId].filter((id): id is string => id !== null);
-  await services.apiKeys.withAgentKeyLock(agentIds, async (apiKeys) => {
-    await provisionLockedAgentKey({ ...services, apiKeys }, instanceId, newAgentId, oldAgentId, tenantId);
+  await services.apiKeys.withAgentKeyLock(agentIds, async (apiKeys, db) => {
+    const lockedServices = {
+      ...services,
+      apiKeys,
+      agents: services.agents.withDatabase(db),
+      instances: services.instances.withDatabase(db),
+      routes: services.routes.withDatabase(db),
+    };
+    await provisionLockedAgentKey(lockedServices, instanceId, newAgentId, oldAgentId, tenantId);
   });
 }
 

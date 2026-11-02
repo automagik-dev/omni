@@ -84,8 +84,16 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
       c.set('apiKey', { id: 'operator', name: 'operator', scopes: ['*'], instanceIds: null, expiresAt: null });
       c.set('services', {
         apiKeys: service,
-        routes: { list: async () => [] },
+        routes: {
+          withDatabase() {
+            return this;
+          },
+          list: async () => [],
+        },
         instances: {
+          withDatabase() {
+            return this;
+          },
           create: async (data: { agentId?: string }) => {
             if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
             return { ...data, id: INSTANCE_B, tenantId };
@@ -102,7 +110,12 @@ postgresDescribe('agent key assignment lifecycle (real PostgreSQL)', () => {
             return { id, channel: 'whatsapp-baileys', tenantId };
           },
         },
-        agents: { getById: async (id: string) => ({ id, name: names[id], metadata: null }) },
+        agents: {
+          withDatabase() {
+            return this;
+          },
+          getById: async (id: string) => ({ id, name: names[id], metadata: null }),
+        },
       } as never);
       await next();
     });

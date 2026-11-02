@@ -17,7 +17,7 @@ import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db
 import { eq, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { __test__ as dispatcher } from '../../../plugins/agent-dispatcher';
-import { syncRouteAgentKey } from '../../../services/agent-key-bindings';
+import { syncRouteAgentKeys } from '../../../services/agent-key-bindings';
 import { AgentService } from '../../../services/agents';
 import { ApiKeyService } from '../../../services/api-keys';
 import { InstanceService } from '../../../services/instances';
@@ -42,8 +42,8 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
   let app: Hono<{ Variables: AppVariables }>;
   let runtimeRole: { name: string; password: string } | undefined;
 
-  function openDb(role?: { name: string; password: string }) {
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName, role), maxConnections: 3 });
+  function openDb(role?: { name: string; password: string }, maxConnections = 3) {
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName, role), maxConnections });
     closers.push(handle.close);
     return handle.db;
   }
@@ -294,12 +294,50 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
     expect(await keys.findAgentKeysByNames([keyName(owner)])).toHaveLength(1);
   });
 
+  test('legacy default bind and reassignment complete on a one-connection pool', async () => {
+    const first = await agent();
+    const second = await agent();
+    const routed = await instance();
+    const target = await instance();
+    // Extending a route-only bare key exercises every ownership lookup inside
+    // the lock: agent, route and instance, including the route's agent owner.
+    await createRoute(routed, first);
+    const original = await keys.findAgentKeyByName(keyName(first));
+    const pool = openDb(undefined, 1);
+    const singleResolver = new RouteResolver(pool);
+    const limitedApp = new Hono<{ Variables: AppVariables }>();
+    limitedApp.use('*', async (c, next) => {
+      c.set('apiKey', { id: 'operator', name: 'operator', scopes: ['*'], instanceIds: null, expiresAt: null });
+      c.set('services', {
+        apiKeys: new ApiKeyService(pool),
+        agents: new AgentService(pool, null),
+        instances: new InstanceService(pool, null),
+        routes: new RouteService(pool, singleResolver),
+      } as never);
+      await next();
+    });
+    limitedApp.route('/instances', instancesRoutes);
+    async function assign(agentId: string) {
+      const response = await limitedApp.request(`/instances/${target.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ agentId }),
+      });
+      expect(response.status).toBe(200);
+    }
+    await assign(first.id);
+    expect(new Set((await keys.getById(original?.id ?? ''))?.instanceIds)).toEqual(new Set([routed.id, target.id]));
+    await assign(second.id);
+    expect((await keys.getById(original?.id ?? ''))?.instanceIds).toEqual([routed.id]);
+    expect((await keys.findAgentKeyByName(keyName(second)))?.instanceIds).toEqual([target.id]);
+  }, 10_000);
+
   test('a foreign agent never receives a grant even without enforced RLS', async () => {
     const local = await agent(crypto.randomUUID());
     const foreign = await agent(crypto.randomUUID());
     const target = await instance(local.tenantId);
     const before = await keys.list();
-    await syncRouteAgentKey(db, target.id, foreign.id);
+    await syncRouteAgentKeys(db, target.id, [foreign.id]);
     expect(await keys.list()).toEqual(before);
     const conversation = await chat(target.id);
     await expect(
@@ -345,7 +383,7 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
     await expect(
       runInWorkerTenantScope(runtime, foreignTenant, () => scopedRoutes.getById(route.id)),
     ).rejects.toThrow();
-    await runInWorkerTenantScope(runtime, localTenant, () => syncRouteAgentKey(runtime, target.id, foreign.id));
+    await runInWorkerTenantScope(runtime, localTenant, () => syncRouteAgentKeys(runtime, target.id, [foreign.id]));
     expect(await keys.getById(foreignKey.key.id)).toEqual(foreignKey.key);
   }, 15_000);
 
@@ -380,6 +418,44 @@ postgresDescribe('routed agent key lifecycle (real PostgreSQL)', () => {
       await Bun.sleep(10);
     }
     throw new Error('Second route writer never waited for the per-agent advisory lock');
+  }
+
+  for (const oldFirst of [false, true]) {
+    test(`route retarget locks the sorted pair before syncing either agent (old first: ${oldFirst})`, async () => {
+      const tenantId = crypto.randomUUID();
+      const owners = [await agent(tenantId), await agent(tenantId)].sort((a, b) => a.id.localeCompare(b.id));
+      const low = owners[0] as Agent;
+      const high = owners[1] as Agent;
+      const previous = oldFirst ? low : high;
+      const next = oldFirst ? high : low;
+      const target = await instance(tenantId);
+      const route = await createRoute(target, previous);
+      const pool = openDb(await enforcedRole(), 1);
+      await assertPgTestRole(pool, DEFAULT_ROLE_NAMES.runtime);
+      const service = new RouteService(pool, new RouteResolver(pool));
+      const locked = barrier();
+      const release = barrier();
+      const holder = db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`omni:agent-key:${low.id}`}))`);
+        locked.release();
+        await release.promise;
+      });
+      await locked.promise;
+      const retarget = runInWorkerTenantScope(pool, tenantId, () => service.update(route.id, { agentId: next.id }));
+      try {
+        await waitForAdvisoryWait(low.id);
+        const highLocks = await db.execute(sql`
+          SELECT 1 FROM pg_locks WHERE locktype = 'advisory' AND granted
+            AND objid = (hashtext(${`omni:agent-key:${high.id}`})::bigint & 4294967295)::oid
+        `);
+        expect(highLocks).toHaveLength(0);
+      } finally {
+        release.release();
+        await Promise.all([holder, retarget]);
+      }
+      expect(await keys.findAgentKeyByName(keyName(previous))).toBeNull();
+      expect((await keys.findAgentKeyByName(keyName(next)))?.instanceIds).toEqual([target.id]);
+    }, 15_000);
   }
 
   // Pause AFTER the real xact lock and BEFORE the graph read. This proves

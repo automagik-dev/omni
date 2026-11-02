@@ -9,7 +9,7 @@ import { type AgentRoute, type NewAgentRoute, agentRoutes, unwrapDbError } from 
 import { and, desc, eq } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
-import { syncRouteAgentKey } from './agent-key-bindings';
+import { syncRouteAgentKeys } from './agent-key-bindings';
 import type { RouteResolver } from './route-resolver';
 
 const log = createLogger('route-agent-key');
@@ -31,6 +31,11 @@ export class RouteService {
     private readonly pool: Database,
     private routeResolver: RouteResolver,
   ) {}
+
+  /** Bind ownership reads to the connection already held by a caller's lock. */
+  withDatabase(db: Database): RouteService {
+    return new RouteService(db, this.routeResolver);
+  }
 
   /**
    * List routes for an instance
@@ -145,7 +150,7 @@ export class RouteService {
       throw rawError;
     }
 
-    await this.syncAgentKey(created.instanceId, created.agentId);
+    await this.syncAgentKeys(created.instanceId, [created.agentId]);
 
     // Best-effort cache invalidation outside try-catch
     // This ensures cache failures don't mask successful creation
@@ -159,13 +164,16 @@ export class RouteService {
     return created;
   }
 
-  private async syncAgentKey(instanceId: string, agentId: string | null): Promise<void> {
-    if (!agentId) return;
+  private async syncAgentKeys(instanceId: string, agentIds: (string | null)[]): Promise<void> {
     try {
-      await syncRouteAgentKey(this.db, instanceId, agentId);
+      await syncRouteAgentKeys(
+        this.db,
+        instanceId,
+        agentIds.filter((id): id is string => id !== null),
+      );
     } catch (error) {
       // Same best-effort contract as instance writes; startup retries repair.
-      log.error('Failed to synchronize routed agent key', { instanceId, agentId, error: String(error) });
+      log.error('Failed to synchronize routed agent key', { instanceId, agentIds, error: String(error) });
     }
   }
 
@@ -199,8 +207,7 @@ export class RouteService {
       throw new NotFoundError('AgentRoute', id);
     }
 
-    if (route.agentId !== updated.agentId) await this.syncAgentKey(route.instanceId, route.agentId);
-    await this.syncAgentKey(updated.instanceId, updated.agentId);
+    await this.syncAgentKeys(updated.instanceId, [route.agentId, updated.agentId]);
 
     // Best-effort cache invalidation - don't fail update if cache fails
     try {
@@ -226,7 +233,7 @@ export class RouteService {
       throw new NotFoundError('AgentRoute', id);
     }
 
-    await this.syncAgentKey(route.instanceId, route.agentId);
+    await this.syncAgentKeys(route.instanceId, [route.agentId]);
 
     // Best-effort cache invalidation - don't fail deletion if cache fails
     try {
