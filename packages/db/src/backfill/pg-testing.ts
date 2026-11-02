@@ -52,13 +52,6 @@ export function runSqlOrThrow(url: string, script: string): void {
   if (result.exitCode !== 0) throw new Error(`psql failed: ${result.stderr || result.stdout}`);
 }
 
-/** Build a URL for a specific database on the same disposable cluster. */
-export function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 /**
  * Create a fresh database on the disposable cluster with every committed
  * migration applied — a file-level clone of the migrated template (#967), so
@@ -68,7 +61,7 @@ export function urlFor(base: string, database: string): string {
 export function provisionDatabase(base: string, fixture?: string): { database: string; url: string } {
   const database = `omni_g6_${crypto.randomUUID().replaceAll('-', '')}`;
   provisionMigratedDatabase({ superUrl: base, psqlBin: psqlBin() }, database);
-  const url = urlFor(base, database);
+  const url = pgRoleUrl(base, database);
   if (fixture) runSqlOrThrow(url, fixture);
   return { database, url };
 }
