@@ -328,7 +328,7 @@ test('invalid external row is skipped, invalid lookup falls back without crashin
 
 const ownMedia = (journalSeq = 1, contentType = 'audio') => ({
   ...row(journalSeq), direction: 'outbound', instanceId: 'instance-1', externalId: `media-${journalSeq}`,
-  contentType, rawPayload: { isFromMe: true, key: { fromMe: true, id: `media-${journalSeq}` } },
+  contentType, rawPayload: { upsertType: 'notify', isFromMe: true, key: { fromMe: true, id: `media-${journalSeq}` } },
 })
 const ownMessage = event => ({
   id: `message-${event.id}`, chatId: event.chatUuid, externalId: event.externalId, messageType: event.contentType,
@@ -400,23 +400,144 @@ for (const [label, change] of [
   assert.deepEqual(f.acks, [1])
 })
 
-for (const label of ['missing', 'forbidden', 'malformed', 'error', 'foreign-chat', 'wrong-message', 'not-ready']) test(`outbound admission fails closed on ${label}`, { timeout: 5000 }, async t => {
-  const event = ownMedia(), warned = deferred()
+for (const label of ['no-chat', 'no-external-id', 'missing', 'forbidden', 'not-found', 'malformed', 'invalid-json', 'foreign-chat', 'wrong-message', 'not-ready']) test(`permanent outbound refusal is warned and acked without blocking inbound: ${label}`, { timeout: 5000 }, async t => {
+  const event = ownMedia(), saved = deferred(), warnings = []
+  if (label === 'no-chat') event.chatUuid = null
+  if (label === 'no-external-id') event.externalId = null
+  const subscription = { ...voice(), sources: [{ kind: 'channel', id: 'instance-1' }] }
   const f = fixture(t, {
-    subscriptions: { first: voice() }, rows: [event], message: async () => {
-      if (label === 'error') throw Error('lookup failed')
+    subscriptions: { first: subscription, second: sub('inbound') }, rows: [event, row(2)], message: async () => {
       const message = { ...ownMessage(event) }
       if (label === 'foreign-chat') message.chatId = 'another-chat'
       if (label === 'wrong-message') message.externalId = 'another-message'
       if (label === 'not-ready') { message.transcription = null; message.mediaUrl = null }
-      return { ok: label !== 'forbidden', json: async () => label === 'malformed' ? { data: { senderAgentId: 7 } } : { data: label === 'missing' ? null : message } }
+      return {
+        ok: !['forbidden', 'not-found'].includes(label), status: label === 'forbidden' ? 403 : label === 'not-found' ? 404 : 200,
+        json: async () => {
+          if (label === 'invalid-json') throw new SyntaxError('bad JSON')
+          return label === 'malformed' ? { data: { senderAgentId: 7 } } : { data: label === 'missing' ? null : message }
+        },
+      }
     },
+    save: async () => { if (f.acks.at(-1) === 2) saved.resolve() },
   })
-  f.rt.warn = () => warned.resolve()
-  await warned.promise
+  f.rt.warn = (...args) => warnings.push(args)
+  await saved.promise
   await f.rt.quiesceOmniEvents()
-  assert.deepEqual(f.fired, [])
+  assert.deepEqual(f.fired, [['inbound', 'event-2']])
+  assert.deepEqual(f.acks, [1, 2])
+  assert.equal(warnings.length, 1, 'refusal is observable without logging the content')
+  assert.equal(f.rt.state.omniEventCursors.messages, '2')
+})
+
+for (const failure of ['network', 'server']) test(`outbound ${failure} failure retries with increasing backoff across successful reconnects`, { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const event = ownMedia(), firstFailure = deferred(), secondFailure = deferred(), saved = deferred()
+  const waits = []
+  let attempts = 0
+  const f = fixture(t, {
+    subscriptions: { first: voice() }, rows: [event], message: async () => {
+      attempts++
+      if (attempts <= 2) {
+        if (failure === 'network') throw new TypeError('fetch failed')
+        return { ok: false, status: 503 }
+      }
+      return { ok: true, json: async () => ({ data: ownMessage(event) }) }
+    },
+    save: async () => saved.resolve(),
+  })
+  f.rt.warn = (_format, _stream, _error, seconds) => {
+    waits.push(seconds)
+    if (waits.length === 1) firstFailure.resolve()
+    else secondFailure.resolve()
+  }
+  await firstFailure.promise
   assert.deepEqual(f.acks, [])
+  t.mock.timers.tick(2000)
+  await secondFailure.promise
+  assert.deepEqual(waits, [2, 5], 'successful reconnect must not reset the failed cursor backoff')
+  assert.deepEqual(f.acks, [])
+  t.mock.timers.tick(2000)
+  await turn()
+  assert.equal(attempts, 2, 'second retry must wait the full five seconds')
+  t.mock.timers.tick(3000)
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.fired, [['voice', event.id]])
+  assert.deepEqual(f.acks, [1])
+  assert.equal(attempts, 3)
+})
+
+for (const failure of ['network', 'server']) test(`persistent outbound ${failure} failure is capped, warned and acked before the next inbound row`, { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const event = ownMedia(), firstFailure = deferred(), secondFailure = deferred(), saved = deferred()
+  const waits = [], refusals = []
+  let attempts = 0
+  const f = fixture(t, {
+    subscriptions: { first: voice(), second: sub('inbound') }, rows: [event, row(2)], message: async () => {
+      attempts++
+      if (failure === 'network') throw new TypeError('fetch failed')
+      return { ok: false, status: 503 }
+    },
+    save: async () => { if (f.acks.at(-1) === 2) saved.resolve() },
+  })
+  f.rt.warn = (format, ...args) => {
+    if (format.startsWith('ds-bot: refused')) { refusals.push(args); return }
+    waits.push(args.at(-1))
+    if (waits.length === 1) firstFailure.resolve()
+    else secondFailure.resolve()
+  }
+  await firstFailure.promise
+  assert.deepEqual(f.acks, [])
+  t.mock.timers.tick(2000)
+  await secondFailure.promise
+  assert.deepEqual(f.acks, [])
+  t.mock.timers.tick(5000)
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(waits, [2, 5])
+  assert.equal(attempts, 3, 'the failed row has a hard three-attempt budget')
+  assert.deepEqual(refusals, [[event.id, 'lookup retries exhausted']])
+  assert.deepEqual(f.fired, [['inbound', 'event-2']])
+  assert.deepEqual(f.acks, [1, 2])
+  assert.equal(f.rt.state.omniEventCursors.messages, '2')
+})
+
+for (const source of ['journal', 'canonical', 'both']) {
+  for (const proof of ['append', 'missing-type', 'history-sync']) test(`received-first echo/history refused with ${source} ${proof} marker`, { timeout: 5000 }, async t => {
+    const event = ownMedia(), message = ownMessage(event), saved = deferred()
+    // Received wins persistence: no senderAgentId, platform key present. Attribution
+    // alone cannot distinguish this record from the owner's device notification.
+    message.rawPayload = { ...event.rawPayload }
+    for (const raw of [source !== 'canonical' && event.rawPayload, source !== 'journal' && message.rawPayload].filter(Boolean)) {
+      if (proof === 'append') raw.upsertType = 'append'
+      if (proof === 'missing-type') delete raw.upsertType
+      if (proof === 'history-sync') raw.isHistorySync = true
+    }
+    const f = fixture(t, {
+      subscriptions: { first: voice() }, rows: [event],
+      message: async () => ({ ok: true, json: async () => ({ data: message }) }),
+      save: async () => saved.resolve(),
+    })
+    await saved.promise
+    await f.rt.quiesceOmniEvents()
+    assert.deepEqual(f.fired, [])
+    assert.deepEqual(f.acks, [1])
+  })
+}
+
+// A media URL is useful without STT; do not promise to wait for a fresh transcript.
+test('own live audio dispatches with a media reference while transcription is pending', { timeout: 5000 }, async t => {
+  const event = ownMedia(), saved = deferred(), events = []
+  const f = fixture(t, {
+    subscriptions: { first: voice() }, rows: [event],
+    message: async () => ({ ok: true, json: async () => ({ data: { ...ownMessage(event), transcription: null } }) }),
+    fire: async (_sub, value) => events.push(value), save: async () => saved.resolve(),
+  })
+  await saved.promise
+  await f.rt.quiesceOmniEvents()
+  assert.equal(events[0].text, '')
+  assert.equal(events[0].message.mediaUrl, 'https://media.test/voice.ogg')
 })
 
 test('a reaction keeps own-reaction semantics and resolves the audio target and transcription afresh', { timeout: 5000 }, async t => {

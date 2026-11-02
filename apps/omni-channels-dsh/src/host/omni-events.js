@@ -7,6 +7,7 @@ import { hostname } from 'node:os'
 import { z } from 'zod'
 
 const BACKOFF_MS = [2_000, 5_000, 15_000, 60_000]
+const MEDIA_LOOKUP_ATTEMPTS = 3
 const LOOKUP_TTL_MS = 10 * 60_000
 const TEXT_MAX = 2_000
 const optionalText = z.string().nullish()
@@ -105,6 +106,7 @@ export function install(rt) {
   const consumerName = suffix => `omni-ui-dsh.${hostname().toLowerCase().replace(/[^a-z0-9.-]/g, '-')}.${suffix}`
   const cursors = () => (state.omniEventCursors ??= {})
   const loops = new Map()
+  let mediaLookupFailure
   let stopped = false
   let syncTail = Promise.resolve()
   let drain
@@ -124,25 +126,34 @@ export function install(rt) {
     return value
   }
 
-  // Fresh reads: a missing message or unfinished transcription must not be frozen in
-  // the name cache for ten minutes. The API enforces the caller's chat/tenant scope.
+  // Uncached, scoped reads. Only transport failures and server errors are retriable;
+  // missing/forbidden/malformed records must not block the whole durable stream.
   async function messageOf(row, required = false) {
-    if (row.chatUuid && row.externalId) {
-      const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
-      if (response?.ok) {
-        const reply = messageReplySchema.safeParse(await response.json())
-        if (reply.success && reply.data.data) return reply.data.data
-      }
+    if (!row.chatUuid || !row.externalId) return undefined
+    const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
+    if (required && response?.status >= 500) throw new Error('own-device media lookup server error')
+    if (!response?.ok) return undefined
+    let data
+    try { data = await response.json() } catch (error) {
+      if (error instanceof SyntaxError) return undefined
+      throw error
     }
-    if (required) throw new Error('own-device media message is not available; no dispatch or ack')
+    const reply = messageReplySchema.safeParse(data)
+    return reply.success ? reply.data.data ?? undefined : undefined
   }
 
-  // Canonical sent records retain the server's send shape and/or agent attribution.
-  // A phone receipt has its platform key. Missing/foreign records never admit an event.
+  // Match device-login's live owner receipt proof, on both the journal and canonical
+  // message. append echoes and history replays are not owner-device notifications,
+  // even when the received persister wins the race against the sent persister.
+  function ownerReceipt(raw, externalId) {
+    return raw?.upsertType === 'notify' && raw.isHistorySync !== true && raw.isFromMe === true
+      && raw.key?.fromMe === true && raw.key.id === externalId
+  }
+
   function ownDeviceMedia(row, message) {
-    if (message.chatId !== row.chatUuid || message.externalId !== row.externalId) throw new Error('media message does not match its source')
-    return message.senderAgentId === null && message.isFromMe === true
-      && message.rawPayload?.key?.fromMe === true && message.rawPayload.key.id === row.externalId
+    return message.chatId === row.chatUuid && message.externalId === row.externalId
+      && message.senderAgentId === null && message.isFromMe === true
+      && ownerReceipt(row.rawPayload, row.externalId) && ownerReceipt(message.rawPayload, row.externalId)
   }
 
   function messageContext(row, message) {
@@ -159,9 +170,17 @@ export function install(rt) {
     const media = ['audio', 'image', 'video', 'document', 'sticker'].includes(row.contentType)
     let message
     if (outboundMedia) {
-      message = await messageOf(row, true)
-      if (!ownDeviceMedia(row, message)) {
-        rt.warn('ds-bot: refused generated or unattributed outbound media event %s', row.id)
+      // Keep the per-row budget outside the reconnect loop (and across reconfigure).
+      // Exhaustion refuses the row so one unavailable lookup cannot hold the stream.
+      const exhausted = () => mediaLookupFailure?.id === row.id && mediaLookupFailure.attempts >= MEDIA_LOOKUP_ATTEMPTS
+      if (!exhausted()) {
+        try { message = await messageOf(row, true) } catch (error) {
+          mediaLookupFailure = { id: row.id, attempts: mediaLookupFailure?.id === row.id ? mediaLookupFailure.attempts + 1 : 1 }
+          if (!exhausted()) throw error
+        }
+      }
+      if (!message || !ownDeviceMedia(row, message)) {
+        rt.warn('ds-bot: refused outbound media event %s (%s)', row.id, exhausted() ? 'lookup retries exhausted' : 'unavailable or non-device record')
         return undefined
       }
     } else if (row.eventType === 'reaction.received' || media) {
@@ -170,7 +189,10 @@ export function install(rt) {
     const processedText = [...new Set([message?.textContent, message?.transcription, message?.imageDescription, message?.videoDescription, message?.documentExtraction].filter(Boolean))].join('\n')
     const text = processedText || row.textContent || ''
     const reference = messageContext(row, message)
-    if (outboundMedia && !text && !reference.mediaUrl) throw new Error('own-device media content is not ready; no dispatch or ack')
+    if (outboundMedia && !text && !reference.mediaUrl) {
+      rt.warn('ds-bot: refused outbound media event without available content %s', row.id)
+      return undefined
+    }
     const chat = row.chatUuid ? await lookup(`/chats/${row.chatUuid}`, nameReplySchema, reply => reply.data?.name) : undefined
     const channel = row.instanceId ? await lookup(`/instances/${row.instanceId}`, nameReplySchema, reply => reply.data?.name) : undefined
     const ids = { ...(row.chatUuid ? { chatId: row.chatUuid } : {}), ...(row.instanceId ? { instanceId: row.instanceId } : {}) }
@@ -269,7 +291,6 @@ export function install(rt) {
         })
         if (cancelled(controller) || response === null) return
         if (!response.ok || !response.body) throw new Error(`omni answered ${response.status} for the ${stream.suffix} stream`)
-        failures = 0
         for await (const frame of frames(response.body)) {
           if (cancelled(controller)) break
           if (frame.event === 'reconnect' || frame.event === 'error') break
@@ -283,6 +304,8 @@ export function install(rt) {
           const handled = await handle(row, controller)
           if (handled === 'cancelled' || (handled === 'unmatched' && cancelled(controller))) break
           await ack(stream, cursor)
+          if (mediaLookupFailure?.id === row.id) mediaLookupFailure = undefined
+          failures = 0 // Only completed progress resets backoff; a reconnect proves nothing.
           if (cancelled(controller)) break
         }
       } catch (error) {
