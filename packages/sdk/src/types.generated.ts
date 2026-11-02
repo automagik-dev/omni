@@ -5481,7 +5481,7 @@ export interface components {
              * @description Check status
              * @enum {string}
              */
-            status: "ok" | "error";
+            status: "ok" | "degraded" | "error";
             /** @description Latency in milliseconds */
             latency?: number;
             /** @description Error message if status is error */
@@ -5512,7 +5512,7 @@ export interface components {
                      * @description Check status
                      * @enum {string}
                      */
-                    status: "ok" | "error";
+                    status: "ok" | "degraded" | "error";
                     /** @description Latency in milliseconds */
                     latency?: number;
                     /** @description Error message if status is error */
@@ -5527,7 +5527,23 @@ export interface components {
                      * @description Check status
                      * @enum {string}
                      */
-                    status: "ok" | "error";
+                    status: "ok" | "degraded" | "error";
+                    /** @description Latency in milliseconds */
+                    latency?: number;
+                    /** @description Error message if status is error */
+                    error?: string;
+                    /** @description Additional details */
+                    details?: {
+                        [key: string]: unknown;
+                    };
+                };
+                /** @description Queue depth check; an unavailable read reports degraded without changing HTTP status or readiness */
+                deadLetters?: {
+                    /**
+                     * @description Check status
+                     * @enum {string}
+                     */
+                    status: "ok" | "degraded" | "error";
                     /** @description Latency in milliseconds */
                     latency?: number;
                     /** @description Error message if status is error */
@@ -5543,7 +5559,7 @@ export interface components {
                      * @description Check status
                      * @enum {string}
                      */
-                    status: "ok" | "error";
+                    status: "ok" | "degraded" | "error";
                     /** @description Latency in milliseconds */
                     latency?: number;
                     /** @description Error message if status is error */
@@ -12167,7 +12183,7 @@ export interface operations {
                                  * @description Check status
                                  * @enum {string}
                                  */
-                                status: "ok" | "error";
+                                status: "ok" | "degraded" | "error";
                                 /** @description Latency in milliseconds */
                                 latency?: number;
                                 /** @description Error message if status is error */
@@ -12182,7 +12198,23 @@ export interface operations {
                                  * @description Check status
                                  * @enum {string}
                                  */
-                                status: "ok" | "error";
+                                status: "ok" | "degraded" | "error";
+                                /** @description Latency in milliseconds */
+                                latency?: number;
+                                /** @description Error message if status is error */
+                                error?: string;
+                                /** @description Additional details */
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                            /** @description Queue depth check; an unavailable read reports degraded without changing HTTP status or readiness */
+                            deadLetters?: {
+                                /**
+                                 * @description Check status
+                                 * @enum {string}
+                                 */
+                                status: "ok" | "degraded" | "error";
                                 /** @description Latency in milliseconds */
                                 latency?: number;
                                 /** @description Error message if status is error */
@@ -12198,7 +12230,7 @@ export interface operations {
                                  * @description Check status
                                  * @enum {string}
                                  */
-                                status: "ok" | "error";
+                                status: "ok" | "degraded" | "error";
                                 /** @description Latency in milliseconds */
                                 latency?: number;
                                 /** @description Error message if status is error */
@@ -12239,7 +12271,7 @@ export interface operations {
                                  * @description Check status
                                  * @enum {string}
                                  */
-                                status: "ok" | "error";
+                                status: "ok" | "degraded" | "error";
                                 /** @description Latency in milliseconds */
                                 latency?: number;
                                 /** @description Error message if status is error */
@@ -12254,7 +12286,23 @@ export interface operations {
                                  * @description Check status
                                  * @enum {string}
                                  */
-                                status: "ok" | "error";
+                                status: "ok" | "degraded" | "error";
+                                /** @description Latency in milliseconds */
+                                latency?: number;
+                                /** @description Error message if status is error */
+                                error?: string;
+                                /** @description Additional details */
+                                details?: {
+                                    [key: string]: unknown;
+                                };
+                            };
+                            /** @description Queue depth check; an unavailable read reports degraded without changing HTTP status or readiness */
+                            deadLetters?: {
+                                /**
+                                 * @description Check status
+                                 * @enum {string}
+                                 */
+                                status: "ok" | "degraded" | "error";
                                 /** @description Latency in milliseconds */
                                 latency?: number;
                                 /** @description Error message if status is error */
@@ -12270,7 +12318,7 @@ export interface operations {
                                  * @description Check status
                                  * @enum {string}
                                  */
-                                status: "ok" | "error";
+                                status: "ok" | "degraded" | "error";
                                 /** @description Latency in milliseconds */
                                 latency?: number;
                                 /** @description Error message if status is error */
