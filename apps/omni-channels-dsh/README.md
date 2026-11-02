@@ -198,6 +198,43 @@ deletion is reported separately, without treating deletion as failed
   `omniEventCursors`) stay in the team's `state.json`, saved through the team's lock; a DSH
   that only reads the team does not change them.
 
+## Own-device voice and media automations
+
+Voice/media triggers are inbound-only by default. When the owner explicitly asks to
+include their own outbound media, use `save_automation` with `allow_outbound: true`
+(`trigger: "voice"` for audio; `"media"` for photos, videos, documents and stickers).
+The saved trigger records `allowOutbound`; later edits retain it unless explicitly
+changed or the trigger kind changes. Set `allow_outbound: false` to turn it off.
+The board and automation summary show when own-device media is included.
+
+Admission also reads the canonical message through the configured Omni credentials:
+it must match the watched chat and external ID, have a live `notify` own-device receipt
+on both the journal and stored message, not be history sync, and have no agent
+attribution. API-send records, `append` echoes, history replays and `message.sent`
+never trigger it. Missing, forbidden, malformed or mismatched lookups are refused
+with a warning and acknowledged, so later events can continue. Network and 5xx
+lookup failures get at most three attempts per row, with increasing backoff that
+survives stream reconnects. Exhaustion warns, refuses and acknowledges the row. This
+currently admits WhatsApp Baileys own-device receipts; other channels without that
+receipt shape remain excluded. The existing channel echo guard stays in place.
+
+The worker gets the source chat/instance, a message/media reference and available
+transcription or processed content, under its existing permissions. If processing is
+disabled or still pending but a media URL exists, it receives that reference without
+inventing a transcript: the text may be empty, and dispatch does not wait for
+transcription. A record with neither usable text nor a media reference is warned,
+refused and acknowledged; it is not replayed when processing finishes.
+
+Inbound media and reactions also perform an uncached scoped message read per event,
+instead of using the ten-minute name cache. Workers receive the available processed
+text and media reference. Reaction triggers retain “you react” semantics and resolve
+the referenced message, including its available transcription. This does not replay already-acknowledged
+outbound events or change the stream's existing at-least-once delivery contract.
+
+Enabling `allow_outbound` uses the existing trigger-widening permission card for
+act-without-asking automations. New and ask-first automations keep their existing
+permission flow; the tool instruction to ask before enabling does not add a new card.
+
 ## Quiesce automation ingress before unloading
 
 The `omniChannels` host runtime exposes `await rt.quiesceOmniEvents()`. Call and await

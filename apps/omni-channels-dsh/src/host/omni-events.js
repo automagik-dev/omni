@@ -7,6 +7,7 @@ import { hostname } from 'node:os'
 import { z } from 'zod'
 
 const BACKOFF_MS = [2_000, 5_000, 15_000, 60_000]
+const MEDIA_LOOKUP_ATTEMPTS = 3
 const LOOKUP_TTL_MS = 10 * 60_000
 const TEXT_MAX = 2_000
 const optionalText = z.string().nullish()
@@ -14,12 +15,17 @@ const rowSchema = z.object({
   id: z.string(), eventType: z.string(), journalSeq: z.number().int().nonnegative().optional(),
   direction: optionalText, chatUuid: optionalText, instanceId: optionalText,
   externalId: optionalText, receivedAt: optionalText, contentType: optionalText, textContent: optionalText,
+  mediaUrl: optionalText, mediaMimeType: optionalText,
   rawPayload: z.object({ isFromMe: z.unknown().optional(), isMentioningInstance: z.unknown().optional() }).passthrough().nullish(),
   metadata: z.object({ from: optionalText, emoji: optionalText }).passthrough().nullish(),
 }).passthrough()
 const nameReplySchema = z.object({ data: z.object({ name: optionalText }).passthrough().nullish() })
 const messageReplySchema = z.object({ data: z.object({
+  id: optionalText, chatId: optionalText, externalId: optionalText, messageType: optionalText,
   textContent: optionalText, transcription: optionalText, senderDisplayName: optionalText,
+  senderAgentId: optionalText, isFromMe: z.boolean().nullish(), mediaUrl: optionalText, mediaMimeType: optionalText,
+  imageDescription: optionalText, videoDescription: optionalText, documentExtraction: optionalText,
+  rawPayload: z.object({ key: z.object({ id: optionalText, fromMe: z.boolean().optional() }).passthrough().nullish() }).passthrough().nullish(),
 }).passthrough().nullish() })
 const ackErrorSchema = z.object({ error: z.object({ code: z.literal('VALIDATION_ERROR'), message: z.string() }) })
 
@@ -53,8 +59,12 @@ export function matches(sub, row) {
     const own = row.rawPayload?.isFromMe === true || row.direction === 'outbound'
     return trigger.kind === 'reaction' && own && bare(row.textContent ?? row.metadata?.emoji) === bare(trigger.emoji)
   }
-  if (row.eventType !== 'message.received' || row.direction !== 'inbound') return false
+  if (row.eventType !== 'message.received') return false
   const type = row.contentType ?? 'text'
+  // This is only the subscription match. Own-device admission below also checks the
+  // canonical message; fromMe/direction alone never makes an API send eligible.
+  if (row.direction !== 'inbound' && !(row.direction === 'outbound' && trigger.allowOutbound === true
+    && ['voice', 'media'].includes(trigger.kind) && row.rawPayload?.isFromMe === true)) return false
   if (trigger.kind === 'message') return true
   if (trigger.kind === 'mention') return row.rawPayload?.isMentioningInstance === true
   if (trigger.kind === 'voice') return type === 'audio'
@@ -96,6 +106,7 @@ export function install(rt) {
   const consumerName = suffix => `omni-ui-dsh.${hostname().toLowerCase().replace(/[^a-z0-9.-]/g, '-')}.${suffix}`
   const cursors = () => (state.omniEventCursors ??= {})
   const loops = new Map()
+  let mediaLookupFailure
   let stopped = false
   let syncTail = Promise.resolve()
   let drain
@@ -115,27 +126,87 @@ export function install(rt) {
     return value
   }
 
-  // What the worker gets: the message (for a reaction, the one reacted to), who wrote it,
-  // and where, with the ids of that chat and its channel (a chat-thread worker's thread is
-  // that chat's).
+  // Uncached, scoped reads. Only transport failures and server errors are retriable;
+  // missing/forbidden/malformed records must not block the whole durable stream.
+  async function messageOf(row, required = false) {
+    if (!row.chatUuid || !row.externalId) return undefined
+    const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
+    if (required && response?.status >= 500) throw new Error('own-device media lookup server error')
+    if (!response?.ok) return undefined
+    let data
+    try { data = await response.json() } catch (error) {
+      if (error instanceof SyntaxError) return undefined
+      throw error
+    }
+    const reply = messageReplySchema.safeParse(data)
+    return reply.success ? reply.data.data ?? undefined : undefined
+  }
+
+  // Match device-login's live owner receipt proof, on both the journal and canonical
+  // message. append echoes and history replays are not owner-device notifications,
+  // even when the received persister wins the race against the sent persister.
+  function ownerReceipt(raw, externalId) {
+    return raw?.upsertType === 'notify' && raw.isHistorySync !== true && raw.isFromMe === true
+      && raw.key?.fromMe === true && raw.key.id === externalId
+  }
+
+  function ownDeviceMedia(row, message) {
+    return message.chatId === row.chatUuid && message.externalId === row.externalId
+      && message.senderAgentId === null && message.isFromMe === true
+      && ownerReceipt(row.rawPayload, row.externalId) && ownerReceipt(message.rawPayload, row.externalId)
+  }
+
+  function messageContext(row, message) {
+    return {
+      id: message?.id, externalId: row.externalId, type: message?.messageType ?? row.contentType,
+      mediaUrl: message?.mediaUrl ?? row.mediaUrl, mimeType: message?.mediaMimeType ?? row.mediaMimeType,
+    }
+  }
+
+  // What the worker gets: the message (for a reaction, the one reacted to), its
+  // processed content and media reference, and the ids of its chat and channel.
   async function eventOf(row) {
+    const outboundMedia = row.eventType === 'message.received' && row.direction === 'outbound'
+    const media = ['audio', 'image', 'video', 'document', 'sticker'].includes(row.contentType)
+    let message
+    if (outboundMedia) {
+      // Keep the per-row budget outside the reconnect loop (and across reconfigure).
+      // Exhaustion refuses the row so one unavailable lookup cannot hold the stream.
+      const exhausted = () => mediaLookupFailure?.id === row.id && mediaLookupFailure.attempts >= MEDIA_LOOKUP_ATTEMPTS
+      if (!exhausted()) {
+        try { message = await messageOf(row, true) } catch (error) {
+          mediaLookupFailure = { id: row.id, attempts: mediaLookupFailure?.id === row.id ? mediaLookupFailure.attempts + 1 : 1 }
+          if (!exhausted()) throw error
+        }
+      }
+      if (!message || !ownDeviceMedia(row, message)) {
+        rt.warn('ds-bot: refused outbound media event %s (%s)', row.id, exhausted() ? 'lookup retries exhausted' : 'unavailable or non-device record')
+        return undefined
+      }
+    } else if (row.eventType === 'reaction.received' || media) {
+      try { message = await messageOf(row) } catch { /* inbound/reaction enrichment is optional */ }
+    }
+    const processedText = [...new Set([message?.textContent, message?.transcription, message?.imageDescription, message?.videoDescription, message?.documentExtraction].filter(Boolean))].join('\n')
+    const text = processedText || row.textContent || ''
+    const reference = messageContext(row, message)
+    if (outboundMedia && !text && !reference.mediaUrl) {
+      rt.warn('ds-bot: refused outbound media event without available content %s', row.id)
+      return undefined
+    }
     const chat = row.chatUuid ? await lookup(`/chats/${row.chatUuid}`, nameReplySchema, reply => reply.data?.name) : undefined
     const channel = row.instanceId ? await lookup(`/instances/${row.instanceId}`, nameReplySchema, reply => reply.data?.name) : undefined
     const ids = { ...(row.chatUuid ? { chatId: row.chatUuid } : {}), ...(row.instanceId ? { instanceId: row.instanceId } : {}) }
     if (row.eventType === 'reaction.received') {
-      const message = row.chatUuid && row.externalId
-        ? await lookup(`/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`, messageReplySchema, reply => reply.data)
-        : undefined
       return {
         kind: `reaction ${row.textContent ?? ''}`.trim(), who: 'the user', chat, channel, ...ids, at: Date.parse(row.receivedAt) || Date.now(),
-        text: String(message?.textContent || message?.transcription || '').slice(0, TEXT_MAX),
-        author: message?.senderDisplayName ?? undefined,
+        text: String(processedText).slice(0, TEXT_MAX),
+        author: message?.senderDisplayName ?? undefined, ...(message ? { message: reference } : {}),
       }
     }
     return {
       kind: row.contentType === 'audio' ? 'voice note' : row.contentType && row.contentType !== 'text' ? row.contentType : 'message',
       who: row.metadata?.from ?? undefined, chat, channel, ...ids, at: Date.parse(row.receivedAt) || Date.now(),
-      text: String(row.textContent ?? '').slice(0, TEXT_MAX),
+      text: String(text).slice(0, TEXT_MAX), ...(media ? { message: reference } : {}),
     }
   }
 
@@ -144,6 +215,7 @@ export function install(rt) {
     const due = Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row))
     if (due.length === 0) return 'unmatched'
     const event = await eventOf(row)
+    if (event === undefined) return 'unmatched'
     if (cancelled(controller)) return 'cancelled'
     // Admission is the first dispatch, not the lookup. Once entered, finish this whole
     // captured row (even after stop), then ack it before the run can settle.
@@ -219,7 +291,6 @@ export function install(rt) {
         })
         if (cancelled(controller) || response === null) return
         if (!response.ok || !response.body) throw new Error(`omni answered ${response.status} for the ${stream.suffix} stream`)
-        failures = 0
         for await (const frame of frames(response.body)) {
           if (cancelled(controller)) break
           if (frame.event === 'reconnect' || frame.event === 'error') break
@@ -233,6 +304,8 @@ export function install(rt) {
           const handled = await handle(row, controller)
           if (handled === 'cancelled' || (handled === 'unmatched' && cancelled(controller))) break
           await ack(stream, cursor)
+          if (mediaLookupFailure?.id === row.id) mediaLookupFailure = undefined
+          failures = 0 // Only completed progress resets backoff; a reconnect proves nothing.
           if (cancelled(controller)) break
         }
       } catch (error) {

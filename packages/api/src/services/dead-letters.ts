@@ -340,24 +340,29 @@ export class DeadLetterService {
    * Manually retry a dead letter
    */
   async retry(id: string): Promise<RetryResult> {
-    const deadLetter = await this.getById(id);
+    const current = await this.getById(id);
 
-    if (deadLetter.status === 'resolved') {
+    if (current.status === 'resolved') {
       return { success: false, deadLetterId: id, error: 'Dead letter already resolved' };
     }
 
-    if (deadLetter.status === 'retrying') {
+    if (current.status === 'retrying') {
       return { success: false, deadLetterId: id, error: 'Dead letter already retrying' };
     }
 
-    // Update status to retrying
-    await this.db
+    // A status read is not ownership: only the pending-to-retrying claim wins.
+    const [deadLetter] = await this.db
       .update(deadLetterEvents)
       .set({
         status: 'retrying',
         lastRetryAt: new Date(),
       })
-      .where(eq(deadLetterEvents.id, id));
+      .where(and(eq(deadLetterEvents.id, id), eq(deadLetterEvents.status, 'pending')))
+      .returning();
+
+    if (!deadLetter) {
+      return { success: false, deadLetterId: id, error: 'Dead letter is no longer pending' };
+    }
 
     // Try to republish the original event
     try {
@@ -479,14 +484,23 @@ export class DeadLetterService {
           .limit(100),
       );
 
-      for (const deadLetter of dueForRetry) {
-        processed++;
-        await this.workDb(tenantId, () =>
+      for (const candidate of dueForRetry) {
+        const [deadLetter] = await this.workDb(tenantId, () =>
           this.db
             .update(deadLetterEvents)
             .set({ status: 'retrying', lastRetryAt: now })
-            .where(eq(deadLetterEvents.id, deadLetter.id)),
+            .where(
+              and(
+                eq(deadLetterEvents.id, candidate.id),
+                eq(deadLetterEvents.status, 'pending'),
+                lte(deadLetterEvents.nextAutoRetryAt, now),
+                this.workPredicate(tenantId),
+              ),
+            )
+            .returning(),
         );
+        if (!deadLetter) continue;
+        processed++;
 
         try {
           await this.republish(deadLetter, deadLetter.payload, 'dead-letter-auto-retry');
