@@ -222,14 +222,21 @@ export class WebhookService {
     headers: Record<string, string>,
     options: WebhookReceiveOptions,
   ): Promise<WebhookReceiveResult> {
-    const receive = () =>
-      this.receive(name, payload, headers, { ...options, autoCreate: false, requireSignature: true });
-    if (!isMultitenancyEnabled()) return receive();
+    const verifiedOptions = { ...options, autoCreate: false, requireSignature: true };
+    if (!isMultitenancyEnabled()) return this.receive(name, payload, headers, verifiedOptions);
 
-    const tenantId = await this.cachedIngressOwner(name);
+    let tenantId: string | null | undefined;
+    try {
+      tenantId = await this.cachedIngressOwner(name);
+    } catch (error) {
+      log.warn('Webhook ingress ownership discovery failed', { sourceName: name, error: String(error) });
+      throw new OmniError({ code: ERROR_CODES.UNAUTHORIZED, message: 'Webhook verification failed' });
+    }
     if (tenantId === undefined) {
       throw new OmniError({ code: ERROR_CODES.UNAUTHORIZED, message: 'Webhook verification failed' });
     }
+    const owner = { tenantId };
+    const receive = () => this.receiveWithOwner(name, payload, headers, verifiedOptions, owner);
     return tenantId ? runInWorkerTenantScope(this.pool, tenantId, receive) : receive();
   }
 
@@ -307,12 +314,7 @@ export class WebhookService {
    * Get webhook source by name
    */
   async getByName(name: string): Promise<WebhookSource | null> {
-    const tenantId = this.tenantId;
-    const [result] = await this.db
-      .select()
-      .from(webhookSources)
-      .where(and(eq(webhookSources.name, name), tenantId ? eq(webhookSources.tenantId, tenantId) : undefined))
-      .limit(1);
+    const [result] = await this.db.select().from(webhookSources).where(eq(webhookSources.name, name)).limit(1);
     return result ?? null;
   }
 
@@ -452,10 +454,36 @@ export class WebhookService {
     headers: Record<string, string>,
     options: WebhookReceiveOptions = {},
   ): Promise<WebhookReceiveResult> {
+    return this.receiveWithOwner(sourceName, payload, headers, options);
+  }
+
+  private async getReceiveSource(name: string, owner?: { tenantId: string | null }): Promise<WebhookSource | null> {
+    if (!owner) return this.getByName(name);
+    const [source] = await this.db
+      .select()
+      .from(webhookSources)
+      .where(
+        and(
+          eq(webhookSources.name, name),
+          owner.tenantId ? eq(webhookSources.tenantId, owner.tenantId) : isNull(webhookSources.tenantId),
+        ),
+      )
+      .limit(1);
+    return source ?? null;
+  }
+
+  /** Only public discovery imposes an explicit owner; authenticated reads keep legacy NULL sources. */
+  private async receiveWithOwner(
+    sourceName: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string>,
+    options: WebhookReceiveOptions,
+    owner?: { tenantId: string | null },
+  ): Promise<WebhookReceiveResult> {
     const { autoCreate = false, rawBody, requireSignature = false } = options;
 
     // Get or create source
-    let source = await this.getByName(sourceName);
+    let source = await this.getReceiveSource(sourceName, owner);
 
     if (!source && autoCreate) {
       source = await this.create({

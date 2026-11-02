@@ -24,8 +24,11 @@ import {
 } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { createApp } from '../app';
+import { AuthBootstrapService } from '../services/auth-bootstrap';
 import { cleanupDeadLettersForTenants } from '../services/dead-letter-maintenance';
 import { WebhookService } from '../services/webhooks';
+import { generateSecret, hashSecret, secretPrefix } from '../tenancy/hash';
+import { MembershipSelectionService, RequestAuthenticator } from '../tenancy/request-auth';
 import { sealCredentialField } from '../tenancy/sealed-credentials';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
@@ -37,7 +40,7 @@ const A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
 const B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
 const SECRET = 'synthetic-source-secret';
 
-for (const mode of ['legacy', 'tenant', 'enforced'] as const) {
+for (const mode of ['legacy', 'tenant', 'tenant-global', 'enforced'] as const) {
   maybe(`webhook ingress and cleanup (${mode}, real PostgreSQL)`, () => {
     const database = `omni_webhook_scope_${crypto.randomUUID().replaceAll('-', '')}`;
     const saved = Object.fromEntries(
@@ -67,9 +70,13 @@ for (const mode of ['legacy', 'tenant', 'enforced'] as const) {
       await admin.execute(`INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget) VALUES
         ('${A}', 'ingress-a', 'Ingress A', 86400, 1000, 1000), ('${B}', 'ingress-b', 'Ingress B', 86400, 1000, 1000)`);
       // G6 replaces preserved global uniques with tenant uniques. Exercise that shape too.
-      await admin.execute('ALTER TABLE webhook_sources DROP CONSTRAINT webhook_sources_name_unique');
-      await admin.execute('DROP INDEX webhook_sources_name_idx');
-      await admin.execute('CREATE UNIQUE INDEX webhook_sources_tenant_name_test ON webhook_sources (tenant_id, name)');
+      if (mode !== 'tenant-global') {
+        await admin.execute('ALTER TABLE webhook_sources DROP CONSTRAINT webhook_sources_name_unique');
+        await admin.execute('DROP INDEX webhook_sources_name_idx');
+        await admin.execute(
+          'CREATE UNIQUE INDEX webhook_sources_tenant_name_test ON webhook_sources (tenant_id, name)',
+        );
+      }
       const passwords = { ddl: crypto.randomUUID(), runtime: crypto.randomUUID(), authPlane: crypto.randomUUID() };
       if (mode === 'enforced') await applyTenantRlsEnforcement(admin);
       else {
@@ -106,7 +113,7 @@ for (const mode of ['legacy', 'tenant', 'enforced'] as const) {
       const result = createApp(db, bus, null, null);
       app = result.app;
       services = result.services;
-      if (mode === 'tenant') {
+      if (mode === 'tenant' || mode === 'tenant-global') {
         const auth = createDbHandle({ url: authUrl, maxConnections: 2 });
         services.authPlane = { db: auth.db, source: 'dedicated-auth-plane-role', close: auth.close };
         services.webhooks = new WebhookService(db, bus, services.eventSchemas, services.deadLetters, auth.db);
@@ -168,6 +175,70 @@ for (const mode of ['legacy', 'tenant', 'enforced'] as const) {
       });
     }
 
+    async function seedTenantCredential(): Promise<string> {
+      const secret = generateSecret();
+      const hash = await hashSecret(secret);
+      const prefix = secretPrefix(secret);
+      const principal = crypto.randomUUID();
+      const membership = crypto.randomUUID();
+      const lineage = crypto.randomUUID();
+      // Credential provisioning is setup; authentication uses the real auth-plane role.
+      await admin.execute(`
+        INSERT INTO principals (id, type, subject) VALUES ('${principal}', 'service', 'webhook-regression');
+        INSERT INTO tenant_memberships (id, tenant_id, principal_id, role)
+          VALUES ('${membership}', '${A}', '${principal}', 'tenant-admin');
+        INSERT INTO tenant_key_lineage
+          (id, tenant_id, principal_id, membership_id, actor_role, name, key_prefix, scopes, root_key_id)
+          VALUES ('${lineage}', '${A}', '${principal}', '${membership}', 'tenant-admin', 'webhook-test',
+            '${prefix}', ARRAY['tenant:*'], '${lineage}');
+        INSERT INTO auth_credentials
+          (credential_class, key_hash, key_prefix, tenant_id, principal_id, membership_id, actor_role, scopes, tenant_key_lineage_id)
+          VALUES ('tenant', '${hash}', '${prefix}', '${A}', '${principal}', '${membership}', 'tenant-admin',
+            ARRAY['tenant:*'], '${lineage}');
+      `);
+      return secret;
+    }
+
+    if (mode === 'tenant-global')
+      test('a tenant key can receive and heartbeat a service-created NULL source without autocreate collisions', async () => {
+        const key = await seedTenantCredential();
+        services.authBootstrap = new AuthBootstrapService(services.authPlane.db);
+        services.requestAuthenticator = new RequestAuthenticator(
+          services.authBootstrap,
+          new MembershipSelectionService(services.authPlane.db),
+        );
+        const created = await scoped(A, () => services.webhooks.create({ name: 'authenticated-null-source' }));
+        expect(created.tenantId).toBeNull();
+        expect(
+          await db.execute(`SELECT indexname FROM pg_indexes WHERE tablename = 'webhook_sources'
+          AND indexname = 'webhook_sources_name_unique'`),
+        ).toHaveLength(1);
+        const post = (suffix = '', body = '{}') =>
+          app.request(`/api/v2/webhooks/${created.name}${suffix}`, {
+            method: 'POST',
+            headers: { 'x-api-key': key, 'content-type': 'application/json' },
+            body,
+          });
+        expect((await post()).status).toBe(200);
+        expect(published.at(-1)?.tenant).toBe(A);
+        const heartbeat = await post('/heartbeat');
+        expect(heartbeat.status).toBe(200);
+        expect(((await heartbeat.json()) as { ok: boolean }).ok).toBe(true);
+        const previous = process.env.OMNI_WEBHOOK_AUTOCREATE;
+        try {
+          process.env.OMNI_WEBHOOK_AUTOCREATE = 'true';
+          expect((await post('', '{"value":"second"}')).status).toBe(200);
+        } finally {
+          if (previous === undefined) Reflect.deleteProperty(process.env, 'OMNI_WEBHOOK_AUTOCREATE');
+          else process.env.OMNI_WEBHOOK_AUTOCREATE = previous;
+        }
+        const rows = await scoped(A, () =>
+          scopedHandle(db).select().from(webhookSources).where(eq(webhookSources.name, created.name)),
+        );
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.heartbeatCount).toBe(1);
+      });
+
     test('signed sources use their stored owner; enforced journal inserts fail closed until ownership derivation', async () => {
       for (const [name, tenant] of [
         ['signed-a', A],
@@ -225,16 +296,17 @@ for (const mode of ['legacy', 'tenant', 'enforced'] as const) {
     });
 
     if (mode !== 'legacy') {
-      test('duplicate names across tenants are refused with the same public response', async () => {
-        await source('ambiguous', A);
-        await source('ambiguous', B);
-        const before = published.length;
-        const duplicate = await deliver('ambiguous');
-        const unknown = await deliver('unknown-duplicate-control');
-        expect(duplicate.status).toBe(401);
-        expect(await duplicate.json()).toEqual(await unknown.json());
-        expect(published.length).toBe(before);
-      });
+      if (mode !== 'tenant-global')
+        test('duplicate names across tenants are refused with the same public response', async () => {
+          await source('ambiguous', A);
+          await source('ambiguous', B);
+          const before = published.length;
+          const duplicate = await deliver('ambiguous');
+          const unknown = await deliver('unknown-duplicate-control');
+          expect(duplicate.status).toBe(401);
+          expect(await duplicate.json()).toEqual(await unknown.json());
+          expect(published.length).toBe(before);
+        });
 
       test('positive and negative cached hits do not enumerate tenants again', async () => {
         await source('cached');
@@ -318,7 +390,9 @@ for (const mode of ['legacy', 'tenant', 'enforced'] as const) {
         });
         const before = published.length;
         try {
-          expect((await deliver('uncached-error')).status).toBe(500);
+          const failed = await deliver('uncached-error');
+          expect(failed.status).toBe(401);
+          expect(await failed.json()).toEqual(await (await deliver('unknown-error-control')).json());
         } finally {
           broken.mockRestore();
         }
