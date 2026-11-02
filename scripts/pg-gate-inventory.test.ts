@@ -242,15 +242,39 @@ function deadViolations(files: Map<string, string>): string[] {
 
 /**
  * Raw DROP DATABASE rule. Scope: discovered *-postgres.test.ts suites, tracked
- * non-test TypeScript under __tests__/ or tests/ (fixtures), and the drop helper
- * module. A drop must go through dropDatabaseOrThrow, whose own statement is the
- * only exempt literal. The acknowledged sites below run the statement themselves
- * and throw on failure; the found sites must equal this list, one entry per site.
- * The provisioning harness (pg-migrated-template.ts) is outside this scope.
+ * non-test TypeScript under __tests__/ or tests/ (fixtures), the drop helper
+ * module and the provisioning harness. Every DROP DATABASE literal is a site
+ * unless an exemption below names it; each exemption is bound to its file and
+ * enclosing function (and a catch clause where it says so) and covers exactly
+ * one literal. The remaining sites run the statement themselves and throw on
+ * failure; they must equal checkedExitDrops, one entry per site.
  */
 const dropHelperModule = 'packages/db/src/backfill/pg-testing.ts';
-const dropHelper = 'dropDatabaseOrThrow';
+const templateModule = 'packages/db/src/pg-migrated-template.ts';
 const dropStatement = /\bDROP\s+DATABASE\b/i;
+
+interface DropExemption {
+  readonly file: string;
+  readonly fn: string;
+  readonly inCatch: boolean;
+  readonly reason: string;
+}
+
+const dropExemptions: readonly DropExemption[] = [
+  {
+    file: dropHelperModule,
+    fn: 'dropDatabaseOrThrow',
+    inCatch: false,
+    reason: 'the helper every suite drop goes through; throws on a non-zero psql exit',
+  },
+  {
+    file: templateModule,
+    fn: 'ensureSqlTemplate',
+    inCatch: true,
+    reason: 'best-effort staging cleanup in a catch that rethrows the original replay error',
+  },
+];
+
 const exitChecked = 'spawnSync exit status checked; throws stderr';
 const checkedExitDrops: readonly (readonly [file: string, reason: string])[] = [
   ['packages/api/src/__tests__/connector-hooks-postgres.test.ts', exitChecked],
@@ -270,29 +294,52 @@ const checkedExitDrops: readonly (readonly [file: string, reason: string])[] = [
   ['packages/api/src/services/__tests__/agent-key-reconciliation-postgres.test.ts', exitChecked],
   ['packages/api/src/services/__tests__/platform-bootstrap-postgres.test.ts', 'awaited db.execute rejects on error'],
   ['packages/db/src/paired-agent-schema-postgres.test.ts', 'fixtureSql throws on a non-zero psql exit'],
+  [templateModule, 'ensureSqlTemplate staging reset runs through runSqlOrThrow'],
 ];
 
 function dropScope(files: Map<string, string>, discovered: Set<string>): Map<string, string> {
   const support = (file: string) =>
     /\.[cm]?tsx?$/.test(file) && !testSuffix.test(file) && /(^|\/)(__tests__|tests)\//.test(file);
-  return new Map([...files].filter(([file]) => discovered.has(file) || file === dropHelperModule || support(file)));
+  return new Map(
+    [...files].filter(
+      ([file]) => discovered.has(file) || file === dropHelperModule || file === templateModule || support(file),
+    ),
+  );
 }
 
-/** One entry per DROP DATABASE literal outside the helper, sorted by file. */
-function rawDrops(files: Map<string, string>): string[] {
-  const found: string[] = [];
+interface DropSite {
+  readonly file: string;
+  readonly line: number;
+}
+
+/** Every DROP DATABASE literal in `files`, split into unexempted sites and exempted ones, sorted by file and line. */
+function rawDrops(
+  files: Map<string, string>,
+  exemptions: readonly DropExemption[] = dropExemptions,
+): { found: DropSite[]; exempt: DropSite[] } {
+  const found: DropSite[] = [];
+  const exempt: DropSite[] = [];
   for (const [file, text] of files) {
     if (!dropStatement.test(text)) continue;
     const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-    const visit = (node: ts.Node): void => {
-      if (file === dropHelperModule && ts.isFunctionDeclaration(node) && node.name?.text === dropHelper) return;
-      if ((ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) && dropStatement.test(node.getText(source)))
-        found.push(file);
-      else ts.forEachChild(node, visit);
+    const unused = new Set(exemptions.filter((exemption) => exemption.file === file));
+    // `fn` is the nearest enclosing function declaration; any function boundary leaves a catch.
+    const visit = (node: ts.Node, outerFn: string | undefined, outerCatch: boolean): void => {
+      const fn = ts.isFunctionDeclaration(node) ? node.name?.text : outerFn;
+      const inCatch = ts.isCatchClause(node) || (outerCatch && !ts.isFunctionLike(node));
+      if ((ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) && dropStatement.test(node.getText(source))) {
+        const site = { file, line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1 };
+        const exemption = [...unused].find((candidate) => candidate.fn === fn && candidate.inCatch === inCatch);
+        if (exemption) unused.delete(exemption);
+        (exemption ? exempt : found).push(site);
+        return;
+      }
+      ts.forEachChild(node, (child) => visit(child, fn, inCatch));
     };
-    visit(source);
+    visit(source, undefined, false);
   }
-  return found.sort();
+  const order = (a: DropSite, b: DropSite) => a.file.localeCompare(b.file) || a.line - b.line;
+  return { found: found.sort(order), exempt: exempt.sort(order) };
 }
 
 function trackedFiles(): Map<string, string> {
@@ -379,30 +426,59 @@ test('postgres suites and test support drop databases only through dropDatabaseO
   const discovered = new Set(POSTGRES_SUITE_ROOTS.flatMap(discover));
   const scope = dropScope(trackedFiles(), discovered);
   expect(scope.has(dropHelperModule)).toBe(true);
-  expect(rawDrops(scope)).toEqual(checkedExitDrops.map(([file]) => file).sort());
+  expect(scope.has(templateModule)).toBe(true);
+  const { found, exempt } = rawDrops(scope);
+  expect(found.map(({ file }) => file)).toEqual(checkedExitDrops.map(([file]) => file).sort());
+  expect(exempt.map(({ file }) => file)).toEqual(dropExemptions.map(({ file }) => file).sort());
 });
 
 test('a raw drop with an ignored result is found; the helper statement and comments are not', () => {
   const file = 'packages/x-postgres.test.ts';
+  const files = (source: string, at = file) => rawDrops(new Map([[at, source]])).found.map((site) => site.file);
   const ignored = 'afterAll(() => { runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`); });';
-  expect(rawDrops(new Map([[file, ignored]]))).toEqual([file]);
-  expect(rawDrops(new Map([[file, `${ignored}\nrunSqlOn(superUrl, 'drop database x');`]]))).toEqual([file, file]);
+  expect(files(ignored)).toEqual([file]);
+  expect(files(`${ignored}\nrunSqlOn(superUrl, 'drop database x');`)).toEqual([file, file]);
   const helper = 'function dropDatabaseOrThrow(a, d) { run(`DROP DATABASE IF EXISTS "${d}"`); }';
-  expect(rawDrops(new Map([[dropHelperModule, helper]]))).toEqual([]);
-  expect(rawDrops(new Map([[file, helper]]))).toEqual([file]);
-  expect(
-    rawDrops(new Map([[file, '// DROP DATABASE is never written here\ndropDatabaseOrThrow(access, name);']])),
-  ).toEqual([]);
+  expect(files(helper, dropHelperModule)).toEqual([]);
+  const helperTwice = "function dropDatabaseOrThrow(a, d) { run('DROP DATABASE x'); run('DROP DATABASE y'); }";
+  expect(files(helperTwice, dropHelperModule)).toEqual([dropHelperModule]);
+  expect(files(helper)).toEqual([file]);
+  expect(files('// DROP DATABASE is never written here\ndropDatabaseOrThrow(access, name);')).toEqual([]);
   const scoped = dropScope(
     new Map([
       [file, ''],
       ['packages/api/src/__tests__/fixtures/pg-clone.ts', ''],
       ['packages/db/src/tenancy-roles.test.ts', ''],
-      ['packages/db/src/pg-migrated-template.ts', ''],
+      [templateModule, ''],
     ]),
     new Set([file]),
   );
-  expect([...scoped.keys()]).toEqual([file, 'packages/api/src/__tests__/fixtures/pg-clone.ts']);
+  expect([...scoped.keys()]).toEqual([file, 'packages/api/src/__tests__/fixtures/pg-clone.ts', templateModule]);
+});
+
+test('the harness is scanned: its catch exemption covers one literal in ensureSqlTemplate and nothing else', () => {
+  const real = readFileSync(join(root, templateModule), 'utf8');
+  const lines = real.split('\n');
+  const catchLine = lines.findIndex((line) => /^\s*runSql\(access, access\.superUrl, `DROP DATABASE/.test(line)) + 1;
+  expect(catchLine).toBeGreaterThan(0);
+  const scan = (text: string, exemptions?: readonly DropExemption[]) =>
+    rawDrops(new Map([[templateModule, text]]), exemptions);
+  const baseline = scan(real);
+  expect(baseline.exempt).toEqual([{ file: templateModule, line: catchLine }]);
+  expect(baseline.found).toHaveLength(1);
+
+  // (1) a second raw DROP elsewhere in the harness is found.
+  const planted = `${real}\nexport function leak(access: PgSuperAccess): void {\n  runSql(access, access.superUrl, 'DROP DATABASE IF EXISTS "leak" WITH (FORCE);');\n}\n`;
+  const leakLine = planted.split('\n').findIndex((line) => line.includes('"leak"')) + 1;
+  expect(leakLine).toBeGreaterThan(lines.length);
+  expect(scan(planted).found).toEqual([...baseline.found, { file: templateModule, line: leakLine }]);
+  // ...and so is a second one inside the same catch: the exemption covers exactly one literal.
+  const twice = [...lines.slice(0, catchLine), lines[catchLine - 1], ...lines.slice(catchLine)].join('\n');
+  expect(scan(twice).found).toEqual([...baseline.found, { file: templateModule, line: catchLine + 1 }]);
+
+  // (2) without the exemption, the real ensureSqlTemplate catch site is reported.
+  const withoutCatch = dropExemptions.filter((exemption) => exemption.file !== templateModule);
+  expect(scan(real, withoutCatch).found).toEqual([...baseline.found, { file: templateModule, line: catchLine }]);
 });
 
 test('dead-name scanning includes docs and config; only .genie is exempt', () => {
