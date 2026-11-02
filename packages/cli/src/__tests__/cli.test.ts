@@ -74,7 +74,7 @@ interface CliResult {
 /**
  * Run the CLI with given arguments
  */
-async function runCli(args: string[], env: Record<string, string> = {}): Promise<CliResult> {
+async function runCli(args: string[], env: Record<string, string> = {}, stdin?: string): Promise<CliResult> {
   const proc = spawn({
     cmd: ['bun', CLI_PATH, ...args],
     env: {
@@ -83,6 +83,7 @@ async function runCli(args: string[], env: Record<string, string> = {}): Promise
       PM2_HOME: TEST_PM2_HOME, // Isolate pm2 daemon from the host (issue #413)
       ...env,
     },
+    stdin: stdin === undefined ? 'ignore' : new Blob([stdin]),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -153,6 +154,8 @@ describe('CLI Basic Tests', () => {
       expect(result.stdout).toContain('auth');
       expect(result.stdout).toContain('config');
       expect(result.stdout).toContain('instances');
+      expect(result.stdout).toContain('Bootstrap Omni server (non-interactive, reinstall-safe)');
+      expect(result.stdout).not.toContain('Interactive setup wizard');
     });
 
     test('shows help for auth command', async () => {
@@ -354,6 +357,32 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'auth login');
       expect(result.stdout).toContain('Logged in');
+    });
+
+    for (const source of ['stdin', 'env'] as const) {
+      test(`auth login accepts ${source} through the root CLI without echoing the key`, async () => {
+        const result = await runCli(
+          ['auth', 'login', '--api-url', MOCK_URL, ...(source === 'stdin' ? ['--api-key-stdin'] : [])],
+          { OMNI_CLI_API_KEY: source === 'env' ? MOCK_API_KEY : '', OMNI_API_KEY: 'test-primary-key' },
+          source === 'stdin' ? `${MOCK_API_KEY}\n` : undefined,
+        );
+        assertSuccess(result, `auth login ${source}`);
+        expect(result.stdout).toContain('Logged in');
+        expect(result.stdout + result.stderr).not.toContain(MOCK_API_KEY);
+        expect(result.stdout).toContain(`"keySource": "${source}"`);
+      });
+    }
+
+    test('auth login refuses a server-only OMNI_API_KEY before any validation request', async () => {
+      clearRecordedRequests();
+      const result = await runCli(['auth', 'login', '--api-url', MOCK_URL], {
+        OMNI_CLI_API_KEY: '',
+        OMNI_API_KEY: MOCK_API_KEY,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain('OMNI_CLI_API_KEY');
+      expect(result.stdout + result.stderr).not.toContain(MOCK_API_KEY);
+      expect(getRecordedRequests().filter((request) => request.path === '/api/v2/auth/validate')).toHaveLength(0);
     });
 
     test('auth status shows authenticated', async () => {
