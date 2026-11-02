@@ -2,7 +2,15 @@
  * Error handling middleware and onError handler
  */
 
-import { ConflictError, ERROR_CODES, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import {
+  ConflictError,
+  ERROR_CODES,
+  NotFoundError,
+  OmniError,
+  ValidationError,
+  createLogger,
+  isRemovedProviderError,
+} from '@omni/core';
 import { unwrapDbError } from '@omni/db';
 import * as Sentry from '@sentry/bun';
 import { DrizzleQueryError } from 'drizzle-orm';
@@ -411,6 +419,12 @@ function handleUnknownError(c: Context): Response {
  * Note: Check specific error types BEFORE their parent types
  */
 function routeError(c: Context, error: unknown): Response {
+  if (isRemovedProviderError(error)) {
+    return c.json(
+      { error: { code: error.code, message: error.message, details: sanitizeErrorContext(error.details) } },
+      410,
+    );
+  }
   if (error instanceof ZodError) {
     return handleZodError(c, error);
   }
@@ -464,6 +478,7 @@ function isCodeClientError(code: string): boolean {
  * Determine if an error is a client error (4xx) vs server error (5xx)
  */
 function isClientError(error: unknown): boolean {
+  if (isRemovedProviderError(error)) return true;
   // Expected client errors - don't log as ERROR
   if (error instanceof ZodError) return true;
   if (error instanceof NotFoundError) return true;
