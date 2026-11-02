@@ -10,6 +10,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { OmniClient } from '@omni/sdk';
 import { __testables } from '../keys';
 
@@ -87,21 +91,6 @@ function stubStdin(options: { isTTY: boolean; answer?: string }): MockedStdin {
   };
 }
 
-function stubProcessExit(): { calls: number[]; restore: () => void } {
-  const calls: number[] = [];
-  const original = process.exit;
-  (process as unknown as { exit: (code?: number) => never }).exit = ((code?: number) => {
-    calls.push(code ?? 0);
-    throw new Error(`__exit_${code ?? 0}`);
-  }) as never;
-  return {
-    calls,
-    restore(): void {
-      process.exit = original;
-    },
-  };
-}
-
 function stubStdout(): { data: string[]; restore: () => void } {
   const data: string[] = [];
   const original = process.stdout.write.bind(process.stdout);
@@ -120,6 +109,65 @@ function stubStdout(): { data: string[]; restore: () => void } {
       (process.stdout as unknown as { write: typeof process.stdout.write }).write = original;
     },
   };
+}
+
+const KEYS_MODULE = fileURLToPath(new URL('../keys.ts', import.meta.url));
+const children = new Set<{ kill(): void; exited: Promise<number> }>();
+let configDir: string;
+
+beforeEach(() => {
+  configDir = mkdtempSync(join(tmpdir(), 'omni-key-create-'));
+});
+
+afterEach(async () => {
+  await Promise.all(
+    [...children].map(async (child) => {
+      child.kill();
+      await child.exited;
+    }),
+  );
+  rmSync(configDir, { recursive: true, force: true });
+});
+
+// Shared output.error mocks can become no-ops when another suite restores its
+// spies. Check refusal against real output/exit in a fresh process instead.
+async function runRefusedCreate(options: Parameters<typeof handleCreate>[1], isTTY: boolean, answer = '') {
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      '--eval',
+      `import { __testables } from ${JSON.stringify(KEYS_MODULE)};
+Object.defineProperty(process.stdin, 'isTTY', { value: ${isTTY}, configurable: true });
+const client = { keys: { create: async () => { throw new Error('Unexpected key creation'); } } };
+await __testables.handleCreate(client, ${JSON.stringify(options)});`,
+    ],
+    {
+      env: {
+        PATH: process.env.PATH,
+        HOME: process.env.HOME,
+        OMNI_CONFIG_DIR: configDir,
+        NO_COLOR: '1',
+      },
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  );
+  children.add(child);
+  try {
+    child.stdin.write(`${answer}\n`);
+    child.stdin.end();
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+    return { exitCode, stdout, stderr };
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await child.exited;
+    children.delete(child);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -158,42 +206,19 @@ describe('promptAdminConfirmation', () => {
 // ---------------------------------------------------------------------------
 
 describe('handleCreate — admin profile', () => {
-  let stdinStub: MockedStdin | null = null;
-  let stdoutStub: ReturnType<typeof stubStdout> | null = null;
-  let exitStub: ReturnType<typeof stubProcessExit> | null = null;
-
-  beforeEach(() => {
-    stdoutStub = stubStdout();
-    exitStub = stubProcessExit();
-  });
-
-  afterEach(() => {
-    stdinStub?.restore();
-    stdoutStub?.restore();
-    exitStub?.restore();
-    stdinStub = null;
-    stdoutStub = null;
-    exitStub = null;
-  });
-
   test('refuses when stdin is not a TTY', async () => {
-    stdinStub = stubStdin({ isTTY: false });
-    const fakeClient = {} as OmniClient;
-    // Accepts either the real-output path (__exit_1 via stubbed process.exit)
-    // or the mock-module path (throws the error message) — other test files
-    // call `mock.module('../output.js', …)` process-wide, so the behavior
-    // depends on suite ordering. Either way, creation must be refused.
-    await expect(handleCreate(fakeClient, { name: 'god', profile: 'admin' })).rejects.toThrow(
-      /__exit_1|admin keys require a TTY/,
-    );
+    const { exitCode, stdout, stderr } = await runRefusedCreate({ name: 'god', profile: 'admin' }, false);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('admin keys require a TTY');
+    expect(stdout).toBe('');
   });
 
   test('refuses on a TTY with the wrong confirmation phrase', async () => {
-    stdinStub = stubStdin({ isTTY: true, answer: 'no thanks' });
-    const fakeClient = {} as OmniClient;
-    await expect(handleCreate(fakeClient, { name: 'god', profile: 'admin' })).rejects.toThrow(
-      /__exit_1|admin confirmation failed/,
-    );
+    const { exitCode, stdout, stderr } = await runRefusedCreate({ name: 'god', profile: 'admin' }, true, 'no thanks');
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('admin confirmation failed');
+    expect(stdout).toContain(ADMIN_CONFIRMATION_PHRASE);
+    expect(stdout).not.toContain('API Key (save this');
   });
 });
 
@@ -238,18 +263,9 @@ describe('handleCreate — scout profile body shape', () => {
   });
 
   test('requires --profile or --scopes', async () => {
-    const exitStub = stubProcessExit();
-    const stdoutStub = stubStdout();
-    try {
-      const fakeClient = { keys: { create: async () => ({ plainTextKey: 'x' }) } } as unknown as OmniClient;
-      // See admin-profile suite: assertion tolerates both the real-output
-      // and mock.module-patched variants of `output.error`.
-      await expect(handleCreate(fakeClient, { name: 'nope' })).rejects.toThrow(
-        /__exit_1|Either --profile or --scopes is required/,
-      );
-    } finally {
-      stdoutStub.restore();
-      exitStub.restore();
-    }
+    const { exitCode, stdout, stderr } = await runRefusedCreate({ name: 'nope' }, false);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Either --profile or --scopes is required');
+    expect(stdout).toBe('');
   });
 });
