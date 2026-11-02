@@ -4,7 +4,13 @@ import { type DurableConsumer, createDbHandle } from '@omni/db';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { PostgresJsPreparedQuery } from 'drizzle-orm/postgres-js/session';
 import { isAdminTierKey } from '../../lib/key-agent';
-import { type ConsumerCaller, EventConsumerService, canAccessConsumer, consumerAccessClause } from '../event-consumers';
+import {
+  type ConsumerCaller,
+  EventConsumerService,
+  canAccessConsumer,
+  consumerAccessClause,
+  resolveConsumerAgentId,
+} from '../event-consumers';
 
 const A = crypto.randomUUID();
 const B = crypto.randomUUID();
@@ -196,4 +202,10 @@ test('consumer-created event includes ownership only when set', async () => {
   } finally {
     publish.mockRestore();
   }
+});
+
+test('an agent naming its own UUID in uppercase resolves to the canonical owner', () => {
+  expect(resolveConsumerAgentId({ name: 'x', eventType: 'custom.*', agentId: A.toUpperCase() }, cases[4]!.caller)).toBe(
+    A,
+  );
 });

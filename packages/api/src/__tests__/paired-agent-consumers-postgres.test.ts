@@ -50,6 +50,8 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
   const A = randomUUID();
   const B = randomUUID();
   const inactive = randomUUID();
+  const legacyAgent = randomUUID();
+  const legacyInstance = randomUUID();
   const IA = randomUUID();
   const IB = randomUUID();
   const II = randomUUID();
@@ -63,6 +65,7 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
   let db: Database;
   let app: ReturnType<typeof createApp>['app'];
   let tenantApp: typeof app;
+  let ownerApp: typeof app;
   const credentials = new Map<string, CreateApiKeyResult>();
   function credential(name: string): CreateApiKeyResult {
     const key = credentials.get(name);
@@ -92,6 +95,7 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
       { id: A, name: 'c1-a', provider: 'claude' },
       { id: B, name: 'c1-b', provider: 'claude' },
       { id: inactive, name: 'c1-inactive', provider: 'claude', isActive: false },
+      { id: legacyAgent, name: 'c1-null', provider: 'claude' },
     ]);
     // Match the existing agent-key fixtures: insert ownership has no creator parent,
     // so apply the trusted additive-state backfill before creating tenant-root instances.
@@ -104,6 +108,7 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
       { id: IB, name: 'c1-b', channel: 'whatsapp-baileys', agentId: B, tenantId: T },
       { id: II, name: 'c1-inactive', channel: 'whatsapp-baileys', agentId: inactive, tenantId: T },
       { id: unbound, name: 'c1-unbound', channel: 'whatsapp-baileys', tenantId: T },
+      { id: legacyInstance, name: 'c1-null', channel: 'whatsapp-baileys', agentId: legacyAgent },
     ]);
     const keys = new ApiKeyService(owner);
     async function key(label: string, scopes: string[], instanceIds?: string[], systemName?: string) {
@@ -115,6 +120,7 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
       });
       credentials.set(label, result);
     }
+    await key('null-agent', ['events:*'], [legacyInstance], 'agent:c1-null');
     await key('admin', ['*']);
     await key('device', [...DEFAULT_DEVICE_KEY_SCOPES]);
     await key('restricted-wildcard', ['*'], [IA]);
@@ -173,36 +179,41 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
     app = application.app;
     // As in the pre-existing C15 route harness: the edge supplies a trusted tenant, never a caller hint.
     // Authentication is still the real legacy key middleware before this trusted projection.
-    tenantApp = new Hono<{ Variables: AppVariables }>();
-    tenantApp.onError(errorHandler);
-    tenantApp.use('*', async (c, next) => {
-      c.set('services', application.services);
-      await next();
-    });
-    tenantApp.use('*', authMiddleware);
-    tenantApp.use('*', async (c, next) => {
-      c.set('authContext', {
-        credentialClass: 'tenant',
-        requestId: randomUUID(),
-        principalId: randomUUID(),
-        credentialId: randomUUID(),
-        tenantId: otherT,
-        actorRole: 'tenant-owner',
-        scopes: ['*'],
-        membershipId: randomUUID(),
-        resourceConstraints: {},
-        expiresAt: null,
-        rateLimit: null,
-        budget: null,
-        delegationDepth: 0,
-        rootKeyId: randomUUID(),
-        policyVersion: 1,
-        revocationEpoch: 0,
-        tenantKeyLineageId: randomUUID(),
+    function forTenant(tenantId: string) {
+      const scopedApp = new Hono<{ Variables: AppVariables }>();
+      scopedApp.onError(errorHandler);
+      scopedApp.use('*', async (c, next) => {
+        c.set('services', application.services);
+        await next();
       });
-      await next();
-    });
-    tenantApp.route('/api/v2', eventConsumersRoutes);
+      scopedApp.use('*', authMiddleware);
+      scopedApp.use('*', async (c, next) => {
+        c.set('authContext', {
+          credentialClass: 'tenant',
+          requestId: randomUUID(),
+          principalId: randomUUID(),
+          credentialId: randomUUID(),
+          tenantId,
+          actorRole: 'tenant-owner',
+          scopes: ['*'],
+          membershipId: randomUUID(),
+          resourceConstraints: {},
+          expiresAt: null,
+          rateLimit: null,
+          budget: null,
+          delegationDepth: 0,
+          rootKeyId: randomUUID(),
+          policyVersion: 1,
+          revocationEpoch: 0,
+          tenantKeyLineageId: randomUUID(),
+        });
+        await next();
+      });
+      scopedApp.route('/api/v2', eventConsumersRoutes);
+      return scopedApp;
+    }
+    tenantApp = forTenant(otherT);
+    ownerApp = forTenant(T);
   }, 180_000);
   beforeEach(() => {
     process.env.OMNI_PAIRED_AGENT_CONSUMERS = 'true';
@@ -251,12 +262,21 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
     });
     return consumerName;
   }
-  function request(label: string, path: string, method = 'GET', body?: unknown, otherTenant = false) {
-    return (otherTenant ? tenantApp : app).request(`/api/v2/events/consumers${path}`, {
-      method,
-      headers: { 'x-api-key': credential(label).plainTextKey, 'content-type': 'application/json' },
-      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-    });
+  function request(
+    label: string,
+    path: string,
+    method = 'GET',
+    body?: unknown,
+    otherTenant: boolean | 'owner' = false,
+  ) {
+    return (otherTenant === 'owner' ? ownerApp : otherTenant ? tenantApp : app).request(
+      `/api/v2/events/consumers${path}`,
+      {
+        method,
+        headers: { 'x-api-key': credential(label).plainTextKey, 'content-type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      },
+    );
   }
   async function hit(label: string, consumer: string, verb: Verb, otherTenant = false) {
     const path = `/${consumer}`;
@@ -323,11 +343,17 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
     }
   test('proven agent defaults ownership, explicit self works, other agent is 403, missing explicit agent is 400', async () => {
     for (const explicit of [false, true]) {
-      const response = await request('a', '', 'POST', {
-        name: name(),
-        eventType: 'custom.*',
-        ...(explicit ? { agentId: A } : {}),
-      });
+      const response = await request(
+        'a',
+        '',
+        'POST',
+        {
+          name: name(),
+          eventType: 'custom.*',
+          ...(explicit ? { agentId: A } : {}),
+        },
+        'owner',
+      );
       expect(response.status).toBe(201);
       expect(view.parse(await response.json()).data).toMatchObject({ agentId: A, scoped: true });
     }
@@ -336,7 +362,68 @@ pgDescribe('paired-agent consumer ownership (C1, real PostgreSQL)', () => {
     expect(
       (await request('admin', '', 'POST', { name: name(), eventType: 'custom.*', agentId: randomUUID() })).status,
     ).toBe(400);
-    const response = await request('admin', '', 'POST', { name: name(), eventType: 'custom.*', agentId: A });
+    const response = await request('admin', '', 'POST', { name: name(), eventType: 'custom.*', agentId: A }, 'owner');
+    expect(response.status).toBe(201);
+    expect(view.parse(await response.json()).data.agentId).toBe(A);
+  });
+  test('cross-tenant explicit and default ownership are indistinguishable from missing agents and write no row', async () => {
+    const existing = await seed();
+    const before = await db.select().from(durableConsumers).where(eq(durableConsumers.name, existing));
+    const missing = await request(
+      'admin',
+      '',
+      'POST',
+      { name: name(), eventType: 'custom.*', agentId: randomUUID() },
+      true,
+    );
+    expect(missing.status).toBe(400);
+    const missingBody: unknown = await missing.json();
+    for (const key of ['admin', 'a'])
+      for (const explicit of [false, true]) {
+        if (key === 'admin' && !explicit) continue;
+        const consumerName = name();
+        const response = await request(
+          key,
+          '',
+          'POST',
+          { name: consumerName, eventType: 'custom.*', ...(explicit ? { agentId: A } : {}) },
+          true,
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual(missingBody);
+        expect(await db.select().from(durableConsumers).where(eq(durableConsumers.name, consumerName))).toHaveLength(0);
+      }
+    expect(await db.select().from(durableConsumers).where(eq(durableConsumers.name, existing))).toEqual(before);
+  });
+  test('NULL ownership scope matches only a NULL-tenant agent, for explicit and default owners', async () => {
+    for (const agentId of [undefined, A]) {
+      const consumerName = name();
+      const response = await request('a', '', 'POST', { name: consumerName, eventType: 'custom.*', agentId });
+      expect(response.status).toBe(400);
+      expect(await db.select().from(durableConsumers).where(eq(durableConsumers.name, consumerName))).toHaveLength(0);
+    }
+    for (const agentId of [undefined, legacyAgent]) {
+      const response = await request('null-agent', '', 'POST', { name: name(), eventType: 'custom.*', agentId });
+      expect(response.status).toBe(201);
+      expect(view.parse(await response.json()).data.agentId).toBe(legacyAgent);
+    }
+    const response = await request(
+      'admin',
+      '',
+      'POST',
+      { name: name(), eventType: 'custom.*', agentId: legacyAgent },
+      'owner',
+    );
+    expect(response.status).toBe(400);
+  });
+  test('an agent naming its own UUID in uppercase creates with canonical ownership', async () => {
+    const response = await request(
+      'a',
+      '',
+      'POST',
+      { name: name(), eventType: 'custom.*', agentId: A.toUpperCase() },
+      'owner',
+    );
     expect(response.status).toBe(201);
     expect(view.parse(await response.json()).data.agentId).toBe(A);
   });

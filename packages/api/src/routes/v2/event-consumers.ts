@@ -80,10 +80,10 @@ eventConsumersRoutes.post('/events/consumers', zValidator('json', CreateConsumer
   const input = c.req.valid('json');
   const services = c.get('services');
   const caller = await consumerCaller(c);
-  resolveConsumerAgentId(input, caller);
-  if (input.agentId !== undefined) {
+  const agentId = resolveConsumerAgentId(input, caller);
+  if (agentId !== null) {
     try {
-      await services.agents.getById(input.agentId);
+      await services.agents.getById(agentId, { tenantId: caller.tenantId ?? null });
     } catch (error) {
       if (error instanceof NotFoundError) throw new ValidationError('agentId must name an existing agent');
       throw error;

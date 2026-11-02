@@ -419,16 +419,20 @@ export function resolveConsumerAgentId(input: CreateConsumerInput, caller?: Cons
       recoverable: false,
     });
   if (input.agentId !== undefined) {
-    if (!caller?.admin && !(caller?.principal?.kind === 'agent' && caller.principal.agentId === input.agentId)) {
+    const agentId = input.agentId.toLowerCase();
+    if (
+      !caller?.admin &&
+      !(caller?.principal?.kind === 'agent' && caller.principal.agentId.toLowerCase() === agentId)
+    ) {
       throw new OmniError({
         code: ERROR_CODES.FORBIDDEN,
         message: 'Cannot create a consumer for another agent',
         recoverable: false,
       });
     }
-    return input.agentId;
+    return agentId;
   }
-  return caller?.principal?.kind === 'agent' ? caller.principal.agentId : null;
+  return caller?.principal?.kind === 'agent' ? caller.principal.agentId.toLowerCase() : null;
 }
 
 /**

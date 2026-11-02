@@ -83,7 +83,7 @@ export const DurableConsumerSchema = z.object({
 });
 
 export const CreateConsumerSchema = z.object({
-  agentId: z.string().uuid().optional().openapi({
+  agentId: z.string().uuid().toLowerCase().optional().openapi({
     description:
       'Owning agent (OMNI_PAIRED_AGENT_CONSUMERS required). Defaults to the calling agent; explicit ownership needs that agent or an admin-tier key.',
   }),
