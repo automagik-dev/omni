@@ -11,13 +11,12 @@
 
 import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
 import { NotFoundError, OmniError } from '@omni/core';
-import { type Database, type Instance, createDbHandle } from '@omni/db';
+import type { Database, Instance } from '@omni/db';
 import { chats, instances, messages } from '@omni/db';
-import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { createServices } from '../services';
 import type { AppVariables } from '../types';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 type SendMessageMock = ReturnType<typeof mock<(...args: unknown[]) => Promise<unknown>>>;
 
@@ -61,8 +60,7 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
 postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', () => {
   let db: Database;
-  const dbName = `omni_l1_${crypto.randomUUID().replaceAll('-', '')}`;
-  let close: (() => Promise<void>) | undefined;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let testInstance: Instance;
   let testChat: { id: string; externalId: string };
   let groupChat: { id: string; externalId: string };
@@ -70,15 +68,9 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
   let outboundMessage: { id: string; externalId: string };
   let groupInboundMessage: { id: string; externalId: string };
   const groupParticipant = '178035101794451@lid';
-  const insertedInstanceIds: string[] = [];
-  const insertedChatIds: string[] = [];
-  const insertedMessageIds: string[] = [];
 
   beforeAll(async () => {
-    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
-    close = handle.close;
-    db = handle.db;
+    db = clone.setup();
 
     const [instance] = await db
       .insert(instances)
@@ -89,7 +81,6 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
       .returning();
     if (!instance) throw new Error('Failed to create test instance');
     testInstance = instance;
-    insertedInstanceIds.push(instance.id);
 
     const [chat] = await db
       .insert(chats)
@@ -103,7 +94,6 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
       .returning();
     if (!chat) throw new Error('Failed to create test chat');
     testChat = { id: chat.id, externalId: chat.externalId };
-    insertedChatIds.push(chat.id);
 
     const [group] = await db
       .insert(chats)
@@ -117,7 +107,6 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
       .returning();
     if (!group) throw new Error('Failed to create test group chat');
     groupChat = { id: group.id, externalId: group.externalId };
-    insertedChatIds.push(group.id);
 
     const [inbound] = await db
       .insert(messages)
@@ -133,7 +122,6 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
       .returning();
     if (!inbound) throw new Error('Failed to create inbound message');
     inboundMessage = { id: inbound.id, externalId: inbound.externalId };
-    insertedMessageIds.push(inbound.id);
 
     const outboundExternalId = `OUTBOUND-${Date.now()}`;
     const [outbound] = await db
@@ -158,7 +146,6 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
       .returning();
     if (!outbound) throw new Error('Failed to create outbound message');
     outboundMessage = { id: outbound.id, externalId: outbound.externalId };
-    insertedMessageIds.push(outbound.id);
 
     const [groupInbound] = await db
       .insert(messages)
@@ -184,50 +171,9 @@ postgresDescribe('POST /messages/send/reaction — fromMe resolution (#386)', ()
       .returning();
     if (!groupInbound) throw new Error('Failed to create group inbound message');
     groupInboundMessage = { id: groupInbound.id, externalId: groupInbound.externalId };
-    insertedMessageIds.push(groupInbound.id);
   });
 
-  async function cleanupRows() {
-    if (!db) return;
-    for (const id of insertedMessageIds) await db.delete(messages).where(eq(messages.id, id));
-    for (const id of insertedChatIds) await db.delete(chats).where(eq(chats.id, id));
-    for (const id of insertedInstanceIds) await db.delete(instances).where(eq(instances.id, id));
-  }
-
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    try {
-      await cleanupRows();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      await close?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      const result = Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--set',
-          'ON_ERROR_STOP=1',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
-  });
+  afterAll(() => clone.teardown());
 
   function createTestApp(sendMessageMock: SendMessageMock) {
     const services = createServices(db, null);

@@ -13,14 +13,12 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import type { Agent, AgentRoute, Database, Instance } from '@omni/db';
-import { agentProviders, agentRoutes, agents, chats, instances, persons } from '@omni/db';
-import { createDbHandle } from '@omni/db';
-import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { eq } from 'drizzle-orm';
+import { agentProviders, agents, chats, instances, persons } from '@omni/db';
 import { Hono } from 'hono';
 import { routesRoutes } from '../routes/v2/agent-routes';
 import { type Services, createServices } from '../services';
 import type { AppVariables } from '../types';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl ? describe : describe.skip;
@@ -28,35 +26,17 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
 postgresDescribe('Agent Routes Endpoints', () => {
   let db: Database;
-  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
-  let close: (() => Promise<void>) | undefined;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let testInstance: Instance;
   let testAgent: Agent;
   let testChat: { id: string };
   let testChat2: { id: string };
   let testChat3: { id: string };
   let testPerson: { id: string };
-  const insertedIds: {
-    instances: string[];
-    providers: string[];
-    agents: string[];
-    routes: string[];
-    chats: string[];
-    persons: string[];
-  } = {
-    instances: [],
-    providers: [],
-    agents: [],
-    routes: [],
-    chats: [],
-    persons: [],
-  };
+  const insertedIds = { routes: [] as string[] };
 
   beforeAll(async () => {
-    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
-    close = handle.close;
-    db = handle.db;
+    db = clone.setup();
 
     // Create test instance
     const [instance] = await db
@@ -68,7 +48,6 @@ postgresDescribe('Agent Routes Endpoints', () => {
       .returning();
     if (!instance) throw new Error('Failed to create test instance');
     testInstance = instance;
-    insertedIds.instances.push(instance.id);
 
     // Create a test provider (needed for agent FK)
     const [provider] = await db
@@ -80,7 +59,6 @@ postgresDescribe('Agent Routes Endpoints', () => {
       })
       .returning();
     if (!provider) throw new Error('Failed to create test provider');
-    insertedIds.providers.push(provider.id);
 
     // Create test agent (UUID FK to agents table)
     const [agent] = await db
@@ -95,7 +73,6 @@ postgresDescribe('Agent Routes Endpoints', () => {
       .returning();
     if (!agent) throw new Error('Failed to create test agent');
     testAgent = agent;
-    insertedIds.agents.push(agent.id);
 
     // Create test chat 1
     const [chat] = await db
@@ -110,7 +87,6 @@ postgresDescribe('Agent Routes Endpoints', () => {
       .returning();
     if (!chat) throw new Error('Failed to create test chat');
     testChat = chat;
-    insertedIds.chats.push(chat.id);
 
     // Create test chat 2 (for cache test)
     const [chat2] = await db
@@ -125,7 +101,6 @@ postgresDescribe('Agent Routes Endpoints', () => {
       .returning();
     if (!chat2) throw new Error('Failed to create test chat 2');
     testChat2 = chat2;
-    insertedIds.chats.push(chat2.id);
 
     // Create test chat 3 (for unique constraint test)
     const [chat3] = await db
@@ -140,7 +115,6 @@ postgresDescribe('Agent Routes Endpoints', () => {
       .returning();
     if (!chat3) throw new Error('Failed to create test chat 3');
     testChat3 = chat3;
-    insertedIds.chats.push(chat3.id);
 
     // Create test person
     const [person] = await db
@@ -151,75 +125,9 @@ postgresDescribe('Agent Routes Endpoints', () => {
       .returning();
     if (!person) throw new Error('Failed to create test person');
     testPerson = person;
-    insertedIds.persons.push(person.id);
   });
 
-  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Cleanup logic requires sequential steps
-  async function cleanupRows() {
-    if (!db) return;
-    // Cleanup in reverse order (routes -> chats/persons -> agents -> providers -> instances)
-    if (insertedIds.routes.length > 0) {
-      await db.delete(agentRoutes).where(eq(agentRoutes.instanceId, testInstance.id));
-    }
-    if (insertedIds.chats.length > 0) {
-      await db.delete(chats).where(eq(chats.instanceId, testInstance.id));
-    }
-    if (insertedIds.persons.length > 0) {
-      for (const id of insertedIds.persons) {
-        await db.delete(persons).where(eq(persons.id, id));
-      }
-    }
-    if (insertedIds.agents.length > 0) {
-      for (const id of insertedIds.agents) {
-        await db.delete(agents).where(eq(agents.id, id));
-      }
-    }
-    if (insertedIds.providers.length > 0) {
-      for (const id of insertedIds.providers) {
-        await db.delete(agentProviders).where(eq(agentProviders.id, id));
-      }
-    }
-    if (insertedIds.instances.length > 0) {
-      for (const id of insertedIds.instances) {
-        await db.delete(instances).where(eq(instances.id, id));
-      }
-    }
-  }
-
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    try {
-      await cleanupRows();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      await close?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      const result = Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--set',
-          'ON_ERROR_STOP=1',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
-  });
+  afterAll(() => clone.teardown());
 
   function createApp(existingServices?: Services) {
     const app = new Hono<{ Variables: AppVariables }>();
@@ -449,7 +357,7 @@ postgresDescribe('Agent Routes Endpoints', () => {
       const getRes = await app.request(`/instances/${testInstance.id}/routes/${routeId}`);
       expect(getRes.status).toBe(404);
 
-      // Remove from insertedIds so cleanup doesn't try to delete it again
+      // Keep the route ID list consistent with the deletion
       insertedIds.routes = insertedIds.routes.filter((id) => id !== routeId);
     });
   });

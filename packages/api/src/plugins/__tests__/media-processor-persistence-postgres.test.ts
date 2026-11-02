@@ -2,10 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test
 import { randomUUID } from 'node:crypto';
 import type { Database } from '@omni/db';
 import { chats, instances, mediaContent, messages, omniEvents } from '@omni/db';
-import { createDbHandle } from '@omni/db';
-import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import type { MediaProcessingService } from '@omni/media-processing';
 import { eq, inArray } from 'drizzle-orm';
+import { createMigratedTestDatabase } from '../../__tests__/fixtures/pg-clone';
 import { __test__ } from '../media-processor';
 
 type ProcessingResult = Awaited<ReturnType<MediaProcessingService['process']>>;
@@ -17,8 +16,7 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
 postgresDescribe('media processor persistence', () => {
   let db: Database;
-  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
-  let close: (() => Promise<void>) | undefined;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   const cleanup = {
     instanceIds: [] as string[],
     chatIds: [] as string[],
@@ -27,41 +25,10 @@ postgresDescribe('media processor persistence', () => {
   };
 
   beforeAll(async () => {
-    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
-    close = handle.close;
-    db = handle.db;
+    db = clone.setup();
   });
 
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    try {
-      await close?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      const result = Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--set',
-          'ON_ERROR_STOP=1',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
-  });
+  afterAll(() => clone.teardown());
 
   afterEach(async () => {
     if (cleanup.messageIds.length > 0) {

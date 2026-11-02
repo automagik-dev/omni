@@ -12,11 +12,10 @@ import { randomUUID } from 'node:crypto';
 import type { EventBus } from '@omni/core';
 import type { Database, NewOmniEvent } from '@omni/db';
 import { omniEvents } from '@omni/db';
-import { createDbHandle } from '@omni/db';
-import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { inArray } from 'drizzle-orm';
 import { setupEventPersistence } from '../plugins/event-persistence';
 import { EventService } from '../services/events';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const CORRELATION = randomUUID();
 
@@ -38,45 +37,13 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
 postgresDescribe('event trace and custom journaling', () => {
   let db: Database;
-  const dbName = `omni_l2_${crypto.randomUUID().replaceAll('-', '')}`;
-  let close: (() => Promise<void>) | undefined;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
 
   beforeAll(async () => {
-    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
-    close = handle.close;
-    db = handle.db;
+    db = clone.setup();
   });
 
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    try {
-      await close?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      const result = Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--set',
-          'ON_ERROR_STOP=1',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
-  });
+  afterAll(() => clone.teardown());
 
   describe('EventService.trace (#957)', () => {
     let service: EventService;
@@ -87,7 +54,6 @@ postgresDescribe('event trace and custom journaling', () => {
     const leafBId = randomUUID();
     const grandchildId = randomUUID();
     const legacyId = randomUUID();
-    const allIds = [rootId, hopId, leafAId, leafBId, grandchildId, legacyId];
 
     beforeAll(async () => {
       service = new EventService(db);
@@ -108,10 +74,6 @@ postgresDescribe('event trace and custom journaling', () => {
         // A row persisted before the migration existed: no stamp at all.
         journalRow({ id: legacyId, eventType: 'message.received', direction: 'inbound', channel: 'discord' }),
       ]);
-    });
-
-    afterAll(async () => {
-      await db.delete(omniEvents).where(inArray(omniEvents.id, allIds));
     });
 
     test('trace from a leaf includes the root ingress event (walk UP)', async () => {

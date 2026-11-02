@@ -18,6 +18,10 @@
     "./pg-migrated-template": {
       "types": "./src/pg-migrated-template.ts",
       "default": "./src/pg-migrated-template.ts"
+    },
+    "./pg-testing": {
+      "types": "./src/backfill/pg-testing.ts",
+      "default": "./src/backfill/pg-testing.ts"
     }
   },
   "scripts": {

@@ -5,11 +5,11 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import { type Database, createDbHandle } from '@omni/db';
+import type { Database } from '@omni/db';
 import { consumerOffsets } from '@omni/db';
-import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { ConsumerOffsetService } from '../services/consumer-offsets';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const TEST_PREFIX = 'test-consumer-';
 
@@ -19,63 +19,15 @@ const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
 
 postgresDescribe('ConsumerOffsetService', () => {
   let db: Database;
-  const dbName = `omni_l1_${crypto.randomUUID().replaceAll('-', '')}`;
-  let close: (() => Promise<void>) | undefined;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
   let service: ConsumerOffsetService;
 
   beforeAll(async () => {
-    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
-    close = handle.close;
-    db = handle.db;
+    db = clone.setup();
     service = new ConsumerOffsetService(db);
   });
 
-  async function cleanupRows() {
-    if (!db) return;
-    // Clean up test data
-    const rows = await db.select().from(consumerOffsets);
-    for (const row of rows) {
-      if (row.consumerName.startsWith(TEST_PREFIX)) {
-        await db.delete(consumerOffsets).where(eq(consumerOffsets.consumerName, row.consumerName));
-      }
-    }
-  }
-
-  afterAll(async () => {
-    const errors: unknown[] = [];
-    try {
-      await cleanupRows();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      await close?.();
-    } catch (error) {
-      errors.push(error);
-    }
-    try {
-      const result = Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--set',
-          'ON_ERROR_STOP=1',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
-      if (result.exitCode !== 0) errors.push(new Error(`Failed to drop legacy test database: ${result.stderr}`));
-    } catch (error) {
-      errors.push(error);
-    }
-    if (errors.length > 0) throw new AggregateError(errors, 'Legacy database teardown failed');
-  });
+  afterAll(() => clone.teardown());
 
   beforeEach(async () => {
     // Clean test consumers before each test
