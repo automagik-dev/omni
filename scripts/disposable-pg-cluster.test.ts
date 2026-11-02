@@ -43,6 +43,13 @@ describe('disposable PostgreSQL isolation', () => {
     ['--url', 'postgres://u:p@127.0.0.1:65432/db?host=127.0.0.1&port=15432'],
     ['--url', 'postgres://u:p@127.0.0.1:65432/db?'],
     ['--url', 'host=10.1.2.3 port=5432 dbname=postgres'],
+    ['--url', 'postgresql://u:x@localhost:5432,127.0.0.1:7777/db'],
+    ['--url', 'postgresql://u:x@localhost:5432,y@127.0.0.1:7777/db'],
+    ['--url', 'postgresql://u:x@y@127.0.0.1:7777/db'],
+    ['--url', 'postgresql://127.0.0.1:7777#,localhost:5432/db'],
+    ['--url', 'postgresql://127.0.0.1:65432#,localhost:5432/db'],
+    ['--url', 'postgresql://?@localhost:5432/db?user=postgres'],
+    ['--url', 'postgresql://127.0.0.1:7777?@localhost:5432/db'],
     ['--url'],
     ['--url='],
     ['--url', '--keep'],
@@ -69,7 +76,9 @@ describe('disposable PostgreSQL isolation', () => {
       ]);
       const output = stdout + stderr;
       expect(code).not.toBe(0);
-      expect(output).toMatch(/requires 127\.0\.0\.1 on a disposable port|requires a value|Invalid URL/);
+      expect(output).toMatch(
+        /requires 127\.0\.0\.1 on a disposable port|requires a value|Invalid URL|single-host URLs|URL fragments/,
+      );
       expect(output).not.toContain('disposable cluster on');
       expect(clusterDirs()).toEqual(before);
     });
