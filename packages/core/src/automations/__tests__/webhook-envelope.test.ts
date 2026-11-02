@@ -199,6 +199,12 @@ describe('call_agent envelope context (#960)', () => {
       id: TRIGGER_EVENT.id,
       type: TRIGGER_EVENT.type,
       correlationId: TRIGGER_EVENT.metadata.correlationId,
+      source: {
+        instanceId: undefined,
+        channelType: undefined,
+        from: context.payload.from,
+        rawPayload: undefined,
+      },
     });
   });
 
