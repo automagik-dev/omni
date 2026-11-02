@@ -7,6 +7,9 @@
 import { ChannelTypeSchema, ContentTypeSchema, EventTypeSchema, ProviderSchemaEnum, RuleTypeSchema } from '@omni/core';
 import { TRPCError, initTRPC } from '@trpc/server';
 import { z } from 'zod';
+import { SCOPE_MAP } from '../constants/scopes';
+import { maskProvider } from '../lib/provider-response';
+import { ApiKeyService } from '../services/api-keys';
 import type { TrpcContext } from './context';
 
 // Initialize tRPC
@@ -23,6 +26,17 @@ const isAuthed = t.middleware(({ ctx, next }) => {
 // Procedures
 const _publicProcedure = t.procedure;
 const protectedProcedure = t.procedure.use(isAuthed);
+
+// Provider procedures share their REST counterpart's scope policy.
+function providerProcedure(restRoute: string) {
+  return protectedProcedure.use(({ ctx, next }) => {
+    const requiredScope = SCOPE_MAP[restRoute];
+    if (!requiredScope || !ApiKeyService.scopeAllows(ctx.apiKey.scopes, requiredScope)) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Insufficient permissions' });
+    }
+    return next();
+  });
+}
 
 // Helper to check scope
 const hasScope = (scopes: string[], required: string): boolean => {
@@ -319,15 +333,19 @@ export const appRouter = t.router({
   // PROVIDERS
   // --------------------------------------------------------------------------
   providers: t.router({
-    list: protectedProcedure.input(z.object({ active: z.boolean().optional() })).query(async ({ ctx, input }) => {
-      return ctx.services.providers.list(input);
-    }),
+    list: providerProcedure('GET /providers')
+      .input(z.object({ active: z.boolean().optional() }))
+      .query(async ({ ctx, input }) => {
+        return (await ctx.services.providers.list(input)).map(maskProvider);
+      }),
 
-    get: protectedProcedure.input(z.object({ id: z.string().uuid() })).query(async ({ ctx, input }) => {
-      return ctx.services.providers.getById(input.id);
-    }),
+    get: providerProcedure('GET /providers/:id')
+      .input(z.object({ id: z.string().uuid() }))
+      .query(async ({ ctx, input }) => {
+        return maskProvider(await ctx.services.providers.getById(input.id));
+      }),
 
-    create: protectedProcedure
+    create: providerProcedure('POST /providers')
       .input(
         z.object({
           name: z.string().min(1).max(255),
@@ -340,15 +358,14 @@ export const appRouter = t.router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        if (!hasScope(ctx.apiKey.scopes, 'admin:*')) {
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Insufficient permissions' });
-        }
-        return ctx.services.providers.create(input);
+        return maskProvider(await ctx.services.providers.create(input));
       }),
 
-    checkHealth: protectedProcedure.input(z.object({ id: z.string().uuid() })).mutation(async ({ ctx, input }) => {
-      return ctx.services.providers.checkHealth(input.id);
-    }),
+    checkHealth: providerProcedure('POST /providers/:id/health')
+      .input(z.object({ id: z.string().uuid() }))
+      .mutation(async ({ ctx, input }) => {
+        return ctx.services.providers.checkHealth(input.id);
+      }),
   }),
 });
 
