@@ -15,6 +15,9 @@ import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 const realFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = realFetch })
 
+// Real Bun version probes need scheduling headroom on a loaded host.
+const PROCESS_TIMEOUT_MS = 30_000
+
 const SANDBOX_KEY = 'omni_sk_sandbox_secret'
 
 function tempDir(t, name) {
@@ -203,7 +206,7 @@ function host(t, { report, code = 0, validate = 200, env = { PATH: '' }, bunVers
   const rt = { home: join(home, 'plugin'), config: {}, ctx: { effect: run => run() }, syncOmniEvents: () => {} }
   installHooks(rt)
   installLink(rt)
-  install(rt, { env, home, spawn: fake.spawn, downloadBun })
+  install(rt, { env, home, spawn: fake.spawn, downloadBun, versionProbeTimeoutMs: PROCESS_TIMEOUT_MS })
   return { rt, sandbox, calls: fake.calls, checked }
 }
 
@@ -211,7 +214,7 @@ function host(t, { report, code = 0, validate = 200, env = { PATH: '' }, bunVers
 const LATEST = '2.999999.1'
 const okReport = sandbox => ({ ok: true, installed: true, home: sandbox, version: PLUGIN_VERSION, apiUrl: 'http://127.0.0.1:18882', configPath: join(sandbox, 'config', 'config.json'), running: true, healthy: true, logsDir: join(sandbox, 'logs') })
 
-test('running Omni here asks first, then installs, links it, and the key never reaches the page', async (t) => {
+test('running Omni here asks first, then installs, links it, and the key never reaches the page', { timeout: PROCESS_TIMEOUT_MS }, async (t) => {
   const { rt, sandbox, calls, checked } = host(t, { report: okReport })
   const asked = await rt.omniLocalEndpoint('omni-local-install', {})
   // Not this plugin's own version (the release of its last change): the newest Omni it works with.
@@ -234,7 +237,7 @@ test('running Omni here asks first, then installs, links it, and the key never r
   await assert.rejects(rt.omniLocalEndpoint('omni-local-install', { confirm: 'yes' }), { code: 'bot/invalid' })
 })
 
-test('an installed Bun with the wrong version uses a private download before installing', async (t) => {
+test('an installed Bun with the wrong version uses a private download before installing', { timeout: PROCESS_TIMEOUT_MS }, async (t) => {
   let downloaded = null
   const { rt, calls } = host(t, {
     report: okReport,
@@ -251,7 +254,7 @@ test('an installed Bun with the wrong version uses a private download before ins
   assert.equal((await rt.omniLocalEndpoint('omni-local-progress')).status, 'paired')
 })
 
-test('a failed install says why and where its logs are, and links nothing', async (t) => {
+test('a failed install says why and where its logs are, and links nothing', { timeout: PROCESS_TIMEOUT_MS }, async (t) => {
   const { rt, sandbox } = host(t, { code: 1, report: home => ({ ok: false, home, error: 'The API did not answer within 180 s', logsDir: join(home, 'logs') }) })
   await rt.omniLocalEndpoint('omni-local-install', { confirm: true })
   await rt.omniLocalJob()
@@ -260,7 +263,7 @@ test('a failed install says why and where its logs are, and links nothing', asyn
   assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
 })
 
-test('a sandbox that refuses its own key is a failure, not a link', async (t) => {
+test('a sandbox that refuses its own key is a failure, not a link', { timeout: PROCESS_TIMEOUT_MS }, async (t) => {
   const { rt } = host(t, { report: okReport, validate: 401 })
   await rt.omniLocalEndpoint('omni-local-install', { confirm: true, update: true })
   await rt.omniLocalJob()
