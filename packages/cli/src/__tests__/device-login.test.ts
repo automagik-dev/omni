@@ -128,6 +128,54 @@ describe('runDeviceLogin', () => {
     expectNoSecrets(outcome);
   });
 
+  test.each([0, 0.25])('floors a server interval of %s to one second', async (interval) => {
+    const outcome = await run([json(200, { ...CODE, interval }), granted, json(200, MINTED)]);
+    expect(outcome.result.status).toBe('approved');
+    expect(outcome.sleeps).toEqual([1000]);
+  });
+
+  test('caps device-code expiry and even an oversized poll interval at fifteen minutes', async () => {
+    const outcome = await run([json(200, { ...CODE, expires_in: 86400, interval: 86400 })]);
+    expect(outcome.result).toEqual({ status: 'expired' });
+    expect(outcome.sleeps).toEqual([900000]);
+    expect(outcome.calls).toHaveLength(1);
+    expect(outcome.prompts[0]).toContain('within 15 min');
+  });
+
+  test('strips terminal controls from the user code and verification URL before showing them', async () => {
+    const outcome = await run([
+      json(200, {
+        ...CODE,
+        user_code: 'AB\u001b[31mCD\u001b[0m\r\n\u0007\u202e',
+        verification_uri_complete: '/api/\u001b[31mlogin\u001b[0m?code=ABCD',
+      }),
+      granted,
+      json(200, MINTED),
+    ]);
+    expect(outcome.result.status).toBe('approved');
+    expect(outcome.prompts[0]).toBe('To sign in, approve code ABCD within 10 min:');
+    expect(outcome.prompts[1]).toBe('  open http://omni.test/api/login?code=ABCD');
+    expect(outcome.prompts[2]).toBe('  or run on the server: omni approve ABCD');
+  });
+
+  test.each(['code', 'poll', 'key', 'fetch'])('strips terminal controls from %s failures', async (stage) => {
+    const bad = 'ERR\u001b[31mOR\u001b[0m\r\n\u0007\u202e';
+    const refusal = json(403, { error: { message: bad } });
+    const replies =
+      stage === 'code'
+        ? [refusal]
+        : stage === 'poll'
+          ? [json(200, CODE), json(400, { error: bad })]
+          : stage === 'key'
+            ? [json(200, CODE), granted, refusal]
+            : [new Error(bad)];
+    const outcome = await run(replies);
+    expect(outcome.result).toEqual({
+      status: 'failed',
+      message: stage === 'poll' ? 'the server refused the sign-in (ERROR)' : 'ERROR',
+    });
+  });
+
   test('authorization_pending keeps the interval; slow_down grows it by 5 s each time', async () => {
     const slow = json(400, { error: 'slow_down' });
     const outcome = await run([json(200, CODE), pending, slow, pending, slow, granted, json(200, MINTED)]);
@@ -157,7 +205,7 @@ describe('runDeviceLogin', () => {
     const code = { ...CODE, expires_in: 5, interval: 2 };
     const outcome = await run([json(200, code), pending, pending]);
     expect(outcome.result).toEqual({ status: 'expired' });
-    // Polls at 2 s and 4 s; the third wait reaches 6 s, past the 5 s expiry.
+    // Polls at 2 s and 4 s; the third wait stops at the 5 s expiry.
     expect(outcome.calls.filter((call) => call.path === '/api/auth/device/token')).toHaveLength(2);
   });
 

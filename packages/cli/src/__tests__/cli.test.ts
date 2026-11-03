@@ -1377,7 +1377,7 @@ describe('CLI Multi-Server Tests', () => {
 
   describe('auth scoping', () => {
     test('a keyless entry errors with the --server-scoped login hint', async () => {
-      await ms(['server', 'add', 'keyless', serverB.url]);
+      await ms(['server', 'add', 'keyless', serverB.url, '--skip-verify']);
 
       const result = await ms(['instances', 'list', '--server', 'keyless']);
       expect(result.exitCode).not.toBe(0);

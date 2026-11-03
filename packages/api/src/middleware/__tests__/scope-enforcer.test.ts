@@ -9,6 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { NotFoundError } from '@omni/core';
 import { Hono } from 'hono';
+import { authRoutes } from '../../routes/v2/auth';
 import { CS_CHILD_SCOPES } from '../../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../../types';
 import {
@@ -871,5 +872,28 @@ describe('chat key — /chats/:id/* resolves the chat as the route does', () => 
     expect(own.status).toBe(200);
     expect(((await own.json()) as { resolved: string }).resolved).toBe(OTHER_CHAT);
     expect((await call(app, 'GET', `/chats/${FOREIGN_CHAT}/messages`)).status).toBe(403);
+  });
+});
+
+describe('self-validation served route guard (#1461)', () => {
+  test('a terminal catch-all at the exact validate path keeps the scope check', async () => {
+    let reached = false;
+    const v2 = new Hono<{ Variables: AppVariables }>();
+    v2.use('*', async (c, next) => {
+      c.set('apiKey', mkKey({ scopes: [] }));
+      await next();
+    });
+    v2.use('*', scopeEnforcerMiddleware);
+    // Same raw pathname, but this terminal handler wins over the real validate route.
+    v2.all('/auth/*', (c) => {
+      reached = true;
+      return c.json({ data: { catchAll: true } });
+    });
+    v2.route('/auth', authRoutes);
+    const app = new Hono().route('/api/v2', v2);
+    const response = await app.request('/api/v2/auth/validate', { method: 'POST' });
+    expect(response.status).toBe(403);
+    expect(reached).toBe(false);
+    expect(await response.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
   });
 });

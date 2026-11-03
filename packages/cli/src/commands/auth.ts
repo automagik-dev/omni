@@ -190,6 +190,13 @@ function wantsDeviceLogin(options: LoginOptions): boolean {
  * Denied, expired, Ctrl+C or a malformed reply exits with nothing saved.
  */
 async function deviceLogin(options: LoginOptions): Promise<void> {
+  if (!process.stdin.isTTY) {
+    output.error(
+      'Device sign-in requires an interactive terminal. Provide --api-key-stdin, OMNI_CLI_API_KEY, or --api-key.',
+      undefined,
+      2,
+    );
+  }
   const config = loadConfig();
   const serverName = getTargetServerName();
   if (options.apiUrl) config.apiUrl = options.apiUrl;
@@ -417,10 +424,11 @@ one, or the entry named by the global flag:
 Or supply OMNI_CLI_API_KEY securely through the environment and run:
   omni auth login --server prod
 
-With no key at all (no flag, no stdin, no OMNI_CLI_API_KEY), login signs this
+With no key at all (no flag, no stdin, no OMNI_CLI_API_KEY), an interactive login signs this
 CLI in by device code: it prints a code and a link, waits for the owner to
 approve it (the link, omni approve <code> on the server, or WhatsApp), and saves
 the new device key into the targeted server entry. Ctrl+C cancels; nothing is saved.
+Without an interactive terminal, supply one of the key inputs above; otherwise login exits 2.
 
 Explicit input flags override OMNI_CLI_API_KEY; do not combine the two login
 input flags. Prefer a secret-manager pipe or protected file over pasting a key

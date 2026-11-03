@@ -26,6 +26,7 @@ interface FakeOmni {
   deviceCode: 'ok' | 'missing';
   keyReply: 'ok' | 'malformed';
   polls: number;
+  requests: number;
   close(): void;
 }
 
@@ -95,6 +96,7 @@ function startFakeOmni(): FakeOmni {
     port: 0,
     hostname: '127.0.0.1',
     fetch(request) {
+      omni.requests += 1;
       const path = new URL(request.url).pathname;
       const route = routes[path];
       return route ? route(request) : reply(404, { error: { code: 'NOT_FOUND', message: `no ${path}` } });
@@ -106,6 +108,7 @@ function startFakeOmni(): FakeOmni {
     deviceCode: 'ok',
     keyReply: 'ok',
     polls: 0,
+    requests: 0,
     close: () => server.stop(true),
   };
   return omni;
@@ -130,8 +133,12 @@ function writeInitialConfig() {
   return config;
 }
 
-function spawnCli(args: string[]) {
-  return Bun.spawn(['bun', CLI_PATH, ...args], {
+function spawnCli(args: string[], interactive = true) {
+  // Simulate only stdin's TTY bit for device-flow tests; keep output piped for JSON/secret assertions.
+  // Noninteractive regressions use the real ignored stdin, with no preload.
+  const preload = join(home, 'tty.cjs');
+  writeFileSync(preload, "Object.defineProperty(process.stdin, 'isTTY', { value: true });");
+  return Bun.spawn(['bun', ...(interactive ? ['--preload', preload] : []), CLI_PATH, ...args], {
     env: {
       PATH: process.env.PATH,
       HOME: home,
@@ -140,13 +147,14 @@ function spawnCli(args: string[]) {
       OMNI_TELEMETRY: 'false',
       NO_COLOR: '1',
     },
+    stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 }
 
-async function cli(args: string[]) {
-  const child = spawnCli(args);
+async function cli(args: string[], interactive = true) {
+  const child = spawnCli(args, interactive);
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -165,7 +173,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'omni-device-login-'));
   rmSync(join(home, '.omni'), { recursive: true, force: true });
   mkdirSync(join(home, '.omni'), { recursive: true });
-  Object.assign(fake, { token: 'approve', deviceCode: 'ok', keyReply: 'ok', polls: 0 });
+  Object.assign(fake, { token: 'approve', deviceCode: 'ok', keyReply: 'ok', polls: 0, requests: 0 });
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -287,6 +295,28 @@ describe('omni auth login --api-key with a device key', () => {
     const result = await cli(['auth', 'login', '--server', 'prod', '--api-key', OTHER_SERVER_KEY]);
     expect(result.exitCode).toBe(2);
     expect(result.stdout + result.stderr).not.toContain(OTHER_SERVER_KEY);
+    expect(readConfig()).toEqual(initial);
+  });
+});
+
+describe('device login hardening (#1461)', () => {
+  test.each(['auth', 'server'])('%s without a key or TTY exits 2 before any server request', async (command) => {
+    const initial = writeInitialConfig();
+    fake.token = 'deny'; // Bound the RED run on the old CLI too.
+    const args = command === 'auth' ? ['auth', 'login', '--server', 'prod'] : ['server', 'add', 'lab', fake.url];
+    const result = await cli(args, false);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout + result.stderr).toContain('requires an interactive terminal');
+    expect(fake.requests).toBe(0);
+    expect(readConfig()).toEqual(initial);
+  });
+
+  test('the 404 fallback never overwrites a keyed entry, even when the URL changes', async () => {
+    const initial = writeInitialConfig();
+    fake.deviceCode = 'missing';
+    const result = await cli(['server', 'add', 'default', fake.url, '--use']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain('unchanged');
     expect(readConfig()).toEqual(initial);
   });
 });
