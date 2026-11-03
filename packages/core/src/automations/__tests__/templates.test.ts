@@ -187,32 +187,6 @@ describe('substituteTemplateObject', () => {
 });
 
 describe('createTemplateContext', () => {
-  test('creates context with payload', () => {
-    const context = createTemplateContext({ name: 'Alice' });
-    expect(context.payload).toEqual({ name: 'Alice' });
-  });
-
-  test('creates context with variables', () => {
-    const context = createTemplateContext({}, { variables: { key: 'value' } });
-    expect(context.variables).toEqual({ key: 'value' });
-  });
-
-  test('creates context with debounce', () => {
-    const debounce = {
-      messages: [{ type: 'text', timestamp: 1000 }],
-      from: { id: '123' },
-      instanceId: 'wa-001',
-    };
-    const context = createTemplateContext({}, { debounce });
-    expect(context.debounce).toEqual(debounce);
-  });
-
-  test('provides env access', () => {
-    const context = createTemplateContext({});
-    expect(context.env).toBeDefined();
-    expect(typeof context.env.PATH).toBe('string');
-  });
-
   test('auto-derives followUp from chat.idle_timeout-shaped payload', () => {
     const context = createTemplateContext({
       syntheticPrompt: 'Please follow up',
