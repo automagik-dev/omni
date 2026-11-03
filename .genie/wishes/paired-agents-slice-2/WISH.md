@@ -507,7 +507,11 @@ The 21 suites with a local `urlFor` were migrated to `pgRoleUrl` in three PRs, e
 1. Slice 6 grant writer:
    - it MUST stamp the grant's tenant from its source (G6 N1 ruling); a NULL grant is not a wildcard;
    - keep the hashable coalesce predicate (G6 amendment).
-   - **In review** (branch `fix/pa-grant-tenant-c12`): `insertAgentSourceGrant` in `@omni/db` is the only sanctioned writer and stamps the source's tenant (no `tenantId` input; a missing or RLS-invisible source throws). `agent-source-grant-writer.test.ts` guards it, and `agent-source-grants-postgres.test.ts` proves the stamp under legacy and enforced RLS. The coalesce predicate is unchanged.
+   - **Helper and guard shipped in #1556:** `insertAgentSourceGrant` in `@omni/db` is the only sanctioned writer and stamps the source's tenant (no `tenantId` input; a missing or RLS-invisible source throws). `agent-source-grant-writer.test.ts` guards it, and `agent-source-grants-postgres.test.ts` proves the stamp under legacy and enforced RLS. The coalesce predicate is unchanged. Branch `fix/pa-grant-guard-gaps` closes the gaps the #1556 review found: the guard now rejects the 7 write forms that got past it, the helper's doc states the NULL-source outcome in both modes and the caller contract below, and an enforced-mode case proves a NULL-tenant source gives NOT_FOUND and writes nothing.
+   - **Caller contract the slice-6 grant writer must meet** (#1556 review findings 2, 4 and 5):
+     - it passes `scopedHandle(db)` to `insertAgentSourceGrant`, and the slice-6 PR proves it with a test or guard at the call site. The registry class `tenant-boundary` holds only then: the helper cannot scope its own handle, and the db-access guard sees no new site in the caller's file;
+     - it confirms the grantee `agentId`, and `approvedByKeyId` where applicable, are visible in the same tenant scope before writing. `agent_source_grants` has no RLS and the agent FK check ignores RLS, so the helper alone would accept another tenant's agent;
+     - it runs inside the request's tenant transaction, so the source lookup and the insert share one transaction. Outside a scope the two statements run separately, and a source deleted or re-tenanted between them leaves a stale grant.
 2. Migrate the 21 pre-existing `-postgres` suites that define a local `urlFor` to `pgRoleUrl`, and shrink `LOCAL_URLFOR_ACKNOWLEDGED` to 0. **Done:** #1536, #1538, #1539 (see "Follow-up 2 done").
 3. Accepted C12 residuals, documented in the guard header:
    - getter and `providerName` fields;
@@ -515,7 +519,7 @@ The 21 suites with a local `urlFor` were migrated to `pgRoleUrl` in three PRs, e
    - a `hermes` map dispatched via `Object.entries`;
    - contrived forms;
    - provider aliases through reassignment or array destructuring.
-   - **In review** (branch `fix/pa-grant-tenant-c12`): getter and `providerName` fields, and provider aliases through reassignment or array destructuring, are now rejected. The residual-1 commit moves 2 `C12 permits` fixtures to `C12 rejects` (t201 ruling: keep). Still accepted: `channel`-named parameters, for-of and catch bindings (G5 ruling), the `hermes` `Object.entries` map, and contrived forms.
+   - **Done** in #1556 (5afb13ab5): getter and `providerName` fields, and provider aliases through reassignment or array destructuring, are now rejected. The residual-1 commit moves 2 `C12 permits` fixtures to `C12 rejects` (t201 ruling: keep). Still accepted: `channel`-named parameters, for-of and catch bindings (G5 ruling), the `hermes` `Object.entries` map, and contrived forms.
 4. Optional G6 review nits: an index-name check on branch I, and filter-only and Seq Scan negative fixtures for the EXPLAIN checker.
 5. Branch A plan note: its seek uses `omni_events_agent_id_idx` or a bitmap rather than the G1 composite index. Accepted as the planner's choice.
 
