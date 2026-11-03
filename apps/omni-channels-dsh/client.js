@@ -15226,6 +15226,8 @@ function phoneThreadOf(roster, params, sessionId) {
 }
 var phoneRight = null;
 var INTENTS_MAX = 8;
+var PHONE_WAIT_MS = 500;
+var PHONE_RETRY_MS = 50;
 var intents = /* @__PURE__ */ new Map();
 var noteIntent = (threadId) => {
   intents.delete(threadId);
@@ -15257,15 +15259,21 @@ function installPhone(ctx, face) {
   });
   return () => fiber.dispose();
 }
+var phoneUnavailable = () => t("Open a conversation first; the phone pane opens beside it.");
+var phoneFailure = (error) => {
+  console.warn("Could not open the phone pane:", error);
+  return phoneUnavailable();
+};
 function openPhone(thread) {
   const right = phoneRight;
   if (!right) return t("The phone pane needs DSH's right column.");
-  if (typeof right.mounted?.getSnapshot === "function" && right.mounted.getSnapshot() === void 0) return t("Open a conversation first; the phone pane opens beside it.");
   try {
+    const snapshot = right.mounted?.getSnapshot?.();
+    if (snapshot === void 0 || right.actionsFor?.(snapshot) === void 0) return phoneUnavailable();
     right.openTab(PHONE_KIND, { params: phoneParams(thread) });
     return null;
   } catch (error) {
-    return error?.message ?? String(error);
+    return phoneFailure(error);
   }
 }
 function requestPhone(thread) {
@@ -15376,10 +15384,32 @@ function PhoneDock({ sessionId, useRoster }) {
   const id = thread?.id ?? null;
   (0, import_react13.useEffect)(() => {
     if (id === null || !hasPhoneIntent(id)) return;
-    const mounted = phoneRight?.mounted;
-    if (typeof mounted?.getSnapshot === "function" && mounted.getSnapshot() !== thread.sessionId) return;
-    takePhoneIntent(id);
-    setProblem(openPhone(thread));
+    const right = phoneRight;
+    let timer;
+    let stopped = false;
+    let waited = 0;
+    const attempt = () => {
+      if (stopped || phoneRight !== right || !hasPhoneIntent(id)) return;
+      try {
+        const snapshot = right?.mounted?.getSnapshot?.();
+        if (snapshot !== thread.sessionId) return;
+        if (right.actionsFor?.(snapshot) === void 0 && waited < PHONE_WAIT_MS) {
+          waited += PHONE_RETRY_MS;
+          timer = setTimeout(attempt, PHONE_RETRY_MS);
+          return;
+        }
+        takePhoneIntent(id);
+        setProblem(openPhone(thread));
+      } catch (error) {
+        takePhoneIntent(id);
+        setProblem(phoneFailure(error));
+      }
+    };
+    attempt();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
   }, [id]);
   if (problem === null) return null;
   return (0, import_react13.createElement)("div", { className: "op-dock" }, (0, import_react13.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)));

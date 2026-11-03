@@ -18,6 +18,7 @@ const mount = root => mountWith(root, { refs: true })
 // the test to run them, and a file becomes a blob: URL.
 
 const calls = []
+const logged = []
 let answer = () => ({})
 const fakeCall = async (endpoint, body) => {
   calls.push([endpoint, plain(body)])
@@ -54,7 +55,7 @@ const ui = await bundleClient([
   'export { PhonePane, PhoneTab, PhoneDock, installPhone, openPhone, requestPhone, hasPhoneIntent, takePhoneIntent, phoneSurfaceIs, threadName, phoneThreadOf, keepParams, keptParams, phoneTabDefinition, phoneTabId, PHONE_KIND, PHONE_TAB_ID, OMNI_PHONE_CSS } from \'./omni-phone.js\'',
   'export { PhoneFrame, frameMetrics, SIDE_BUTTONS, PHONE_FRAME_CSS } from \'./phone-frame.js\'',
   'export { ThreadRow, rowPropsOf } from \'./omni-tree.js\'',
-], { globals: { URL: BundleURL, URLSearchParams, Blob, atob, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
+], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL: BundleURL, URLSearchParams, Blob, atob, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
 
 // -------------------------------------------------------------------------
 // Threads as the host's view lists them (threads.js threadsView), and a chat's messages as
@@ -86,6 +87,7 @@ const host = (messages = MESSAGES) => (endpoint) => {
 
 function reset() {
   calls.length = 0
+  logged.length = 0
   timers = []
   storage.clear()
   storageFull = false
@@ -490,4 +492,114 @@ test('two rows clicked quickly each open their own pane, the later one last', as
   dockOf('s2', roster).draw()
   await settle()
   assert.equal(stand.opened.length, 2)
+})
+
+
+test('a mounted Session without an adopted store gives a friendly row message and never calls openTab', (t) => {
+  reset()
+  const stand = installed(t)
+  stand.adopted.delete('s-omni')
+  let opened = 0
+  stand.right.openTab = () => { opened += 1; throw new Error('sidebarRight: no session surface is mounted') }
+  const row = mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1), actions: {}, rowProps: {} }))
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.equal(text(one(row.draw(), 'ot-thread-problem')), 'Open a conversation first; the phone pane opens beside it.')
+  assert.equal(opened, 0)
+})
+
+test('an unexpected openTab failure shows only a friendly translated row message', (t) => {
+  reset()
+  const stand = installed(t)
+  const raw = 'sidebarRight: private runtime diagnostic'
+  stand.right.openTab = () => { throw new Error(raw) }
+  const row = mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1), actions: {}, rowProps: {} }))
+  one(row.draw(), 'bt-thread').props.onClick()
+  assert.equal(text(one(row.draw(), 'ot-thread-problem')), 'Open a conversation first; the phone pane opens beside it.')
+  assert.equal(text(row.draw()).includes(raw), false)
+  assert.equal(logged.length, 1)
+  assert.equal(logged[0][1].message, raw)
+})
+
+async function nextPhoneWait() {
+  const timer = timers.find(timer => timer.on && timer.ms === 50)
+  assert.ok(timer, 'the pending adoption has a bounded retry')
+  timer.on = false
+  timer.run()
+  await settle()
+}
+
+test('a thread dock retries a pending click and opens once its mounted store is adopted', async (t) => {
+  reset()
+  const stand = installed(t)
+  const thread = THREAD(1)
+  const roster = hooked([thread])
+  const row = threadRow(thread, { openSession: () => {} }, roster)
+  one(row.draw(), 'bt-thread').props.onClick()
+  stand.put('s1')
+  let attempts = 0
+  const openTab = stand.right.openTab
+  stand.right.openTab = (...args) => { attempts += 1; return openTab(...args) }
+  const dock = dockOf('s1', roster)
+  t.after(() => dock.unmount())
+  dock.draw()
+  assert.equal(attempts, 0, 'no openTab call before adoption')
+  assert.equal(ui.hasPhoneIntent('t1'), true)
+  stand.adopt('s1')
+  await nextPhoneWait()
+  assert.equal(dock.draw(), null)
+  assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
+  assert.equal(ui.hasPhoneIntent('t1'), false)
+  assert.equal(attempts, 1)
+})
+
+test('a store that never adopts times out with a friendly dock message and no openTab call', async (t) => {
+  reset()
+  const stand = installed(t)
+  const thread = THREAD(1)
+  one(threadRow(thread, { openSession: () => {} }, hooked([thread])).draw(), 'bt-thread').props.onClick()
+  stand.put('s1')
+  let attempts = 0
+  stand.right.openTab = () => { attempts += 1 }
+  const dock = dockOf('s1', hooked([thread]))
+  t.after(() => dock.unmount())
+  dock.draw()
+  for (let retry = 0; retry < 10; retry += 1) await nextPhoneWait()
+  assert.equal(text(one(dock.draw(), 'op-dock-problem')), 'Open a conversation first; the phone pane opens beside it.')
+  assert.equal(ui.hasPhoneIntent('t1'), false)
+  assert.equal(attempts, 0)
+  assert.equal(timers.some(timer => timer.on && timer.ms === 50), false)
+})
+
+test('unmounting a waiting dock cancels its retry; it never opens in another Session', async (t) => {
+  reset()
+  const stand = installed(t)
+  const thread = THREAD(1)
+  one(threadRow(thread, { openSession: () => {} }, hooked([thread])).draw(), 'bt-thread').props.onClick()
+  stand.put('s1')
+  const dock = dockOf('s1', hooked([thread]))
+  dock.draw()
+  assert.ok(timers.some(timer => timer.on && timer.ms === 50))
+  dock.unmount()
+  assert.equal(timers.some(timer => timer.on && timer.ms === 50), false)
+  stand.put('s-other')
+  stand.adopt('s-other')
+  await settle()
+  assert.deepEqual(stand.opened, [])
+})
+
+
+test('a pending adoption retry never opens the phone in a different mounted Session', async (t) => {
+  reset()
+  const stand = installed(t)
+  const thread = THREAD(1)
+  one(threadRow(thread, { openSession: () => {} }, hooked([thread])).draw(), 'bt-thread').props.onClick()
+  stand.put('s1')
+  const dock = dockOf('s1', hooked([thread]))
+  t.after(() => dock.unmount())
+  dock.draw()
+  stand.put('s-other')
+  stand.adopt('s-other')
+  await nextPhoneWait()
+  assert.deepEqual(stand.opened, [])
+  assert.equal(timers.some(timer => timer.on && timer.ms === 50), false)
 })

@@ -60,9 +60,11 @@ test('the board never opens by itself: only the header button opens it; the phon
     'omni-tree.js: const why = openPhone(thread)',
   ])
   assert.deepEqual(calls(/^.*\brequestPhone\(.*$/gm).filter(line => !line.includes('export function')), ['omni-tree.js: const reason = requestPhone(thread)'])
-  // Nothing waits on a timer for the pane any more: the dock opens it from the Session's own
-  // render, and the only timer left in the module is the chat poll.
-  assert.deepEqual(calls(/^.*setTimeout\(.*$/gm).filter(line => line.includes('openPhone') || line.includes('PHONE_WAIT')), [])
+  // The dock may briefly retry adoption, but only to fulfill a pending click on this thread.
+  const dock = phone.slice(phone.indexOf('export function PhoneDock('))
+  assert.match(dock, /hasPhoneIntent\(id\)/)
+  assert.match(dock, /waited < PHONE_WAIT_MS/)
+  assert.match(dock, /clearTimeout\(timer\)/)
   assert.deepEqual(calls(/^.*\bopenThread\(.*$/gm).filter(line => !line.includes('function openThread(')).map(line => line.split(': ')[1]), [
     'if (opens && openOnArrival.delete(thread.id)) openThread(thread, actions, setProblem)',
     'const opener = () => openThread(thread, actions, setProblem)',

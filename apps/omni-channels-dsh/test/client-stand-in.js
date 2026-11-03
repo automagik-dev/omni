@@ -133,6 +133,7 @@ export function column() {
       const sessionId = state.onScreen
       return sessionId === undefined || !surfaces.has(sessionId) ? undefined : { sessionId, surface: {} }
     },
+    actionsFor: sessionId => adopted.has(sessionId) ? {} : undefined,
     openTab: (kind, options) => {
       if (!types.some(type => type.kind === kind)) throw new Error(`sidebarRight: no tab type is registered as "${kind}"`)
       // As DSH's controller: openTab needs the Session on screen and its adopted store
