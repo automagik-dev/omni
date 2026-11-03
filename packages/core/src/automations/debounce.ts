@@ -77,14 +77,6 @@ export function buildConversationKey(instanceId: string, personId: string): Conv
 }
 
 /**
- * Parse conversation key back to components
- */
-export function parseConversationKey(key: ConversationKey): { instanceId: string; personId: string } {
-  const parts = key.split(':');
-  return { instanceId: parts[0] ?? '', personId: parts[1] ?? '' };
-}
-
-/**
  * State for a debounce window
  */
 interface DebounceWindow {
@@ -309,13 +301,6 @@ export class DebounceManager {
    */
   getActiveWindowCount(): number {
     return this.windows.size;
-  }
-
-  /**
-   * Get pending message count for a conversation
-   */
-  getPendingCount(key: ConversationKey): number {
-    return this.windows.get(key)?.messages.length ?? 0;
   }
 }
 

@@ -554,7 +554,7 @@ describe('SlackAppReceiver', () => {
 // bolt-client helpers the receiver's callers rely on
 // ─────────────────────────────────────────────────────────────
 
-// Same post-mock import: bolt-client binds `@slack/bolt` at module load.
+// Load the connection helpers beside the receiver tests.
 const { buildActingClients, resolveWorkspaceIdentity } = await import('../connection/bolt-client');
 
 /** A `WebClient`-shaped stand-in whose `auth.test` answers with `result`. */

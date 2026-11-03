@@ -1,18 +1,10 @@
 /**
- * Bolt.js client initialization with Socket Mode and HTTP Receiver support
- *
- * Handles:
- * - App-Level Token + Bot Token configuration (Socket Mode)
- * - HTTPReceiver with signing secret validation (HTTP mode)
- * - Body-limit guard for HTTP mode (1 MB max)
- * - Health check endpoint
- * - Reconnection handling with structured logging
- * - Rate limiting with exponential backoff
+ * Slack connection identity, socket lifecycle, health and HTTP body-limit helpers.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Logger } from '@omni/channel-sdk';
-import { App, type AppOptions, HTTPReceiver, SocketModeReceiver } from '@slack/bolt';
+import type { App, SocketModeReceiver } from '@slack/bolt';
 import { WebClient } from '@slack/web-api';
 import type { SlackConnectionOptions } from '../types';
 import { SlackError, SlackErrorCode } from '../types';
@@ -142,88 +134,6 @@ export interface BoltConnection {
   socketConnectTimeoutMs?: number;
 }
 
-/** Connection options of a per-instance App, which always carries a bot token. */
-type BotConnectionOptions = SlackConnectionOptions & { botToken: string };
-
-/**
- * Create a Bolt.js App configured for Socket Mode (but NOT started yet).
- *
- * Handlers MUST be registered on the returned app BEFORE calling startBoltConnection().
- * This is required because Bolt.js Socket Mode starts receiving events immediately
- * after start(), and any events arriving before handlers are registered will be dropped.
- *
- * For HTTP mode, creates an HTTPReceiver. After calling startBoltConnection(),
- * Bolt's built-in HTTP server starts on connection.httpPort (default 3001).
- * The returned BoltConnection.httpHandler is also available for external-server integration.
- */
-export function createBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
-  // A per-instance App authenticates with its `token`, so it needs a bot
-  // token; a bot-less user-mode instance runs behind the shared receiver only.
-  const botToken = options.botToken;
-  if (!botToken) {
-    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required for a per-instance Bolt app');
-  }
-  const mode = options.mode ?? 'socket';
-
-  if (mode === 'http') {
-    return createHttpBoltApp({ ...options, botToken }, logger);
-  }
-  return createSocketBoltApp({ ...options, botToken }, logger);
-}
-
-/**
- * Create a Bolt.js App in Socket Mode
- */
-function createSocketBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
-  logger.info('Creating Bolt.js app with Socket Mode (not started yet)');
-
-  if (!options.appToken) {
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'appToken (xapp-...) is required for Socket Mode');
-  }
-
-  // Construct the receiver explicitly (instead of letting `socketMode: true`
-  // build one inside App) so the SocketModeClient is reachable in a typed way —
-  // the startup assertion and health check need its real WebSocket state (#941).
-  const receiver = new SocketModeReceiver({ appToken: options.appToken });
-
-  const appOptions: AppOptions = {
-    token: options.botToken,
-    receiver,
-    socketMode: true,
-    clientOptions: {
-      retryConfig: {
-        retries: options.retryConfig?.retries ?? 2,
-        factor: options.retryConfig?.factor ?? 2,
-        minTimeout: options.retryConfig?.baseDelayMs ?? 500,
-        maxTimeout: options.retryConfig?.maxDelayMs ?? 3000,
-        randomize: true,
-      },
-    },
-  };
-
-  const app = new App(appOptions);
-
-  // Register global error handler to surface Socket Mode issues
-  app.error(async (error) => {
-    logger.error('Bolt.js global error', { error: String(error) });
-  });
-
-  const connection: BoltConnection = {
-    app,
-    client: app.client,
-    ...buildActingClients(options, app.client),
-    botToken: options.botToken,
-    mode: 'socket',
-    socketClient: receiver.client,
-    socketState: 'pending',
-    socketConnectTimeoutMs: options.socketConnectTimeoutMs,
-  };
-
-  watchSocketLifecycle(connection, logger);
-
-  return connection;
-}
-
 /**
  * Forward SocketModeClient lifecycle events onto the connection (#941).
  *
@@ -273,60 +183,10 @@ export function watchSocketLifecycle(connection: BoltConnection, logger: Logger)
 }
 
 /**
- * Create a Bolt.js App in HTTP mode using HTTPReceiver.
- *
- * The receiver handles Slack signing secret verification automatically.
- * The returned BoltConnection.httpHandler wraps the receiver with a 1 MB body-limit guard.
- */
-function createHttpBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
-  if (!options.signingSecret) {
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'signingSecret is required for HTTP mode');
-  }
-
-  logger.info('Creating Bolt.js app with HTTP receiver (not started yet)');
-
-  const receiver = new HTTPReceiver({
-    signingSecret: options.signingSecret,
-  });
-
-  const clientRetryConfig = {
-    retries: options.retryConfig?.retries ?? 2,
-    factor: options.retryConfig?.factor ?? 2,
-    minTimeout: options.retryConfig?.baseDelayMs ?? 500,
-    maxTimeout: options.retryConfig?.maxDelayMs ?? 3000,
-    randomize: true,
-  };
-
-  const app = new App({
-    token: options.botToken,
-    receiver,
-    clientOptions: { retryConfig: clientRetryConfig },
-  });
-
-  app.error(async (error) => {
-    logger.error('Bolt.js HTTP receiver error', { error: String(error) });
-  });
-
-  // Wrap the receiver's requestListener with a body-limit guard
-  const httpHandler = withBodyLimit(receiver.requestListener, logger);
-
-  return {
-    app,
-    client: app.client,
-    ...buildActingClients(options, app.client),
-    botToken: options.botToken,
-    mode: 'http',
-    httpPort: options.httpPort,
-    httpHandler,
-  };
-}
-
-/**
  * Wrap a Slack HTTP request listener with the 1 MB body-limit guard.
  *
- * Shared by both HTTP transports — the per-instance app above and the pooled
- * receiver in app-receiver.ts. An oversized body has to be refused with 413
- * before Bolt buffers it, whichever of the two is serving the request.
+ * Used by the pooled receiver in app-receiver.ts. An oversized body is refused
+ * with 413 before Bolt buffers it.
  */
 export function withBodyLimit(
   listener: (req: IncomingMessage, res: ServerResponse) => void,
