@@ -619,6 +619,8 @@ export const STRINGS = {
   'Other chats': '其他聊天',
   'Adding…': '正在添加…',
   'The chat was not added.': '这个聊天没有添加。',
+  'Could not load chats. Try again.': '无法加载聊天。请重试。',
+  'Could not load messages. Retrying soon.': '无法加载消息。稍后将重试。',
   'Could not remove this chat. Try again.': '无法移除这个聊天。请重试。',
   'Could not change this chat\'s settings. Try again.': '无法更改这个聊天的设置。请重试。',
   'Remove {name} from the sidebar? Click again': '要从侧边栏移除 {name} 吗？再点一次',

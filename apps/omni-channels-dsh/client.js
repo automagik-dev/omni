@@ -15295,7 +15295,10 @@ function useChatPoll(chatId, on2) {
           const reply = await call("omni-messages", { chatId });
           if (!stopped) setRead({ chatId, messages: Array.isArray(reply?.messages) ? reply.messages : [], error: null });
         } catch (error) {
-          if (!stopped) setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: error?.message ?? String(error) }));
+          if (!stopped) {
+            console.warn("Could not load chat messages:", error);
+            setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: t("Could not load messages. Retrying soon.") }));
+          }
         }
       }
       if (!stopped) timer = setTimeout(tick, POLL_MS);
@@ -16217,7 +16220,10 @@ function ThreadPicker({ channel, onPick, onClose }) {
         if (alive.current && asked.current === ticket) setList({ status: "ready", chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null });
       },
       (error) => {
-        if (alive.current && asked.current === ticket) setList({ status: "failed", chats: [], error: error?.message ?? String(error) });
+        if (alive.current && asked.current === ticket) {
+          console.warn("Could not load chats:", error);
+          setList({ status: "failed", chats: [], error: t("Could not load chats. Try again.") });
+        }
       }
     );
     if (words === "") {
@@ -16233,9 +16239,15 @@ function ThreadPicker({ channel, onPick, onClose }) {
     setProblem(null);
     try {
       const result = await onPick(chat);
-      if (alive.current && result?.ok !== true) setProblem(result?.reason ?? t("The chat was not added."));
+      if (alive.current && result?.ok !== true) {
+        console.warn("Could not add the chat:", result?.reason);
+        setProblem(t("The chat was not added."));
+      }
     } catch (error) {
-      if (alive.current) setProblem(error?.message ?? String(error));
+      if (alive.current) {
+        console.warn("Could not add the chat:", error);
+        setProblem(t("The chat was not added."));
+      }
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -17295,6 +17307,8 @@ var STRINGS = {
   "Other chats": "其他聊天",
   "Adding…": "正在添加…",
   "The chat was not added.": "这个聊天没有添加。",
+  "Could not load chats. Try again.": "无法加载聊天。请重试。",
+  "Could not load messages. Retrying soon.": "无法加载消息。稍后将重试。",
   "Could not remove this chat. Try again.": "无法移除这个聊天。请重试。",
   "Could not change this chat's settings. Try again.": "无法更改这个聊天的设置。请重试。",
   "Remove {name} from the sidebar? Click again": "要从侧边栏移除 {name} 吗？再点一次",

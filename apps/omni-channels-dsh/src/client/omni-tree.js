@@ -271,7 +271,12 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     const ticket = ++asked.current
     const load = () => call('omni-thread-chats', words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
       (reply) => { if (alive.current && asked.current === ticket) setList({ status: 'ready', chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null }) },
-      (error) => { if (alive.current && asked.current === ticket) setList({ status: 'failed', chats: [], error: error?.message ?? String(error) }) },
+      (error) => {
+        if (alive.current && asked.current === ticket) {
+          console.warn('Could not load chats:', error)
+          setList({ status: 'failed', chats: [], error: t('Could not load chats. Try again.') })
+        }
+      },
     )
     if (words === '') {
       void load()
@@ -286,9 +291,15 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     setProblem(null)
     try {
       const result = await onPick(chat)
-      if (alive.current && result?.ok !== true) setProblem(result?.reason ?? t('The chat was not added.'))
+      if (alive.current && result?.ok !== true) {
+        console.warn('Could not add the chat:', result?.reason)
+        setProblem(t('The chat was not added.'))
+      }
     } catch (error) {
-      if (alive.current) setProblem(error?.message ?? String(error))
+      if (alive.current) {
+        console.warn('Could not add the chat:', error)
+        setProblem(t('The chat was not added.'))
+      }
     } finally {
       if (alive.current) setBusy(null)
     }
