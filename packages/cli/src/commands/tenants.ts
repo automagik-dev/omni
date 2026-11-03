@@ -32,6 +32,7 @@ import { Command } from 'commander';
 import { getClient } from '../client.js';
 import { getTargetServerName } from '../config.js';
 import * as output from '../output.js';
+import { quoteShellArg } from '../utils/shell.js';
 
 // ============================================================================
 // TYPES
@@ -200,7 +201,7 @@ function renderPlatformError(err: unknown, action: string): never {
       const serverName = getTargetServerName();
       output.error(
         `Failed to ${action}: ${CREDENTIAL_REJECTED_401}` +
-          `omni auth login --server ${serverName} --api-key-stdin < /secure/path/omni-api-key`,
+          `omni auth login --server ${quoteShellArg(serverName)} --api-key-stdin < /secure/path/omni-api-key`,
         undefined,
         1,
       );
