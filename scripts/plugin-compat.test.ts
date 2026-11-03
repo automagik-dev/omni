@@ -5,7 +5,8 @@
  *
  * Run: bun test scripts/plugin-compat.test.ts (needs the release tags; it fetches the ones it reads)
  */
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,11 +15,46 @@ import { apiSurface, checkPlugin, pluginUses, serves } from './plugin-compat';
 
 // Git/archive-backed tests use the marketplace budget of 120 s: release lookup can fetch
 // tags (including a missing tag), then git archive/show and tar inspect the release. Pure tests keep 5 s.
+// Each command has a separate 60 s timeout. These do NOT sum to a 120 s test bound:
+// one checkPlugin can make 9 calls with a local tag (540 s) or 12 after fetching (720 s).
+// The two-plugin test can double that. Bun's deadline is not a hard wall-clock cap on sync calls.
 const root = join(import.meta.dir, '..');
 const readJson = (path: string) => JSON.parse(readFileSync(join(root, path), 'utf8'));
 const repoVersion: string = readJson('package.json').version;
 const plugins = ownPlugins(root);
 const here = apiSurface(null);
+
+describe('release surface command deadlines', () => {
+  test.each([
+    ['cat-file', 'git cat-file -e pinned:packages/api/src/routes/v2', 0],
+    ['archive', 'git archive --format=tar pinned -- packages/api/src/routes/v2 packages/api/src/schemas/openapi', 2],
+    ['-x', 'tar -x -C', 3],
+    ['show', 'git show pinned:packages/api/src/login/auth.ts', 4],
+  ] as const)('a timed-out %s fails with the command, rather than hiding an API', (_operation, command, preceding) => {
+    const exec = spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+      throw Object.assign(new Error('spawnSync ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    });
+    for (let index = 0; index < preceding; index++) exec.mockReturnValueOnce(Buffer.alloc(0));
+    try {
+      expect(() => apiSurface('pinned', '/unused')).toThrow(`Command timed out after 60000 ms: ${command}`);
+      expect(exec).toHaveBeenCalledTimes(preceding + 1);
+      for (const call of exec.mock.calls) expect(call[2]).toMatchObject({ timeout: 60_000 });
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  test('ordinary missing source files still yield an empty surface', () => {
+    const exec = spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+      throw Object.assign(new Error('missing file'), { status: 1 });
+    });
+    try {
+      expect(apiSurface('pinned', '/unused')).toEqual([]);
+    } finally {
+      exec.mockRestore();
+    }
+  });
+});
 
 describe("Omni's plugins and the Omni they need", () => {
   test('both plugins declare engines.omni as a minimum Omni release', () => {

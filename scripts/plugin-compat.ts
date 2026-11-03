@@ -21,12 +21,12 @@
  * path is built at run time (omni_call runs whatever the model picks; those are checked against
  * the linked Omni's own catalogue then).
  */
-import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 // @ts-expect-error -- plain Node ESM without types: the plugin's own route reader.
 import { sourceRoutes } from '../apps/omni-channels-dsh/scripts/omni-routes.mjs';
+import { CommandTimeoutError, boundedExec } from './lib/bounded-exec';
 import { minimumOf, ownPlugins, releaseCommit } from './lib/plugin-versions';
 
 const repoRoot = join(import.meta.dir, '..');
@@ -109,27 +109,29 @@ export function apiSurface(ref: string | null, root = repoRoot): Operation[] {
   try {
     const present = API_SOURCES.filter((path) => {
       try {
-        execFileSync('git', ['cat-file', '-e', `${ref}:${path}`], { cwd: root, stdio: 'ignore' });
+        boundedExec('git', ['cat-file', '-e', `${ref}:${path}`], { cwd: root, stdio: 'ignore' });
         return true;
-      } catch {
+      } catch (error) {
+        if (error instanceof CommandTimeoutError) throw error;
         return false;
       }
     });
     if (present.length > 0) {
-      const archive = execFileSync('git', ['archive', '--format=tar', ref, '--', ...present], {
+      const archive = boundedExec('git', ['archive', '--format=tar', ref, '--', ...present], {
         cwd: root,
         maxBuffer: 256 * 1024 * 1024,
       });
-      execFileSync('tar', ['-x', '-C', dir], { input: archive });
+      boundedExec('tar', ['-x', '-C', dir], { input: archive });
     }
     const read = (file: string) => {
       try {
-        return execFileSync('git', ['show', `${ref}:${file}`], {
+        return boundedExec('git', ['show', `${ref}:${file}`], {
           cwd: root,
           encoding: 'utf8',
           stdio: ['ignore', 'pipe', 'ignore'],
         });
-      } catch {
+      } catch (error) {
+        if (error instanceof CommandTimeoutError) throw error;
         return null;
       }
     };
@@ -315,7 +317,7 @@ if (import.meta.main) {
     for (const problem of result.problems) console.error(`  ${problem}`);
     failed ||= result.problems.length > 0;
     if (process.argv[2] === 'oldest') {
-      const tags = execFileSync('git', ['tag', '--list', 'v2.*', '--sort=-v:refname'], {
+      const tags = boundedExec('git', ['tag', '--list', 'v2.*', '--sort=-v:refname'], {
         cwd: repoRoot,
         encoding: 'utf8',
       })

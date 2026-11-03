@@ -14,9 +14,9 @@
  * released yet): the cut writes that release's version there.
  */
 
-import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { CommandTimeoutError, boundedExec } from './bounded-exec';
 
 /** Omni's calver: <major>.<yymmdd>.<build>, no prerelease suffix. */
 export const RELEASE_VERSION = /^\d+\.\d{6}\.\d+$/;
@@ -76,15 +76,16 @@ export function ownPlugins(root: string): OwnPlugin[] {
     });
 }
 
-function git(root: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+function git(root: string, args: string[], timeout?: number): string {
+  return boundedExec('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout }).trim();
 }
 
-function gitOk(root: string, args: string[]): boolean {
+function gitOk(root: string, args: string[], timeout?: number): boolean {
   try {
-    git(root, args);
+    git(root, args, timeout);
     return true;
-  } catch {
+  } catch (error) {
+    if (error instanceof CommandTimeoutError) throw error;
     return false;
   }
 }
@@ -105,7 +106,7 @@ export function releaseCommit(root: string, version: string): string | null {
   // --depth only in a clone that is already shallow: in a full clone it would make the clone
   // shallow again, and checks that walk history after this one (the market gate) would break.
   const shallow = git(root, ['rev-parse', '--is-shallow-repository']) === 'true';
-  gitOk(root, ['fetch', '--quiet', '--no-tags', ...(shallow ? ['--depth=1'] : []), 'origin', `+${ref}:${ref}`]);
+  gitOk(root, ['fetch', '--quiet', '--no-tags', ...(shallow ? ['--depth=1'] : []), 'origin', `+${ref}:${ref}`], 60_000);
   return resolve();
 }
 
