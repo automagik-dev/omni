@@ -1,7 +1,7 @@
 /**
  * Auth Commands
  *
- * omni auth login [--api-key-stdin | --api-key <key>] [--api-url <url>] (or OMNI_CLI_API_KEY)
+ * omni auth login [--api-key-stdin | --api-key <key>] [--api-url <url>] (or OMNI_CLI_API_KEY; none: device code)
  * omni auth status
  * omni auth logout
  * omni auth recover
@@ -21,6 +21,7 @@ import {
   saveConfig,
   saveLocalRuntimeConfig,
 } from '../config.js';
+import { deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import { credentialStatusFields, serverPostureFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
@@ -176,6 +177,50 @@ async function readLoginApiKey(options: LoginOptions): Promise<LoginCredential> 
     key: parsed.data,
     source: options.apiKeyStdin ? 'stdin' : options.apiKey !== undefined ? 'flag' : 'env',
   };
+}
+
+/** No key given at all (no flag, no stdin, no OMNI_CLI_API_KEY): sign in by device code instead. */
+function wantsDeviceLogin(options: LoginOptions): boolean {
+  return options.apiKey === undefined && !options.apiKeyStdin && process.env.OMNI_CLI_API_KEY === undefined;
+}
+
+/**
+ * `auth login` without a key (#1461): the server's device flow for client omni-cli. The
+ * minted key is saved into the targeted server entry; the key itself is never printed.
+ * Denied, expired, Ctrl+C or a malformed reply exits with nothing saved.
+ */
+async function deviceLogin(options: LoginOptions): Promise<void> {
+  const config = loadConfig();
+  const serverName = getTargetServerName();
+  if (options.apiUrl) config.apiUrl = options.apiUrl;
+  const apiUrl = (config.apiUrl ?? 'http://localhost:8882').replace(/\/+$/, '');
+  const result = await runDeviceLoginWithInterrupt({
+    url: apiUrl,
+    onPrompt: (prompt) => {
+      for (const line of devicePromptLines(prompt)) output.info(line);
+    },
+  });
+  if (result.status !== 'approved') {
+    // Exit 2 as every other login refusal does (130 for Ctrl+C), naming the key inputs.
+    const failure = deviceLoginFailure(result);
+    output.error(
+      `${failure.message} To log in with a key instead, provide one via --api-key-stdin, OMNI_CLI_API_KEY, or --api-key.`,
+      undefined,
+      failure.exitCode === 130 ? 130 : 2,
+    );
+  }
+  config.apiUrl = apiUrl;
+  config.apiKey = result.key.apiKey;
+  saveConfig(config);
+  output.success(`Logged in successfully (server: ${serverName})`, {
+    server: serverName,
+    keySource: 'device',
+    apiUrl,
+    keyId: result.key.keyId,
+    scopes: result.key.scopes,
+    keyExpiresAt: result.key.keyExpiresAt,
+    configPath: getConfigPath(),
+  });
 }
 
 /** Validate an API key against the API. Returns true if valid. */
@@ -372,6 +417,11 @@ one, or the entry named by the global flag:
 Or supply OMNI_CLI_API_KEY securely through the environment and run:
   omni auth login --server prod
 
+With no key at all (no flag, no stdin, no OMNI_CLI_API_KEY), login signs this
+CLI in by device code: it prints a code and a link, waits for the owner to
+approve it (the link, omni approve <code> on the server, or WhatsApp), and saves
+the new device key into the targeted server entry. Ctrl+C cancels; nothing is saved.
+
 Explicit input flags override OMNI_CLI_API_KEY; do not combine the two login
 input flags. Prefer a secret-manager pipe or protected file over pasting a key
 into shell history or chat. The legacy key flag remains supported. OMNI_API_KEY
@@ -380,6 +430,7 @@ to 8 KB including the optional trailing LF/CRLF. Successful login reports keySou
 `,
     )
     .action(async (options: LoginOptions) => {
+      if (wantsDeviceLogin(options)) return deviceLogin(options);
       let credential: LoginCredential;
       try {
         credential = await readLoginApiKey(options);
