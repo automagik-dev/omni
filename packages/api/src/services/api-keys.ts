@@ -627,10 +627,11 @@ export class ApiKeyService {
   }
 
   /**
-   * List all API keys (without revealing the actual keys)
+   * List all API keys (without revealing the actual keys), newest first with an ID tie-breaker,
+   * so a key made just now is on the first page of `GET /keys` and paging is stable.
    */
   async list(): Promise<ApiKey[]> {
-    return this.db.select().from(apiKeys).orderBy(apiKeys.createdAt);
+    return this.db.select().from(apiKeys).orderBy(desc(apiKeys.createdAt), desc(apiKeys.id));
   }
 
   /**

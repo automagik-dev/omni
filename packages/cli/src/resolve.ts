@@ -257,6 +257,29 @@ export async function resolvePersonId(input: string): Promise<string> {
   output.error(`No person found matching "${input}"`);
 }
 
+/** `GET /keys` serves at most this many keys a page. */
+const KEY_PAGE_SIZE = 100;
+
+/**
+ * Every API key, page by page, so a prefix or a name is matched against all of them.
+ * A short page is the last one. A page with no key not already seen also ends the walk:
+ * a key made mid-walk shifts later pages by one, and an API that ignores `offset` repeats page 1.
+ */
+async function listAllKeys(): Promise<{ id: string; name: string }[]> {
+  const client = getClient();
+  const all: { id: string; name: string }[] = [];
+  const seen = new Set<string>();
+  for (let offset = 0; ; offset += KEY_PAGE_SIZE) {
+    const { items } = await client.keys.list({ limit: KEY_PAGE_SIZE, offset });
+    const fresh = items.filter((k) => !seen.has(k.id));
+    for (const key of fresh) {
+      seen.add(key.id);
+      all.push(key);
+    }
+    if (items.length < KEY_PAGE_SIZE || fresh.length === 0) return all;
+  }
+}
+
 /**
  * Resolve an API key identifier to a UUID.
  *
@@ -270,9 +293,8 @@ export async function resolvePersonId(input: string): Promise<string> {
 export async function resolveKeyId(input: string): Promise<string> {
   if (UUID_RE.test(input)) return input;
 
-  const client = getClient();
-  const result = await client.keys.list({ limit: 100 });
-  const keys = result.items;
+  // Oldest first, as the API used to list them: a duplicate exact name still resolves to the oldest.
+  const keys = (await listAllKeys()).reverse();
 
   // Partial UUID prefix (at least 2 chars, looks hex-ish)
   if (/^[0-9a-f]{2,}$/i.test(input)) {

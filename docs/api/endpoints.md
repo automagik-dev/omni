@@ -678,7 +678,7 @@ Requires `keys:read` or `keys:write` scope.
 
 ```yaml
 GET    /api/v2/keys                           # List API keys
-  Query: limit?, cursor?
+  Query: status?, limit? (1-100, default 50), offset? — newest first
 
 GET    /api/v2/keys/:id                       # Get key details
 
