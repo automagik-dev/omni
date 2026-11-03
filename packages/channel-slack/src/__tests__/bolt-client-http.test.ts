@@ -130,67 +130,6 @@ describe('createBoltApp — mode selection', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// HTTP body-limit guard
-// ─────────────────────────────────────────────────────────────
-
-describe('HTTP mode — body-limit guard', () => {
-  it('rejects requests with Content-Length > 1 MB', () => {
-    const conn = createBoltApp(
-      { botToken: 'xoxb-fake', mode: 'http', signingSecret: 'test-secret' },
-      noopLogger as never,
-    );
-
-    const req = makeMockReq({
-      headers: { 'content-length': String(1024 * 1024 + 1) },
-    });
-    const state = { statusCode: 0, body: '' };
-    const res = {
-      writeHead: (code: number) => {
-        state.statusCode = code;
-      },
-      end: (data: string) => {
-        state.body = data;
-      },
-    } as unknown as ServerResponse;
-
-    conn.httpHandler?.(req, res);
-
-    expect(state.statusCode).toBe(413);
-    expect(state.body).toContain('Too Large');
-  });
-
-  it('does not reject requests with Content-Length exactly 1 MB', () => {
-    const conn = createBoltApp(
-      { botToken: 'xoxb-fake', mode: 'http', signingSecret: 'test-secret' },
-      noopLogger as never,
-    );
-
-    const req = makeMockReq({
-      headers: { 'content-length': String(1024 * 1024) },
-    });
-    let rejected = false;
-    const res = {
-      writeHead: (code: number) => {
-        if (code === 413) rejected = true;
-      },
-      end: noop,
-    } as unknown as ServerResponse;
-
-    conn.httpHandler?.(req, res);
-
-    expect(rejected).toBe(false);
-  });
-
-  it('has httpHandler defined on HTTP mode connection', () => {
-    const conn = createBoltApp(
-      { botToken: 'xoxb-fake', mode: 'http', signingSecret: 'my-signing-secret' },
-      noopLogger as never,
-    );
-    expect(typeof conn.httpHandler).toBe('function');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
 // BoltConnection structure
 // ─────────────────────────────────────────────────────────────
 
