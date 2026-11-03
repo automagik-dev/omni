@@ -3,7 +3,7 @@
 
 .PHONY: help install dev dev-api dev-services dev-stop build clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions marketplace-check \
+        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions marketplace-check skill-cli-check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -303,8 +303,13 @@ marketplace-check:
 	bun scripts/marketplace.ts check
 	bun scripts/plugin-compat.ts
 
+# Static plugin command/flag drift gate. SDK dist is needed only to load CLI command metadata.
+skill-cli-check: _build-dist
+	bun test scripts/check-skill-cli.test.ts
+	bun scripts/check-skill-cli.ts
+
 # Run all quality checks
-check: typecheck lint dead-code verify-migrations verify-versions marketplace-check test
+check: typecheck lint dead-code verify-migrations verify-versions marketplace-check skill-cli-check test
 	@echo ""
 	@echo "All checks passed!"
 

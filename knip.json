@@ -4,6 +4,8 @@
     ".": {
       "entry": [
         "scripts/test-messaging.ts",
+        "scripts/check-skill-cli.test.ts",
+        "scripts/check-skill-cli.ts",
         "scripts/kill-stale-test-daemons.ts",
         "scripts/pg-gate.ts",
         "scripts/pg-gate-report.test.ts",

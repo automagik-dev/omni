@@ -306,6 +306,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Plugin skill CLI drift
+        run: make skill-cli-check
+
       - name: Lint
         run: bunx biome check .
 
