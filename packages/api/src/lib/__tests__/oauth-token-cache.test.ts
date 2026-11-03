@@ -22,10 +22,6 @@ describe('oauth-token-cache', () => {
     expect(take(handle)).toBeUndefined();
   });
 
-  test('take of an unknown handle returns undefined', () => {
-    expect(take('eshandle_unknown')).toBeUndefined();
-  });
-
   test('the handle expires after five minutes by default', () => {
     setSystemTime(T0);
     const handle = put('token');

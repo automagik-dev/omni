@@ -194,19 +194,6 @@ describe('list_spaces', () => {
     expect((error as Error).message).not.toContain(TOKEN);
   });
 
-  test('401 says the token is invalid or expired and never echoes ClickUp text', async () => {
-    const error = await runError(
-      'list_spaces',
-      { teamId: '123' },
-      errorResponse({ err: 'provider raw detail that must not leak', ECODE: 'OAUTH_017' }, 401),
-    );
-    expect(error).toBeInstanceOf(ClickUpApiError);
-    expect((error as ClickUpApiError).status).toBe(401);
-    expect((error as Error).message).toContain('invalid or expired');
-    expect((error as Error).message).not.toContain(TOKEN);
-    expect((error as Error).message).not.toContain('provider raw detail');
-  });
-
   test('404 names the team id as wrong or nonexistent in that scope', async () => {
     const error = await runError(
       'list_spaces',
@@ -245,14 +232,6 @@ describe('list_folders', () => {
   test('returns an empty list unchanged', async () => {
     const { result } = await run('list_folders', { spaceId: '789' }, () => jsonResponse({ folders: [] }));
     expect(result).toEqual({ folders: [] });
-  });
-
-  test('401 says the token is invalid or expired', async () => {
-    const error = await runError('list_folders', { spaceId: '789' }, errorResponse({ err: 'nope' }, 401));
-    expect(error).toBeInstanceOf(ClickUpApiError);
-    expect((error as ClickUpApiError).status).toBe(401);
-    expect((error as Error).message).toContain('invalid or expired');
-    expect((error as Error).message).not.toContain(TOKEN);
   });
 
   test('404 names the space id', async () => {
@@ -310,14 +289,6 @@ describe('list_lists', () => {
     expect(result).toEqual({ lists: [] });
   });
 
-  test('401 says the token is invalid or expired', async () => {
-    const error = await runError('list_lists', { spaceId: '789' }, errorResponse({ err: 'nope' }, 401));
-    expect(error).toBeInstanceOf(ClickUpApiError);
-    expect((error as ClickUpApiError).status).toBe(401);
-    expect((error as Error).message).toContain('invalid or expired');
-    expect((error as Error).message).not.toContain(TOKEN);
-  });
-
   test('404 on the folder path names the folder id', async () => {
     const error = await runError(
       'list_lists',
@@ -335,5 +306,20 @@ describe('list_lists', () => {
     expect(error).toBeInstanceOf(ClickUpApiError);
     expect((error as ClickUpApiError).status).toBe(404);
     expect((error as Error).message).toContain('space 999');
+  });
+});
+
+describe('discovery authentication failures', () => {
+  test.each([
+    ['list_spaces', { teamId: '123' }, { err: 'provider raw detail that must not leak', ECODE: 'OAUTH_017' }],
+    ['list_folders', { spaceId: '789' }, { err: 'nope' }],
+    ['list_lists', { spaceId: '789' }, { err: 'nope' }],
+  ])('%s: 401 says the token is invalid or expired', async (key, input, response) => {
+    const error = await runError(key, input, errorResponse(response, 401));
+    expect(error).toBeInstanceOf(ClickUpApiError);
+    expect((error as ClickUpApiError).status).toBe(401);
+    expect((error as Error).message).toContain('invalid or expired');
+    expect((error as Error).message).not.toContain(TOKEN);
+    expect((error as Error).message).not.toContain('provider raw detail');
   });
 });

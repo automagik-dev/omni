@@ -286,12 +286,13 @@ test('the picker draws each chat as the chat list does: picture or initials, nam
       { id: 'c1', name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at, avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: '5511988887777@s.whatsapp.net', added: true },
       { id: 'c2', name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at, avatarUrl: null, number: null, jid: '120363000000000000@g.us', added: false },
       { id: 'c3', name: null, initials: 'GR', kind: 'group', preview: '', at, avatarUrl: null, number: null, jid: '120363000000000001@g.us', added: false },
+      { id: 'c7', name: null, kind: 'direct', initials: 'CH', number: null, added: false },
     ] }
     : {})
   byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
   view.draw()
   await settle()
-  const [dm, group, nameless] = all(view.draw(), 'ot-picker-chat')
+  const [dm, group, nameless, namelessDirect] = all(view.draw(), 'ot-picker-chat')
   // The picture, loaded as the Channels page loads it, over the initials it falls back to.
   const picture = one(dm, 'oc-ava-img')
   assert.deepEqual([picture.props.src, picture.props.referrerPolicy, text(one(dm, 'oc-ava-face'))], ['https://pps.whatsapp.net/marina.jpg', 'no-referrer', 'MA'])
@@ -303,6 +304,7 @@ test('the picker draws each chat as the chat list does: picture or initials, nam
   assert.deepEqual([one(group, 'ot-picker-number'), text(one(group, 'ot-picker-preview'))], [undefined, 'You: fotos no drive'])
   // A group with no name is called one.
   assert.deepEqual([text(one(nameless, 'ot-picker-name')), one(nameless, 'ot-picker-preview')], ['Group', undefined])
+  assert.deepEqual([namelessDirect, nameless].map(row => text(one(row, 'ot-picker-name'))), ['Chat', 'Group'])
   // Each button is named by its chat's name, number and state, not by the initials or preview.
   assert.deepEqual([dm, group, nameless].map(row => row.props['aria-label']), ['Marina, +5511988887777, Added', 'Obra', 'Group'])
 })
@@ -766,16 +768,6 @@ test('a thread\'s row is named by its chat, never a raw id: its number or name f
   assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: null, kind: 'direct' })), ['Chat', 'Chat', 'Remove Chat'])
   assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: null, kind: 'group' })), ['Group', 'Group', 'Remove Group'])
   assert.match(one(draw(THREAD(1, CHANNEL_A, { title: null, kind: 'group' })), 'bt-thread').props['aria-label'], /^Group/)
-})
-
-test('a chat the picker lists with no name is "Chat", or "Group" for a group', async (t) => {
-  linked()
-  const { view } = tree(t, { roster: hooked() })
-  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c7', name: null, kind: 'direct', initials: 'CH', number: null, added: false }, { id: 'c8', name: null, kind: 'group', initials: 'GR', number: null, added: false }] } : {})
-  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
-  view.draw()
-  await settle()
-  assert.deepEqual(all(view.draw(), 'ot-picker-name').map(text), ['Chat', 'Group'])
 })
 
 test('a thread row\'s menu and remove button sit after its title, never over it: the title ends in an ellipsis before them, and no phone button is left', () => {

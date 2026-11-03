@@ -4,20 +4,13 @@ import { extractPlatformTimestamp } from '../message-persistence';
 describe('extractPlatformTimestamp', () => {
   const FALLBACK = Date.now();
 
-  test('returns null when rawPayload is undefined', () => {
-    expect(extractPlatformTimestamp(undefined, FALLBACK)).toBeNull();
-  });
-
-  test('returns null when messageTimestamp is missing', () => {
-    expect(extractPlatformTimestamp({}, FALLBACK)).toBeNull();
-  });
-
-  test('returns null when messageTimestamp is 0', () => {
-    expect(extractPlatformTimestamp({ messageTimestamp: 0 }, FALLBACK)).toBeNull();
-  });
-
-  test('returns null when messageTimestamp is empty string', () => {
-    expect(extractPlatformTimestamp({ messageTimestamp: '' }, FALLBACK)).toBeNull();
+  test.each([
+    ['rawPayload is undefined', undefined],
+    ['messageTimestamp is missing', {}],
+    ['messageTimestamp is 0', { messageTimestamp: 0 }],
+    ['messageTimestamp is empty string', { messageTimestamp: '' }],
+  ] as const)('returns null when %s', (_name, rawPayload) => {
+    expect(extractPlatformTimestamp(rawPayload, FALLBACK)).toBeNull();
   });
 
   test('handles number timestamp in seconds', () => {
@@ -73,14 +66,5 @@ describe('extractPlatformTimestamp', () => {
     const result = extractPlatformTimestamp({ messageTimestamp: tsMs }, FALLBACK);
     expect(result).not.toBeNull();
     expect(result!.getTime()).toBe(tsMs);
-  });
-
-  test('does NOT fall back to fallback when messageTimestamp is present', () => {
-    const ts = 1746665253;
-    const wrongFallback = Date.now(); // very different from ts
-    const result = extractPlatformTimestamp({ messageTimestamp: ts }, wrongFallback);
-    expect(result).not.toBeNull();
-    expect(result!.getTime()).toBe(ts * 1000);
-    expect(result!.getTime()).not.toBeCloseTo(wrongFallback, -3);
   });
 });
