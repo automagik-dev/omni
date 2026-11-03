@@ -120,6 +120,7 @@ const revokeKeySchema = z.object({
 const listQuerySchema = z.object({
   status: z.enum(['active', 'revoked', 'expired']).optional().describe('Filter by status'),
   limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'),
+  offset: z.coerce.number().int().min(0).default(0).describe('Keys to skip (newest first)'),
 });
 
 const auditQuerySchema = z.object({
@@ -875,10 +876,12 @@ keysRoutes.post('/children/:id/revoke', zValidator('json', RevokeChildKeyBodySch
 });
 
 /**
- * GET /keys - List all API keys
+ * GET /keys - List all API keys, newest first
+ *
+ * `offset` pages past `limit` (max 100), so every key can be reached.
  */
 keysRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
-  const { status, limit } = c.req.valid('query');
+  const { status, limit, offset } = c.req.valid('query');
   const services = c.get('services');
 
   let items = await services.apiKeys.list();
@@ -887,7 +890,7 @@ keysRoutes.get('/', zValidator('query', listQuerySchema), async (c) => {
     items = items.filter((k) => k.status === status);
   }
 
-  items = items.slice(0, limit);
+  items = items.slice(offset, offset + limit);
 
   return c.json({
     items,
