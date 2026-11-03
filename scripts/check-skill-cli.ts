@@ -147,12 +147,20 @@ function tokenize(text: string): Token[] {
   return tokens;
 }
 
+interface ScanCounts {
+  invocations: number;
+}
 /** Validate each command in an excerpt; flag values and positional arguments are not commands. */
-export function checkExcerpt(text: string, tree: CommandTree): { offset: number; message: string }[] {
+export function checkExcerpt(
+  text: string,
+  tree: CommandTree,
+  counts?: ScanCounts,
+): { offset: number; message: string }[] {
   const tokens = tokenize(text);
   const errors: { offset: number; message: string }[] = [];
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i]?.value !== 'omni') continue;
+    if (counts) counts.invocations++;
     let command = tree;
     const ancestors = [tree];
     let positional = false;
@@ -196,7 +204,11 @@ export function checkExcerpt(text: string, tree: CommandTree): { offset: number;
 }
 
 /** Check executable examples in fenced blocks and inline code; retain source offsets for errors. */
-export function checkMarkdown(text: string, tree: CommandTree): { line: number; message: string }[] {
+export function checkMarkdown(
+  text: string,
+  tree: CommandTree,
+  counts?: ScanCounts,
+): { line: number; message: string }[] {
   const errors: { line: number; message: string }[] = [];
   const code = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*$|`([^`\n]+)`/gm;
   let uncovered = text;
@@ -209,19 +221,24 @@ export function checkMarkdown(text: string, tree: CommandTree): { line: number; 
       uncovered.slice(match.index + match[0].length);
     const language = match[2]?.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
     if (match[1] && !['', 'sh', 'bash', 'shell', 'zsh', 'console'].includes(language)) continue;
-    for (const error of checkExcerpt(excerpt, tree)) {
+    for (const error of checkExcerpt(excerpt, tree, counts)) {
       errors.push({ line: text.slice(0, start + error.offset).split('\n').length, message: error.message });
     }
   }
   for (const match of uncovered.matchAll(/^[ \t]*(?:\$ )?omni(?:[ \t]+[^\n]*)?$/gm)) {
-    for (const error of checkExcerpt(match[0], tree)) {
+    for (const error of checkExcerpt(match[0], tree, counts)) {
       errors.push({ line: text.slice(0, match.index + error.offset).split('\n').length, message: error.message });
     }
   }
   return errors;
 }
 /** Check literal shell commands and argv arrays in plugin hooks/scripts, not log messages. */
-export function checkScript(file: string, text: string, tree: CommandTree): { line: number; message: string }[] {
+export function checkScript(
+  file: string,
+  text: string,
+  tree: CommandTree,
+  counts?: ScanCounts,
+): { line: number; message: string }[] {
   const errors: { line: number; message: string }[] = [];
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   function visit(node: ts.Node): void {
@@ -243,7 +260,7 @@ export function checkScript(file: string, text: string, tree: CommandTree): { li
       }
       if (excerpt) {
         const line = ast.getLineAndCharacterOfPosition(node.getStart()).line + 1;
-        errors.push(...checkExcerpt(excerpt, tree).map((error) => ({ line, message: error.message })));
+        errors.push(...checkExcerpt(excerpt, tree, counts).map((error) => ({ line, message: error.message })));
       }
     }
     ts.forEachChild(node, visit);
@@ -252,7 +269,7 @@ export function checkScript(file: string, text: string, tree: CommandTree): { li
   if (file.endsWith('.json')) {
     const visitJson = (value: unknown): void => {
       if (typeof value === 'string') {
-        errors.push(...checkExcerpt(value, tree).map((error) => ({ line: 1, message: error.message })));
+        errors.push(...checkExcerpt(value, tree, counts).map((error) => ({ line: 1, message: error.message })));
       } else if (value && typeof value === 'object') Object.values(value).forEach(visitJson);
     };
     visitJson(JSON.parse(text));
@@ -265,31 +282,41 @@ function files(dir: string): string[] {
     return entry.isDirectory() ? files(path) : [path];
   });
 }
-export function scanPluginFiles(dir: string, tree: CommandTree): { count: number; errors: string[] } {
+export function scanPluginFiles(
+  dir: string,
+  tree: CommandTree,
+): { count: number; invocations: number; errors: string[] } {
   let count = 0;
+  let invocations = 0;
   const errors: string[] = [];
   for (const file of files(dir)) {
     const text = readFileSync(file, 'utf8');
+    const counts = { invocations: 0 };
     const problems = file.endsWith('.md')
-      ? checkMarkdown(text, tree)
+      ? checkMarkdown(text, tree, counts)
       : file.endsWith('.sh')
-        ? checkExcerpt(text, tree).map((error) => ({
+        ? checkExcerpt(text, tree, counts).map((error) => ({
             line: text.slice(0, error.offset).split('\n').length,
             message: error.message,
           }))
-        : checkScript(file, text, tree);
+        : checkScript(file, text, tree, counts);
     count++;
+    invocations += counts.invocations;
     errors.push(...problems.map((p) => `${relative(root, file)}:${p.line}: ${p.message}`));
   }
   if (count === 0) errors.push('No plugin files scanned');
   if (tree.commands.length === 0) errors.push('No CLI commands scanned');
-  return { count, errors };
+  if (invocations === 0) errors.push('No omni commands checked');
+  return { count, invocations, errors };
 }
 async function main(): Promise<void> {
   const tree = await loadCommandTree();
-  const { count, errors } = scanPluginFiles(join(root, 'plugins/omni'), tree);
+  const { count, invocations, errors } = scanPluginFiles(join(root, 'plugins/omni'), tree);
   for (const error of errors) console.error(error);
   if (errors.length) process.exitCode = 1;
-  else console.log(`Skill CLI drift check: ${count} files match ${tree.commands.length} registered command groups`);
+  else
+    console.log(
+      `Skill CLI drift check: ${count} files, ${invocations} invocations match ${tree.commands.length} registered command groups`,
+    );
 }
 if (import.meta.main) await main();

@@ -86,6 +86,40 @@ describe('skill gate edge cases (#1461)', () => {
     }
   });
 
+  it('fails when files exist but zero omni invocations resolve', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'omni-skill-no-invocations-'));
+    try {
+      writeFileSync(join(dir, 'SKILL.md'), ['# Omni guide', '```bash', 'echo hello', '```'].join('\n'));
+      writeFileSync(join(dir, 'hooks.json'), '{"hooks":{}}');
+      expect(scanPluginFiles(dir, tree).errors).toContain('No omni commands checked');
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('counts invocations once, excluding flag payloads and subcommand levels', () => {
+    const counts = { invocations: 0 };
+    checkExcerpt('omni send --text "omni fictional --stale"; omni events consumers inspect audit-log', tree, counts);
+    expect(counts.invocations).toBe(2);
+  });
+
+  it.each([
+    ['SKILL.md', '`omni status`\n```bash\nomni server list\n```', 2],
+    ['SKILL.md', 'omni status', 1],
+    ['SKILL.md', '```text\nomni status\n```', 0],
+    ['hook.json', '{"command":"omni status"}', 1],
+    ['runner.js', 'exec(omniPath, ["status"]);', 1],
+    ['runner.sh', 'omni status; omni server list', 2],
+  ])('sums resolved invocations from %s: %s', (name, content, expected) => {
+    const dir = mkdtempSync(join(tmpdir(), 'omni-skill-counts-'));
+    try {
+      writeFileSync(join(dir, name), content);
+      expect(scanPluginFiles(dir, tree).invocations).toBe(expected);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
   it('fails when zero CLI commands are scanned', () => {
     const dir = mkdtempSync(join(tmpdir(), 'omni-skill-no-commands-'));
     try {
