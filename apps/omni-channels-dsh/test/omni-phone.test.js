@@ -603,3 +603,52 @@ test('a pending adoption retry never opens the phone in a different mounted Sess
   assert.deepEqual(stand.opened, [])
   assert.equal(timers.some(timer => timer.on && timer.ms === 50), false)
 })
+
+
+test('the dock catch hides raw runtime text and logs the diagnostic while adoption is pending', async (t) => {
+  reset()
+  const stand = installed(t)
+  const thread = THREAD(1)
+  one(threadRow(thread, { openSession: () => {} }, hooked([thread])).draw(), 'bt-thread').props.onClick()
+  stand.put('s1')
+  const dock = dockOf('s1', hooked([thread]))
+  t.after(() => dock.unmount())
+  dock.draw()
+  const failure = new Error('PRIVATE-DOCK-ADOPTION-ERROR')
+  stand.right.actionsFor = () => { throw failure }
+  await nextPhoneWait()
+  assert.equal(text(one(dock.draw(), 'op-dock-problem')), 'Open a conversation first; the phone pane opens beside it.')
+  assert.equal(text(dock.draw()).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not open the phone pane:', failure]])
+  assert.equal(ui.hasPhoneIntent('t1'), false)
+  assert.deepEqual(stand.opened, [])
+  assert.equal(timers.some(timer => timer.on && timer.ms === 50), false)
+})
+
+for (const [label, actionsFor] of [['missing', undefined], ['not callable', {}]]) {
+  test(`openPhone falls back to openTab when actionsFor is ${label}`, (t) => {
+    reset()
+    const stand = installed(t)
+    stand.right.actionsFor = actionsFor
+    assert.equal(ui.openPhone(THREAD(1)), null)
+    assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
+    assert.deepEqual(logged, [])
+  })
+
+  test(`the dock falls back to openTab when actionsFor is ${label}`, (t) => {
+    reset()
+    const stand = installed(t)
+    const thread = THREAD(1)
+    one(threadRow(thread, { openSession: () => {} }, hooked([thread])).draw(), 'bt-thread').props.onClick()
+    stand.put('s1')
+    stand.adopt('s1')
+    stand.right.actionsFor = actionsFor
+    const dock = dockOf('s1', hooked([thread]))
+    t.after(() => dock.unmount())
+    assert.equal(dock.draw(), null)
+    assert.deepEqual(stand.opened, [['omni-phone', { params: { threadId: 't1', chatId: CHAT_1 } }]])
+    assert.equal(ui.hasPhoneIntent('t1'), false)
+    assert.equal(timers.some(timer => timer.on && timer.ms === 50), false)
+    assert.deepEqual(logged, [])
+  })
+}

@@ -15269,7 +15269,7 @@ function openPhone(thread) {
   if (!right) return t("The phone pane needs DSH's right column.");
   try {
     const snapshot = right.mounted?.getSnapshot?.();
-    if (snapshot === void 0 || right.actionsFor?.(snapshot) === void 0) return phoneUnavailable();
+    if (snapshot === void 0 || typeof right.actionsFor === "function" && right.actionsFor(snapshot) === void 0) return phoneUnavailable();
     right.openTab(PHONE_KIND, { params: phoneParams(thread) });
     return null;
   } catch (error) {
@@ -15393,7 +15393,7 @@ function PhoneDock({ sessionId, useRoster }) {
       try {
         const snapshot = right?.mounted?.getSnapshot?.();
         if (snapshot !== thread.sessionId) return;
-        if (right.actionsFor?.(snapshot) === void 0 && waited < PHONE_WAIT_MS) {
+        if (typeof right.actionsFor === "function" && right.actionsFor(snapshot) === void 0 && waited < PHONE_WAIT_MS) {
           waited += PHONE_RETRY_MS;
           timer = setTimeout(attempt, PHONE_RETRY_MS);
           return;
@@ -16078,12 +16078,18 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     }
     setConfirming(false);
     setProblem(null);
-    call("omni-thread-remove", { threadId: thread.id }).catch((error) => setProblem(error?.message ?? String(error)));
+    call("omni-thread-remove", { threadId: thread.id }).catch((error) => {
+      console.warn("Could not remove the chat:", error);
+      setProblem(t("Could not remove this chat. Try again."));
+    });
   };
   const choose = (choice) => {
     setMenu(false);
     setProblem(null);
-    call("omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }).catch((error) => setProblem(error?.message ?? String(error)));
+    call("omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }).catch((error) => {
+      console.warn("Could not change the chat settings:", error);
+      setProblem(t("Could not change this chat's settings. Try again."));
+    });
   };
   const onMenuKey = (event) => {
     if (event.key !== "Escape") return;
@@ -17289,6 +17295,8 @@ var STRINGS = {
   "Other chats": "其他聊天",
   "Adding…": "正在添加…",
   "The chat was not added.": "这个聊天没有添加。",
+  "Could not remove this chat. Try again.": "无法移除这个聊天。请重试。",
+  "Could not change this chat's settings. Try again.": "无法更改这个聊天的设置。请重试。",
   "Remove {name} from the sidebar? Click again": "要从侧边栏移除 {name} 吗？再点一次",
   // Why a chat cannot be added, or a thread does not work (threads.js, thread-keys.js, omni-tree.js).
   "Adding a chat needs a newer Bot team.": "添加聊天需要更新的 Bot 团队。",

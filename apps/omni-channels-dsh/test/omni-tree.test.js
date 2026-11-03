@@ -16,6 +16,7 @@ import { omni } from './omni-client.js'
 // The tree's modules bundled as DSH bundles the client, with the stand-in React of
 // client-stand-in.js and a host stand-in for `call`: nothing leaves the test.
 const calls = []
+const logged = []
 let answer = () => ({})
 const fakeCall = async (endpoint, body) => {
   calls.push([endpoint, plain(body)])
@@ -39,7 +40,7 @@ const loadTree = () => bundleClient([
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
-], { globals: { URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
+], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
 const ui = await loadTree()
 
 test('only the Bot of kind omni carries the channel tree', () => {
@@ -505,12 +506,16 @@ test('removing a thread asks once more, then asks the host', async () => {
   remove.props.onClick()
   await settle()
   assert.deepEqual(calls, [['omni-thread-remove', { threadId: 't1' }]])
-  // A refusal says why on the row.
-  answer = () => new Error('The thread could not be removed: busy')
+  // A refusal shows a translated line; only the console gets the host diagnostic.
+  logged.length = 0
+  const failure = new Error('The thread could not be removed: busy')
+  answer = () => failure
   one(view.draw(), 'ot-thread-remove').props.onClick()
   one(view.draw(), 'ot-thread-remove').props.onClick()
   await settle()
-  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'The thread could not be removed: busy')
+  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'Could not remove this chat. Try again.')
+  assert.equal(text(view.draw()).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not remove the chat:', failure]])
 })
 
 test('a thread row marks, with a title, when its sends or any of its reactions go without asking, from the view; asking as by default, it has no mark', () => {
@@ -575,12 +580,16 @@ test('a thread row\'s menu sets the thread\'s own choice for its messages and it
   assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
   view.draw()
   assert.deepEqual([pointer.size, calls.length], [0, 2])
-  // The host's refusal (a host that only reads the team) says why on the row.
-  answer = () => new Error('This window shows the team but cannot change it.')
+  // The host's refusal stays in the console; the row offers a translated recovery message.
+  logged.length = 0
+  const failure = new Error('This window shows the team but cannot change it.')
+  answer = () => failure
   more().props.onClick()
   all(one(view.draw(), 'ot-thread-menu'), 'ot-thread-menu-item')[1].props.onClick()
   await settle()
-  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'This window shows the team but cannot change it.')
+  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'Could not change this chat\'s settings. Try again.')
+  assert.equal(text(view.draw()).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not change the chat settings:', failure]])
   // A thread with no choices of its own follows the default for both.
   assert.deepEqual(plain(ui.permissionMenuOf(THREAD(2))).map(group => group.items.filter(item => item.checked).map(item => item.value)), [[null], [null]])
   // It names the default it follows now: sends and any reaction allowed by the owner.
@@ -588,7 +597,7 @@ test('a thread row\'s menu sets the thread\'s own choice for its messages and it
 })
 
 test('the reasons the host gives a thread or the + have Chinese copy here', () => {
-  for (const reason of [NEEDS_NEWER_TEAM, NOT_LINKED, OTHER_OMNI, BEING_CUT, WAITING, ui.OMNI_OUTDATED]) assert.ok(Object.hasOwn(STRINGS, reason), reason)
+  for (const reason of [NEEDS_NEWER_TEAM, NOT_LINKED, OTHER_OMNI, BEING_CUT, WAITING, ui.OMNI_OUTDATED, 'Could not remove this chat. Try again.', "Could not change this chat's settings. Try again."]) assert.ok(Object.hasOwn(STRINGS, reason), reason)
 })
 
 // Before an Omni is linked, the tree is one quiet link into the Connect wizard.
