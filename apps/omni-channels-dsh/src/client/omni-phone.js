@@ -49,9 +49,12 @@ let phoneRight = null
 // row's click, the picker's pick). The Session's own dock takes it and opens the pane from
 // that render's effects: sidebarRight opens a tab on the Session the seat has adopted, and
 // adoption is minted with the render that brings the Session, not when the click asks. A
-// click while another Session is on screen therefore leaves the intent, never a timer; the
-// oldest goes when it grows past INTENTS_MAX, so clicking rows over and over cannot grow it.
+// click while another Session is on screen therefore leaves the intent; only its dock may
+// briefly retry while that Session's store is being adopted. The oldest intent goes when
+// it grows past INTENTS_MAX, so clicking rows over and over cannot grow it.
 const INTENTS_MAX = 8
+const PHONE_WAIT_MS = 500
+const PHONE_RETRY_MS = 50
 const intents = new Map()
 const noteIntent = (threadId) => {
   intents.delete(threadId)
@@ -101,15 +104,22 @@ export function installPhone(ctx, face) {
  * with its surface there. Returns null when it opened, else why not. It opens no Session.
  * Called when that surface is not there it changes nothing: requestPhone waits instead.
  */
+const phoneUnavailable = () => t('Open a conversation first; the phone pane opens beside it.')
+const phoneFailure = error => {
+  console.warn('Could not open the phone pane:', error)
+  return phoneUnavailable()
+}
+
 export function openPhone(thread) {
   const right = phoneRight
   if (!right) return t('The phone pane needs DSH\'s right column.')
-  if (typeof right.mounted?.getSnapshot === 'function' && right.mounted.getSnapshot() === undefined) return t('Open a conversation first; the phone pane opens beside it.')
   try {
+    const snapshot = right.mounted?.getSnapshot?.()
+    if (snapshot === undefined || right.actionsFor?.(snapshot) === undefined) return phoneUnavailable()
     right.openTab(PHONE_KIND, { params: phoneParams(thread) })
     return null
   } catch (error) {
-    return error?.message ?? String(error)
+    return phoneFailure(error)
   }
 }
 
@@ -215,9 +225,9 @@ export function PhoneTab({ useTabInfo, sessionId, useRoster }) {
 
 /**
  * In a thread's own Session: opens the pane its row asked for, from this render's effects.
- * That is where DSH has minted the Session's surface (sidebarRight's own rule: a command acts
- * on the arriving Session from that commit's effects), so no wait and no timer is needed. It
- * draws no control of its own; a pane that could not open says why, in place.
+ * A mounted Session can briefly have no adopted store, including just after adoption was
+ * released. Retry that gap only here, for at most PHONE_WAIT_MS; never call openTab until
+ * actionsFor is available. It draws no control; a pane that cannot open says why in place.
  */
 export function PhoneDock({ sessionId, useRoster }) {
   const thread = useRoster(roster => threadsIn(roster).find(item => item.sessionId === sessionId) ?? null)
@@ -225,13 +235,30 @@ export function PhoneDock({ sessionId, useRoster }) {
   const id = thread?.id ?? null
   useEffect(() => {
     if (id === null || !hasPhoneIntent(id)) return
-    // This dock renders inside the thread's Session, so DSH has minted and adopted that
-    // Session's store in the render that brought it: openTab lands here. Its committed surface
-    // may arrive one effect later (the seat's own), which openTab takes as it is.
-    const mounted = phoneRight?.mounted
-    if (typeof mounted?.getSnapshot === 'function' && mounted.getSnapshot() !== thread.sessionId) return
-    takePhoneIntent(id)
-    setProblem(openPhone(thread))
+    const right = phoneRight
+    let timer
+    let stopped = false
+    let waited = 0
+    const attempt = () => {
+      if (stopped || phoneRight !== right || !hasPhoneIntent(id)) return
+      try {
+        const snapshot = right?.mounted?.getSnapshot?.()
+        // Never open this thread's pane in a Session the owner navigated to during the wait.
+        if (snapshot !== thread.sessionId) return
+        if (right.actionsFor?.(snapshot) === undefined && waited < PHONE_WAIT_MS) {
+          waited += PHONE_RETRY_MS
+          timer = setTimeout(attempt, PHONE_RETRY_MS)
+          return
+        }
+        takePhoneIntent(id)
+        setProblem(openPhone(thread))
+      } catch (error) {
+        takePhoneIntent(id)
+        setProblem(phoneFailure(error))
+      }
+    }
+    attempt()
+    return () => { stopped = true; clearTimeout(timer) }
   }, [id])
   if (problem === null) return null
   return h('div', { className: 'op-dock' }, h('span', { className: 'op-dock-problem', role: 'alert' }, hostText(problem)))
