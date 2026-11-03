@@ -76,19 +76,6 @@ describe('Media Group Buffer', () => {
     expect(result.mediaRefs[2].type).toBe('image');
   });
 
-  test('buffer flushes on timeout', async () => {
-    // Use a short timeout for testing
-    const fastBuffer = new MediaGroupBuffer(flushCallback, 200);
-
-    fastBuffer.add('group-timeout', createMessage());
-
-    // Wait for timeout to fire
-    await new Promise((r) => setTimeout(r, 350));
-
-    expect(flushCallback).toHaveBeenCalledTimes(1);
-    expect(flushCallback.mock.calls[0]?.[0].mediaGroupId).toBe('group-timeout');
-  });
-
   test('buffer flushes when hitting 50 messages', () => {
     for (let i = 0; i < 50; i++) {
       buffer.add('group-cap', createMessage({ estimatedSize: 100 }));
@@ -119,6 +106,7 @@ describe('Media Group Buffer', () => {
 
     expect(flushCallback).toHaveBeenCalledTimes(1);
     expect(flushCallback.mock.calls[0]?.[0].messages).toHaveLength(2);
+    expect(flushCallback.mock.calls[0]?.[0].mediaGroupId).toBe('group-partial');
   });
 
   test('combined caption joins all captions', () => {

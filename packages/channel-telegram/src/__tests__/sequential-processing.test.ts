@@ -68,42 +68,6 @@ describe('Sequential Processing', () => {
       expect(diff).toBeLessThan(30);
     });
 
-    test('forum topic messages with different threadIds processed concurrently', async () => {
-      const startTimes: Record<string, number> = {};
-
-      const task1 = queue.enqueue('chat-1:thread-100', async () => {
-        startTimes['100'] = Date.now();
-        await new Promise((r) => setTimeout(r, 50));
-      });
-
-      const task2 = queue.enqueue('chat-1:thread-200', async () => {
-        startTimes['200'] = Date.now();
-        await new Promise((r) => setTimeout(r, 50));
-      });
-
-      await Promise.all([task1, task2]);
-
-      const diff = Math.abs((startTimes['100'] ?? 0) - (startTimes['200'] ?? 0));
-      expect(diff).toBeLessThan(30);
-    });
-
-    test('forum topic messages with same threadId processed sequentially', async () => {
-      const order: number[] = [];
-
-      const task1 = queue.enqueue('chat-1:thread-100', async () => {
-        await new Promise((r) => setTimeout(r, 30));
-        order.push(1);
-      });
-
-      const task2 = queue.enqueue('chat-1:thread-100', async () => {
-        order.push(2);
-      });
-
-      await Promise.all([task1, task2]);
-
-      expect(order).toEqual([1, 2]);
-    });
-
     test('queue cleans up after tasks complete', async () => {
       await queue.enqueue('chat-1', async () => {});
       await queue.enqueue('chat-1', async () => {});

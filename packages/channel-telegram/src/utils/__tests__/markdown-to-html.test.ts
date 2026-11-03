@@ -74,16 +74,12 @@ describe('markdownToTelegramHtml', () => {
   });
 
   // ---- Headers ----
-  test('converts # header to bold', () => {
-    expect(markdownToTelegramHtml('# Title')).toBe('<b>Title</b>');
-  });
-
-  test('converts ## header to bold', () => {
-    expect(markdownToTelegramHtml('## Subtitle')).toBe('<b>Subtitle</b>');
-  });
-
-  test('converts ###### header to bold', () => {
-    expect(markdownToTelegramHtml('###### Small')).toBe('<b>Small</b>');
+  test.each([
+    ['# Title', '<b>Title</b>'],
+    ['## Subtitle', '<b>Subtitle</b>'],
+    ['###### Small', '<b>Small</b>'],
+  ])('converts %s header to bold', (input, expected) => {
+    expect(markdownToTelegramHtml(input)).toBe(expected);
   });
 
   // ---- Nested formatting ----

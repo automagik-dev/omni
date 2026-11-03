@@ -62,26 +62,13 @@ describe('Caption Overflow — splitCaption()', () => {
     }
   });
 
-  test('caption of exactly 1024 chars — no split', () => {
-    const caption = 'c'.repeat(1024);
+  test.each([
+    ['exactly 1024 chars', 'c'.repeat(1024)],
+    ['<1024 chars', 'Hello world'],
+    ['empty', ''],
+  ])('caption of %s — no split', (_label, caption) => {
     const { first, overflow } = splitCaption(caption);
-
-    expect(first.length).toBe(1024);
-    expect(overflow).toHaveLength(0);
-  });
-
-  test('caption of <1024 chars — no split', () => {
-    const caption = 'Hello world';
-    const { first, overflow } = splitCaption(caption);
-
-    expect(first).toBe('Hello world');
-    expect(overflow).toHaveLength(0);
-  });
-
-  test('empty caption — no follow-up messages', () => {
-    const { first, overflow } = splitCaption('');
-
-    expect(first).toBe('');
+    expect(first).toBe(caption);
     expect(overflow).toHaveLength(0);
   });
 });
