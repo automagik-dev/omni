@@ -15,7 +15,7 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { chatOf } from './omni.js'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from './resume-hook.js'
-import { NOT_LINKED } from './thread-keys.js'
+import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
 
 // A thread's whole tool list; the guard below refuses any other tool in a thread's Session.
 export const THREAD_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'thread_ask_omni'])
@@ -29,6 +29,11 @@ const CHATS_LIMIT = 100
 export const AUTOMATION_THREADS_MAX = 50
 export const THREADS_FULL = `Not run: automations already made ${AUTOMATION_THREADS_MAX} chat threads. Remove some, or add this chat with +.`
 const ALREADY = 'This chat is a thread already.'
+// Exact local constants only: remote diagnostics with added words never become UI copy.
+const ADD_REASON_CODES = new Map([
+  [NOT_LINKED, 'not_linked'], [OTHER_OMNI, 'other_omni'], [NEEDS_NEWER_TEAM, 'needs_newer_team'], [ALREADY, 'already_thread'],
+  ['Could not reach Omni. Try again in a moment.', 'omni_unreachable'],
+])
 const TITLE_MAX = 80
 // How much of a chat's name its thread is told, and how much of it is kept from Omni.
 const NAME_MAX = 80
@@ -361,7 +366,7 @@ export function install(rt) {
   async function add(channelId, chatId, { madeBy } = {}) {
     if (!ready()) return { ok: false, reason: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
     const readOnly = rt.readOnly?.()
-    if (readOnly !== undefined) return { ok: false, reason: readOnly }
+    if (readOnly !== undefined) return { ok: false, reason: readOnly, reasonCode: 'read_only' }
     if (!ID.test(String(channelId)) || !ID.test(String(chatId))) return { ok: false, reason: 'Pick a chat of this channel.' }
     await rt.load()
     if (adding.has(chatId)) {
@@ -387,7 +392,7 @@ export function install(rt) {
     const link = rt.omniLink?.() ?? null
     const threadId = randomUUID()
     const minted = await rt.threadKeys.mint(threadId, chatId)
-    if (!minted.ok) return { ok: false, reason: minted.reason }
+    if (!minted.ok) return minted
     const name = chatNameOf(chat)
     const kind = chat.chatType === 'dm' ? 'direct' : 'group'
     const chatName = labelOf(name, kind)
@@ -593,7 +598,9 @@ export function install(rt) {
     'omni-thread-add': async (body) => {
       const payload = parse(AddPayload, body, 'Pick a chat of this channel')
       const result = await add(payload.channelId, payload.chatId)
-      return result.ok ? { ok: true, threadId: result.thread.id, sessionId: result.thread.sessionId } : result
+      if (result.ok) return { ok: true, threadId: result.thread.id, sessionId: result.thread.sessionId }
+      const reasonCode = result.reasonCode ?? ADD_REASON_CODES.get(result.reason)
+      return reasonCode === undefined ? result : { ...result, reasonCode }
     },
     'omni-thread-remove': async (body) => {
       const payload = parse(ThreadPayload, body, 'Pick a thread')
