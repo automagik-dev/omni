@@ -98,6 +98,10 @@ mock.module(Bun.resolveSync('@slack/bolt', CHANNEL_SLACK_DIR), () => {
   return { App: FakeApp, SocketModeReceiver: FakeSocketModeReceiver, HTTPReceiver: FakeHTTPReceiver };
 });
 
+// mock.module outlives this file in a single-process run. Preserve the real
+// exports (including ChatStreamer) for later importers and replace only WebClient.
+const realWebApi = await import(Bun.resolveSync('@slack/web-api', CHANNEL_SLACK_DIR));
+
 mock.module(Bun.resolveSync('@slack/web-api', CHANNEL_SLACK_DIR), () => {
   /**
    * `auth.test` is the only call this fake answers: it has no `users`, so the
@@ -126,7 +130,7 @@ mock.module(Bun.resolveSync('@slack/web-api', CHANNEL_SLACK_DIR), () => {
     }
   }
 
-  return { WebClient: FakeWebClient };
+  return { ...realWebApi, WebClient: FakeWebClient };
 });
 
 // Imported AFTER the mocks: the routes pull in @omni/channel-slack, which
