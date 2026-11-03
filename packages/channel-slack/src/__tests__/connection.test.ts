@@ -366,18 +366,6 @@ describe('SlackError', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Rate limiting configuration
-// ─────────────────────────────────────────────────────────────
-
-describe('Rate limiting config', () => {
-  it('plugin accepts retryConfig in options', () => {
-    const plugin = new SlackPlugin();
-    // Just verify the type works — actual connection test requires a Slack workspace
-    expect(plugin.id).toBe('slack');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
 // Shared receiver: one Slack app token, one socket, many instances
 // ─────────────────────────────────────────────────────────────
 

@@ -135,32 +135,16 @@ describe('Entity Select Menus', () => {
   });
 
   describe('Action Row Builders', () => {
-    test('buildUserSelectMenuRow wraps in action row', () => {
-      const row = buildUserSelectMenuRow({ customId: 'user-row' });
+    test.each([
+      ['buildUserSelectMenuRow', buildUserSelectMenuRow, 'user-row'],
+      ['buildRoleSelectMenuRow', buildRoleSelectMenuRow, 'role-row'],
+      ['buildChannelSelectMenuRow', buildChannelSelectMenuRow, 'channel-row'],
+      ['buildMentionableSelectMenuRow', buildMentionableSelectMenuRow, 'mentionable-row'],
+    ] as const)('%s wraps in action row', (_name, builder, customId) => {
+      const row = builder({ customId });
       const json = row.toJSON();
       expect(json.components).toHaveLength(1);
-      expect(json.components[0]?.custom_id).toBe('user-row');
-    });
-
-    test('buildRoleSelectMenuRow wraps in action row', () => {
-      const row = buildRoleSelectMenuRow({ customId: 'role-row' });
-      const json = row.toJSON();
-      expect(json.components).toHaveLength(1);
-      expect(json.components[0]?.custom_id).toBe('role-row');
-    });
-
-    test('buildChannelSelectMenuRow wraps in action row', () => {
-      const row = buildChannelSelectMenuRow({ customId: 'channel-row' });
-      const json = row.toJSON();
-      expect(json.components).toHaveLength(1);
-      expect(json.components[0]?.custom_id).toBe('channel-row');
-    });
-
-    test('buildMentionableSelectMenuRow wraps in action row', () => {
-      const row = buildMentionableSelectMenuRow({ customId: 'mentionable-row' });
-      const json = row.toJSON();
-      expect(json.components).toHaveLength(1);
-      expect(json.components[0]?.custom_id).toBe('mentionable-row');
+      expect(json.components[0]?.custom_id).toBe(customId);
     });
   });
 

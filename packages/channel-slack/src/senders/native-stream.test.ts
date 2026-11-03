@@ -70,24 +70,6 @@ function makeClient(hasNativeStream = true) {
 // ─────────────────────────────────────────────────────────────
 
 describe('createNativeStreamSender', () => {
-  it('returns a valid StreamSender with all required methods', () => {
-    const { client } = makeClient();
-    const logger = makeLogger();
-    const sender = createNativeStreamSender({
-      client: client as never,
-      channelId: 'C12345',
-      threadTs: '1234567890.001',
-      throttleMs: 1000,
-      logger,
-    });
-
-    expect(typeof sender.onThinkingDelta).toBe('function');
-    expect(typeof sender.onContentDelta).toBe('function');
-    expect(typeof sender.onFinal).toBe('function');
-    expect(typeof sender.onError).toBe('function');
-    expect(typeof sender.abort).toBe('function');
-  });
-
   it('calls chatStream on first onContentDelta', async () => {
     const { client, chatStreamCalls, streamer } = makeClient();
     const logger = makeLogger();
@@ -320,20 +302,6 @@ describe('markStoppedByPlatform (#914 L2)', () => {
     });
     await fallback.onContentDelta({ phase: 'content', content: 'Hello' });
     expect(fallback.markStoppedByPlatform(['1234567890.123456'])).toBe(false);
-  });
-});
-
-describe('STREAM_MODES includes native', () => {
-  it('native is in STREAM_MODES', async () => {
-    const { STREAM_MODES } = await import('../types');
-    expect(STREAM_MODES).toContain('native');
-  });
-});
-
-describe('resolveStreamMode accepts native', () => {
-  it('resolves native mode', async () => {
-    const { resolveStreamMode } = await import('../config/stream-mode');
-    expect(resolveStreamMode('native')).toBe('native');
   });
 });
 

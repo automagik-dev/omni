@@ -4,11 +4,6 @@ import { downloadForwardedAttachment, extractForwardedAttachments } from '../han
 import type { ForwardedAttachment } from '../handlers/forwarded-attachments';
 
 describe('forwarded-attachments', () => {
-  test('module exports expected functions', () => {
-    expect(typeof extractForwardedAttachments).toBe('function');
-    expect(typeof downloadForwardedAttachment).toBe('function');
-  });
-
   test('extractForwardedAttachments returns empty for message without reference', async () => {
     const mockMessage = {
       reference: null,

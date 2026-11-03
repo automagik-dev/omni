@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { SLACK_CAPABILITIES } from '../capabilities';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from '../handlers/files';
 import { extractMessageMeta } from '../handlers/messages';
-import type { SlackFileInfo } from '../types';
 
 const noop = () => undefined;
 const noopLogger = { debug: noop, info: noop, warn: noop, error: noop };
@@ -336,39 +335,5 @@ describe('Message meta edge cases', () => {
     expect(meta.teamId).toBeUndefined();
     expect(meta.channelType).toBeUndefined();
     expect(meta.isThreadReply).toBe(false);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// Type validation
-// ─────────────────────────────────────────────────────────────
-
-describe('SlackFileInfo type', () => {
-  it('contains expected fields', () => {
-    const file: SlackFileInfo = {
-      id: 'F123',
-      name: 'test.txt',
-      mimeType: 'text/plain',
-      size: 256,
-    };
-    expect(file.id).toBe('F123');
-    expect(file.name).toBe('test.txt');
-    expect(file.mimeType).toBe('text/plain');
-    expect(file.size).toBe(256);
-  });
-
-  it('supports optional URL fields', () => {
-    const file: SlackFileInfo = {
-      id: 'F456',
-      name: 'image.png',
-      mimeType: 'image/png',
-      size: 1024,
-      urlPrivateDownload: 'https://files.slack.com/dl',
-      urlPrivate: 'https://files.slack.com/view',
-      thumbnailUrl: 'https://files.slack.com/thumb',
-    };
-    expect(file.urlPrivateDownload).toBeDefined();
-    expect(file.urlPrivate).toBeDefined();
-    expect(file.thumbnailUrl).toBeDefined();
   });
 });

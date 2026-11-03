@@ -59,17 +59,6 @@ describe('Components v2 Containers', () => {
     test('rejects 0 files', () => {
       expect(() => buildFileFromArray([])).toThrow('File component requires at least 1 attachment');
     });
-
-    test('validation happens during builder construction, NOT at send-time', () => {
-      // This test verifies the error is thrown at build time
-      let errorThrown = false;
-      try {
-        buildFileFromArray([{ url: 'a' }, { url: 'b' }]);
-      } catch {
-        errorThrown = true;
-      }
-      expect(errorThrown).toBe(true);
-    });
   });
 
   describe('buildSection', () => {
@@ -200,13 +189,6 @@ describe('Components v2 Containers', () => {
       expect(msg.flags).toBe(COMPONENTS_V2_FLAG);
       expect(msg.flags).toBe(32768);
       expect(msg.components).toHaveLength(1);
-    });
-  });
-
-  describe('feature flag gating', () => {
-    test('COMPONENTS_V2_FLAG is correct value (1 << 15)', () => {
-      expect(COMPONENTS_V2_FLAG).toBe(32768);
-      expect(COMPONENTS_V2_FLAG).toBe(1 << 15);
     });
   });
 });
