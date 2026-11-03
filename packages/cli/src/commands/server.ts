@@ -33,6 +33,7 @@ import {
 import { type DeviceKey, deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import * as output from '../output.js';
 import { normalizeServerUrl } from '../signing.js';
+import { quoteShellArg } from '../utils/shell.js';
 import { stripTerminalControls } from '../utils/terminal.js';
 import { VERSION } from '../version.js';
 
@@ -221,8 +222,9 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
   saveServers(next);
 
   if (!entry.apiKey) {
+    const serverArg = quoteShellArg(name);
     output.warn(
-      `No API key stored for '${name}'.\nSign in interactively: omni auth login --server ${name}\nOr read a key from stdin: omni auth login --server ${name} --api-key-stdin < /secure/path/omni-api-key`,
+      `No API key stored for '${name}'.\nSign in interactively: omni auth login --server ${serverArg}\nOr read a key from stdin: omni auth login --server ${serverArg} --api-key-stdin < /secure/path/omni-api-key`,
     );
   }
 
@@ -279,7 +281,7 @@ function handleRemove(name: string, options: { force?: boolean }): void {
   // every command. Refuse instead — `omni server add` can replace it in place.
   if (Object.keys(remaining).length === 0) {
     output.error(`Cannot remove '${name}': it is the only registered server`, {
-      hint: `Point it somewhere else instead: omni server add ${name} <url>`,
+      hint: `Point it somewhere else instead: omni server add ${quoteShellArg(name)} <url>`,
     });
   }
 

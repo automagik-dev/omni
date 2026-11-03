@@ -479,28 +479,28 @@ describe('control-plane failure UX', () => {
     expect(() => renderPlatformError(err, 'get the tenant')).toThrow('Failed to get the tenant: tenant not found');
   });
 
-  test('401 explains PLATFORM credentials and offers server-scoped stdin login without keys on argv', () => {
+  test.each([
+    { name: 'prod', argument: 'prod' },
+    { name: "prod team; $HOME's", argument: "'prod team; $HOME'\\''s'" },
+  ])('401 offers stdin login with a shell-safe server: $name', ({ name, argument }) => {
     const dir = mkdtempSync(join(tmpdir(), 'omni-tenant-auth-hint-'));
     const previousDir = process.env.OMNI_CONFIG_DIR;
     const previousServer = process.env.__OMNI_RUNTIME_SERVER;
     process.env.OMNI_CONFIG_DIR = dir;
-    process.env.__OMNI_RUNTIME_SERVER = 'prod';
+    process.env.__OMNI_RUNTIME_SERVER = name;
     writeFileSync(
       join(dir, 'config.json'),
       JSON.stringify({
         servers: {
           active: 'default',
-          list: { default: { url: 'http://default.invalid' }, prod: { url: 'https://prod.invalid' } },
+          list: { default: { url: 'http://default.invalid' }, [name]: { url: 'https://prod.invalid' } },
         },
       }),
     );
     try {
       const err = new OmniApiError('Platform credential required', 'UNAUTHORIZED', undefined, 401);
       expect(() => renderPlatformError(err, 'list tenants')).toThrow(
-        'Failed to list tenants: the server rejected the credential (401). ' +
-          'The platform control plane accepts only PLATFORM-class credentials — legacy admin/god keys and ' +
-          'tenant data-plane keys are denied by design. Authenticate with a platform key from stdin: ' +
-          'omni auth login --server prod --api-key-stdin < /secure/path/omni-api-key',
+        `Failed to list tenants: the server rejected the credential (401). The platform control plane accepts only PLATFORM-class credentials — legacy admin/god keys and tenant data-plane keys are denied by design. Authenticate with a platform key from stdin: omni auth login --server ${argument} --api-key-stdin < /secure/path/omni-api-key`,
       );
     } finally {
       if (previousDir === undefined) Reflect.deleteProperty(process.env, 'OMNI_CONFIG_DIR');

@@ -27,6 +27,7 @@ import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
+import { quoteShellArg } from '../utils/shell.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -506,7 +507,7 @@ to 8 KB including the optional trailing LF/CRLF. Successful login reports keySou
 
       if (!config.apiKey) {
         output.error(
-          `Not logged in for server "${serverName}". Run: omni auth login --server ${serverName} --api-key-stdin < /secure/path/omni-api-key`,
+          `Not logged in for server "${serverName}". Run: omni auth login --server ${quoteShellArg(serverName)} --api-key-stdin < /secure/path/omni-api-key`,
           undefined,
           2,
         );
