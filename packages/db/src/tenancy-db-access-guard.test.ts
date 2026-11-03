@@ -340,6 +340,10 @@ describe('db-access guard', () => {
       'packages/api/src/services/connectors.ts',
       // Key-to-agent provenance reads instances/agents through the active scope.
       'packages/api/src/lib/key-agent.ts',
+      // Paired-agent grant writer: reads the grant source's tenant through the
+      // caller's handle (`scopedHandle` in the API); cross-tenant sources are
+      // invisible under enforcement (agent-source-grants-postgres.test.ts).
+      'packages/db/src/agent-source-grants.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);
