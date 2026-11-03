@@ -251,7 +251,7 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-/** Same retry policy the per-instance Bolt app applies to its Web API client. */
+/** Retry policy for the pooled receiver’s Web API client. */
 function buildRetryConfig(opts: SlackConnectionOptions): NonNullable<WebClientOptions['retryConfig']> {
   return {
     retries: opts.retryConfig?.retries ?? 2,
@@ -983,8 +983,7 @@ export class SlackAppReceiver {
       }
       const receiver = new HTTPReceiver({ signingSecret: opts.signingSecret });
       const app = new App({ authorize, clientOptions, receiver });
-      // Same 1 MB guard the per-instance HTTP app applies (Group 2 review,
-      // MEDIUM #2): an oversized body is refused with 413 before Bolt buffers it.
+      // Refuse oversized bodies with 413 before Bolt buffers them.
       return { app, httpHandler: withBodyLimit(receiver.requestListener, this.logger) };
     }
 

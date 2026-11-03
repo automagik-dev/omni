@@ -39,11 +39,13 @@ interface FakeAppRecord {
 /** Every fake App constructed since the last `resetFakes()`. */
 const constructedApps: FakeAppRecord[] = [];
 const socketReceiverOptions: Record<string, unknown>[] = [];
+const socketClients: (EventEmitter & { websocket: { active: boolean; isActive: () => boolean } })[] = [];
 const httpReceiverOptions: Record<string, unknown>[] = [];
 
 function resetFakes(): void {
   constructedApps.length = 0;
   socketReceiverOptions.length = 0;
+  socketClients.length = 0;
   httpReceiverOptions.length = 0;
 }
 
@@ -94,10 +96,11 @@ mock.module('@slack/bolt', () => {
 
   class FakeSocketModeReceiver {
     readonly client = Object.assign(new EventEmitter(), {
-      websocket: { isActive: () => true },
+      websocket: { active: true, isActive: () => this.client.websocket.active },
     });
     constructor(options: Record<string, unknown>) {
       socketReceiverOptions.push(options);
+      socketClients.push(this.client);
     }
   }
 
@@ -442,6 +445,26 @@ describe('SlackAppReceiver', () => {
     expect(clientsByToken.size).toBe(0);
   });
 
+  it('#941 rejects startup when the Socket Mode websocket never opens', async () => {
+    const { receiver } = makeReceiver({ ...SOCKET_OPTS, socketConnectTimeoutMs: 30 });
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+    socketClient.websocket.active = false;
+
+    await expect(receiver.start()).rejects.toThrow('Socket Mode WebSocket did not open within 30ms');
+    expect(receiver.isRunning).toBe(false);
+  });
+
+  it('#941 tracks disconnected events from the Socket Mode client', () => {
+    const { receiver } = makeReceiver();
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+
+    socketClient.emit('disconnected');
+
+    expect(receiver.socketHealth().state).toBe('disconnected');
+  });
+
   it('detaching the last attachment stops the receiver', async () => {
     const { receiver } = makeReceiver();
     const app = lastApp();
@@ -554,7 +577,7 @@ describe('SlackAppReceiver', () => {
 // bolt-client helpers the receiver's callers rely on
 // ─────────────────────────────────────────────────────────────
 
-// Same post-mock import: bolt-client binds `@slack/bolt` at module load.
+// Load the connection helpers beside the receiver tests.
 const { buildActingClients, resolveWorkspaceIdentity } = await import('../connection/bolt-client');
 
 /** A `WebClient`-shaped stand-in whose `auth.test` answers with `result`. */
