@@ -1,8 +1,9 @@
 /**
  * Tests for the event-driven media processing pipeline.
  *
- * Covers: awaitMediaProcessing(), mediaResultCache, mediaCompletions,
- * checkProcessedColumn, and the 10-minute promise leak circuit breaker.
+ * Covers: awaitMediaProcessing(), mediaResultCache, mediaCompletions and
+ * checkProcessedColumn. The 10-minute promise leak sweep is pinned in
+ * agent-dispatcher.test.ts (setupAgentDispatcher).
  */
 import { afterEach, describe, expect, it, mock } from 'bun:test';
 import type { MediaProcessedPayload } from '@omni/core';

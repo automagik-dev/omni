@@ -174,6 +174,42 @@ describe('ConversationService', () => {
     });
   });
 
+  describe('event payloads', () => {
+    const payloadOf = () => (eventBus.publish.mock.calls as unknown[][])[0]?.[1];
+
+    test('conversation.created carries { conversationId, title }', async () => {
+      const created = mockConversation({ id: 'new-conv', title: 'New' });
+      mockDb.insert = mock(() => ({
+        values: mock(() => ({ returning: mock(() => Promise.resolve([created])) })),
+      })) as unknown as typeof mockDb.insert;
+
+      await service.create({ title: 'New' } as any);
+
+      expect(payloadOf()).toEqual({ conversationId: 'new-conv', title: 'New' });
+    });
+
+    test('conversation.updated carries { conversationId, title }', async () => {
+      const updated = mockConversation({ id: 'conv-789', title: 'Updated' });
+      mockDb.update = mock(() => ({
+        set: mock(() => ({ where: mock(() => ({ returning: mock(() => Promise.resolve([updated])) })) })),
+      })) as unknown as typeof mockDb.update;
+
+      await service.update('conv-789', { title: 'Updated' } as any);
+
+      expect(payloadOf()).toEqual({ conversationId: 'conv-789', title: 'Updated' });
+    });
+
+    test('conversation.deleted carries { conversationId }', async () => {
+      mockDb.delete = mock(() => ({
+        where: mock(() => ({ returning: mock(() => Promise.resolve([{ id: 'conv-del' }])) })),
+      })) as unknown as typeof mockDb.delete;
+
+      await service.delete('conv-del');
+
+      expect(payloadOf()).toEqual({ conversationId: 'conv-del' });
+    });
+  });
+
   describe('getChats()', () => {
     test('returns chats for conversation', async () => {
       const chatList = [{ id: 'chat-1', conversationId: 'conv-123' }];

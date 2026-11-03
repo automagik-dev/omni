@@ -385,6 +385,44 @@ describe('agent-dispatcher', () => {
       cleanup();
     });
 
+    it('the 60s media sweep rejects and drops promises older than 10 minutes only', async () => {
+      const realSetInterval = globalThis.setInterval;
+      const sweeps: Array<() => void> = [];
+      globalThis.setInterval = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (ms === 60_000) sweeps.push(fn);
+        return realSetInterval(fn, ms, ...rest);
+      }) as typeof setInterval;
+      let cleanup: DispatcherCleanup | undefined;
+      try {
+        cleanup = await setupAgentDispatcher(
+          createMockEventBus() as unknown as import('@omni/core').EventBus,
+          createMockServices(),
+          mockDb,
+        );
+      } finally {
+        globalThis.setInterval = realSetInterval;
+      }
+
+      const { mediaCompletions } = __test__;
+      const stale = { resolve: mock(() => {}), reject: mock((_err: Error) => {}), createdAt: Date.now() - 11 * 60_000 };
+      const fresh = { resolve: mock(() => {}), reject: mock((_err: Error) => {}), createdAt: Date.now() - 9 * 60_000 };
+      mediaCompletions.set('media-stale', stale);
+      mediaCompletions.set('media-fresh', fresh);
+      try {
+        expect(sweeps).toHaveLength(1);
+        sweeps[0]?.();
+
+        expect(stale.reject).toHaveBeenCalledTimes(1);
+        expect(mediaCompletions.has('media-stale')).toBe(false);
+        expect(fresh.reject).not.toHaveBeenCalled();
+        expect(mediaCompletions.has('media-fresh')).toBe(true);
+      } finally {
+        mediaCompletions.delete('media-stale');
+        mediaCompletions.delete('media-fresh');
+        await cleanup?.();
+      }
+    });
+
     it('cancelActiveAgentRun resolves false when nothing is in flight (#914)', async () => {
       await expect(cancelActiveAgentRun('inst-none', 'chat-none', 'user_stop')).resolves.toBe(false);
     });
@@ -2600,6 +2638,47 @@ describe('agent-dispatcher', () => {
       expect(sql).toContain('"id" <> ');
       expect(sql).toContain('"slack_team_id" = ');
       expect(params).toEqual([true, 'slack', 'inst-1', 'T123']);
+    });
+  });
+
+  // The per_thread init marker lives in agent_sessions under a `thread_init:`
+  // session key. Both the lookup and the insert must use that exact key: a
+  // round-trip alone would stay green if both sites drifted together.
+  describe('per_thread init marker key', () => {
+    it('checkPerThreadSessionExists looks up thread_init:<sessionId>', async () => {
+      let captured: unknown;
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: (cond: unknown) => {
+              captured = cond;
+              return { limit: () => Promise.resolve([{ instanceId: 'inst-1' }]) };
+            },
+          }),
+        }),
+      } as unknown as import('@omni/db').Database;
+
+      await expect(__test__.checkPerThreadSessionExists(db, 'inst-1', 'thread-1')).resolves.toBe(true);
+
+      const { params } = new PgDialect().sqlToQuery(captured as SQL);
+      expect(params).toEqual(['inst-1', 'thread_init:thread-1']);
+    });
+
+    it('markPerThreadSessionInitialized inserts thread_init:<sessionId>', async () => {
+      let inserted: { instanceId?: string; sessionKey?: string } | undefined;
+      const db = {
+        insert: () => ({
+          values: (row: { instanceId?: string; sessionKey?: string }) => {
+            inserted = row;
+            return { onConflictDoUpdate: () => Promise.resolve() };
+          },
+        }),
+      } as unknown as import('@omni/db').Database;
+
+      await __test__.markPerThreadSessionInitialized(db, 'inst-1', 'thread-1');
+
+      expect(inserted?.instanceId).toBe('inst-1');
+      expect(inserted?.sessionKey).toBe('thread_init:thread-1');
     });
   });
 });
