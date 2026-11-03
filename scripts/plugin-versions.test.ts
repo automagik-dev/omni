@@ -5,7 +5,8 @@
  *
  * Run: bun test scripts/plugin-versions.test.ts
  */
-import { afterAll, describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, spyOn, test } from 'bun:test';
+import * as childProcess from 'node:child_process';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,81 @@ afterAll(() => {
 const R1 = '2.000101.1';
 const R2 = '2.000101.2';
 const R3 = '2.000102.1';
+
+describe('release command deadlines', () => {
+  test('a timed-out tag lookup names the local command, rather than reporting a missing release', () => {
+    const failure = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    const exec = spyOn(childProcess, 'execFileSync').mockImplementation(() => {
+      throw failure;
+    });
+    try {
+      expect(() => releaseCommit('/unused', R1)).toThrow(
+        `Command timed out after 60000 ms: git rev-parse -q --verify refs/tags/v${R1}^{commit}`,
+      );
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec.mock.calls[0]?.[2]).toMatchObject({ timeout: 60_000 });
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  test.each([false, true])('a timed-out missing-tag fetch is bounded and actionable (shallow=%s)', (shallow) => {
+    const exec = spyOn(childProcess, 'execFileSync')
+      .mockImplementationOnce(() => {
+        throw Object.assign(new Error('missing tag'), { status: 1 });
+      })
+      .mockReturnValueOnce(String(shallow))
+      .mockImplementation(() => {
+        throw Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+      });
+    try {
+      expect(() => releaseCommit('/unused', R1)).toThrow(
+        `Command timed out after 60000 ms: git fetch --quiet --no-tags ${shallow ? '--depth=1 ' : ''}origin +refs/tags/v${R1}:refs/tags/v${R1}`,
+      );
+      expect(exec).toHaveBeenCalledTimes(3);
+      expect(exec.mock.calls[0]?.[2]).toMatchObject({ timeout: 60_000 });
+      expect(exec.mock.calls[1]?.[2]).toMatchObject({ timeout: 60_000 });
+      expect(exec.mock.calls[2]?.[2]).toMatchObject({ timeout: 60_000 });
+      expect(exec.mock.calls[2]?.[1]).toEqual([
+        'fetch',
+        '--quiet',
+        '--no-tags',
+        ...(shallow ? ['--depth=1'] : []),
+        'origin',
+        `+refs/tags/v${R1}:refs/tags/v${R1}`,
+      ]);
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  test('an ordinary missing remote tag still reports no release', () => {
+    const missing = () => {
+      throw Object.assign(new Error('missing tag'), { status: 1 });
+    };
+    const exec = spyOn(childProcess, 'execFileSync')
+      .mockImplementationOnce(missing)
+      .mockReturnValueOnce('false')
+      .mockImplementation(missing);
+    try {
+      expect(releaseCommit('/unused', R1)).toBeNull();
+      expect(exec).toHaveBeenCalledTimes(4);
+    } finally {
+      exec.mockRestore();
+    }
+  });
+
+  test('a resolved local tag returns its commit with the local deadline', () => {
+    const exec = spyOn(childProcess, 'execFileSync').mockReturnValueOnce('').mockReturnValueOnce('abc123\n');
+    try {
+      expect(releaseCommit('/unused', R1)).toBe('abc123');
+      expect(exec).toHaveBeenCalledTimes(2);
+      for (const call of exec.mock.calls) expect(call[2]).toMatchObject({ timeout: 60_000 });
+    } finally {
+      exec.mockRestore();
+    }
+  });
+});
 
 function git(root: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
