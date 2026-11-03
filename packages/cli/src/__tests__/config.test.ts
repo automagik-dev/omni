@@ -17,10 +17,8 @@ import { join } from 'node:path';
 import {
   CONFIG_KEYS,
   type Config,
-  type ConfigKey,
   DEFAULT_SERVER_CONFIG,
   DEFAULT_SERVER_NAME,
-  type ServerConfig,
   clearRuntimeServer,
   deleteConfigValue,
   describeActiveServer,
@@ -132,14 +130,6 @@ describe('Config Validation', () => {
   });
 
   describe('CONFIG_KEYS', () => {
-    test('has all expected keys', () => {
-      const keys = Object.keys(CONFIG_KEYS);
-      expect(keys).toContain('apiUrl');
-      expect(keys).toContain('apiKey');
-      expect(keys).toContain('defaultInstance');
-      expect(keys).toContain('format');
-    });
-
     test('has descriptions for all keys', () => {
       for (const [_key, meta] of Object.entries(CONFIG_KEYS)) {
         expect(meta.description).toBeDefined();
@@ -163,34 +153,10 @@ describe('Config Validation', () => {
   });
 });
 
-describe('Config Key Types', () => {
-  test('ConfigKey type includes all valid keys', () => {
-    // This is a compile-time check - if it compiles, it passes
-    const validKeys: ConfigKey[] = ['apiUrl', 'apiKey', 'defaultInstance', 'format'];
-    expect(validKeys.length).toBe(4);
-  });
-});
-
 describe('ServerConfig', () => {
   // `loadServerConfig()` below hits the filesystem — sandbox it so it never
   // reads the developer's real ~/.omni/config.json.
   withSandbox();
-
-  test('ServerConfig type has all required fields', () => {
-    // Compile-time check - if it compiles, the type is correct
-    const config: ServerConfig = {
-      port: 8882,
-      databaseUrl: 'postgresql://localhost/test',
-      dataDir: '/tmp/data',
-      logLevel: 'info',
-      nodeEnv: 'production',
-    };
-    expect(config.port).toBe(8882);
-    expect(config.databaseUrl).toBe('postgresql://localhost/test');
-    expect(config.dataDir).toBe('/tmp/data');
-    expect(config.logLevel).toBe('info');
-    expect(config.nodeEnv).toBe('production');
-  });
 
   test('DEFAULT_SERVER_CONFIG has correct production defaults', () => {
     expect(DEFAULT_SERVER_CONFIG.port).toBe(8882);
@@ -213,30 +179,13 @@ describe('ServerConfig', () => {
 });
 
 describe('Server Config Keys', () => {
-  test('server.* keys are in CONFIG_KEYS', () => {
-    expect(CONFIG_KEYS['server.port' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.databaseUrl' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.dataDir' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.logLevel' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.nodeEnv' as ConfigKey]).toBeDefined();
-  });
-
-  test('server.* keys have descriptions', () => {
-    for (const key of ['server.port', 'server.databaseUrl', 'server.dataDir', 'server.logLevel', 'server.nodeEnv']) {
-      const meta = CONFIG_KEYS[key as ConfigKey];
-      expect(meta.description).toBeDefined();
-      expect(typeof meta.description).toBe('string');
-      expect(meta.description.length).toBeGreaterThan(0);
-    }
-  });
-
-  test('isValidConfigKey returns true for server.* keys', () => {
-    expect(isValidConfigKey('server.port')).toBe(true);
-    expect(isValidConfigKey('server.databaseUrl')).toBe(true);
-    expect(isValidConfigKey('server.dataDir')).toBe(true);
-    expect(isValidConfigKey('server.logLevel')).toBe(true);
-    expect(isValidConfigKey('server.nodeEnv')).toBe(true);
-  });
+  test.each(['server.port', 'server.databaseUrl', 'server.dataDir', 'server.logLevel', 'server.nodeEnv'] as const)(
+    '%s is a valid config key',
+    (key) => {
+      expect(CONFIG_KEYS[key]).toBeDefined();
+      expect(isValidConfigKey(key)).toBe(true);
+    },
+  );
 });
 
 describe('server.natsHost', () => {

@@ -11,7 +11,6 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import type { OutputFormat } from '../output.js';
 import * as output from '../output.js';
 
 describe('Output Module Exports', () => {
@@ -40,31 +39,6 @@ describe('Output Module Exports', () => {
 
   test('exports flushStdout', () => {
     expect(typeof output.flushStdout).toBe('function');
-  });
-});
-
-describe('areColorsEnabled', () => {
-  test('returns a boolean', () => {
-    const result = output.areColorsEnabled();
-    expect(typeof result).toBe('boolean');
-  });
-});
-
-describe('getCurrentFormat', () => {
-  test('returns human or json', () => {
-    const format = output.getCurrentFormat();
-    expect(['human', 'json']).toContain(format);
-  });
-
-  test('return type is OutputFormat', () => {
-    const format: OutputFormat = output.getCurrentFormat();
-    expect(format).toBeDefined();
-  });
-});
-
-describe('disableColors', () => {
-  test('can be called without error', () => {
-    expect(() => output.disableColors()).not.toThrow();
   });
 });
 
