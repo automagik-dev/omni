@@ -1352,7 +1352,10 @@ export interface RevokeApiKeyBody {
 /** Query parameters for listing API keys */
 export interface ListApiKeysParams {
   status?: ApiKeyStatus;
+  /** Page size, 1-100 (default 50). Keys come newest first. */
   limit?: number;
+  /** Keys to skip, to page past `limit`. */
+  offset?: number;
 }
 
 /** Result of creating an API key (includes the plaintext key) */
@@ -3724,6 +3727,7 @@ export function createOmniClient(config: OmniClientConfig) {
         const query = new URLSearchParams();
         if (params?.status) query.set('status', params.status);
         if (params?.limit) query.set('limit', String(params.limit));
+        if (params?.offset) query.set('offset', String(params.offset));
         const resp = await apiFetch(`${baseUrl}/api/v2/keys?${query}`, {});
         const json = (await resp.json()) as { items?: ApiKeyRecord[]; meta?: { total: number } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);

@@ -15295,7 +15295,10 @@ function useChatPoll(chatId, on2) {
           const reply = await call("omni-messages", { chatId });
           if (!stopped) setRead({ chatId, messages: Array.isArray(reply?.messages) ? reply.messages : [], error: null });
         } catch (error) {
-          if (!stopped) setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: error?.message ?? String(error) }));
+          if (!stopped) {
+            console.warn("Could not load chat messages:", error);
+            setRead((before) => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: t("Could not load messages. Retrying soon.") }));
+          }
         }
       }
       if (!stopped) timer = setTimeout(tick, POLL_MS);
@@ -15967,6 +15970,17 @@ var OPEN_KEY = "omni.tree.open";
 var SEARCH_DELAY_MS = 250;
 var OMNI_OUTDATED = "Adding a chat needs a newer Omni. Update it first.";
 var OFFER_UNKNOWN = "Adding a chat is not ready yet. Reload the window if this stays.";
+var ADD_REASONS = Object.freeze({
+  chat_keys_unavailable: "Omni cannot make chat keys; update it.",
+  chat_key_limit: "This app holds as many chat keys as Omni allows.",
+  omni_unreachable: "Could not reach Omni. Try again in a moment.",
+  not_linked: "Not connected: this app is not linked to an Omni.",
+  other_omni: "Not connected: this app is linked to another Omni.",
+  needs_newer_team: "Adding a chat needs a newer Bot team.",
+  already_thread: "This chat is a thread already.",
+  read_only: "This host is read-only. Add the chat from the host that owns the team."
+});
+var addReason = (code) => typeof code === "string" && Object.hasOwn(ADD_REASONS, code) ? t(ADD_REASONS[code]) : t("The chat was not added.");
 function readOpen() {
   try {
     return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) ?? "[]"));
@@ -16217,7 +16231,10 @@ function ThreadPicker({ channel, onPick, onClose }) {
         if (alive.current && asked.current === ticket) setList({ status: "ready", chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null });
       },
       (error) => {
-        if (alive.current && asked.current === ticket) setList({ status: "failed", chats: [], error: error?.message ?? String(error) });
+        if (alive.current && asked.current === ticket) {
+          console.warn("Could not load chats:", error);
+          setList({ status: "failed", chats: [], error: t("Could not load chats. Try again.") });
+        }
       }
     );
     if (words === "") {
@@ -16233,9 +16250,15 @@ function ThreadPicker({ channel, onPick, onClose }) {
     setProblem(null);
     try {
       const result = await onPick(chat);
-      if (alive.current && result?.ok !== true) setProblem(result?.reason ?? t("The chat was not added."));
+      if (alive.current && result?.ok !== true) {
+        console.warn("Could not add the chat:", result?.reason);
+        setProblem(addReason(result?.reasonCode));
+      }
     } catch (error) {
-      if (alive.current) setProblem(error?.message ?? String(error));
+      if (alive.current) {
+        console.warn("Could not add the chat:", error);
+        setProblem(addReason(error?.code === "bot/read-only" ? "read_only" : void 0));
+      }
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -17295,6 +17318,8 @@ var STRINGS = {
   "Other chats": "其他聊天",
   "Adding…": "正在添加…",
   "The chat was not added.": "这个聊天没有添加。",
+  "Could not load chats. Try again.": "无法加载聊天。请重试。",
+  "Could not load messages. Retrying soon.": "无法加载消息。稍后将重试。",
   "Could not remove this chat. Try again.": "无法移除这个聊天。请重试。",
   "Could not change this chat's settings. Try again.": "无法更改这个聊天的设置。请重试。",
   "Remove {name} from the sidebar? Click again": "要从侧边栏移除 {name} 吗？再点一次",
@@ -17306,6 +17331,11 @@ var STRINGS = {
   "Not connected: this app is linked to another Omni.": "未连接：这个应用关联的是另一个 Omni。",
   "Not connected: its previous key is still being cut.": "未连接：它之前的密钥还在作废中。",
   "Not connected: waiting for a key from the linked Omni.": "未连接：正在等待关联的 Omni 发来密钥。",
+  "Omni cannot make chat keys; update it.": "Omni 无法创建聊天密钥；请先更新它。",
+  "This app holds as many chat keys as Omni allows.": "这个应用持有的聊天密钥已达 Omni 允许的上限。",
+  "Could not reach Omni. Try again in a moment.": "无法连接 Omni。请稍后重试。",
+  "This chat is a thread already.": "这个聊天已添加为话题。",
+  "This host is read-only. Add the chat from the host that owns the team.": "此主机为只读。请从持有此 Bot 团队的主机添加聊天。",
   // A message's file in the chat view (channels.js).
   "Picture": "图片",
   "Voice note": "语音消息",

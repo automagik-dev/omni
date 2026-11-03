@@ -59,7 +59,7 @@ const KeysFile = z.object({
 const Minted = z.object({ data: z.object({ id: z.string().regex(ID), plainTextKey: text, parentKeyId: z.string().nullish(), chatId: z.string(), chatExternalId: z.string(), instanceId: z.string().regex(ID) }) })
 const Revoked = z.object({ data: z.object({ status: z.enum(['revoked', 'already_revoked']) }) })
 const Instance = z.object({ data: z.object({ ownerIdentifier: z.string().max(200).nullish() }) })
-const Refusal = z.object({ error: z.object({ message: z.string().max(500) }) })
+const Refusal = z.object({ error: z.object({ message: z.string().max(500), code: z.string().optional() }) })
 
 // The same Omni: the same API address (its path too), whatever key it was reached with.
 const sameOmni = (a, b) => {
@@ -299,13 +299,20 @@ export function install(rt) {
 
   function refusalOf(reply, link) {
     const host = new URL(link.url).host
-    const said = without(Refusal.safeParse(reply.json).data?.error?.message, link.key)
-    if (reply.status === 0) return `Could not reach Omni at ${host}.`
+    const error = Refusal.safeParse(reply.json).data?.error
+    const said = without(error?.message, link.key)
+    if (reply.status === 0) return { reason: `Could not reach Omni at ${host}.`, reasonCode: 'omni_unreachable' }
     // A 404 without Omni's own words is a route this Omni does not have.
-    if (reply.status === 404) return said ?? `Omni at ${host} cannot make chat keys; update it.`
-    if (reply.status === 403) return `Omni refused a chat key${said ? `: ${said}` : '.'}`
-    if (reply.status === 409) return said ?? 'This app holds as many chat keys as Omni allows.'
-    return `Omni answered ${reply.status} for a chat key${said ? `: ${said}` : '.'}`
+    if (reply.status === 404) return said === undefined
+      ? { reason: `Omni at ${host} cannot make chat keys; update it.`, reasonCode: 'chat_keys_unavailable' }
+      : { reason: said }
+    if (reply.status === 403) return { reason: `Omni refused a chat key${said ? `: ${said}` : '.'}` }
+    if (reply.status === 409) return {
+      reason: said ?? 'This app holds as many chat keys as Omni allows.',
+      // A known API code selects fixed client copy; its message remains diagnostic only.
+      ...(said === undefined || error?.code === 'CHILD_LIMIT' ? { reasonCode: 'chat_key_limit' } : {}),
+    }
+    return { reason: `Omni answered ${reply.status} for a chat key${said ? `: ${said}` : '.'}` }
   }
 
   // A key this host will not keep cuts itself, if Omni answers.
@@ -318,7 +325,7 @@ export function install(rt) {
   // it could not be reached.
   async function mintIn(file, threadId, chatId, link) {
     const reply = await ask(link.url, link.key, 'POST', '/keys/children', { chatId })
-    if (reply.status !== 201) return { ok: false, reason: refusalOf(reply, link), status: reply.status }
+    if (reply.status !== 201) return { ok: false, ...refusalOf(reply, link), status: reply.status }
     const minted = Minted.safeParse(reply.json)
     if (!minted.success || minted.data.data.chatId !== chatId) {
       await discard(link, reply.json?.data?.plainTextKey)
@@ -382,7 +389,7 @@ export function install(rt) {
         const file = read()
         if (file.threads[threadId]) return { ok: false, reason: 'This thread has a key already.' }
         const minted = await mintIn(file, threadId, chatId, link)
-        if (!minted.ok) return { ok: false, reason: minted.reason }
+        if (!minted.ok) return { ok: false, reason: minted.reason, ...(minted.reasonCode === undefined ? {} : { reasonCode: minted.reasonCode }) }
         try {
           await write(file)
         } catch (error) {

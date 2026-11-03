@@ -142,7 +142,7 @@ test('a thread whose Session cannot be archived keeps its record, its guard and 
 
 test('a failed mint makes no thread, no Session and no key entry, and the reason comes back (:187)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  for (const [mint, reason] of [['missing', /cannot make chat keys; update it/], ['refused', /Omni refused a chat key: this key cannot mint chat keys/], ['down', /Could not reach Omni/]]) {
+  for (const [mint, reason, reasonCode] of [['missing', /cannot make chat keys; update it/, 'chat_keys_unavailable'], ['refused', /Omni refused a chat key: this key cannot mint chat keys/, undefined], ['down', /Could not reach Omni/, 'omni_unreachable']]) {
     const omni = fakeOmni()
     const home = homeFor(t, omni)
     const run = await boot(t, home)
@@ -152,6 +152,7 @@ test('a failed mint makes no thread, no Session and no key entry, and the reason
     const answer = await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT })
     assert.equal(answer.ok, false, mint)
     assert.match(answer.reason, reason, mint)
+    assert.equal(answer.reasonCode, reasonCode, mint)
     assert.deepEqual([run.made, run.channels.threads.list(), heard], [[], [], []], mint)
     assert.deepEqual(keysOf(home)?.threads ?? {}, {}, mint)
     assert.deepEqual(saved(home).omniThreads ?? {}, {}, mint)
@@ -159,6 +160,25 @@ test('a failed mint makes no thread, no Session and no key entry, and the reason
     assert.deepEqual(askedOf(omni), [`GET /chats/${CHAT}`, 'POST /keys/children'], mint)
     await run.stop()
   }
+})
+
+test('thread add carries known link and read-only reasons without treating arbitrary text as a code', async (t) => {
+  const run = await boot(t, homeFor(t, fakeOmni()))
+  run.channels.threadKeys.mint = async () => ({ ok: false, reason: NOT_LINKED })
+  let result = await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT })
+  assert.equal(result.reasonCode, 'not_linked')
+  run.channels.readOnly = () => 'PRIVATE-READ-ONLY-HOST'
+  result = await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT })
+  assert.deepEqual(result, { ok: false, reason: 'PRIVATE-READ-ONLY-HOST', reasonCode: 'read_only' })
+  run.channels.readOnly = () => undefined
+  run.channels.threadKeys.mint = async () => ({ ok: false, reason: `${NOT_LINKED} PRIVATE-REMOTE-TEXT` })
+  result = await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT })
+  assert.equal(result.reasonCode, undefined)
+  run.channels.omniRequest = async () => { throw new Error('PRIVATE-CHAT-LOOKUP') }
+  result = await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT })
+  assert.equal(result.reasonCode, 'omni_unreachable')
+  assert.equal(result.reason, 'Could not reach Omni. Try again in a moment.')
+  assert.deepEqual(run.made, [])
 })
 
 test('the picker lists one channel\'s chats and marks the added ones; a chat of another channel, or one already a thread, is not added again', async (t) => {
@@ -172,7 +192,7 @@ test('the picker lists one channel\'s chats and marks the added ones; a chat of 
     { id: CHAT, name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at: Date.parse('2026-10-29T12:00:00.000Z'), avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: CHATS[CHAT].externalId, added: true },
     { id: GROUP, name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at: Date.parse('2026-10-29T11:00:00.000Z'), avatarUrl: null, number: null, jid: CHATS[GROUP].externalId, added: false },
   ] })
-  assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT }), { ok: false, reason: 'This chat is a thread already.' })
+  assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT }), { ok: false, reason: 'This chat is a thread already.', reasonCode: 'already_thread' })
   assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: ELSEWHERE }), { ok: false, reason: 'That chat is not on this channel.' })
   await assert.rejects(run.call('omni-thread-add', { channelId: INSTANCE, chatId: 'not-a-chat' }), /Pick a chat/)
   assert.equal(run.made.length, 1)
@@ -357,7 +377,7 @@ test('against a team stand-in with no hook, adding a chat refuses with the reaso
   const omni = fakeOmni()
   const home = homeFor(t, omni, teamState({ omniThreads: { old: record('old', 'old-session') } }))
   const run = await boot(t, home, { mask: true })
-  assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT }), { ok: false, reason: NEEDS_NEWER_TEAM })
+  assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT }), { ok: false, reason: NEEDS_NEWER_TEAM, reasonCode: 'needs_newer_team' })
   assert.deepEqual([run.made, askedOf(omni), keysOf(home), run.registered], [[], [], null, []])
   assert.deepEqual(run.channels.threads.list().map(item => item.id), ['old'])
   const view = run.view()

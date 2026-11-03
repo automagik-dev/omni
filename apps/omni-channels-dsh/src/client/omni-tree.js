@@ -24,6 +24,18 @@ const SEARCH_DELAY_MS = 250
 export const OMNI_OUTDATED = 'Adding a chat needs a newer Omni. Update it first.'
 // The host has not said yet whether a chat can be added: the + stays off, and says so.
 export const OFFER_UNKNOWN = 'Adding a chat is not ready yet. Reload the window if this stays.'
+// Only these codes can select owner-facing guidance. Never interpolate a host diagnostic.
+const ADD_REASONS = Object.freeze({
+  chat_keys_unavailable: 'Omni cannot make chat keys; update it.',
+  chat_key_limit: 'This app holds as many chat keys as Omni allows.',
+  omni_unreachable: 'Could not reach Omni. Try again in a moment.',
+  not_linked: 'Not connected: this app is not linked to an Omni.',
+  other_omni: 'Not connected: this app is linked to another Omni.',
+  needs_newer_team: 'Adding a chat needs a newer Bot team.',
+  already_thread: 'This chat is a thread already.',
+  read_only: 'This host is read-only. Add the chat from the host that owns the team.',
+})
+const addReason = code => typeof code === 'string' && Object.hasOwn(ADD_REASONS, code) ? t(ADD_REASONS[code]) : t('The chat was not added.')
 
 function readOpen() {
   try { return new Set(JSON.parse(localStorage.getItem(OPEN_KEY) ?? '[]')) } catch { return new Set() }
@@ -271,7 +283,12 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     const ticket = ++asked.current
     const load = () => call('omni-thread-chats', words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
       (reply) => { if (alive.current && asked.current === ticket) setList({ status: 'ready', chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null }) },
-      (error) => { if (alive.current && asked.current === ticket) setList({ status: 'failed', chats: [], error: error?.message ?? String(error) }) },
+      (error) => {
+        if (alive.current && asked.current === ticket) {
+          console.warn('Could not load chats:', error)
+          setList({ status: 'failed', chats: [], error: t('Could not load chats. Try again.') })
+        }
+      },
     )
     if (words === '') {
       void load()
@@ -286,9 +303,15 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     setProblem(null)
     try {
       const result = await onPick(chat)
-      if (alive.current && result?.ok !== true) setProblem(result?.reason ?? t('The chat was not added.'))
+      if (alive.current && result?.ok !== true) {
+        console.warn('Could not add the chat:', result?.reason)
+        setProblem(addReason(result?.reasonCode))
+      }
     } catch (error) {
-      if (alive.current) setProblem(error?.message ?? String(error))
+      if (alive.current) {
+        console.warn('Could not add the chat:', error)
+        setProblem(addReason(error?.code === 'bot/read-only' ? 'read_only' : undefined))
+      }
     } finally {
       if (alive.current) setBusy(null)
     }

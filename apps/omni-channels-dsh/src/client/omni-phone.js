@@ -150,7 +150,10 @@ function useChatPoll(chatId, on) {
           const reply = await call('omni-messages', { chatId })
           if (!stopped) setRead({ chatId, messages: Array.isArray(reply?.messages) ? reply.messages : [], error: null })
         } catch (error) {
-          if (!stopped) setRead(before => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: error?.message ?? String(error) }))
+          if (!stopped) {
+            console.warn('Could not load chat messages:', error)
+            setRead(before => ({ chatId, messages: before.chatId === chatId ? before.messages : null, error: t('Could not load messages. Retrying soon.') }))
+          }
         }
       }
       if (!stopped) timer = setTimeout(tick, POLL_MS)

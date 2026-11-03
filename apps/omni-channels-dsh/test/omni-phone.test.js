@@ -193,16 +193,19 @@ test('the next poll reads the chat again and does not fetch a file it already ha
   assert.equal(asked('omni-messages').length, 4)
 })
 
-test('a hidden tab does not poll; a host refusal shows as text in the pane', async (t) => {
+test('a hidden tab does not poll; a host refusal shows friendly text and logs its diagnostic', async (t) => {
   reset()
   const roster = hooked([THREAD(1)])
   const hidden = pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's-omni', useRoster: useRosterOf(roster), visible: false }, t)
   await drawn(hidden)
   assert.equal(asked('omni-messages').length, 0)
-  answer = endpoint => (endpoint === 'omni-messages' ? new Error('omni is not set up here') : {})
+  const failure = new Error('omni is not set up here')
+  answer = endpoint => (endpoint === 'omni-messages' ? failure : {})
   const root = await drawn(pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's-omni', useRoster: useRosterOf(roster) }, t))
   const problem = all(root, 'op-note').find(node => node.props.role === 'alert')
-  assert.equal(text(problem), 'omni is not set up here')
+  assert.equal(text(problem), 'Could not load messages. Retrying soon.')
+  assert.equal(text(root).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not load chat messages:', failure]])
 })
 
 test('a poll that comes while the page is hidden reads nothing; the next one on a shown page reads again', async (t) => {
@@ -652,3 +655,25 @@ for (const [label, actionsFor] of [['missing', undefined], ['not callable', {}]]
     assert.deepEqual(logged, [])
   })
 }
+
+test('a later poll failure keeps messages visible, hides raw text, and clears on recovery', async (t) => {
+  reset()
+  answer = host([MESSAGES[5]])
+  const roster = hooked([THREAD(1)])
+  const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's-omni', useRoster: useRosterOf(roster) }, t)
+  await drawn(view)
+  const failure = 'PRIVATE-MESSAGE-POLL-STRING'
+  answer = () => { throw failure }
+  await nextPoll()
+  let root = await drawn(view)
+  assert.equal(text(all(root, 'op-note').find(node => node.props.role === 'alert')), 'Could not load messages. Retrying soon.')
+  assert.equal(text(root).includes(failure), false)
+  assert.equal(one(root, 'oc-bubble').children.find(child => typeof child === 'string'), 'On my way')
+  assert.deepEqual(logged, [['Could not load chat messages:', failure]])
+  answer = host([MESSAGES[5]])
+  await nextPoll()
+  root = await drawn(view)
+  assert.equal(all(root, 'op-note').find(node => node.props.role === 'alert'), undefined)
+  assert.equal(one(root, 'oc-bubble').children.find(child => typeof child === 'string'), 'On my way')
+  assert.equal(asked('omni-messages').length, 3)
+})

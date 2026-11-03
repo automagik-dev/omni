@@ -254,7 +254,7 @@ export const SOURCE_ROUTES = [
   {"method":"GET","path":"/instances/supported-channels","summary":"List supported channel types","tag":"instances"},
   {"method":"GET","path":"/journeys/{correlationId}","summary":"Specific journey timeline","tag":"journeys"},
   {"method":"GET","path":"/journeys/summary","summary":"Aggregated journey metrics","tag":"journeys","query":"z.object({ since: z .string() .optional() .transform((v) => { if (!v) return undefined; const match = v.match(/^(\\d+)(m|h|d)$/); if (match?.[1] && match[2]) { const amount = Number.parseInt(match[1], 10); const unit = match[2] as 'm' | 'h' | 'd'; const multipliers = { m: 60_000, h: 3_600_000, d: 86_400_000 } as const; return Date.now() - amount * multipliers[unit]; } const ts = new Date(v).getTime(); return Number.isNaN(ts) ? undefined : ts; }), })"},
-  {"method":"GET","path":"/keys","summary":"List all API keys","tag":"keys","query":"z.object({ status: z.enum(['active', 'revoked', 'expired']).optional().describe('Filter by status'), limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'), })"},
+  {"method":"GET","path":"/keys","summary":"List all API keys, newest first","tag":"keys","query":"z.object({ status: z.enum(['active', 'revoked', 'expired']).optional().describe('Filter by status'), limit: z.coerce.number().int().min(1).max(100).default(50).describe('Max results'), offset: z.coerce.number().int().min(0).default(0).describe('Keys to skip (newest first)'), })"},
   {"method":"POST","path":"/keys","summary":"Create a new API key","tag":"keys"},
   {"method":"DELETE","path":"/keys/{id}","summary":"Permanently delete an API key","tag":"keys"},
   {"method":"GET","path":"/keys/{id}","summary":"Get a single API key","tag":"keys"},
