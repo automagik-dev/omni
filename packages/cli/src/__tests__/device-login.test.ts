@@ -1,0 +1,209 @@
+/**
+ * The CLI's device flow (#1461) against a scripted fake server: every fetch is answered
+ * from a queue, sleeps advance a fake clock instead of waiting, and nothing touches the
+ * network or a config file.
+ */
+
+import { describe, expect, test } from 'bun:test';
+import { type DeviceLoginResult, SLOW_DOWN_STEP_S, devicePromptLines, runDeviceLogin } from '../device-login';
+
+const URL_BASE = 'http://omni.test';
+const DEVICE_KEY = 'omni_sk_devicekeyDEVICEKEYdevicekey0001';
+const DEVICE_TOKEN = 'device-token-secret-0001';
+const CODE = {
+  device_code: 'device-code-secret-0001',
+  user_code: 'ABCDEFGH',
+  verification_uri: '/api/login/device',
+  verification_uri_complete: '/api/login/device?user_code=ABCDEFGH',
+  expires_in: 600,
+  interval: 2,
+};
+const MINTED = {
+  data: {
+    apiKey: DEVICE_KEY,
+    keyId: 'key-0001',
+    scopes: ['instances:*', 'system:read'],
+    keyExpiresAt: null,
+    apiUrl: URL_BASE,
+    companions: [],
+  },
+};
+
+type Reply = { status: number; body?: unknown };
+const json = (status: number, body?: unknown): Reply => ({ status, body });
+const pending = json(400, { error: 'authorization_pending', error_description: 'waiting' });
+const granted = json(200, { access_token: DEVICE_TOKEN, token_type: 'Bearer', expires_in: 3600 });
+
+interface Run {
+  result: DeviceLoginResult;
+  calls: Array<{ path: string; body: unknown; authorization: string | null }>;
+  sleeps: number[];
+  prompts: string[];
+}
+
+/** Run the flow against `replies` (code first, then token polls, then the key). */
+async function run(
+  replies: Array<Reply | Error>,
+  options: { abortAt?: 'sleep' | 'fetch'; abortAfterSleeps?: number; deviceName?: string } = {},
+): Promise<Run> {
+  const calls: Run['calls'] = [];
+  const sleeps: number[] = [];
+  const prompts: string[] = [];
+  const controller = new AbortController();
+  let clock = 1_000_000;
+  const queue = [...replies];
+  const fakeFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    calls.push({
+      path: String(input).replace(URL_BASE, ''),
+      body: init?.body ? JSON.parse(String(init.body)) : null,
+      authorization: headers.get('authorization'),
+    });
+    if (options.abortAt === 'fetch' && calls.length === 2) {
+      controller.abort();
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    }
+    const next = queue.shift();
+    if (!next) throw new Error('the fake server ran out of replies');
+    if (next instanceof Error) throw next;
+    const text = typeof next.body === 'string' ? next.body : JSON.stringify(next.body ?? null);
+    return new Response(text, { status: next.status, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  const result = await runDeviceLogin({
+    url: URL_BASE,
+    fetch: fakeFetch,
+    signal: controller.signal,
+    now: () => clock,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      clock += ms;
+      if (options.abortAt === 'sleep' && sleeps.length === (options.abortAfterSleeps ?? 1)) controller.abort();
+    },
+    onPrompt: (prompt) => prompts.push(...devicePromptLines(prompt)),
+    ...(options.deviceName ? { deviceName: options.deviceName } : {}),
+  });
+  return { result, calls, sleeps, prompts };
+}
+
+/** No secret the flow handles may appear in what it shows or returns as an error. */
+function expectNoSecrets(outcome: Run) {
+  const shown =
+    JSON.stringify(outcome.prompts) + JSON.stringify(outcome.result.status === 'failed' ? outcome.result : {});
+  for (const secret of [DEVICE_KEY, DEVICE_TOKEN, CODE.device_code]) expect(shown).not.toContain(secret);
+}
+
+describe('runDeviceLogin', () => {
+  test('approval: code, polls while pending, then mints and returns the key', async () => {
+    const outcome = await run([json(200, CODE), pending, pending, granted, json(200, MINTED)], {
+      deviceName: 'omni CLI on test',
+    });
+    expect(outcome.result).toEqual({
+      status: 'approved',
+      key: { apiKey: DEVICE_KEY, keyId: 'key-0001', scopes: ['instances:*', 'system:read'], keyExpiresAt: null },
+    });
+    expect(outcome.calls.map((call) => call.path)).toEqual([
+      '/api/auth/device/code',
+      '/api/auth/device/token',
+      '/api/auth/device/token',
+      '/api/auth/device/token',
+      '/api/v2/login/device-key',
+    ]);
+    expect(outcome.calls[0]?.body).toEqual({ client_id: 'omni-cli' });
+    expect(outcome.calls[1]?.body).toEqual({
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      device_code: CODE.device_code,
+      client_id: 'omni-cli',
+    });
+    expect(outcome.calls[4]).toEqual({
+      path: '/api/v2/login/device-key',
+      body: { deviceName: 'omni CLI on test' },
+      authorization: `Bearer ${DEVICE_TOKEN}`,
+    });
+    // The server's interval, before every poll.
+    expect(outcome.sleeps).toEqual([2000, 2000, 2000]);
+    // The code and the link, resolved against the server; never the device code.
+    expect(outcome.prompts.join('\n')).toContain('ABCDEFGH');
+    expect(outcome.prompts.join('\n')).toContain('http://omni.test/api/login/device?user_code=ABCDEFGH');
+    expect(outcome.prompts.join('\n')).toContain('omni approve ABCDEFGH');
+    expectNoSecrets(outcome);
+  });
+
+  test('authorization_pending keeps the interval; slow_down grows it by 5 s each time', async () => {
+    const slow = json(400, { error: 'slow_down' });
+    const outcome = await run([json(200, CODE), pending, slow, pending, slow, granted, json(200, MINTED)]);
+    expect(outcome.result.status).toBe('approved');
+    const step = SLOW_DOWN_STEP_S * 1000;
+    expect(outcome.sleeps).toEqual([2000, 2000, 2000 + step, 2000 + step, 2000 + 2 * step]);
+  });
+
+  test('a 429 slows down like slow_down; a 5xx is waited out', async () => {
+    const outcome = await run([json(200, CODE), json(429, {}), json(503, 'down'), granted, json(200, MINTED)]);
+    expect(outcome.result.status).toBe('approved');
+    expect(outcome.sleeps).toEqual([2000, 7000, 7000]);
+  });
+
+  test('access_denied ends the flow as denied, with no key request', async () => {
+    const outcome = await run([json(200, CODE), pending, json(400, { error: 'access_denied' })]);
+    expect(outcome.result).toEqual({ status: 'denied' });
+    expect(outcome.calls.some((call) => call.path === '/api/v2/login/device-key')).toBe(false);
+  });
+
+  test('expired_token ends the flow as expired', async () => {
+    const outcome = await run([json(200, CODE), json(400, { error: 'expired_token' })]);
+    expect(outcome.result).toEqual({ status: 'expired' });
+  });
+
+  test("the code's own expiry ends the flow without another poll", async () => {
+    const code = { ...CODE, expires_in: 5, interval: 2 };
+    const outcome = await run([json(200, code), pending, pending]);
+    expect(outcome.result).toEqual({ status: 'expired' });
+    // Polls at 2 s and 4 s; the third wait reaches 6 s, past the 5 s expiry.
+    expect(outcome.calls.filter((call) => call.path === '/api/auth/device/token')).toHaveLength(2);
+  });
+
+  test('Ctrl+C while waiting cancels before any further request', async () => {
+    const outcome = await run([json(200, CODE), pending], { abortAt: 'sleep', abortAfterSleeps: 2 });
+    expect(outcome.result).toEqual({ status: 'cancelled' });
+    expect(outcome.calls.map((call) => call.path)).toEqual(['/api/auth/device/code', '/api/auth/device/token']);
+  });
+
+  test('Ctrl+C during a request cancels', async () => {
+    const outcome = await run([json(200, CODE)], { abortAt: 'fetch' });
+    expect(outcome.result).toEqual({ status: 'cancelled' });
+  });
+
+  test('a server without device sign-in (404) is unavailable, and nothing is shown', async () => {
+    const outcome = await run([json(404, { error: { code: 'NOT_FOUND', message: 'Not found' } })]);
+    expect(outcome.result).toEqual({ status: 'unavailable' });
+    expect(outcome.prompts).toEqual([]);
+  });
+
+  test('a malformed code, token or key reply fails cleanly', async () => {
+    const cases: Array<[Array<Reply>, string]> = [
+      [[json(200, { user_code: 'ABCDEFGH' })], 'malformed sign-in code'],
+      [[json(200, 'not json at all')], 'malformed sign-in code'],
+      [[json(200, CODE), json(200, { token_type: 'Bearer' })], 'malformed device token'],
+      [[json(200, CODE), json(400, { nope: true })], 'HTTP 400'],
+      [[json(200, CODE), granted, json(200, { data: { keyId: 'key-0001' } })], 'malformed device key'],
+      [[json(200, CODE), granted, json(200, { data: { ...MINTED.data, apiKey: '' } })], 'malformed device key'],
+    ];
+    for (const [replies, message] of cases) {
+      const outcome = await run(replies);
+      expect(outcome.result.status).toBe('failed');
+      expect(outcome.result.status === 'failed' && outcome.result.message).toContain(message);
+      expectNoSecrets(outcome);
+    }
+  });
+
+  test("a refused key request reports the server's message, never the token", async () => {
+    const refusal = json(403, { error: { code: 'FORBIDDEN', message: "This Omni's device-key scopes leave nothing" } });
+    const outcome = await run([json(200, CODE), granted, refusal]);
+    expect(outcome.result).toEqual({ status: 'failed', message: "This Omni's device-key scopes leave nothing" });
+    expectNoSecrets(outcome);
+  });
+
+  test('an unreachable server fails cleanly', async () => {
+    const outcome = await run([new TypeError('Unable to connect')]);
+    expect(outcome.result).toEqual({ status: 'failed', message: 'Unable to connect' });
+  });
+});

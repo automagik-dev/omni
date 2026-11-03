@@ -1,7 +1,7 @@
 /**
  * Server Commands — manage the REMOTE server registry.
  *
- *   omni server add <name> <url> [--api-key <key>]   Register a server
+ *   omni server add <name> <url> [--api-key <key>]   Register a server (no key: sign in by device code)
  *   omni server list [--reveal]                      List registered servers
  *   omni server use <name>                           Switch the active server
  *   omni server remove <name> [--force]              Drop a server
@@ -30,6 +30,7 @@ import {
   maskConfigApiKey,
   saveServers,
 } from '../config.js';
+import { type DeviceKey, deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import * as output from '../output.js';
 import { normalizeServerUrl } from '../signing.js';
 import { VERSION } from '../version.js';
@@ -143,6 +144,24 @@ function exitVerificationFailed(name: string, url: string, failure: Extract<Veri
   });
 }
 
+/**
+ * Sign this CLI in to `url` with the server's device flow (#1461), for an `add` without a
+ * key. Null when the server has no device sign-in (login off, or older), so the entry is
+ * saved keyless as before; any other outcome but approval exits, with nothing saved.
+ */
+async function signInByDevice(url: string): Promise<DeviceKey | null> {
+  const result = await runDeviceLoginWithInterrupt({
+    url,
+    onPrompt: (prompt) => {
+      for (const line of devicePromptLines(prompt)) output.info(line);
+    },
+  });
+  if (result.status === 'approved') return result.key;
+  if (result.status === 'unavailable') return null;
+  const failure = deviceLoginFailure(result);
+  return output.error(failure.message, undefined, failure.exitCode);
+}
+
 // ============================================================================
 // Subcommand actions
 // ============================================================================
@@ -174,6 +193,9 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
 
   const entry: ServerEntry = { url: normalized };
   if (options.apiKey) entry.apiKey = options.apiKey;
+  // No key and a verified server: sign in by device code instead of saving it keyless.
+  const signedIn = !options.apiKey && !options.skipVerify ? await signInByDevice(normalized) : null;
+  if (signedIn) entry.apiKey = signedIn.apiKey;
 
   const existed = servers.list[name] !== undefined;
   const next: ServersConfig = {
@@ -182,7 +204,7 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
   };
   saveServers(next);
 
-  if (!options.apiKey) {
+  if (!entry.apiKey) {
     output.warn(`No API key stored for '${name}'. Run: omni auth login --server ${name} --api-key <key>`);
   }
 
@@ -192,6 +214,7 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
     apiKey: maskConfigApiKey(entry.apiKey),
     verified: options.skipVerify !== true,
     active: next.active === name,
+    ...(signedIn ? { signedIn: true, keyId: signedIn.keyId, scopes: signedIn.scopes } : {}),
   });
 }
 
@@ -291,9 +314,9 @@ Target one entry for a single command with the global flag:
 
   server
     .command('add <name> <url>')
-    .description('Register a server (verifies reachability and key before saving)')
-    .option('--api-key <key>', 'API key for this server')
-    .option('--skip-verify', 'Save the entry without probing the server first')
+    .description('Register a server (verifies reachability and key; without a key, signs in by device code)')
+    .option('--api-key <key>', 'API key for this server (omit it to sign in by device code)')
+    .option('--skip-verify', 'Save the entry without probing the server first (and without signing in)')
     .option('--use', 'Also make this the active server')
     .action(handleAdd);
 
