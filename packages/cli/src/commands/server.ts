@@ -221,7 +221,9 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
   saveServers(next);
 
   if (!entry.apiKey) {
-    output.warn(`No API key stored for '${name}'. Run: omni auth login --server ${name} --api-key <key>`);
+    output.warn(
+      `No API key stored for '${name}'.\nSign in interactively: omni auth login --server ${name}\nOr read a key from stdin: omni auth login --server ${name} --api-key-stdin < /secure/path/omni-api-key`,
+    );
   }
 
   output.success(existed ? `Updated server '${name}'` : `Added server '${name}'`, {

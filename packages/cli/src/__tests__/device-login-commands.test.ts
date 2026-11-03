@@ -224,6 +224,11 @@ describe('omni server add <name> <url> without a key', () => {
     const result = await cli(['server', 'add', 'lab', fake.url]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("No API key stored for 'lab'");
+    expect(result.stdout).toContain('Sign in interactively: omni auth login --server lab\n');
+    expect(result.stdout).toContain(
+      'Or read a key from stdin: omni auth login --server lab --api-key-stdin < /secure/path/omni-api-key',
+    );
+    expect(result.stdout).not.toMatch(/--api-key(?:\s|=)/);
     expect(readConfig().servers.list.lab).toEqual({ url: fake.url });
   });
 
@@ -232,11 +237,26 @@ describe('omni server add <name> <url> without a key', () => {
     const result = await cli(['server', 'add', 'lab', fake.url, '--skip-verify']);
     expect(result.exitCode).toBe(0);
     expect(fake.polls).toBe(0);
+    expect(result.stdout).toContain('Sign in interactively: omni auth login --server lab\n');
+    expect(result.stdout).toContain(
+      'Or read a key from stdin: omni auth login --server lab --api-key-stdin < /secure/path/omni-api-key',
+    );
+    expect(result.stdout).not.toMatch(/--api-key(?:\s|=)/);
     expect(readConfig().servers.list.lab).toEqual({ url: fake.url });
   });
 });
 
 describe('omni auth login without a key', () => {
+  test('help lists device and explicit credential sources without signing in', async () => {
+    const initial = writeInitialConfig();
+    const result = await cli(['auth', 'login', '--help'], false);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Successful login reports keySource (device/flag/stdin/env).');
+    expect(result.stdout).toContain('With no key at all');
+    expect(fake.requests).toBe(0);
+    expect(readConfig()).toEqual(initial);
+  });
+
   test('signs in by device code and saves the key into the targeted entry', async () => {
     const initial = writeInitialConfig();
     const result = await cli(['auth', 'login', '--server', 'prod', '--json']);
