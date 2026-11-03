@@ -619,6 +619,8 @@ export const STRINGS = {
   'Other chats': '其他聊天',
   'Adding…': '正在添加…',
   'The chat was not added.': '这个聊天没有添加。',
+  'Could not remove this chat. Try again.': '无法移除这个聊天。请重试。',
+  'Could not change this chat\'s settings. Try again.': '无法更改这个聊天的设置。请重试。',
   'Remove {name} from the sidebar? Click again': '要从侧边栏移除 {name} 吗？再点一次',
   // Why a chat cannot be added, or a thread does not work (threads.js, thread-keys.js, omni-tree.js).
   'Adding a chat needs a newer Bot team.': '添加聊天需要更新的 Bot 团队。',

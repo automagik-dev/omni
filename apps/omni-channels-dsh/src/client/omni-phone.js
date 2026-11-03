@@ -115,7 +115,7 @@ export function openPhone(thread) {
   if (!right) return t('The phone pane needs DSH\'s right column.')
   try {
     const snapshot = right.mounted?.getSnapshot?.()
-    if (snapshot === undefined || right.actionsFor?.(snapshot) === undefined) return phoneUnavailable()
+    if (snapshot === undefined || (typeof right.actionsFor === 'function' && right.actionsFor(snapshot) === undefined)) return phoneUnavailable()
     right.openTab(PHONE_KIND, { params: phoneParams(thread) })
     return null
   } catch (error) {
@@ -226,8 +226,8 @@ export function PhoneTab({ useTabInfo, sessionId, useRoster }) {
 /**
  * In a thread's own Session: opens the pane its row asked for, from this render's effects.
  * A mounted Session can briefly have no adopted store, including just after adoption was
- * released. Retry that gap only here, for at most PHONE_WAIT_MS; never call openTab until
- * actionsFor is available. It draws no control; a pane that cannot open says why in place.
+ * released. When DSH exposes actionsFor, retry that gap here for at most PHONE_WAIT_MS;
+ * otherwise let openTab try and map its failure. It draws no control; a failed pane says why.
  */
 export function PhoneDock({ sessionId, useRoster }) {
   const thread = useRoster(roster => threadsIn(roster).find(item => item.sessionId === sessionId) ?? null)
@@ -245,7 +245,7 @@ export function PhoneDock({ sessionId, useRoster }) {
         const snapshot = right?.mounted?.getSnapshot?.()
         // Never open this thread's pane in a Session the owner navigated to during the wait.
         if (snapshot !== thread.sessionId) return
-        if (right.actionsFor?.(snapshot) === undefined && waited < PHONE_WAIT_MS) {
+        if (typeof right.actionsFor === 'function' && right.actionsFor(snapshot) === undefined && waited < PHONE_WAIT_MS) {
           waited += PHONE_RETRY_MS
           timer = setTimeout(attempt, PHONE_RETRY_MS)
           return

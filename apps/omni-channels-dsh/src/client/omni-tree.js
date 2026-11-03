@@ -176,13 +176,19 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     if (!confirming) { setConfirming(true); return }
     setConfirming(false)
     setProblem(null)
-    call('omni-thread-remove', { threadId: thread.id }).catch(error => setProblem(error?.message ?? String(error)))
+    call('omni-thread-remove', { threadId: thread.id }).catch(error => {
+      console.warn('Could not remove the chat:', error)
+      setProblem(t('Could not remove this chat. Try again.'))
+    })
   }
   // The owner's choice for this thread; the row shows it on the team's next roster pull.
   const choose = (choice) => {
     setMenu(false)
     setProblem(null)
-    call('omni-thread-permissions', { threadId: thread.id, [choice.field]: choice.value }).catch(error => setProblem(error?.message ?? String(error)))
+    call('omni-thread-permissions', { threadId: thread.id, [choice.field]: choice.value }).catch(error => {
+      console.warn('Could not change the chat settings:', error)
+      setProblem(t('Could not change this chat\'s settings. Try again.'))
+    })
   }
   const onMenuKey = (event) => {
     if (event.key !== 'Escape') return

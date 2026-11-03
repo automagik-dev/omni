@@ -60,6 +60,8 @@ test('the board never opens by itself: only the header button opens it; the phon
     'omni-tree.js: const why = openPhone(thread)',
   ])
   assert.deepEqual(calls(/^.*\brequestPhone\(.*$/gm).filter(line => !line.includes('export function')), ['omni-tree.js: const reason = requestPhone(thread)'])
+  // Phone opens run through the dock's attempt, never a timer calling openPhone directly.
+  assert.deepEqual(calls(/^.*setTimeout\(.*$/gm).filter(line => line.includes('openPhone') || line.includes('PHONE_WAIT')), [])
   // The dock may briefly retry adoption, but only to fulfill a pending click on this thread.
   const dock = phone.slice(phone.indexOf('export function PhoneDock('))
   assert.match(dock, /hasPhoneIntent\(id\)/)
