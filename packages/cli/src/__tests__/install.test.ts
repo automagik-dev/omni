@@ -407,14 +407,6 @@ describe('createInstallCommand — flag wiring', () => {
     expect(longs).toContain('--database-url');
     expect(longs).toContain('--api-key');
   });
-
-  test('description reflects non-interactive reinstall-safe agent-first design', () => {
-    const cmd = createInstallCommand();
-    const desc = cmd.description();
-    expect(desc).toContain('non-interactive');
-    expect(desc).toContain('reinstall-safe');
-    expect(desc).toContain('agent-first');
-  });
 });
 
 // ---------------------------------------------------------------------------

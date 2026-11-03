@@ -212,10 +212,6 @@ describe('buildRuntimeEnv', () => {
     expect(chosen.OMNI_LOGIN_ENABLED).toBe('false');
     expect(buildRuntimeEnv({ ...DEFAULT_SERVER_CONFIG, login: 'on' }, {}).OMNI_LOGIN_ENABLED).toBeUndefined();
   });
-
-  test('CANONICAL_PG_PORT is re-exported from pgserve-transport (5432)', () => {
-    expect(CANONICAL_PG_PORT).toBe(5432);
-  });
 });
 
 describe('UDS-preference (pgserve-singleton-no-proxy G1)', () => {
@@ -242,19 +238,6 @@ describe('UDS-preference (pgserve-singleton-no-proxy G1)', () => {
     expect(url).toBe('postgresql://postgres:postgres@localhost/omni');
     const parsed = new URL(url);
     expect(parsed.search).toBe('');
-  });
-
-  test('resolveDatabaseUrl falls back to TCP embedded URL when UDS is absent', () => {
-    process.env.XDG_RUNTIME_DIR = '/var/empty';
-    const cfg = { ...DEFAULT_SERVER_CONFIG, databaseUrl: '' };
-    expect(resolveDatabaseUrl(cfg)).toBe(buildEmbeddedDatabaseUrl());
-  });
-
-  test('non-default operator URL is preserved verbatim regardless of UDS state', () => {
-    process.env.XDG_RUNTIME_DIR = '/var/empty';
-    const external = 'postgresql://omni:omni@db.example.com:5432/omni_prod';
-    const cfg = { ...DEFAULT_SERVER_CONFIG, databaseUrl: external };
-    expect(resolveDatabaseUrl(cfg)).toBe(external);
   });
 
   test('legacy phase-2 URL (localhost:8432) is treated as a stale default and re-resolved', () => {

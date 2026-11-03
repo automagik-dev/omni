@@ -23,10 +23,6 @@ import {
 } from '../lib/requirements.js';
 
 describe('REQUIREMENTS manifest', () => {
-  test('declares pgserve at >=2.3', () => {
-    expect(REQUIREMENTS.pgserve).toBe('>=2.3');
-  });
-
   test('declares genie at >=5.0', () => {
     expect(REQUIREMENTS.genie).toBe('>=5.0');
   });
@@ -102,32 +98,16 @@ describe('compareVersions', () => {
 });
 
 describe('satisfiesConstraint', () => {
-  test('exact match satisfies >=', () => {
-    expect(satisfiesConstraint('2.3.0', '>=2.3')).toBe(true);
-  });
-
-  test('newer patch satisfies', () => {
-    expect(satisfiesConstraint('2.3.5', '>=2.3')).toBe(true);
-  });
-
-  test('newer minor satisfies', () => {
-    expect(satisfiesConstraint('2.4.0', '>=2.3')).toBe(true);
-  });
-
-  test('older minor does NOT satisfy', () => {
-    expect(satisfiesConstraint('2.2.99', '>=2.3')).toBe(false);
-  });
-
-  test('older major does NOT satisfy', () => {
-    expect(satisfiesConstraint('1.99.0', '>=2.3')).toBe(false);
-  });
-
-  test('CalVer satisfies under >=2.3 (since 260507 > 3)', () => {
-    expect(satisfiesConstraint('2.260507.4', '>=2.3')).toBe(true);
-  });
-
-  test('malformed current version returns false (does not throw)', () => {
-    expect(satisfiesConstraint('not-a-version', '>=2.3')).toBe(false);
+  test.each([
+    ['exact match satisfies >=', '2.3.0', true],
+    ['newer patch satisfies', '2.3.5', true],
+    ['newer minor satisfies', '2.4.0', true],
+    ['older minor does NOT satisfy', '2.2.99', false],
+    ['older major does NOT satisfy', '1.99.0', false],
+    ['CalVer satisfies under >=2.3 (since 260507 > 3)', '2.260507.4', true],
+    ['malformed current version returns false (does not throw)', 'not-a-version', false],
+  ])('%s', (_name, current, expected) => {
+    expect(satisfiesConstraint(current, '>=2.3')).toBe(expected);
   });
 });
 

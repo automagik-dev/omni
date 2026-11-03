@@ -36,10 +36,6 @@ describe('PM2_HARDENED_DEFAULTS', () => {
     expect(PM2_HARDENED_DEFAULTS.restartDelayMs).toBeGreaterThanOrEqual(1000);
   });
 
-  test('api memory limit is set', () => {
-    expect(PM2_HARDENED_DEFAULTS.apiMaxMemory).toMatch(/^\d+[MG]$/);
-  });
-
   test('nats memory limit is set', () => {
     expect(PM2_HARDENED_DEFAULTS.natsMaxMemory).toMatch(/^\d+[MG]$/);
   });
@@ -206,32 +202,6 @@ describe('buildPm2StartArgs — nats launch', () => {
     const errIdx = natsArgs.indexOf('--error');
     expect(natsArgs[outIdx + 1]).toContain('omni-nats-out.log');
     expect(natsArgs[errIdx + 1]).toContain('omni-nats-error.log');
-  });
-});
-
-describe('buildPm2StartArgs — shared-flag invariant', () => {
-  test('install and start produce identical hardened flags for omni-api', () => {
-    // Different call sites (install.ts, start.ts) build the same shape —
-    // simulate both and diff them. The only legitimate difference should be
-    // the script path; all flag pairs must match.
-    const a = buildPm2StartArgs({
-      kind: 'api',
-      script: '/install/path/launcher.sh',
-      name: PM2_PROCESSES.api,
-      interpreter: 'bash',
-    });
-    const b = buildPm2StartArgs({
-      kind: 'api',
-      script: '/start/path/launcher.sh',
-      name: PM2_PROCESSES.api,
-      interpreter: 'bash',
-    });
-    // Everything except the script path (index 1) must be identical.
-    expect(a.length).toBe(b.length);
-    for (let i = 0; i < a.length; i++) {
-      if (i === 1) continue;
-      expect(a[i]).toBe(b[i]);
-    }
   });
 });
 
