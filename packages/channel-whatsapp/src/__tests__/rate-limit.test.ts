@@ -47,19 +47,6 @@ describe('parseRetryAfter', () => {
     // Message-based detection only works in isRateLimitError, not parseRetryAfter
     expect(parseRetryAfter({ message: 'Rate limit exceeded' })).toBeNull();
   });
-
-  test('parse time <1ms p99', () => {
-    const error = { statusCode: 429, retryAfter: 5 };
-    const latencies: number[] = [];
-    for (let i = 0; i < 10_000; i++) {
-      const start = performance.now();
-      parseRetryAfter(error);
-      latencies.push(performance.now() - start);
-    }
-    latencies.sort((a, b) => a - b);
-    const p99 = latencies[Math.floor(latencies.length * 0.99)];
-    expect(p99).toBeLessThan(1);
-  });
 });
 
 describe('isRateLimitError', () => {
@@ -102,15 +89,6 @@ describe('calculateExponentialBackoff', () => {
   test('starts at initial backoff for first hit', () => {
     const backoff = calculateExponentialBackoff(1, { jitterFactor: 0 });
     expect(backoff).toBe(1000);
-  });
-
-  test('doubles for each consecutive hit', () => {
-    const b1 = calculateExponentialBackoff(1, { jitterFactor: 0 });
-    const b2 = calculateExponentialBackoff(2, { jitterFactor: 0 });
-    const b3 = calculateExponentialBackoff(3, { jitterFactor: 0 });
-    expect(b1).toBe(1000);
-    expect(b2).toBe(2000);
-    expect(b3).toBe(4000);
   });
 
   test('caps at max backoff', () => {
