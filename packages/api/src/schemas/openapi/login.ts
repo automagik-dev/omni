@@ -9,11 +9,14 @@
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
+import { DEVICE_CLIENTS, type DeviceClientId } from '../../login/config';
 import { ErrorSchema } from './common';
 
 const claimToken = z.object({
   'x-omni-claim-token': z.string().openapi({ description: 'The claim token printed in the server log at boot' }),
 });
+/** The device clients this Omni knows, from login/config.ts, so the docs never lag a new one. */
+const DEVICE_CLIENT_IDS = Object.keys(DEVICE_CLIENTS) as [DeviceClientId, ...DeviceClientId[]];
 const error = (description: string) => ({ description, content: { 'application/json': { schema: ErrorSchema } } });
 const ok = (schema: z.ZodTypeAny, description: string) => ({
   description,
@@ -89,7 +92,10 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     request: {
       headers: z.object({
         authorization: z.string().openapi({ description: 'Bearer <access_token from /api/auth/device/token>' }),
-        'x-omni-client': z.string().optional().openapi({ description: 'omni-desktop, omni-dsh, omni-cli or unfold' }),
+        'x-omni-client': z
+          .string()
+          .optional()
+          .openapi({ description: DEVICE_CLIENT_IDS.join(', ') }),
       }),
       ...json(z.object({ deviceName: z.string().min(1).max(80) })),
     },
@@ -114,7 +120,7 @@ export function registerLoginSchemas(registry: OpenAPIRegistry): void {
     request: json(
       z.object({
         grant: z.string().regex(/^[A-Za-z0-9_-]{24}$/),
-        clientId: z.enum(['omni-desktop', 'omni-dsh', 'omni-cli', 'unfold']),
+        clientId: z.enum(DEVICE_CLIENT_IDS),
         deviceName: z.string().min(1).max(80),
       }),
     ),

@@ -11650,7 +11650,7 @@ export interface operations {
                 "application/json": {
                     grant: string;
                     /** @enum {string} */
-                    clientId: "omni-desktop" | "omni-dsh" | "omni-cli" | "unfold";
+                    clientId: "omni-desktop" | "omni-dsh" | "omni-cli" | "omni-agent-host" | "unfold";
                     deviceName: string;
                 };
             };
