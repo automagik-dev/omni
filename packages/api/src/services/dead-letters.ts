@@ -32,7 +32,7 @@ import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-o
 import { z } from 'zod';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
-import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
 import { DEAD_LETTER_RETRY_SOURCES } from './dead-letter-sources';
@@ -81,17 +81,19 @@ const StoredEnvelopeSchema = z.object({
 });
 
 /**
- * Under multitenancy a retry must never move an event into a tenant its row was
- * not already in. A restored instanceId lets the publish derive the instance
- * owner's tenant, so it stays only when the row has a tenant and the bus's own
- * owner registry says that tenant owns the instance. A NULL-owned row, an unknown
- * owner or a mismatch republishes without it; event-persistence then drops an
- * instance-less receipt replay. With the flag off the owner registry is empty and
- * nothing is stamped from the instance, so the restore is unchanged.
+ * A retry must never move an event into a tenant its row was not already in. A
+ * restored instanceId lets the publish derive the instance owner's tenant (the
+ * owner registry is filled whatever the flag), so it stays only when that owner
+ * IS the row's tenant. A NULL-owned row never equals a resolved owner. With no
+ * resolved owner it stays only while the flag is off (the single-tenant restore);
+ * with the flag on an unknown owner drops it. A dropped instance means an
+ * instance-less receipt replay, which event-persistence does not insert.
  */
 function confineToRowTenant(metadata: Partial<EventMetadata>, rowTenantId: string | null): Partial<EventMetadata> {
-  if (!metadata.instanceId || !isMultitenancyEnabled()) return metadata;
-  if (rowTenantId && resolveInstanceOwnerTenantId(metadata.instanceId) === rowTenantId) return metadata;
+  if (!metadata.instanceId) return metadata;
+  const owner = resolveInstanceOwnerTenantId(metadata.instanceId);
+  // An unknown owner keeps the single-tenant restore only with the flag off.
+  if (owner === null ? !isMultitenancyEnabled() : owner === rowTenantId) return metadata;
   const { instanceId: _foreign, ...confined } = metadata;
   return confined;
 }
@@ -403,15 +405,20 @@ export class DeadLetterService {
       await this.eventBus.publishConnector(entry.eventType, restored.payload, { ...restored.metadata, source });
     } else {
       const original = storedEnvelope(entry, payload);
-      await this.eventBus.publishGeneric(entry.eventType as EventType, original?.payload ?? payload, {
-        ...(original ? confineToRowTenant(original.metadata, entry.tenantId ?? null) : {}),
-        source,
-        // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
-        // stable across attempts for consumer-side idempotency. Do not reuse
-        // entry.eventId: it may already have a retained failed-handler claim.
-        publishEventId: entry.id,
-        ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
-      });
+      const eventBus = this.eventBus;
+      const publish = () =>
+        eventBus.publishGeneric(entry.eventType as EventType, original?.payload ?? payload, {
+          ...(original ? confineToRowTenant(original.metadata, entry.tenantId ?? null) : {}),
+          source,
+          // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
+          // stable across attempts for consumer-side idempotency. Do not reuse
+          // entry.eventId: it may already have a retained failed-handler claim.
+          publishEventId: entry.id,
+          // The row's tenant, explicitly. A NULL-owned row has none to give, so it is
+          // published outside any request scope rather than inheriting the caller's.
+          ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
+        });
+      await (entry.tenantId ? publish() : runDetachedFromTenantScope(publish));
     }
   }
 
@@ -427,6 +434,13 @@ export class DeadLetterService {
 
     if (current.status === 'retrying') {
       return { success: false, deadLetterId: id, error: 'Dead letter already retrying' };
+    }
+
+    // A NULL-owned row has no tenant to republish in, and a manual retry runs in
+    // the caller's request scope. Under multitenancy refuse it here; the scheduler
+    // (no request scope) still republishes such rows tenantless.
+    if (!current.tenantId && isMultitenancyEnabled()) {
+      return { success: false, deadLetterId: id, error: 'Dead letter has no owning tenant' };
     }
 
     // A status read is not ownership: only the pending-to-retrying claim wins.

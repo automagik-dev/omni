@@ -11,6 +11,7 @@ import {
   type EventType,
   type OmniEvent,
   setEnvelopeInstanceTenantResolver,
+  setEnvelopeTenantResolver,
 } from '@omni/core';
 import {
   type Database,
@@ -24,12 +25,17 @@ import {
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
+import { Hono } from 'hono';
 import { setupEventPersistence } from '../../plugins/event-persistence';
+import { deadLettersRoutes } from '../../routes/v2/dead-letters';
 import {
   __resetInstanceOwnerRegistry,
   installInstanceOwnerResolver,
   rememberInstanceOwners,
 } from '../../tenancy/instance-owner-registry';
+import { currentTenantScope } from '../../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../../tenancy/worker-tenant-context';
+import type { AppVariables } from '../../types';
 import { DeadLetterService } from '../dead-letters';
 
 // API unit tests can mock @omni/core process-wide in the single-process sweep.
@@ -292,7 +298,7 @@ postgresDescribe('dead-letter retry restores the original event (legacy, real Po
 
   test('multitenancy without enforcement: a NULL-owned row naming an owned instance stays tenantless (#1566)', async () => {
     // Enforced RLS never retries a NULL-owned row; with enforcement off the
-    // scheduler and manual retry still do, so this is where the rule bites.
+    // scheduler still does (a manual retry is refused, see below).
     const owner = crypto.randomUUID();
     installInstanceOwnerResolver();
     rememberInstanceOwners([{ id: instanceA, tenantId: owner }]);
@@ -304,7 +310,7 @@ postgresDescribe('dead-letter retry restores the original event (legacy, real Po
         { instanceId: instanceA, correlationId: 'corr-unowned' },
       );
       expect(row.tenantId).toBeNull();
-      expect(await retry('manual', row.id)).toBe(true);
+      expect(await retry('auto', row.id)).toBe(true);
       expect(deliveries.at(-1)?.id).toBe(row.id);
       expect(deliveries.at(-1)?.metadata.tenantId).toBeUndefined();
       expect(deliveries.at(-1)?.metadata.instanceId).toBeUndefined();
@@ -313,6 +319,99 @@ postgresDescribe('dead-letter retry restores the original event (legacy, real Po
       process.env.OMNI_MULTITENANCY_ENABLED = 'false';
       setEnvelopeInstanceTenantResolver(null);
       __resetInstanceOwnerRegistry();
+    }
+  });
+
+  async function seedTenant(slug: string): Promise<string> {
+    const [tenant] = await db
+      .insert(tenants)
+      .values({
+        slug: `${slug}-${crypto.randomUUID().slice(0, 8)}`,
+        displayName: slug,
+        maxKeyTtlSeconds: 3600,
+        maxKeyRateLimit: 100,
+        maxKeyBudget: 100,
+      })
+      .returning();
+    if (!tenant) throw new Error('missing tenant');
+    return tenant.id;
+  }
+
+  /** The owner registry the bus stamps tenants from, populated regardless of the flag. */
+  async function withOwners(owners: Array<{ id: string; tenantId: string }>, fn: () => Promise<void>) {
+    installInstanceOwnerResolver();
+    rememberInstanceOwners(owners);
+    try {
+      await fn();
+    } finally {
+      setEnvelopeInstanceTenantResolver(null);
+      __resetInstanceOwnerRegistry();
+    }
+  }
+
+  for (const mode of ['manual', 'auto'] as const) {
+    test(`flag off, ${mode}: a NULL-owned row naming an owned instance takes no tenant (#1566 B1)`, async () => {
+      const owner = await seedTenant('b1-owner');
+      await withOwners([{ id: instanceA, tenantId: owner }], async () => {
+        const { row } = await fileDeadLetter(
+          'custom.dlq-b1-unowned' as EventType,
+          { value: 'b1' },
+          { instanceId: instanceA, correlationId: 'corr-b1' },
+        );
+        expect(row.tenantId).toBeNull();
+        expect(await retry(mode, row.id)).toBe(true);
+        expect(deliveries.at(-1)?.id).toBe(row.id);
+        expect(deliveries.at(-1)?.metadata.tenantId).toBeUndefined();
+        expect(deliveries.at(-1)?.metadata.instanceId).toBeUndefined();
+      });
+    });
+
+    test(`flag off, ${mode}: a tenant-A row naming a tenant-B instance leaves B's row untouched (#1566 B1)`, async () => {
+      const [tenantA, tenantB] = [await seedTenant('b1-a'), await seedTenant('b1-b')];
+      const externalId = `wamid-${crypto.randomUUID()}`;
+      const { rowB } = await seedSentRows(externalId);
+      await withOwners([{ id: instanceB, tenantId: tenantB }], async () => {
+        const { row } = await fileDeadLetter(
+          'message.delivered',
+          { externalId, chatId: 'chat-1', deliveredAt: Date.now() },
+          { instanceId: instanceB, channelType: 'whatsapp-baileys' },
+        );
+        await db.update(deadLetterEvents).set({ tenantId: tenantA }).where(eq(deadLetterEvents.id, row.id));
+        expect(await retry(mode, row.id)).toBe(true);
+        const rows = await rowsFor(externalId);
+        expect(rows.find((r) => r.id === rowB)?.deliveredAt).toBeNull();
+        expect(rows.every((r) => r.deliveredAt === null)).toBe(true);
+        expect(await nullInstanceReceipts()).toHaveLength(0);
+        expect(deliveries.at(-1)?.metadata.tenantId).toBe(tenantA);
+        expect(deliveries.at(-1)?.metadata.instanceId).toBeUndefined();
+      });
+    });
+  }
+
+  test('flag on: a NULL-owned row retried from a tenant request is refused and stays pending (#1566 N1)', async () => {
+    const tenant = await seedTenant('n1-request');
+    // The production ambient resolver (index.ts): the request scope's tenant.
+    setEnvelopeTenantResolver(() => currentTenantScope()?.tenantId ?? null);
+    process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.use('*', async (c, next) => {
+      c.set('services', { deadLetters: service } as unknown as AppVariables['services']);
+      await runTenantWorkDb(db, tenant, next);
+    });
+    app.route('/dead-letters', deadLettersRoutes);
+    try {
+      const { row } = await fileDeadLetter('custom.dlq-n1' as EventType, { value: 'n1' }, { correlationId: 'corr-n1' });
+      expect(row.tenantId).toBeNull();
+      const before = deliveries.length;
+      const res = await app.request(`/dead-letters/${row.id}/retry`, { method: 'POST' });
+      // Nothing is published, so nothing can take the request's tenant.
+      expect(deliveries.slice(before).map((event) => event.metadata.tenantId)).toEqual([]);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ success: false, error: 'Dead letter has no owning tenant' });
+      expect((await service.getById(row.id)).status).toBe('pending');
+    } finally {
+      process.env.OMNI_MULTITENANCY_ENABLED = 'false';
+      setEnvelopeTenantResolver(null);
     }
   });
 
