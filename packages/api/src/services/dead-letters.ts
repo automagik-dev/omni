@@ -24,6 +24,7 @@ import {
   generateId,
   isConnectorEventType,
   prepareDeadLetterInsert,
+  resolveInstanceOwnerTenantId,
 } from '@omni/core';
 import type { Database, DeadLetterStatus } from '@omni/db';
 import { deadLetterEvents, resolveEnforcementMode } from '@omni/db';
@@ -78,6 +79,22 @@ const StoredEnvelopeSchema = z.object({
     ingestMode: optional(z.enum(['realtime', 'history-sync'])),
   }),
 });
+
+/**
+ * Under multitenancy a retry must never move an event into a tenant its row was
+ * not already in. A restored instanceId lets the publish derive the instance
+ * owner's tenant, so it stays only when the row has a tenant and the bus's own
+ * owner registry says that tenant owns the instance. A NULL-owned row, an unknown
+ * owner or a mismatch republishes without it; event-persistence then drops an
+ * instance-less receipt replay. With the flag off the owner registry is empty and
+ * nothing is stamped from the instance, so the restore is unchanged.
+ */
+function confineToRowTenant(metadata: Partial<EventMetadata>, rowTenantId: string | null): Partial<EventMetadata> {
+  if (!metadata.instanceId || !isMultitenancyEnabled()) return metadata;
+  if (rowTenantId && resolveInstanceOwnerTenantId(metadata.instanceId) === rowTenantId) return metadata;
+  const { instanceId: _foreign, ...confined } = metadata;
+  return confined;
+}
 
 /**
  * The original event of a row filed by `create`, or null for a row whose
@@ -387,7 +404,7 @@ export class DeadLetterService {
     } else {
       const original = storedEnvelope(entry, payload);
       await this.eventBus.publishGeneric(entry.eventType as EventType, original?.payload ?? payload, {
-        ...original?.metadata,
+        ...(original ? confineToRowTenant(original.metadata, entry.tenantId ?? null) : {}),
         source,
         // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
         // stable across attempts for consumer-side idempotency. Do not reuse

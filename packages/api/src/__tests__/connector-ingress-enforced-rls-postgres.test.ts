@@ -37,6 +37,7 @@ import {
   type GenericEventHandler,
   createAutomationEngine,
   isConnectorEventType,
+  setEnvelopeInstanceTenantResolver,
 } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
@@ -61,6 +62,11 @@ import { createServices } from '../services';
 import { ConnectorService } from '../services/connectors';
 import { DeadLetterService } from '../services/dead-letters';
 import { connectorIngressLookupActive, resolveConnectorIngressTenant } from '../tenancy/connector-ingress';
+import {
+  __resetInstanceOwnerRegistry,
+  installInstanceOwnerResolver,
+  rememberInstanceOwners,
+} from '../tenancy/instance-owner-registry';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 
@@ -584,6 +590,77 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     expect(await inTenant(TENANT_A, () => services.deadLetters.getById(dead.id))).toMatchObject({ tenantId: TENANT_A });
     await expect(inTenant(TENANT_B, () => services.deadLetters.getById(dead.id))).rejects.toThrow('not found');
     await inTenant(TENANT_A, () => services.deadLetters.abandon(dead.id));
+  });
+
+  test('under multitenancy a retry restores instanceId only for an instance its row tenant owns (#1566)', async () => {
+    const instanceOfA = randomUUID();
+    const instanceOfB = randomUUID();
+    const type = 'custom.dlq-instance-confined' as const;
+    const envelope = (instanceId: string) => {
+      const id = randomUUID();
+      return {
+        event: {
+          id,
+          type,
+          payload: { instanceId },
+          metadata: { correlationId: id, instanceId },
+          timestamp: Date.now(),
+        },
+        subject: type,
+        error: new Error('consumer failed'),
+        retryCount: 0,
+        autoRetry: false,
+      };
+    };
+    const published: Parameters<GenericEventHandler>[0][] = [];
+    const subscription = await bus.subscribePattern(type, async (event) => {
+      published.push(event);
+    });
+    const previous = {
+      OMNI_MULTITENANCY_ENABLED: process.env.OMNI_MULTITENANCY_ENABLED,
+      OMNI_DB_ENFORCEMENT: process.env.OMNI_DB_ENFORCEMENT,
+    };
+    // The same owner lookup the bus stamps tenants from.
+    installInstanceOwnerResolver();
+    rememberInstanceOwners([
+      { id: instanceOfA, tenantId: TENANT_A },
+      { id: instanceOfB, tenantId: TENANT_B },
+    ]);
+    try {
+      process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+      process.env.OMNI_DB_ENFORCEMENT = 'on';
+      if (!handle) throw new Error('missing superuser handle');
+
+      // (1) A NULL-owned row naming a tenant-owned instance is never retried
+      // under enforcement, so nothing is published into any tenant.
+      const unowned = await new DeadLetterService(handle.db, bus).create(envelope(instanceOfB));
+      expect(unowned.tenantId).toBeNull();
+      for (const tenantId of [TENANT_A, TENANT_B]) {
+        await expect(inTenant(tenantId, () => services.deadLetters.retry(unowned.id))).rejects.toThrow('not found');
+      }
+
+      // (2) A tenant-A row naming a tenant-B instance stays in tenant A, without the instance.
+      const foreign = await inTenant(TENANT_A, () => services.deadLetters.create(envelope(instanceOfB)));
+      expect((await inTenant(TENANT_A, () => services.deadLetters.retry(foreign.id))).success).toBe(true);
+      expect(published.at(-1)?.id).toBe(foreign.id);
+      expect(published.at(-1)?.metadata.tenantId).toBe(TENANT_A);
+      expect(published.at(-1)?.metadata.instanceId).toBeUndefined();
+
+      // (3) A tenant-A row naming a tenant-A instance keeps it.
+      const own = await inTenant(TENANT_A, () => services.deadLetters.create(envelope(instanceOfA)));
+      expect((await inTenant(TENANT_A, () => services.deadLetters.retry(own.id))).success).toBe(true);
+      expect(published.at(-1)?.id).toBe(own.id);
+      expect(published.at(-1)?.metadata).toMatchObject({ tenantId: TENANT_A, instanceId: instanceOfA });
+      expect(published.map((event) => event.id)).not.toContain(unowned.id);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+      setEnvelopeInstanceTenantResolver(null);
+      __resetInstanceOwnerRegistry();
+      await subscription.unsubscribe();
+    }
   });
 
   test('a retried generic dead letter runs under its row tenant, never the stored envelope tenant (#1552)', async () => {

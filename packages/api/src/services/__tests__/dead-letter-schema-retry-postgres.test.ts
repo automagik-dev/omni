@@ -116,6 +116,9 @@ for (const enforced of [false, true]) {
         });
         closers.push(() => authHandle.close());
         authDb = authHandle.db;
+        // Instance ownership as the bus derives it: every instance here belongs to tenant A,
+        // the tenant each row is written in, so a retry may restore its instanceId (#1566).
+        (await import('@omni/core')).setEnvelopeInstanceTenantResolver(() => TENANT_A);
       }
       bus = {
         connect: async () => {},
@@ -160,6 +163,7 @@ for (const enforced of [false, true]) {
         for (const close of closers.reverse()) await close();
         dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
       } finally {
+        (await import('@omni/core')).setEnvelopeInstanceTenantResolver(null);
         for (const [key, value] of Object.entries({
           OMNI_MULTITENANCY_ENABLED: previousFlags.multitenancy,
           OMNI_DB_ENFORCEMENT: previousFlags.enforcement,

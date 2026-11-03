@@ -5,7 +5,13 @@
  * The tenant always comes from the dead-letter row, never the stored envelope.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
-import type { ConnectorEventPublisher, EventBus, EventType, OmniEvent } from '@omni/core';
+import {
+  type ConnectorEventPublisher,
+  type EventBus,
+  type EventType,
+  type OmniEvent,
+  setEnvelopeInstanceTenantResolver,
+} from '@omni/core';
 import {
   type Database,
   type NewOmniEvent,
@@ -19,6 +25,11 @@ import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-templ
 import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { and, eq, inArray, isNull } from 'drizzle-orm';
 import { setupEventPersistence } from '../../plugins/event-persistence';
+import {
+  __resetInstanceOwnerRegistry,
+  installInstanceOwnerResolver,
+  rememberInstanceOwners,
+} from '../../tenancy/instance-owner-registry';
 import { DeadLetterService } from '../dead-letters';
 
 // API unit tests can mock @omni/core process-wide in the single-process sweep.
@@ -277,6 +288,32 @@ postgresDescribe('dead-letter retry restores the original event (legacy, real Po
       textContent: 'hello',
       eventType: 'message.sent',
     });
+  });
+
+  test('multitenancy without enforcement: a NULL-owned row naming an owned instance stays tenantless (#1566)', async () => {
+    // Enforced RLS never retries a NULL-owned row; with enforcement off the
+    // scheduler and manual retry still do, so this is where the rule bites.
+    const owner = crypto.randomUUID();
+    installInstanceOwnerResolver();
+    rememberInstanceOwners([{ id: instanceA, tenantId: owner }]);
+    process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+    try {
+      const { row } = await fileDeadLetter(
+        'custom.dlq-unowned-instance' as EventType,
+        { value: 'unowned' },
+        { instanceId: instanceA, correlationId: 'corr-unowned' },
+      );
+      expect(row.tenantId).toBeNull();
+      expect(await retry('manual', row.id)).toBe(true);
+      expect(deliveries.at(-1)?.id).toBe(row.id);
+      expect(deliveries.at(-1)?.metadata.tenantId).toBeUndefined();
+      expect(deliveries.at(-1)?.metadata.instanceId).toBeUndefined();
+      expect(deliveries.at(-1)?.metadata.correlationId).toBe('corr-unowned');
+    } finally {
+      process.env.OMNI_MULTITENANCY_ENABLED = 'false';
+      setEnvelopeInstanceTenantResolver(null);
+      __resetInstanceOwnerRegistry();
+    }
   });
 
   test('the retried event runs under the dead-letter row tenant, never the stored envelope tenant', async () => {
