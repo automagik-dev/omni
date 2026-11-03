@@ -19,9 +19,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { type Database, createDbHandle } from '@omni/db';
+import { type Database, apiKeys as apiKeysTable, createDbHandle } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
+import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { DEFAULT_DEVICE_KEY_SCOPES, deviceKeysFor } from '../../../login/config';
 import { authMiddleware } from '../../../middleware/auth';
@@ -88,6 +89,25 @@ postgresDescribe('POST /auth/validate for any authenticated credential', () => {
   let otherServerKeys: ApiKeyService;
   let app: Hono;
   let reached: string[];
+
+  /**
+   * Every validation queues an unawaited usage UPDATE on the key's row (ApiKeyService
+   * updateUsageAsync). Wait until all of them have landed, so none is still running into
+   * this suite's teardown and the next suite's (a thousand of them did, and the next
+   * suite's DROP DATABASE timed out).
+   */
+  async function usageWritesSettled(keyId: string, expected: number) {
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const [row] = await db
+        .select({ usageCount: apiKeysTable.usageCount })
+        .from(apiKeysTable)
+        .where(eq(apiKeysTable.id, keyId));
+      if ((row?.usageCount ?? 0) >= expected) return;
+      if (Date.now() > deadline) throw new Error(`usage writes did not settle: ${row?.usageCount}/${expected}`);
+      await Bun.sleep(25);
+    }
+  }
 
   /** A key shaped as routes/v2/login.ts mintDeviceKey makes it for the omni-cli client. */
   const deviceKey = (extra: { expiresAt?: Date } = {}, on = apiKeys) =>
@@ -213,5 +233,6 @@ postgresDescribe('POST /auth/validate for any authenticated credential', () => {
     }
     expect(status).toBe(429);
     expect(calls).toBe(1_001);
-  });
+    await usageWritesSettled(own.key.id, calls);
+  }, 30_000);
 });
