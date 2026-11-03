@@ -28,7 +28,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { dropDatabaseOrThrow } from '../../packages/db/src/backfill/pg-testing';
+import { cleanupAfterFailure, dropDatabaseOrThrow } from '../../packages/db/src/backfill/pg-testing';
 import { createDbHandle } from '../../packages/db/src/client';
 import { applyMigrations } from '../../packages/db/src/migrate';
 import {
@@ -303,9 +303,16 @@ postgresDescribe('v2.260830.2 -> v2.260902.5 release rehearsal (real PostgreSQL)
   });
 
   afterAll(async () => {
-    if (handle) await handle.close();
-    if (database) dropDatabaseOrThrow({ superUrl: postgresUrl, psqlBin }, database);
-    if (candidateDrizzleDir) rmSync(candidateDrizzleDir, { recursive: true, force: true });
+    const removeCandidate = () => {
+      if (candidateDrizzleDir) rmSync(candidateDrizzleDir, { recursive: true, force: true });
+    };
+    try {
+      if (handle) await handle.close();
+      if (database) dropDatabaseOrThrow({ superUrl: postgresUrl, psqlBin }, database);
+    } catch (error) {
+      await cleanupAfterFailure(removeCandidate, error);
+    }
+    removeCandidate();
   });
 
   test('applies 0052 once through the journaled migrator and proves image-only rollback safe', async () => {

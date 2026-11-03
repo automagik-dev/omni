@@ -71,6 +71,21 @@ export function connect(url: string): ToolingSql {
   return openToolingConnection(url);
 }
 
+/**
+ * Run a failed test's cleanup, then rethrow the test's error. A cleanup failure
+ * never replaces it: both surface as AggregateError([testError, cleanupError]),
+ * the test's error first. Call it from the test body's catch, and call the same
+ * cleanup after the try on success, so a cleanup failure still fails the test.
+ */
+export async function cleanupAfterFailure(cleanup: () => Promise<void> | void, error: unknown): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    throw new AggregateError([error, cleanupError], 'test failed, then its cleanup failed');
+  }
+  throw error;
+}
+
 /** Drop a suite database through the disposable-target guard; a failed DROP fails the suite. */
 export function dropDatabaseOrThrow(access: PgSuperAccess, database: string): void {
   const result = Bun.spawnSync({

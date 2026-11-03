@@ -26,7 +26,7 @@ import type { ToolingSql } from './db';
 import { runBackfill } from './engine';
 import type { InstanceTenantMap } from './mapping-engine';
 import { personCloneId, runPersonCloning } from './person-clone';
-import { connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
+import { cleanupAfterFailure, connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 import { assertZeroUnresolved, reconcile } from './reconciliation';
 import { assertTenantUniquesPresent, replacePreservedGlobalUniques } from './rehearsal';
 import { driveValidateOrdering } from './validate-ordering';
@@ -117,6 +117,10 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
   test('full pipeline reaches zero unresolved, then VALIDATE ordering succeeds', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runPipeline(sql);
 
@@ -147,15 +151,19 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       const stillPending = await sql<{ n: string }[]>`
         SELECT count(*)::text AS n FROM pg_constraint WHERE contype = 'f' AND NOT convalidated`;
       expect(Number(stillPending[0]!.n)).toBe(0);
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('VALIDATE ordering FAILS CLOSED when a row is unresolved', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runPipeline(sql);
       // Introduce an UNRESOLVED row: a fresh chat with NO instance (so the G2
@@ -168,10 +176,10 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       const report = await reconcile(sql, REHEARSAL_TABLES);
       expect(report.totals.unresolved).toBeGreaterThan(0);
       await expect(driveValidateOrdering(sql, report)).rejects.toThrow(/not zero/i);
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('RLS probes pass for the assigned tables after enforcement', async () => {
@@ -180,6 +188,12 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
     const passwords = { ddl: pw(), runtime: pw(), authPlane: pw() };
     const provisioner = createDbHandle({ url, maxConnections: 4 });
     let runtime: ToolingSql | null = null;
+    const cleanup = async () => {
+      if (runtime) await runtime.end();
+      await provisioner.close();
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runPipeline(sql);
 
@@ -215,11 +229,9 @@ maybe('G6 zero-unresolved rehearsal — real PostgreSQL', () => {
       expect(await seenByB('dead_letter_events')).toBe(1);
       // Sanity: the clones exist with the expected deterministic ids.
       expect(personCloneId(P_SPAN, TENANT_A)).toMatch(/^[0-9a-f-]{36}$/);
-    } finally {
-      if (runtime) await runtime.end();
-      await provisioner.close();
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 });

@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
+import { cleanupAfterFailure, dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { reconcile } from '../reconcile-identity-fragmentation';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -61,19 +61,6 @@ async function provisionDatabase(): Promise<{
       dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
     },
   };
-}
-
-/**
- * Clean up after a scenario that threw, then rethrow its error. A cleanup
- * failure never replaces it: both surface, the scenario's error first.
- */
-async function cleanupAfterFailure(cleanup: () => Promise<void>, error: unknown): Promise<never> {
-  try {
-    await cleanup();
-  } catch (cleanupError) {
-    throw new AggregateError([error, cleanupError], 'scenario failed, then its cleanup failed');
-  }
-  throw error;
 }
 
 /**
