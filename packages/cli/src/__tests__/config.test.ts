@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -390,6 +390,13 @@ describe('Server registry resolution', () => {
     expect(active.url).toBe('https://omni.example.com');
     expect(active.maskedKey).not.toBe(REMOTE_KEY);
     expect(active.maskedKey).toBe(`${REMOTE_KEY.slice(0, 12)}...`);
+  });
+
+  test('saveConfig creates the config file readable by its owner only (0o600)', () => {
+    // The file holds API keys. `mode` only applies when the file is created, so
+    // saveConfig must be the first writer in the empty sandbox.
+    saveConfig(loadConfig());
+    expect(statSync(getConfigPath()).mode & 0o777).toBe(0o600);
   });
 });
 

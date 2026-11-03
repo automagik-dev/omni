@@ -62,6 +62,13 @@ describe('Caption Overflow — splitCaption()', () => {
     }
   });
 
+  test('caption of 1025 chars splits into first 1024 + a one-char overflow', () => {
+    const { first, overflow } = splitCaption('d'.repeat(1025));
+
+    expect(first).toBe('d'.repeat(1024));
+    expect(overflow).toEqual(['d']);
+  });
+
   test.each([
     ['exactly 1024 chars', 'c'.repeat(1024)],
     ['<1024 chars', 'Hello world'],

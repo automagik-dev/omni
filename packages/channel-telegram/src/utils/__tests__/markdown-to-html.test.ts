@@ -73,6 +73,12 @@ describe('markdownToTelegramHtml', () => {
     expect(markdownToTelegramHtml('[go](https://x.com/a&b)')).toBe('<a href="https://x.com/a&amp;b">go</a>');
   });
 
+  test('escapes double quotes in link href', () => {
+    expect(markdownToTelegramHtml('[go](https://x.com/?q="a")')).toBe(
+      '<a href="https://x.com/?q=&quot;a&quot;">go</a>',
+    );
+  });
+
   // ---- Headers ----
   test.each([
     ['# Title', '<b>Title</b>'],
