@@ -1,7 +1,8 @@
 /**
- * The agent-host device client (#1461): a paired agent host reads events and nothing else
- * (owner decision 2026-11-03). Its device key is the literal set below, under the operator's
- * ceiling, never more; no send, write, admin, `auth:*` or `keys:*` scope, and no companion key.
+ * The agent-host device client (#1461): a paired agent host reads events and runs durable
+ * consumers of its own (owner decisions 2026-11-03). Its device key is the literal set below,
+ * under the operator's ceiling, never more; no send, write, admin, `auth:*` or `keys:*` scope,
+ * and no companion key.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -16,8 +17,8 @@ import {
 } from '../config';
 
 const AGENT_HOST = 'omni-agent-host';
-/** The approved set, written out: read events only. */
-const APPROVED = ['events:read'];
+/** The approved set, written out: read events, and run the consumers it creates. */
+const APPROVED = ['events:read', 'events:consume'];
 
 describe('the omni-agent-host device client', () => {
   test('is a known device client', () => {
@@ -36,18 +37,21 @@ describe('the omni-agent-host device client', () => {
   test('carries no send, write, admin, auth, keys or other governing scope', () => {
     const { scopes } = deviceKeysFor(AGENT_HOST, DEFAULT_DEVICE_KEY_SCOPES);
     expect(scopes.filter((scope) => FORBIDDEN_SCOPE.test(scope))).toEqual([]);
-    expect(scopes.filter((scope) => !scope.endsWith(':read'))).toEqual([]);
+    expect(scopes).toEqual(['events:read', 'events:consume']);
     expect(scopes.filter((scope) => !scope.startsWith('events:'))).toEqual([]);
   });
 
   test("the operator's ceiling narrows it and never widens it", () => {
     const cases: [ceiling: string[], expected: string[]][] = [
-      [['events:*'], ['events:read']],
+      [['events:*'], ['events:read', 'events:consume']],
+      [['events:read', 'events:consume'], ['events:read', 'events:consume']],
+      // A ceiling without events:consume still mints a read-only key, not a refusal.
       [['events:read'], ['events:read']],
       [['messages:*', 'events:read'], ['events:read']],
+      [['events:consume'], ['events:consume']],
       [['instances:read', 'chats:read'], []],
       [['messages:*'], []],
-      // events:write is not events:read: the ceiling must name the read.
+      // events:write is neither events:read nor events:consume: the ceiling must name them.
       [['events:write'], []],
     ];
     for (const [ceiling, expected] of cases) {

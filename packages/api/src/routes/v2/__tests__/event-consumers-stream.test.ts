@@ -12,6 +12,7 @@ import type { DurableConsumer, OmniEvent } from '@omni/db';
 import { Hono } from 'hono';
 import { SCOPE_MAP } from '../../../constants/scopes';
 import { errorHandler } from '../../../middleware/error';
+import { ApiKeyService } from '../../../services/api-keys';
 import type { ConsumerCaller, StreamAccess, StreamScanResult } from '../../../services/event-consumers';
 import type { AppVariables } from '../../../types';
 import { eventConsumersRoutes } from '../event-consumers';
@@ -272,9 +273,13 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     await again.body?.cancel();
   });
 
-  test('requires events:write, the same scope as pull (an events:read key cannot stream)', () => {
-    expect(SCOPE_MAP['GET /events/consumers/:name/stream']).toBe('events:write');
+  test('requires events:consume, the same scope as pull', () => {
+    expect(SCOPE_MAP['GET /events/consumers/:name/stream']).toBe('events:consume');
     expect(SCOPE_MAP['GET /events/consumers/:name/stream']).toBe(SCOPE_MAP['POST /events/consumers/:name/pull']);
+    // Every key that could stream before still can: events:write, events:* and * all imply it.
+    expect(ApiKeyService.scopeAllows(['events:write'], 'events:consume')).toBe(true);
+    expect(ApiKeyService.scopeAllows(['events:*'], 'events:consume')).toBe(true);
+    expect(ApiKeyService.scopeAllows(['*'], 'events:consume')).toBe(true);
   });
 
   test('the route resolves the consumer with the pull caller (scoped and not visible -> 404, nothing streamed)', async () => {

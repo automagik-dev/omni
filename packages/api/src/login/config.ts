@@ -73,7 +73,7 @@ export const DEVICE_CLIENTS = {
   'omni-desktop': 'the Automagik app',
   'omni-dsh': 'the Omni plugin for DeepSeek Harness',
   'omni-cli': 'the omni command line',
-  'omni-agent-host': 'an agent host (read events only)',
+  'omni-agent-host': 'an agent host (reads events, runs its own consumers)',
   unfold: 'Unfold',
 } as const satisfies Record<string, string>;
 export type DeviceClientId = keyof typeof DEVICE_CLIENTS;
@@ -99,10 +99,11 @@ export const DEVICE_CLIENT_KEYS: Partial<
     scopes: ['instances:*', 'chats:read', 'messages:read', 'events:read', 'system:read'],
     companions: [{ name: 'agent', scopes: ['messages:send', 'events:read', 'events:write', 'instances:read'] }],
   },
-  // A paired agent host (Brain, a monitor) reads events and nothing else (#1461, owner
-  // decision 2026-11-03). Not events:write: that also creates and deletes consumers,
-  // registers schemas and triggers events, so durable pull/ack stays out.
-  'omni-agent-host': { scopes: ['events:read'] },
+  // A paired agent host (Brain, a monitor) reads events and runs durable consumers of its
+  // own (#1461, owner decisions 2026-11-03): events:consume touches only the consumers this
+  // key created. Not events:write: that also registers schemas, triggers events and reaches
+  // every consumer of the tenant.
+  'omni-agent-host': { scopes: ['events:read', 'events:consume'] },
 };
 
 const namespaceOf = (scope: string) => scope.split(':')[0] ?? scope;
