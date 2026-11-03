@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { releaseCommit } from './lib/plugin-versions';
 import { AUTOMAGIK_URL, INDEX_PATH, REPO_URL, checkIndex, pinAutomagik, pinIndex } from './marketplace';
 
+// Git-backed tests use 120 s: a cold Automagik pin can fetch for 60 s, a missing Omni pin
+// for 30 s, then every entry still needs Git history/manifest checks. Parser/mock-only tests keep 5 s.
 const repoDir = join(import.meta.dir, '..');
 const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoDir, encoding: 'utf8' }).trim();
 const channels = JSON.parse(readFileSync(join(repoDir, 'apps/omni-channels-dsh/package.json'), 'utf8'));
@@ -51,25 +53,25 @@ describe('marketplace index check', () => {
         execFileSync('git', ['merge-base', '--is-ancestor', newest.source.commit, tag], { cwd: repoDir }).length,
       ).toBe(0);
     }
-  });
+  }, 120_000);
 
   test('the committed index passes', () => {
     expect(checkIndex(JSON.parse(readFileSync(INDEX_PATH, 'utf8')), repoDir)).toEqual([]);
-  });
+  }, 120_000);
 
   test('an entry pinned to HEAD with the package there passes', () => {
     expect(checkIndex(indexWith(ours(head)), repoDir)).toEqual([]);
-  });
+  }, 120_000);
 
   test('a commit that is not in the history fails', () => {
     const [problem] = checkIndex(indexWith(ours('0'.repeat(40))), repoDir);
     expect(problem).toContain('not reachable from HEAD');
-  });
+  }, 120_000);
 
   test('a commit whose package is another name or version fails', () => {
     expect(checkIndex(indexWith(ours(head), '@automagik/not-omni'), repoDir)[0]).toContain('package.json is');
     expect(checkIndex(indexWith(ours(head, 'apps/nowhere'), channels.name), repoDir)[0]).toContain('has no');
-  });
+  }, 120_000);
 
   test("an outside plugin fails, from git or npm, and DSH's own parser runs first", () => {
     const foreign = {
@@ -184,7 +186,7 @@ describe('marketplace index check', () => {
       expect(typeof declared).toBe('string');
       expect(Bun.semver.satisfies(tested, declared)).toBe(true);
     }
-  });
+  }, 120_000);
 
   test('pin lists a new version with the DSH range its package.json declares at the ref', () => {
     const older = {
@@ -204,7 +206,7 @@ describe('marketplace index check', () => {
     };
     const [added] = pinIndex(older, repoDir, 'HEAD').plugins[0]?.versions ?? [];
     expect(added).toMatchObject({ version: channels.version, engines: { dsh: channels.engines.dsh } });
-  });
+  }, 120_000);
 
   test('pin keeps a listed version where it is when its package is unchanged, and refuses a changed one', () => {
     // apps/omni-ui-dsh was 0.1.7 at both commits, with the Connect Omni step added in between.
@@ -230,7 +232,7 @@ describe('marketplace index check', () => {
     expect(kept.plugins[0]?.versions).toEqual(
       listed('@automagik/omni-ai-dsh', '0.1.0', 'apps/omni-ai-dsh').plugins[0]?.versions,
     );
-  });
+  }, 120_000);
 
   test('pin adds a moved plugin at its new version and keeps an unchanged one, older versions included', () => {
     // At v2.261025.2 both plugins are 2.261025.2; the index lists them there, and earlier ones too.
@@ -258,5 +260,5 @@ describe('marketplace index check', () => {
       expect(plugin.versions[0]).toMatchObject({ version: '2.261025.2' });
       expect(plugin.versions.length).toBe(before.find((p: { name: string }) => p.name === plugin.name).versions.length);
     }
-  });
+  }, 120_000);
 });
