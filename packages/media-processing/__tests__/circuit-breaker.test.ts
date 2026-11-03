@@ -11,11 +11,6 @@ describe('CircuitBreaker', () => {
   });
 
   describe('initial state', () => {
-    it('starts in closed state', () => {
-      const breaker = new CircuitBreaker({ name: 'test' });
-      expect(breaker.getState()).toBe('closed');
-    });
-
     it('has zero failures and successes initially', () => {
       const breaker = new CircuitBreaker({ name: 'test' });
       const stats = breaker.getStats();

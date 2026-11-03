@@ -133,23 +133,16 @@ describe('installNatsBinary', () => {
 });
 
 describe('installNatsBinary over a nats-server installed earlier', () => {
-  test('one with no marker is replaced by the pinned release', async () => {
+  test.each([
+    ['no marker', undefined],
+    ['another release marker', OLD_MARKER],
+  ])('one with %s is replaced by the pinned release', async (_name, marker) => {
     const archive = fixtureArchive();
     serve(archive.bytes);
-    const target = installedEarlier();
+    const target = installedEarlier(marker);
 
     expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('installed');
     expect(urls).toEqual([`${RELEASE}/nats-server-v2.12.15-${HOST}.tar.gz`]);
-    expect(readFileSync(target, 'utf-8')).toBe('#!/bin/sh\n');
-    expect(readFileSync(`${target}.pin`, 'utf-8')).toBe(markerFor(archive.sha256));
-  });
-
-  test('one whose marker names another release is replaced', async () => {
-    const archive = fixtureArchive();
-    serve(archive.bytes);
-    const target = installedEarlier(OLD_MARKER);
-
-    expect(await installNatsBinary(target, pinFor(archive.sha256, archive.bytes.length))).toBe('installed');
     expect(urls).toHaveLength(1);
     expect(readFileSync(target, 'utf-8')).toBe('#!/bin/sh\n');
     expect(readFileSync(`${target}.pin`, 'utf-8')).toBe(markerFor(archive.sha256));

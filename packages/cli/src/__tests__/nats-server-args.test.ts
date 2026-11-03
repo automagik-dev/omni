@@ -74,13 +74,12 @@ describe('NatsHostSchema — rejected values', () => {
 });
 
 describe('resolveNatsHost', () => {
-  test('falls back to the default when natsHost is absent (older configs)', () => {
-    expect(resolveNatsHost({})).toBe(DEFAULT_NATS_HOST);
-    expect(resolveNatsHost({ natsHost: undefined })).toBe(DEFAULT_NATS_HOST);
-  });
-
-  test('falls back to the default when config.json stores null', () => {
-    expect(resolveNatsHost({ natsHost: null as unknown as string })).toBe(DEFAULT_NATS_HOST);
+  test.each([
+    ['absent', {}],
+    ['undefined', { natsHost: undefined }],
+    ['null', { natsHost: null as unknown as string }],
+  ])('falls back to the default when natsHost is %s', (_name, config) => {
+    expect(resolveNatsHost(config)).toBe(DEFAULT_NATS_HOST);
   });
 
   test('returns a configured IPv4, wildcard, IPv6 or hostname as-is', () => {

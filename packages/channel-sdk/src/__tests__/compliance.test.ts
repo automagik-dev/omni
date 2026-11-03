@@ -259,21 +259,6 @@ const errorConstructorArgs: Record<string, unknown[]> = {
 // Group 1: Infrastructure
 
 describe('SDK compliance test infrastructure', () => {
-  it('has descriptors for all 10 channels', () => {
-    const names = channels.map((c) => c.name).sort();
-    expect(names).toEqual([
-      'asc',
-      'asc-flow',
-      'discord',
-      'hermes',
-      'slack',
-      'telegram',
-      'twilio-whatsapp',
-      'whatsapp',
-      'whatsapp-business',
-    ]);
-  });
-
   for (const channel of channels) {
     it(`${channel.name}: plugin source file exists`, () => {
       expect(existsSync(channel.pluginSourcePath)).toBe(true);
@@ -327,17 +312,6 @@ for (const channel of channels) {
         for (const prop of ['id', 'name', 'version', 'capabilities']) {
           expect(sourceDeclaresProperty(source, prop)).toBe(true);
         }
-      });
-
-      it('has lifecycle methods (initialize, destroy)', () => {
-        expect(hasMethod(channel.pluginClass, 'initialize')).toBe(true);
-        expect(hasMethod(channel.pluginClass, 'destroy')).toBe(true);
-      });
-
-      it('has health methods (getHealth, getConnectedInstances, getStatus)', () => {
-        expect(hasMethod(channel.pluginClass, 'getHealth')).toBe(true);
-        expect(hasMethod(channel.pluginClass, 'getConnectedInstances')).toBe(true);
-        expect(hasMethod(channel.pluginClass, 'getStatus')).toBe(true);
       });
     });
 

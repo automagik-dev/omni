@@ -72,7 +72,11 @@ const settings = {
     stopOutsideMessagingWindow: true,
     showTypingIndicator: false,
   },
-  closeContactConfig: { won: { cooldownMs: null } },
+  closeContactConfig: {
+    won: { cooldownMs: null },
+    no_response: { escalationThreshold: null },
+    other: { cooldownMs: 3_600_000, escalationThreshold: 5, escalationWindowMs: 604_800_000 },
+  },
   outboundPacing: 'humanized',
   outboundPacingOverride: false,
 };
@@ -210,7 +214,7 @@ test('every issue setting and all eight Meta identifiers persist, individually a
   }
   expect((await patch({ ...settings, ...meta })).status).toBe(200);
   const result = (await (await app.request(`/${ID}`)).json()) as { data: Record<string, unknown> };
-  expect(result.data).toMatchObject({ ...settings, ...meta, agentProviderId: null });
+  expect(result.data).toMatchObject({ id: ID, ...settings, ...meta, agentProviderId: null });
   expect(result.data).not.toHaveProperty('metaAccessToken');
 });
 test('partial updates preserve every omitted setting, including falsy values and structured config', async () => {
@@ -271,6 +275,7 @@ test('DB-nullable fields clear; null on NOT NULL, malformed nested values and un
   for (const invalid of [
     ...notNull.map((key) => ({ [key]: null })),
     { chainMode: 'invalid' },
+    { audioTranscription: 'never' },
     { triggerMode: 'sync' },
     { processImages: 'false' },
     { inboundMaxAgeMinutes: -1 },

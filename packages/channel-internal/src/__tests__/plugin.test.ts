@@ -95,14 +95,6 @@ describe('InternalChannelPlugin', () => {
   });
 
   describe('connect', () => {
-    it('completes without error', async () => {
-      await plugin.connect('inst-1', { instanceId: 'inst-1', channelType: 'internal' } as never);
-
-      // BaseChannelPlugin emits via updateInstanceStatus which may or may not publish
-      // At minimum: no errors and the plugin is reachable
-      expect(plugin).toBeDefined();
-    });
-
     it('resolves without error', async () => {
       await expect(
         plugin.connect('inst-a', { instanceId: 'inst-a', channelType: 'internal' } as never),
@@ -134,31 +126,10 @@ describe('InternalChannelPlugin', () => {
       const published = eventBus.calls.find((c) => c.type === 'message.received');
       expect(published).toBeDefined();
       expect((published?.metadata as Record<string, unknown>).instanceId).toBe('target-inst');
-    });
-
-    it('puts source instance as the chatId and from fields', async () => {
-      await plugin.sendMessage('target-inst', {
-        to: 'target-inst',
-        content: { type: 'text', text: 'chained message' },
-        metadata: { sourceInstanceId: 'source-inst', chainMode: 'forward' },
-      });
-
-      const published = eventBus.calls.find((c) => c.type === 'message.received');
       const payload = published?.payload as Record<string, unknown>;
       expect(payload.chatId).toBe('source-inst');
       expect(payload.from).toBe('source-inst');
-    });
-
-    it('sets content text from the outgoing message', async () => {
-      await plugin.sendMessage('target-inst', {
-        to: 'target-inst',
-        content: { type: 'text', text: 'the message text' },
-        metadata: { sourceInstanceId: 'source-inst', chainMode: 'forward' },
-      });
-
-      const published = eventBus.calls.find((c) => c.type === 'message.received');
-      const payload = published?.payload as Record<string, unknown>;
-      expect((payload.content as Record<string, unknown>).text).toBe('the message text');
+      expect((payload.content as Record<string, unknown>).text).toBe('hello from chain');
     });
 
     it('returns success without publishing when text is empty', async () => {

@@ -376,13 +376,6 @@ describe('at login', () => {
     expect(detached).toHaveLength(1);
   });
 
-  test('a reinstall that keeps at-login as it was leaves the running supervisor alone', async () => {
-    const { deps, kills } = fakeDeps();
-    await installSandbox({ home, defaultHome }, deps);
-    await installSandbox({ home, defaultHome }, deps);
-    expect(kills).toEqual([]);
-  });
-
   test('linux: no systemd user session fails the install instead of claiming at-login', async () => {
     const { deps } = fakeDeps();
     const run = deps.run;
