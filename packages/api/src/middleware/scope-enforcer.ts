@@ -34,6 +34,7 @@ import { explicitChatInstance, getActiveInstanceId, isChatUuid, resolveChatRow }
 import { readSignedHostScopeContext } from '../lib/signed-host-scope-context';
 import { ApiKeyService } from '../services/api-keys';
 import type { ApiKeyData, AppVariables } from '../types';
+import { servedRouteKey } from './tenancy';
 
 const log = createLogger('api:scope-enforcer');
 
@@ -651,6 +652,29 @@ async function enforceLocks(
   );
 }
 
+/** The one route any authenticated credential may call without its SCOPE_MAP scope (#1461). */
+const SELF_VALIDATION_ROUTE = { method: 'POST', path: '/api/v2/auth/validate' } as const;
+
+/**
+ * Whether this request is a credential validating itself on `POST /auth/validate`.
+ *
+ * Why the bearer scope check may skip this route: its handler only reports facts about the
+ * caller's own credential (key prefix, name, scopes, credential context, tenancy posture),
+ * and its response body is unchanged by this exemption. A revoked, expired or unknown key
+ * never gets here: authMiddleware refuses it with 401 first. Without it a device key, which
+ * may never carry `auth:*` (login/config.ts FORBIDDEN_SCOPE), cannot confirm it works.
+ *
+ * Matched by the route Hono will actually serve (its registered pattern, as the tenancy
+ * edge reads it), AND by the request's undecoded pathname being exactly that pattern, so
+ * a trailing or doubled slash, a percent-encoded spelling, another method (HEAD, OPTIONS,
+ * GET) or another mount prefix fails closed to the normal scope check.
+ */
+function isSelfValidation(c: Context<{ Variables: AppVariables }>): boolean {
+  if (c.req.method !== SELF_VALIDATION_ROUTE.method) return false;
+  if (servedRouteKey(c) !== `${SELF_VALIDATION_ROUTE.method} ${SELF_VALIDATION_ROUTE.path}`) return false;
+  return new URL(c.req.url).pathname === SELF_VALIDATION_ROUTE.path;
+}
+
 export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariables }>(async (c, next) => {
   const apiKey = c.get('apiKey');
 
@@ -685,7 +709,9 @@ export const scopeEnforcerMiddleware = createMiddleware<{ Variables: AppVariable
   // (Group 5) re-uses it when needed.
   let requiredScope: string | undefined;
 
-  if (!wildcard) {
+  // Self-validation skips the bearer scope check only: a signing host's narrowed scopes
+  // and the allowlist locks below still apply (see isSelfValidation).
+  if (!wildcard && !isSelfValidation(c)) {
     requiredScope = findRequiredScope(method, path);
 
     // Deny-by-default: no mapping means forbidden
