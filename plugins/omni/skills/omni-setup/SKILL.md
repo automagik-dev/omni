@@ -44,6 +44,10 @@ omni status --json
 
 An operator already holding a key with `auth:admin` can use `omni claim`, `omni approve <code>`, or bare `omni connect` (optionally `--url https://omni.example.com`). Claim makes an unclaimed Omni theirs; approve accepts a waiting device code; connect prints a one-time link/QR for a supported app. These are not ways for a keyless agent or CLI to grant itself access. Human login must be enabled and is unavailable with multitenancy. The full app flow is in `docs/guides/pair-dsh-with-omni.md` in the Omni repository.
 
+### Agent hosts pair read-only
+
+An agent host that only watches events (Brain, a monitor) pairs as device client `omni-agent-host`: it requests a code (`POST /api/auth/device/code` with that `client_id`), the owner runs `omni approve <code>`, it polls `POST /api/auth/device/token`, then trades the token once at `POST /api/v2/login/device-key`. The key holds only `events:read`, and the operator's `OMNI_DEVICE_KEY_SCOPES` can narrow it but never widen it. It can list, get, search, trace, `stream` and `wait` on events, and list or inspect consumers. It cannot send or change anything, mint keys, or pull, ack, create or delete a durable consumer (`omni events follow`). Do not pair an agent host with keyless `omni auth login`: that pairs as `omni-cli`, which gets the full device-key scopes. Steps are in `docs/guides/pair-agent-host-with-omni.md` in the Omni repository.
+
 ## 2. Connect a channel
 
 ```bash
