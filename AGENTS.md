@@ -14,13 +14,16 @@ Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 ## Working across residences
 
 Two teams, on two machines with two GitHub accounts, work this repo. Coordinate on GitHub only; there is no shared hc.
+For claiming and coordination, GitHub issues, assignments and PR comments on automagik-dev/omni are owner-approved
+(2026-11-03).
 
 - Claim before you work: self-assign the GitHub issue before branching. For unplanned work, open an issue first
   (neutral wording) and self-assign it. Skip issues assigned to someone else; ask on the issue instead.
 - Before branching, run `git fetch`, then check `gh pr list --state open` and `git ls-remote --heads origin` for the
   same files or area. If another claim or branch overlaps, coordinate on the issue or PR; do not start.
-- Branch from fresh `origin/dev`. Never push to a branch your team did not create. Never force-push or rebase a shared
-  branch.
+- Branch feature work from fresh `origin/dev`. Never push to a feature branch your team did not create. Never
+  force-push or rebase a shared branch. This branch rule covers feature branches; the direct-to-`dev` fixes in
+  `.claude/CLAUDE.md` still apply.
 - Push and open a draft PR as early as the gate allows, so the other team sees the work. Link the issue.
 - Merge only PRs your own team opened; review or merge another team's PR only if they ask on it. Comment "merging" on
   the PR before queueing it.
