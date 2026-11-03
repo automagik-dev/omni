@@ -7,15 +7,19 @@
  * node_modules are excluded: the G6 suites seed explicit-tenant grants on purpose.
  *
  * A scanned file fails when it:
- * - calls `.insert(<table>)` anywhere except the helper (upserts are inserts);
- * - calls `.update(<table>).set(...)` with `tenantId`, `sourceId` or `sourceKind`
- *   (camelCase or snake_case keys), a spread, a computed key that is not a benign
- *   literal, or a non-literal patch. Moving a grant to another source would keep
- *   the old source's tenant stamp. Revocation via `revokedAt` stays allowed;
- * - writes the table in SQL text: INSERT INTO / UPDATE agent_source_grants, with an
- *   optional quoted or unquoted schema prefix (`"public".`), in a string or an `sql`
- *   template, or a template whose interpolation after INSERT INTO / UPDATE is
- *   <table> or `sql.identifier` / `sql.raw` naming agent_source_grants.
+ * - calls `.insert(<table>)` anywhere except the helper (upserts are inserts), including
+ *   a builder assigned before chaining (`const q = db.insert(<table>)`);
+ * - calls `.set(...)` on `.update(<table>)` or on a `const`/`let` alias or reassignment
+ *   of that builder (`const q = db.update(<table>); q.set(...)`), with `tenantId`,
+ *   `sourceId` or `sourceKind` (camelCase or snake_case keys), a spread, a computed key
+ *   that is not a benign literal, or a non-literal patch. Moving a grant to another
+ *   source would keep the old source's tenant stamp. Revocation via `revokedAt` stays
+ *   allowed. Methods count when called by name or literal element access (`db['insert']`);
+ * - writes the table in SQL text: INSERT INTO / UPDATE agent_source_grants, with
+ *   whitespace or `/* … *\/` and `-- …` comments between the words, an optional quoted
+ *   or unquoted schema prefix (`"public".`), in a string or an `sql` template, or a
+ *   template whose interpolation after INSERT INTO / UPDATE is <table>, a string literal
+ *   naming agent_source_grants, or `sql.identifier` / `sql.raw` naming it.
  *
  * <table> is `agentSourceGrants` reached by: the identifier; property access
  * (`schema.agentSourceGrants`); literal element access (`schema['agentSourceGrants']`);
@@ -39,8 +43,11 @@ const ROOT = resolve(import.meta.dir, '../../../..');
 const HELPER = 'packages/db/src/agent-source-grants.ts';
 const TABLE = 'agentSourceGrants';
 const SCHEMA_PREFIX = String.raw`("?\w+"?\s*\.\s*)?`;
-const SQL_WRITE = new RegExp(String.raw`\b(insert\s+into|update)\s+${SCHEMA_PREFIX}"?agent_source_grants"?`, 'i');
-const SQL_WRITE_PREFIX = new RegExp(String.raw`\b(insert\s+into|update)\s*${SCHEMA_PREFIX}$`, 'i');
+/** One unit of the gap between SQL words: whitespace, a block comment or a line comment. */
+const SQL_GAP = String.raw`(?:\s|/\*[\s\S]*?\*/|--[^\n]*(?:\n|$))`;
+const SQL_VERB = String.raw`\b(insert${SQL_GAP}+into|update)`;
+const SQL_WRITE = new RegExp(String.raw`${SQL_VERB}${SQL_GAP}+${SCHEMA_PREFIX}"?agent_source_grants"?`, 'i');
+const SQL_WRITE_PREFIX = new RegExp(String.raw`${SQL_VERB}${SQL_GAP}*${SCHEMA_PREFIX}$`, 'i');
 const SQL_TABLE_NAME = new RegExp(String.raw`^${SCHEMA_PREFIX}"?agent_source_grants"?$`, 'i');
 /** `.set()` keys that carry the tenant stamp or the source it was derived from, normalized. */
 const STAMP_COLUMNS = new Set(['tenantid', 'sourceid', 'sourcekind']);
@@ -91,9 +98,10 @@ function isTable(node: ts.Expression, tableNames: Set<string>): boolean {
   );
 }
 
-/** `sql.identifier('agent_source_grants')` or `sql.raw('"public"."agent_source_grants"')`. */
+/** `'agent_source_grants'`, `sql.identifier('agent_source_grants')` or `sql.raw('"public"."agent_source_grants"')`. */
 function isSqlTableName(node: ts.Expression): boolean {
   const expression = unwrap(node);
+  if (ts.isStringLiteralLike(expression)) return SQL_TABLE_NAME.test(expression.text);
   return (
     ts.isCallExpression(expression) &&
     ts.isPropertyAccessExpression(expression.expression) &&
@@ -137,6 +145,30 @@ function aliasesAt(node: ts.Node, names: Set<string>): string[] {
   return reassigned ? [node.left.text] : [];
 }
 
+/** The receiver of a `method` call made by name (`x.method(…)`) or literal element access (`x['method'](…)`). */
+function receiverOf(node: ts.Node, method: string): ts.Expression | undefined {
+  if (!ts.isCallExpression(node)) return undefined;
+  const callee = unwrap(node.expression);
+  if (ts.isPropertyAccessExpression(callee)) return callee.name.text === method ? callee.expression : undefined;
+  const named =
+    ts.isElementAccessExpression(callee) &&
+    ts.isStringLiteralLike(callee.argumentExpression) &&
+    callee.argumentExpression.text === method;
+  return named ? callee.expression : undefined;
+}
+
+/** A `const`/`let` declaration or plain reassignment that binds a name to a value `matches`. */
+function boundName(node: ts.Node, matches: (value: ts.Expression) => boolean): string | undefined {
+  if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && matches(node.initializer))
+    return node.name.text;
+  const reassigned =
+    ts.isBinaryExpression(node) &&
+    node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+    ts.isIdentifier(node.left) &&
+    matches(node.right);
+  return reassigned ? node.left.text : undefined;
+}
+
 /** Whether an `.update(<table>).set(patch)` patch may touch the tenant stamp or its source. */
 function setsStamp(node: ts.CallExpression): boolean {
   const patch = node.arguments[0];
@@ -169,26 +201,31 @@ function sqlWrite(node: ts.Node, tableNames: Set<string>): boolean {
 function grantWrites(source: string, path: string): { site: string; sanctioned: boolean }[] {
   const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true);
   const tableNames = new Set([TABLE]);
+  const updateBuilders = new Set<string>();
+  const tableCall = (node: ts.Node, method: string): node is ts.CallExpression =>
+    ts.isCallExpression(node) &&
+    receiverOf(node, method) !== undefined &&
+    !!node.arguments[0] &&
+    isTable(node.arguments[0], tableNames);
+  /** `.update(<table>)` or a name bound to one. */
+  const isUpdateBuilder = (node: ts.Expression): boolean => {
+    const expression = unwrap(node);
+    return tableCall(expression, 'update') || (ts.isIdentifier(expression) && updateBuilders.has(expression.text));
+  };
   function collectAliases(node: ts.Node): void {
     for (const alias of aliasesAt(node, tableNames)) tableNames.add(alias);
+    const builder = boundName(node, isUpdateBuilder);
+    if (builder) updateBuilders.add(builder);
     ts.forEachChild(node, collectAliases);
   }
   // Two passes, so an alias of an alias declared later in the file still resolves.
   collectAliases(file);
   collectAliases(file);
   const found: { site: string; sanctioned: boolean }[] = [];
-  const tableCall = (node: ts.Node, method: string): node is ts.CallExpression =>
-    ts.isCallExpression(node) &&
-    ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === method &&
-    !!node.arguments[0] &&
-    isTable(node.arguments[0], tableNames);
-  const stampUpdate = (node: ts.Node): boolean =>
-    ts.isCallExpression(node) &&
-    ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === 'set' &&
-    tableCall(node.expression.expression, 'update') &&
-    setsStamp(node);
+  const stampUpdate = (node: ts.Node): boolean => {
+    const receiver = receiverOf(node, 'set');
+    return !!receiver && isUpdateBuilder(receiver) && setsStamp(node as ts.CallExpression);
+  };
   function visit(node: ts.Node): void {
     if (tableCall(node, 'insert')) found.push({ site: node.getText(file), sanctioned: path === HELPER });
     else if (stampUpdate(node) || sqlWrite(node, tableNames))
@@ -250,6 +287,21 @@ const rejected = [
   "db.update(agentSourceGrants).set({ 'source_id': id })",
   "db.update(agentSourceGrants).set({ ['sourceId']: id })",
   'db.update(agentSourceGrants).set({ [column]: id })',
+  // Review of #1558, residual 1: a builder assigned before chaining.
+  'const q = db.update(agentSourceGrants); q.set({ tenantId: null })',
+  'let q; q = db.update(agentSourceGrants); q.set({ sourceId })',
+  'const q = db.update(agentSourceGrants); const r = q; r.set(patch)',
+  'const q = db.insert(agentSourceGrants); q.values(row)',
+  // Residual 2: the method named by element access.
+  "db['insert'](agentSourceGrants).values(row)",
+  "db['update'](agentSourceGrants)['set']({ tenantId: null })",
+  // Residual 3: SQL comments between the words.
+  "db.execute(sql.raw('insert /* x */ into agent_source_grants (agent_id) values (1)'))",
+  "db.execute(sql.raw('update -- move it\\n agent_source_grants set tenant_id = null'))",
+  'sql`insert into /* target */ ${agentSourceGrants} (agent_id) values (${id})`',
+  // Residual 4: a string literal interpolated as the target.
+  "sql`insert into ${'agent_source_grants'} (agent_id) values (${id})`",
+  'sql`UPDATE ${`"public"."agent_source_grants"`} SET tenant_id = NULL`',
 ];
 const permitted = [
   'db.select().from(agentSourceGrants)',
@@ -264,6 +316,12 @@ const permitted = [
   'db.update(agentSourceGrants).set({ revokedAt: new Date(), agentId })',
   "db.update(agentSourceGrants).set({ ['revokedAt']: new Date() })",
   'const { agentSourceGrantsArchive: g } = schema; db.insert(g).values(row)',
+  'const q = db.update(agentSourceGrants); q.set({ revokedAt: new Date() })',
+  'const q = db.update(durableConsumers); q.set({ tenantId: null })',
+  "db['select']().from(agentSourceGrants)",
+  "db.execute(sql.raw('insert /* x */ into durable_consumers (id) values (1)'))",
+  "sql`select 1 from ${'agent_source_grants'}`",
+  "sql`insert into ${'durable_consumers'} (id) values (${id})`",
 ];
 for (const source of rejected)
   test(`grant writer guard rejects ${source}`, () => {
