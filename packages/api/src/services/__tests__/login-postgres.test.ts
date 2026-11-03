@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import type { TypedOmniEvent } from '@omni/core';
 import { type Database, apiKeys, createDbHandle, loginVerifications } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq, like, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { type Login, createLogin } from '../../login';
@@ -155,17 +156,7 @@ postgresDescribe('human login (real PostgreSQL)', () => {
 
   afterAll(async () => {
     await close?.().catch(() => undefined);
-    Bun.spawnSync({
-      cmd: [
-        psqlBin,
-        '-X',
-        '--no-psqlrc',
-        '--dbname',
-        superUrl,
-        '-c',
-        `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`,
-      ],
-    });
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
     for (const key of ENV) {
       if (saved[key] === undefined) Reflect.deleteProperty(process.env, key);
       else process.env[key] = saved[key];

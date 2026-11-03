@@ -40,6 +40,7 @@ import {
   createDbHandle,
 } from '@omni/db';
 import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { createServices } from '../../services';
 import { buildAutomationEngineDeps } from '../automation-actions';
 
@@ -142,7 +143,7 @@ postgresDescribe('two-tenant automation-actions containment (real PostgreSQL)', 
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test("tenant A's callback resolves A's own chat UUID to its external id", async () => {

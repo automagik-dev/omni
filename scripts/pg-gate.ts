@@ -40,7 +40,7 @@ import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // Do not import suite setup here: it validates inherited OMNI_G* URLs at load.
 // The gate first acquires its own target, then replaces those URLs for its child.
-import { assertPgTestTarget } from '../packages/db/src/pg-test-target';
+import { POSTGRES_URL_VARS, assertPgTestTarget } from '../packages/db/src/pg-test-target';
 import {
   createDisposableCluster,
   destroyDisposableCluster,
@@ -57,18 +57,12 @@ export const POSTGRES_EXCLUDED_DIRS: readonly string[] = ['node_modules', 'dist'
 export const POSTGRES_SUITE_SUFFIX = /-postgres\.test\.ts$/;
 
 /**
- * Every opt-in variable a `*-postgres.test.ts` in this repository reads.
- *
- * All of them are set to the SAME disposable URL. Each suite creates its own
- * database underneath it, so they do not collide.
+ * Every opt-in variable a `*-postgres.test.ts` in this repository reads, from
+ * its single definition in packages/db (side-effect free, unlike the suite
+ * harness). All of them are set to the SAME disposable URL. Each suite creates
+ * its own database underneath it, so they do not collide.
  */
-export const POSTGRES_URL_VARS = [
-  'OMNI_G1_POSTGRES_URL',
-  'OMNI_G2_POSTGRES_URL',
-  'OMNI_G3_POSTGRES_URL',
-  'OMNI_G4_POSTGRES_URL',
-  'OMNI_G6_POSTGRES_URL',
-] as const;
+export { POSTGRES_URL_VARS };
 
 export const PSQL_BIN_VARS = [
   'OMNI_G1_PSQL_BIN',
@@ -79,7 +73,7 @@ export const PSQL_BIN_VARS = [
 ] as const;
 
 /** Discover the suites the gate is responsible for. */
-function findPostgresSuites(dir: string, out: string[] = []): string[] {
+export function findPostgresSuites(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     if (POSTGRES_EXCLUDED_DIRS.includes(entry)) continue;
     const full = join(dir, entry);

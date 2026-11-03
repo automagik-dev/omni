@@ -12,6 +12,7 @@ import {
   eventSchemas,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq, sql } from 'drizzle-orm';
 import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../../tenancy/worker-tenant-context';
@@ -154,19 +155,7 @@ for (const enforced of [false, true]) {
 
     afterAll(async () => {
       for (const close of closers.reverse()) await close();
-      Bun.spawnSync({
-        cmd: [
-          psqlBin,
-          '-X',
-          '--no-psqlrc',
-          '--dbname',
-          pgRoleUrl(superUrl, 'postgres'),
-          '-c',
-          `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`,
-        ],
-        stdout: 'pipe',
-        stderr: 'pipe',
-      });
+      dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
       for (const [key, value] of Object.entries({
         OMNI_MULTITENANCY_ENABLED: previousFlags.multitenancy,
         OMNI_DB_ENFORCEMENT: previousFlags.enforcement,

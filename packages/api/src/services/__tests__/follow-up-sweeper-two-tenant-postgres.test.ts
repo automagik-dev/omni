@@ -40,6 +40,7 @@ import {
   createDbHandle,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
 import { scopedHandle } from '../../tenancy/tenant-scope';
@@ -198,7 +199,7 @@ postgresDescribe('two-tenant follow-up sweeper fan-out (real PostgreSQL)', () =>
       else process.env[key] = value;
     }
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   // ── PHASE 1: flag-on, pre-enforcement (the transitional mixed state) ──────

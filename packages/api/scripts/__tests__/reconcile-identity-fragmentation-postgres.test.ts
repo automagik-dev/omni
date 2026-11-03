@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { reconcile } from '../reconcile-identity-fragmentation';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -57,7 +58,7 @@ async function provisionDatabase(): Promise<{
     },
     cleanup: async () => {
       await handle.close().catch(() => undefined);
-      runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+      dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
     },
   };
 }
@@ -157,7 +158,7 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('dry run detects the fragmentation but writes nothing', async () => {

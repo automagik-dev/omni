@@ -21,12 +21,10 @@ import type { ConnectorEventPublisher, EventBus } from '@omni/core';
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { executeAction } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, instances, omniEvents, tenants } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { authMiddleware } from '../../middleware/auth';
@@ -45,21 +43,6 @@ import { WebhookService } from '../webhooks';
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
-
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-959-registry-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
 
 interface PublishedEvent {
   type: string;
@@ -142,7 +125,7 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('registering a schema inserts at version 1', async () => {

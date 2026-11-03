@@ -4,6 +4,18 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, relative } from 'node:path';
 import postgres from 'postgres';
 
+/**
+ * Every opt-in variable a `*-postgres.test.ts` in this repository reads. The
+ * single list: the suite harness checks each at load, and the gate sets each.
+ */
+export const POSTGRES_URL_VARS = [
+  'OMNI_G1_POSTGRES_URL',
+  'OMNI_G2_POSTGRES_URL',
+  'OMNI_G3_POSTGRES_URL',
+  'OMNI_G4_POSTGRES_URL',
+  'OMNI_G6_POSTGRES_URL',
+] as const;
+
 /** Refuse ambiguous or shared targets before either postgres.js or psql opens a connection. */
 export function assertPgTestTarget(url: string, env: Record<string, string | undefined> = process.env): void {
   const refuse = (reason: string): never => {

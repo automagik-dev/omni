@@ -24,12 +24,10 @@ import type { ConnectorEventPublisher, EventBus } from '@omni/core';
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { executeAction } from '@omni/core';
 import { type Database, type EventType, createDbHandle, deadLetterEvents, omniEvents } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { DeadLetterService } from '../dead-letters';
@@ -40,21 +38,6 @@ import { WebhookService } from '../webhooks';
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
-
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-1000-strict-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
 
 interface PublishedEvent {
   type: string;
@@ -154,7 +137,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
   afterAll(async () => {
     Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('a source is created non-strict by default (no global default flip)', async () => {

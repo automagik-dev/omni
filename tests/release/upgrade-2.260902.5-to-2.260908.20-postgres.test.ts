@@ -31,6 +31,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dropDatabaseOrThrow } from '../../packages/db/src/backfill/pg-testing';
 import { createDbHandle } from '../../packages/db/src/client';
 import { applyMigrations } from '../../packages/db/src/migrate';
 import {
@@ -368,7 +369,7 @@ postgresDescribe('v2.260902.5 -> v2.260908.20 release rehearsal (real PostgreSQL
 
   afterAll(async () => {
     if (handle) await handle.close();
-    if (database) runSqlOn(postgresUrl, `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`);
+    if (database) dropDatabaseOrThrow({ superUrl: postgresUrl, psqlBin }, database);
     if (candidateDrizzleDir) rmSync(candidateDrizzleDir, { recursive: true, force: true });
   });
 

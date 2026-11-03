@@ -41,6 +41,7 @@ import {
   tenants,
 } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq, sql } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../plugins/automation-actions';
 import { createServices } from '../services';
@@ -243,12 +244,8 @@ postgresDescribe('ClickUp connector acceptance loop (real PostgreSQL)', () => {
   afterAll(async () => {
     await stopEngine?.().catch(() => undefined);
     await handle?.close().catch(() => undefined);
-    const dbUrl = pgRoleUrl(superUrl, 'postgres');
     // Drop through the same psql binary the provisioner used.
-    const { spawnSync } = await import('node:child_process');
-    spawnSync(psqlBin, ['-X', '--no-psqlrc', '-c', `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`, dbUrl], {
-      stdio: 'ignore',
-    });
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   let ids: { connectorId: string; subscriptionId: string; automationId: string };

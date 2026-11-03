@@ -35,6 +35,7 @@ import {
   createDbHandle,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { isSealedCredentialField, openCredentialField } from '../../tenancy/sealed-credentials';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import { InstanceService } from '../instances';
@@ -132,7 +133,7 @@ postgresDescribe('two-tenant sealed credentials at rest (real PostgreSQL)', () =
   afterAll(async () => {
     setTenantSecretMasterKey(null);
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   afterEach(() => setTenantSecretMasterKey(null));

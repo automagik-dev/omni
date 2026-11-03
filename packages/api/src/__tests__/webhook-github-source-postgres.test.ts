@@ -31,12 +31,12 @@ import type { ConnectorEventPublisher } from '@omni/core';
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, omniEvents, webhookSources } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq, like } from 'drizzle-orm';
 import { createApp } from '../app';
 import { EventSchemaService } from '../services/event-schemas';
@@ -54,21 +54,6 @@ const GITHUB_EVENT_TYPES = [
   'custom.github.issues',
   'custom.github.release',
 ] as const;
-
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-983-github-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
 
 interface PublishedEvent {
   type: string;
@@ -227,7 +212,7 @@ postgresDescribe('GitHub source recipe end-to-end (#983, real PostgreSQL)', () =
 
   afterAll(async () => {
     await close?.().catch(() => undefined);
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('declaring the cadence armed liveness supervision on create (#961)', async () => {

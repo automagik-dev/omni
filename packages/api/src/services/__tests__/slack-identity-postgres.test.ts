@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createDbHandle } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { InstanceService } from '../instances';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -65,7 +66,7 @@ postgresDescribe('Slack OAuth identity uniqueness (real PostgreSQL)', () => {
 
   afterAll(async () => {
     await close?.().catch(() => undefined);
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('a second user-mode insert for one identity conflicts and the lookup finds the first', async () => {

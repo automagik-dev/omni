@@ -31,6 +31,7 @@ import {
   createDbHandle,
 } from '@omni/db';
 import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { AUTH_PLANE_URL_ENV_VAR, resolveAuthPlaneConnection } from '../auth-plane-connection';
 import { MembershipSelectionService } from '../request-auth';
 
@@ -105,7 +106,7 @@ postgresDescribe('auth-plane wiring (real PostgreSQL)', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('MISWIRED to the runtime role, the confirming-hint membership read fails closed', async () => {
