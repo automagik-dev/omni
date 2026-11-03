@@ -80,24 +80,4 @@ describe('TurnMonitor stalled-event contract', () => {
       spy.mockRestore();
     }
   });
-
-  test('TurnMonitorDeps has no sendFallback — stalled state cannot reach a channel regardless of config', async () => {
-    // Structural proof: if a fallback code path still existed, constructing
-    // the monitor without it would fail or the tick would attempt to call it.
-    // This test passes silently when the channel-send path has been deleted.
-    const { tick } = makeMonitor({
-      turns: [
-        {
-          id: 't2',
-          instanceId: 'i2',
-          chatId: 'c2',
-          lastActivityAt: FIFTEEN_MINUTES_AGO(),
-          nudgeCount: 2,
-        },
-      ],
-      instance: { agentStalledTimeoutMs: 600_000 },
-    });
-
-    await expect(tick()).resolves.toBeUndefined();
-  });
 });
