@@ -1,5 +1,15 @@
 import { beforeAll, describe, expect, it, spyOn } from 'bun:test';
-import { type CommandTree, checkExcerpt, checkMarkdown, checkScript, loadCommandTree } from './check-skill-cli';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  type CommandTree,
+  checkExcerpt,
+  checkMarkdown,
+  checkScript,
+  loadCommandTree,
+  scanPluginFiles,
+} from './check-skill-cli';
 
 let tree: CommandTree;
 beforeAll(async () => {
@@ -63,5 +73,63 @@ describe('plugin commands against the registered CLI', () => {
     expect(checkScript('hook.json', '{"command":"omni status --stale"}', tree)).toHaveLength(1);
     const js = 'log("omni not found"); exec(omniPath, ["status", "--stale"]);';
     expect(checkScript('runner.js', js, tree).map((error) => error.message)).toEqual(['status: unknown flag --stale']);
+  });
+});
+
+describe('skill gate edge cases (#1461)', () => {
+  it('fails when zero plugin files are scanned', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'omni-skill-empty-'));
+    try {
+      expect(scanPluginFiles(dir, tree).errors).toContain('No plugin files scanned');
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it('fails when zero CLI commands are scanned', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'omni-skill-no-commands-'));
+    try {
+      writeFileSync(join(dir, 'SKILL.md'), '# Empty command tree');
+      expect(scanPluginFiles(dir, { ...tree, commands: [] }).errors).toContain('No CLI commands scanned');
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+
+  it.each(['--no-color', '--all', '-V', '--version'])('rejects root-only %s after a subcommand', (flag) => {
+    expect(checkExcerpt(`omni server list ${flag}`, tree).map((error) => error.message)).toContain(
+      `list: unknown flag ${flag}`,
+    );
+    expect(checkExcerpt(`omni ${flag} server list`, tree)).toEqual([]);
+  });
+
+  it('keeps pre-parsed globals valid after a subcommand', () => {
+    expect(checkExcerpt('omni server list --json --server prod', tree)).toEqual([]);
+    expect(checkExcerpt('omni server list --server=prod --json', tree)).toEqual([]);
+  });
+
+  it('accepts 2>&1 without losing subsequent stale flags', () => {
+    expect(checkExcerpt('omni instances list --json > out.json 2>&1', tree)).toEqual([]);
+    expect(checkExcerpt('omni instances list 2>&1 --stale-1461', tree).map((error) => error.message)).toEqual([
+      'list: unknown flag --stale-1461',
+    ]);
+  });
+
+  it('accepts implicit omni help commands while checking the target', () => {
+    expect(checkExcerpt('omni help film', tree)).toEqual([]);
+    expect(checkExcerpt('omni help <cmd>', tree)).toEqual([]);
+    expect(checkExcerpt('omni help fictional', tree).map((error) => error.message)).toEqual([
+      'omni: unknown command fictional',
+    ]);
+  });
+
+  it.each(['```', '~~~'])('ignores prose inside %stext fences, including inline code', (fence) => {
+    const doc = [`${fence}text`, 'omni is the CLI used below', '`omni fictional`', fence].join('\n');
+    expect(checkMarkdown(doc, tree)).toEqual([]);
+  });
+
+  it.each(['', 'sh', 'bash', 'shell', 'zsh', 'console'])('still checks %s shell fences', (language) => {
+    const doc = [`\`\`\`${language}`, 'omni status --stale-1461', '```'].join('\n');
+    expect(checkMarkdown(doc, tree)).toEqual([{ line: 2, message: 'status: unknown flag --stale-1461' }]);
   });
 });

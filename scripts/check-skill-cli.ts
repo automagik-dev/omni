@@ -10,6 +10,7 @@ interface CliOption {
   short?: string;
   required: boolean;
   optional: boolean;
+  preparsed?: boolean;
 }
 interface CommanderNode {
   name(): string;
@@ -73,6 +74,7 @@ export async function loadCommandTree(): Promise<CommandTree> {
     const create: () => CommanderNode = module[imported.name];
     commands.push(snapshot(create()));
   }
+  const registryStart = registry.pos;
   const options: CliOption[] = [help];
   function visit(node: ts.Node): void {
     if (
@@ -92,7 +94,7 @@ export async function loadCommandTree(): Promise<CommandTree> {
       }
     }
     // index.ts consumes JSON/server flags before Commander: read those declarations too.
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+    if (node.pos < registryStart && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const arg = node.arguments[0];
       if (arg && ts.isStringLiteral(arg)) {
         if (
@@ -100,9 +102,9 @@ export async function loadCommandTree(): Promise<CommandTree> {
           node.expression.expression.getText(ast) === 'process.argv' &&
           /^--[\w-]+$/.test(arg.text)
         )
-          options.push({ long: arg.text, required: false, optional: false });
+          options.push({ long: arg.text, required: false, optional: false, preparsed: true });
         if (node.expression.name.text === 'startsWith' && /^--[\w-]+=$/.test(arg.text)) {
-          options.push({ long: arg.text.slice(0, -1), required: true, optional: false });
+          options.push({ long: arg.text.slice(0, -1), required: true, optional: false, preparsed: true });
         }
       }
     }
@@ -136,7 +138,7 @@ interface Token {
 function tokenize(text: string): Token[] {
   const tokens: Token[] = [];
   const pattern =
-    /\\\r?\n|#[^\n]*|<[^<>\s]+>|\d*[<>]{1,2}|(?:[^\s'";|&()<>\\]+|'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n])+|[\n;|&()<>]/g;
+    /\\\r?\n|#[^\n]*|<[^<>\s]+>|\d*[<>]{1,2}&?|(?:[^\s'";|&()<>\\]+|'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n])+|[\n;|&()<>]/g;
   for (const match of text.matchAll(pattern)) {
     const raw = match[0];
     if (raw.startsWith('#') || raw.startsWith('\\\n') || raw.startsWith('\\\r\n')) continue;
@@ -154,17 +156,20 @@ export function checkExcerpt(text: string, tree: CommandTree): { offset: number;
     let command = tree;
     const ancestors = [tree];
     let positional = false;
+    let seekingHelp = false;
     for (i++; i < tokens.length; i++) {
       const token = tokens[i];
       if (!token || /^[\n;|&()]$/.test(token.value)) break;
-      if (/^\d*[<>]{1,2}$/.test(token.value)) {
+      if (/^\d*[<>]{1,2}&?$/.test(token.value)) {
         i++;
         continue;
       }
       const value = token.value;
       if (value.startsWith('-')) {
         const flag = value.split('=')[0];
-        const option = ancestors.flatMap((c) => c.options).find((o) => o.long === flag || o.short === flag);
+        const option = ancestors
+          .flatMap((c) => c.options.filter((o) => c !== tree || command === tree || o.preparsed))
+          .find((o) => o.long === flag || o.short === flag);
         if (!option) errors.push({ offset: token.offset, message: `${command.name}: unknown flag ${flag}` });
         if (option && !value.includes('=') && (option.required || option.optional)) {
           const next = tokens[i + 1]?.value;
@@ -172,6 +177,9 @@ export function checkExcerpt(text: string, tree: CommandTree): { offset: number;
         }
       } else if (/^(<.*>|\[.*\]|\*|\.\.\.|\$[\w@]+)$/.test(value)) {
         positional = true;
+      } else if (command === tree && value === 'help' && !positional && !seekingHelp) {
+        // Commander adds root "help [command]" without registering it as a child.
+        seekingHelp = true;
       } else {
         const child = command.commands.find((c) => c.name === value || c.aliases.includes(value));
         if (!positional && child) {
@@ -190,15 +198,17 @@ export function checkExcerpt(text: string, tree: CommandTree): { offset: number;
 /** Check executable examples in fenced blocks and inline code; retain source offsets for errors. */
 export function checkMarkdown(text: string, tree: CommandTree): { line: number; message: string }[] {
   const errors: { line: number; message: string }[] = [];
-  const code = /```[^\n]*\n([\s\S]*?)```|`([^`\n]+)`/g;
+  const code = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*$|`([^`\n]+)`/gm;
   let uncovered = text;
   for (const match of text.matchAll(code)) {
-    const excerpt = match[1] ?? match[2] ?? '';
+    const excerpt = match[3] ?? match[4] ?? '';
     const start = match.index + match[0].indexOf(excerpt);
     uncovered =
       uncovered.slice(0, match.index) +
       match[0].replace(/[^\n]/g, ' ') +
       uncovered.slice(match.index + match[0].length);
+    const language = match[2]?.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+    if (match[1] && !['', 'sh', 'bash', 'shell', 'zsh', 'console'].includes(language)) continue;
     for (const error of checkExcerpt(excerpt, tree)) {
       errors.push({ line: text.slice(0, start + error.offset).split('\n').length, message: error.message });
     }
@@ -255,11 +265,10 @@ function files(dir: string): string[] {
     return entry.isDirectory() ? files(path) : [path];
   });
 }
-async function main(): Promise<void> {
-  const tree = await loadCommandTree();
+export function scanPluginFiles(dir: string, tree: CommandTree): { count: number; errors: string[] } {
   let count = 0;
   const errors: string[] = [];
-  for (const file of files(join(root, 'plugins/omni'))) {
+  for (const file of files(dir)) {
     const text = readFileSync(file, 'utf8');
     const problems = file.endsWith('.md')
       ? checkMarkdown(text, tree)
@@ -272,6 +281,13 @@ async function main(): Promise<void> {
     count++;
     errors.push(...problems.map((p) => `${relative(root, file)}:${p.line}: ${p.message}`));
   }
+  if (count === 0) errors.push('No plugin files scanned');
+  if (tree.commands.length === 0) errors.push('No CLI commands scanned');
+  return { count, errors };
+}
+async function main(): Promise<void> {
+  const tree = await loadCommandTree();
+  const { count, errors } = scanPluginFiles(join(root, 'plugins/omni'), tree);
   for (const error of errors) console.error(error);
   if (errors.length) process.exitCode = 1;
   else console.log(`Skill CLI drift check: ${count} files match ${tree.commands.length} registered command groups`);
