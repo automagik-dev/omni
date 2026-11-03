@@ -372,6 +372,14 @@ describe('SlackAppReceiver', () => {
     expect(() => receiverKeyFor({ botToken: 'xoxb', mode: 'http' })).toThrow(SlackError);
   });
 
+  it.each([undefined, ''])('rejects HTTP construction without a signing secret (%p)', (signingSecret) => {
+    expect(() => new SlackAppReceiver({ mode: 'http', signingSecret }, () => undefined, noopLogger)).toThrow(
+      SlackError,
+    );
+    expect(httpReceiverOptions).toEqual([]);
+    expect(constructedApps).toEqual([]);
+  });
+
   it('authorize returns the most recently attached bot token for the team', async () => {
     const { receiver } = makeReceiver();
     const authorize = authorizeOf(lastApp());

@@ -978,8 +978,11 @@ export class SlackAppReceiver {
     const clientOptions: AppOptions['clientOptions'] = { retryConfig: this.retryConfig };
 
     if (this.mode === 'http') {
-      // receiverKeyFor validated the secret before the constructor called buildApp.
-      const receiver = new HTTPReceiver({ signingSecret: opts.signingSecret as string });
+      const { signingSecret } = opts;
+      if (!signingSecret) {
+        throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'signingSecret is required for HTTP mode');
+      }
+      const receiver = new HTTPReceiver({ signingSecret });
       const app = new App({ authorize, clientOptions, receiver });
       // Refuse oversized bodies with 413 before Bolt buffers them.
       return { app, httpHandler: withBodyLimit(receiver.requestListener, this.logger) };
