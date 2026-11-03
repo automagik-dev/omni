@@ -30,20 +30,6 @@ export { WhatsAppError, ErrorCode, mapBaileysError, isRetryable } from './utils/
 export { PresenceManager, createPresenceManager, setOnline, setOffline } from './presence';
 export type { PresenceType } from './presence';
 
-// Receipts
-export {
-  markMessageAsRead,
-  markMessagesAsRead,
-  markChatAsRead,
-  mapStatusCode,
-  isDelivered,
-  isRead,
-  shouldSendReadReceipt,
-  ReceiptTracker,
-  createReceiptTracker,
-} from './receipts';
-export type { MessageStatus, ReadReceiptMode, ReadReceiptConfig } from './receipts';
-
 // Media utilities
 export {
   downloadMediaToBuffer,
@@ -62,7 +48,6 @@ export {
   isSocketConnected,
   getSocketUser,
   getSocketUserName,
-  SocketManager,
 } from './socket';
 export type { SocketConfig } from './socket';
 
