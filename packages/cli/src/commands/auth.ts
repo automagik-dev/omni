@@ -434,7 +434,7 @@ Explicit input flags override OMNI_CLI_API_KEY; do not combine the two login
 input flags. Prefer a secret-manager pipe or protected file over pasting a key
 into shell history or chat. The legacy key flag remains supported. OMNI_API_KEY
 configures the API server primary key and is ignored by login. Stdin is limited
-to 8 KB including the optional trailing LF/CRLF. Successful login reports keySource (flag/stdin/env).
+to 8 KB including the optional trailing LF/CRLF. Successful login reports keySource (device/flag/stdin/env).
 `,
     )
     .action(async (options: LoginOptions) => {
