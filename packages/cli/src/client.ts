@@ -27,8 +27,9 @@ const DEFAULT_API_URL = 'http://localhost:8882';
 export function exitNotAuthenticated(): never {
   const target = describeActiveServer();
   return output.error(
-    `Not authenticated for server "${target.name}" (${target.url}). ` +
-      `Run: omni auth login --server ${target.name} --api-key <key>`,
+    `Not authenticated for server "${target.name}" (${target.url}).\n` +
+      `Sign in interactively: omni auth login --server ${target.name}\n` +
+      `Or read a key from stdin: omni auth login --server ${target.name} --api-key-stdin < /secure/path/omni-api-key`,
     undefined,
     2,
   );

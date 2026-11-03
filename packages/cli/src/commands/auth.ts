@@ -271,13 +271,19 @@ function printManualInstructions(newKey?: string): void {
   output.raw('       cat ~/.pm2/dump.pm2 | grep OMNI_API_KEY');
   output.raw('');
   output.raw('  2. Update CLI config:');
-  output.raw(`       omni auth login --api-key ${key}`);
+  output.raw('       Sign in interactively: omni auth login --server default');
+  output.raw(
+    '       Or read a key from stdin: omni auth login --server default --api-key-stdin < /secure/path/omni-api-key',
+  );
   output.raw('');
   output.raw('  3. Or to rotate to a new key:');
   output.raw('     a. Stop the API:  omni stop');
   output.raw('     b. Delete primary key from DB manually');
   output.raw(`     c. Restart:       OMNI_API_KEY=${key} omni start`);
-  output.raw(`     d. Login:         omni auth login --api-key ${key}`);
+  output.raw('     d. Sign in interactively: omni auth login --server default');
+  output.raw(
+    '        Or read a key from stdin: omni auth login --server default --api-key-stdin < /secure/path/omni-api-key',
+  );
   output.raw('');
 }
 
