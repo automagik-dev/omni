@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
 import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
-import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
+import { cleanupAfterFailure, dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { reconcile } from '../reconcile-identity-fragmentation';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -231,9 +231,10 @@ postgresDescribe('reconciliation script --apply write-path safety (real PostgreS
       // re-point) have already committed, so this snapshot differs.
       const after = await snapshot(db);
       expect(after).toBe(before);
-    } finally {
-      await cleanup();
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   }, 120_000);
 
   // Bug #2: Step-2 backfill must keep the OLDEST person (oldest-survives),
@@ -265,8 +266,9 @@ postgresDescribe('reconciliation script --apply write-path safety (real PostgreS
       const [survivor] = survivors;
       expect(survivor?.id).toBe(PERSON_LID);
       expect(survivor?.primaryPhone).toBe('+5511666660000');
-    } finally {
-      await cleanup();
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   }, 120_000);
 });

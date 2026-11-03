@@ -27,7 +27,7 @@ import type { ToolingSql } from './db';
 import { EngineCrash, runBackfill } from './engine';
 import { findBySource } from './ledger';
 import type { InstanceTenantMap } from './mapping-engine';
-import { connect } from './pg-testing';
+import { cleanupAfterFailure, connect } from './pg-testing';
 import { dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 
 const base = superUrl();
@@ -125,6 +125,12 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       const sql = connect(url);
       const admin = createDbHandle({ url: pgRoleUrl(base, database) });
       let runtime: ReturnType<typeof createDbHandle> | undefined;
+      const cleanup = async () => {
+        if (runtime) await runtime.close();
+        await admin.close();
+        await sql.end();
+        dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+      };
       try {
         if (enforced) {
           await applyTenantRlsEnforcement(admin.db);
@@ -156,17 +162,19 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
             }
           }
         }
-      } finally {
-        if (runtime) await runtime.close();
-        await admin.close();
-        await sql.end();
-        dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+      } catch (error) {
+        await cleanupAfterFailure(cleanup, error);
       }
+      await cleanup();
     }, 180000);
 
   test('dry-run reaches every decision but writes NOTHING', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       const report = await runBackfill(sql, { mode: 'dry-run', instanceTenantMap: instanceMap, tables: SCOPE });
 
@@ -185,15 +193,19 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(await ledgerCount(sql)).toBe(0);
       expect(await tenantOf(sql, 'instances', INSTANCE_A)).toBeNull();
       expect(await tenantOf(sql, 'chats', CHAT_A)).toBeNull();
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('apply assigns via composite ownership; conflicts/orphans quarantine; silent tables stop-block', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       const report = await runBackfill(sql, { mode: 'apply', instanceTenantMap: instanceMap, tables: SCOPE });
 
@@ -231,15 +243,19 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(names).toEqual(['automations', 'conversations', 'webhook_sources']);
       for (const sb of report.stopBlocked) expect(sb.openQuestion.length).toBeGreaterThan(0);
       expect(await tenantOf(sql, 'automations', '11110000-0000-4000-8000-000000000001')).toBeNull();
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('every rewrite has a PRIOR durable ledger entry (crash between plan and rewrite)', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       // Crash after the very first planned entry — before its row is rewritten.
       let crashed = false;
@@ -270,15 +286,19 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       expect(await tenantOf(sql, 'instances', INSTANCE_B)).toBe(TENANT_B);
       const done = await findBySource(sql, 'instances', { id: planned[0]!.source_primary_key.id });
       expect(done?.status).toBe('applied');
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('apply is idempotent — a second full run changes nothing', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runBackfill(sql, { mode: 'apply', instanceTenantMap: instanceMap, tables: SCOPE });
       const firstCount = await ledgerCount(sql);
@@ -294,15 +314,19 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
         SELECT ledger_id AS id, max(revision)::text AS revision
         FROM tenant_migration_ledger_history GROUP BY ledger_id ORDER BY ledger_id`;
       expect(second).toEqual(first);
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('apply -> invert -> byte-identical restore, proven by checksum', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       // Pre-image checksum of a row we will assign.
       const preRow = (await sql.unsafe(`SELECT * FROM "instances" WHERE id = $1`, [INSTANCE_A])) as unknown as Record<
@@ -327,9 +351,9 @@ maybe('G6 backfill engine — real PostgreSQL', () => {
       >[];
       expect(checksum(postRow[0]!)).toBe(preChecksum); // byte-identical
       expect(await tenantOf(sql, 'instances', INSTANCE_A)).toBeNull();
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 });

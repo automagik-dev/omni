@@ -67,11 +67,14 @@ postgresDescribe('dead-letter retry identity (legacy, real PostgreSQL)', () => {
   }, 180_000);
 
   afterAll(async () => {
-    for (const close of closers.reverse()) await close();
-    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    try {
+      for (const close of closers.reverse()) await close();
+      dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
     }
   });
 

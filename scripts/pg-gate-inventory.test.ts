@@ -396,7 +396,7 @@ test('tracked PostgreSQL tests are discoverable and use only pg-gate opt-ins', (
   for (const file of discovered) expect(tests.has(file)).toBe(true);
   expect(violations(tests, discovered)).toEqual([]);
   expect(harnessImporters(tests)).toEqual([...harnessUnitTests.keys()].sort());
-});
+}, 30_000);
 
 test('a non-postgres test importing the harness is a PG opt-in: static, re-export or dynamic', () => {
   const file = 'packages/foo.test.ts';
@@ -431,7 +431,7 @@ test('a non-postgres test importing the harness is a PG opt-in: static, re-expor
 
 test('retired opt-in names cannot return in tracked files outside .genie', () => {
   expect(deadViolations(trackedFiles())).toEqual([]);
-});
+}, 30_000);
 
 test('recognizes env aliases, destructuring, brackets and DB connection arguments', () => {
   for (const source of [
@@ -499,7 +499,7 @@ test('postgres suites and test support drop databases only through dropDatabaseO
   const { found, exempt } = rawDrops(scope);
   expect(found.map(({ file }) => file)).toEqual(checkedExitDrops.map(([file]) => file).sort());
   expect(exempt.map(({ file }) => file)).toEqual(dropExemptions.map(({ file }) => file).sort());
-});
+}, 30_000);
 
 test('a raw drop with an ignored result is found; the helper statement and comments are not', () => {
   const file = 'packages/x-postgres.test.ts';

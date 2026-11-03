@@ -154,14 +154,17 @@ for (const enforced of [false, true]) {
     }, 180_000);
 
     afterAll(async () => {
-      for (const close of closers.reverse()) await close();
-      dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
-      for (const [key, value] of Object.entries({
-        OMNI_MULTITENANCY_ENABLED: previousFlags.multitenancy,
-        OMNI_DB_ENFORCEMENT: previousFlags.enforcement,
-      })) {
-        if (value === undefined) delete process.env[key];
-        else process.env[key] = value;
+      try {
+        for (const close of closers.reverse()) await close();
+        dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
+      } finally {
+        for (const [key, value] of Object.entries({
+          OMNI_MULTITENANCY_ENABLED: previousFlags.multitenancy,
+          OMNI_DB_ENFORCEMENT: previousFlags.enforcement,
+        })) {
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        }
       }
     });
 

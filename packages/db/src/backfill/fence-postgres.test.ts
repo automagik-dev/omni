@@ -20,7 +20,7 @@ import {
   postSnapshotDelta,
 } from './fence';
 import type { InstanceTenantMap } from './mapping-engine';
-import { connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
+import { cleanupAfterFailure, connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 
 const base = superUrl();
 const maybe = base.length > 0 ? describe : describe.skip;
@@ -52,6 +52,10 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
   test('writer-epoch rejection and high-water-mark capture', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       expect(checkWriterEpoch(3, 3).allowed).toBe(true);
       expect(checkWriterEpoch(2, 3).allowed).toBe(false);
@@ -64,15 +68,19 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
 
       const later = await captureHighWaterMark(sql);
       expect(later).toMatch(/^[0-9A-F]+\/[0-9A-F]+$/);
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('post-snapshot replay driver selects EXACTLY the delta beyond the snapshot', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       // Batch 1: instances. Then take the snapshot high-water mark.
       await runBackfill(sql, { mode: 'apply', instanceTenantMap: instanceMap, tables: ['instances'], writerEpoch: 5 });
@@ -87,15 +95,19 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(delta.length).toBe(2);
       const total = await sql<{ n: string }[]>`SELECT count(*)::text AS n FROM tenant_migration_ledger`;
       expect(Number(total[0]!.n)).toBe(4); // 2 instances + 2 chats, but delta is only the 2 chats
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('final reconciliation reports no-gap when clean, gap when a decision is stuck', async () => {
     const clean = provisionDatabase(base, FIXTURE);
     const sqlClean = connect(clean.url);
+    const cleanupClean = async () => {
+      await sqlClean.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, clean.database);
+    };
     try {
       await runBackfill(sqlClean, {
         mode: 'apply',
@@ -108,13 +120,17 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       expect(result.noGap).toBe(true);
       expect(result.staleEpochWrites).toBe(0);
       expect(result.plannedNotApplied).toBe(0);
-    } finally {
-      await sqlClean.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, clean.database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanupClean, error);
     }
+    await cleanupClean();
 
     const gapped = provisionDatabase(base, FIXTURE);
     const sqlGap = connect(gapped.url);
+    const cleanupGapped = async () => {
+      await sqlGap.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, gapped.database);
+    };
     try {
       // A crash leaves a `planned` decision that never applied — a gap.
       try {
@@ -132,15 +148,19 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       const result = await finalReconciliationUnderFence(sqlGap, activation);
       expect(result.noGap).toBe(false);
       expect(result.plannedNotApplied).toBeGreaterThan(0);
-    } finally {
-      await sqlGap.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, gapped.database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanupGapped, error);
     }
+    await cleanupGapped();
   });
 
   test('a stale-epoch write is detected as a gap under a higher fence', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       // Writes at epoch 0, then a fence activated at epoch 5: the earlier writes
       // are stale-epoch and must show up as a gap.
@@ -149,9 +169,9 @@ maybe('G6 fence protocol — real PostgreSQL', () => {
       const result = await finalReconciliationUnderFence(sql, activation);
       expect(result.noGap).toBe(false);
       expect(result.staleEpochWrites).toBeGreaterThan(0);
-    } finally {
-      await sql.end();
-      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 });
