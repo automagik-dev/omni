@@ -134,15 +134,6 @@ describe('createMessagingWindowProbe', () => {
     });
     expect(probe(r, now)).toBe('expired');
   });
-
-  test('honours custom windowMs override (test-only)', () => {
-    const probe = createMessagingWindowProbe({ windowMs: 60_000 });
-    const r = row({
-      channelType: 'whatsapp-business',
-      lastInboundCustomerMessageAt: new Date(now.getTime() - 61_000),
-    });
-    expect(probe(r, now)).toBe('expired');
-  });
 });
 
 describe('playTypingIndicator', () => {

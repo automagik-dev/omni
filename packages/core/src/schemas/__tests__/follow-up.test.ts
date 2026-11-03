@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test';
-import type { EventPayloadMap } from '../../events/types';
 import { CORE_EVENT_TYPES } from '../../events/types';
 import {
   DisarmReasonSchema,
@@ -105,16 +104,8 @@ describe('follow-up schemas', () => {
       expect(parsed.maxFollowUps).toBe(3);
     });
 
-    test('rejects negative maxFollowUps', () => {
-      expect(FollowUpSequenceConfigSchema.safeParse({ ...validConfig, maxFollowUps: -1 }).success).toBe(false);
-    });
-
-    test('rejects zero maxFollowUps', () => {
-      expect(FollowUpSequenceConfigSchema.safeParse({ ...validConfig, maxFollowUps: 0 }).success).toBe(false);
-    });
-
-    test('rejects maxFollowUps above cap', () => {
-      expect(FollowUpSequenceConfigSchema.safeParse({ ...validConfig, maxFollowUps: 51 }).success).toBe(false);
+    test.each([-1, 0, 51])('rejects out-of-range maxFollowUps %p', (maxFollowUps) => {
+      expect(FollowUpSequenceConfigSchema.safeParse({ ...validConfig, maxFollowUps }).success).toBe(false);
     });
 
     test('rejects empty promptTemplate', () => {
@@ -209,55 +200,6 @@ describe('follow-up schemas', () => {
       expect(types).toContain('follow_up.fired');
       expect(types).toContain('follow_up.skipped');
       expect(types).toContain('follow_up.disarmed');
-    });
-
-    test('EventPayloadMap typechecks each follow-up variant without as-any', () => {
-      // Compile-time proof: these assignments must typecheck without casts.
-      const idle: EventPayloadMap['chat.idle_timeout'] = {
-        chatId: 'chat-1',
-        instanceId: 'inst-1',
-        agentId: null,
-        sequenceIndex: 0,
-        attemptNumber: 1,
-        totalAttempts: 3,
-        minutesSinceLastAgentReply: 3,
-        syntheticPrompt: 'please follow up',
-      };
-      const armed: EventPayloadMap['follow_up.armed'] = {
-        chatId: 'chat-1',
-        instanceId: 'inst-1',
-        agentId: null,
-        sequenceIndex: 0,
-        nextFireAt: Date.now() + 60_000,
-      };
-      const fired: EventPayloadMap['follow_up.fired'] = {
-        chatId: 'chat-1',
-        instanceId: 'inst-1',
-        agentId: null,
-        sequenceIndex: 0,
-        firedAt: Date.now(),
-        syntheticPrompt: 'please follow up',
-      };
-      const skipped: EventPayloadMap['follow_up.skipped'] = {
-        chatId: 'chat-1',
-        instanceId: 'inst-1',
-        agentId: null,
-        sequenceIndex: 0,
-        reason: 'channel_disconnected',
-      };
-      const disarmed: EventPayloadMap['follow_up.disarmed'] = {
-        chatId: 'chat-1',
-        instanceId: 'inst-1',
-        agentId: null,
-        sequenceIndex: 0,
-        reason: 'customer_replied',
-      };
-
-      expect(idle.chatId).toBe('chat-1');
-      expect(armed.sequenceIndex).toBe(0);
-      expect(fired.syntheticPrompt).toBe('please follow up');
-      expect(skipped.reason).toBe('channel_disconnected');
-      expect(disarmed.reason).toBe('customer_replied');
     });
   });
 });

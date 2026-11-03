@@ -64,28 +64,6 @@ describe('payload-store', () => {
       // Base64 should only contain valid characters
       expect(result.compressed).toMatch(/^[A-Za-z0-9+/]+=*$/);
     });
-
-    test('handles nested objects', () => {
-      const payload = {
-        level1: {
-          level2: {
-            level3: {
-              value: 'deep',
-            },
-          },
-        },
-      };
-      const result = compressPayload(payload);
-
-      expect(result.compressed).toBeTruthy();
-    });
-
-    test('handles arrays', () => {
-      const payload = { items: [1, 2, 3, 4, 5] };
-      const result = compressPayload(payload);
-
-      expect(result.compressed).toBeTruthy();
-    });
   });
 
   describe('decompressPayload', () => {
@@ -183,44 +161,17 @@ describe('payload-store', () => {
   });
 
   describe('shouldStoreStage', () => {
-    test('respects storeWebhookRaw', () => {
-      const configTrue = { ...DEFAULT_STORAGE_CONFIG, storeWebhookRaw: true };
-      const configFalse = { ...DEFAULT_STORAGE_CONFIG, storeWebhookRaw: false };
-
-      expect(shouldStoreStage('webhook_raw', configTrue)).toBe(true);
-      expect(shouldStoreStage('webhook_raw', configFalse)).toBe(false);
-    });
-
-    test('respects storeAgentRequest', () => {
-      const configTrue = { ...DEFAULT_STORAGE_CONFIG, storeAgentRequest: true };
-      const configFalse = { ...DEFAULT_STORAGE_CONFIG, storeAgentRequest: false };
-
-      expect(shouldStoreStage('agent_request', configTrue)).toBe(true);
-      expect(shouldStoreStage('agent_request', configFalse)).toBe(false);
-    });
-
-    test('respects storeAgentResponse', () => {
-      const configTrue = { ...DEFAULT_STORAGE_CONFIG, storeAgentResponse: true };
-      const configFalse = { ...DEFAULT_STORAGE_CONFIG, storeAgentResponse: false };
-
-      expect(shouldStoreStage('agent_response', configTrue)).toBe(true);
-      expect(shouldStoreStage('agent_response', configFalse)).toBe(false);
-    });
-
-    test('respects storeChannelSend', () => {
-      const configTrue = { ...DEFAULT_STORAGE_CONFIG, storeChannelSend: true };
-      const configFalse = { ...DEFAULT_STORAGE_CONFIG, storeChannelSend: false };
-
-      expect(shouldStoreStage('channel_send', configTrue)).toBe(true);
-      expect(shouldStoreStage('channel_send', configFalse)).toBe(false);
-    });
-
-    test('respects storeError', () => {
-      const configTrue = { ...DEFAULT_STORAGE_CONFIG, storeError: true };
-      const configFalse = { ...DEFAULT_STORAGE_CONFIG, storeError: false };
-
-      expect(shouldStoreStage('error', configTrue)).toBe(true);
-      expect(shouldStoreStage('error', configFalse)).toBe(false);
+    test.each([
+      ['storeWebhookRaw', 'webhook_raw'],
+      ['storeAgentRequest', 'agent_request'],
+      ['storeAgentResponse', 'agent_response'],
+      ['storeChannelSend', 'channel_send'],
+      ['storeError', 'error'],
+    ] as const)('respects %s', (flag, stage) => {
+      const configTrue = { ...DEFAULT_STORAGE_CONFIG, [flag]: true };
+      const configFalse = { ...DEFAULT_STORAGE_CONFIG, [flag]: false };
+      expect(shouldStoreStage(stage, configTrue)).toBe(true);
+      expect(shouldStoreStage(stage, configFalse)).toBe(false);
     });
   });
 

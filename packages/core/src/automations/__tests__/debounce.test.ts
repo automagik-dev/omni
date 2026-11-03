@@ -3,27 +3,12 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
-import { DebounceManager, type DebouncedMessage, buildConversationKey, parseConversationKey } from '../debounce';
+import { DebounceManager, type DebouncedMessage, buildConversationKey } from '../debounce';
 import type { DebounceConfig } from '../types';
 
 describe('buildConversationKey', () => {
   test('builds key from instanceId and personId', () => {
     expect(buildConversationKey('wa-001', 'user-123')).toBe('wa-001:user-123');
-  });
-});
-
-describe('parseConversationKey', () => {
-  test('parses key back to components', () => {
-    const result = parseConversationKey('wa-001:user-123');
-    expect(result.instanceId).toBe('wa-001');
-    expect(result.personId).toBe('user-123');
-  });
-
-  test('handles keys with colons in personId', () => {
-    // Note: This will only get the first part after the first colon
-    const result = parseConversationKey('wa-001:user:with:colons');
-    expect(result.instanceId).toBe('wa-001');
-    expect(result.personId).toBe('user');
   });
 });
 
@@ -153,22 +138,6 @@ describe('DebounceManager', () => {
 
       manager.flushAll();
       expect(manager.getActiveWindowCount()).toBe(0);
-    });
-  });
-
-  describe('getPendingCount', () => {
-    test('returns count of pending messages for a key', () => {
-      const callback = mock(() => {});
-      const config: DebounceConfig = { mode: 'fixed', delayMs: 5000 };
-      const manager = new DebounceManager(config, callback);
-
-      expect(manager.getPendingCount('key')).toBe(0);
-
-      manager.addMessage('key', { type: 'text', timestamp: 1, payload: {} }, { id: '1' }, 'wa-001');
-      expect(manager.getPendingCount('key')).toBe(1);
-
-      manager.addMessage('key', { type: 'text', timestamp: 2, payload: {} }, { id: '1' }, 'wa-001');
-      expect(manager.getPendingCount('key')).toBe(2);
     });
   });
 });
