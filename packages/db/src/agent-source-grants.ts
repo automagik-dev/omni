@@ -54,7 +54,7 @@ async function sourceTenant(db: Database, kind: AgentGrantSourceKind, sourceId: 
  * **This is the only sanctioned writer of `agent_source_grants`. The slice-6 grant
  * writer MUST call it** and must not insert grants any other way. The guard test
  * `packages/api/src/__tests__/agent-source-grant-writer.test.ts` fails on any other
- * insert, and on any update that sets `tenantId`.
+ * insert, and on any update that sets `tenantId`, `sourceId` or `sourceKind`.
  *
  * - The input has no `tenantId`, and `.strict()` rejects one: the tenant always
  *   comes from the source row (connector, connector subscription, webhook source
@@ -62,13 +62,19 @@ async function sourceTenant(db: Database, kind: AgentGrantSourceKind, sourceId: 
  * - A source that does not exist, or that the caller's tenant scope cannot see
  *   under FORCE RLS, throws `NotFoundError`. No grant is written with a guessed
  *   or NULL tenant.
- * - An untenanted (NULL) source gives a NULL grant, which matches only
- *   untenanted rows.
+ * - An untenanted (NULL) source depends on the mode. With tenant enforcement off
+ *   (legacy), it gives a NULL grant, which matches only untenanted rows. Under
+ *   enforced RLS the policy is `"tenant_id" = omni_current_tenant_id()`, so a NULL
+ *   source is invisible in every tenant scope and this throws `NotFoundError`.
+ *
+ * Caller contract: pass the caller's tenant-scoped handle (in the API:
+ * `scopedHandle(db)`), so the source lookup and the insert run under the same RLS
+ * scope. The db-access registry's `tenant-boundary` class for this file holds only
+ * when the caller does so: this helper cannot scope its own handle, because
+ * `scopedHandle` lives in the api package, and it trusts the handle it is given.
  *
  * Authorization (who may grant what) and the grant's state-change event belong
  * to the slice-6 writer that calls this; this function only persists the row.
- * Pass the caller's tenant-scoped handle so the source lookup runs under the same
- * RLS scope as the insert (in the API: `scopedHandle(db)`).
  */
 export async function insertAgentSourceGrant(db: Database, input: AgentSourceGrantInput): Promise<AgentSourceGrant> {
   const grant = AgentSourceGrantInputSchema.parse(input);

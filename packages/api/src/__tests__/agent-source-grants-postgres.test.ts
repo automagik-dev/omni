@@ -195,6 +195,13 @@ for (const mode of ['legacy', 'enforced'] as const) {
             await expect(write(T, input(kind, source))).rejects.toMatchObject({ code: 'NOT_FOUND' });
             expect(await stored([source])).toEqual([]);
           });
+        // The policy is `tenant_id = omni_current_tenant_id()`, so a NULL-tenant source is invisible too.
+        if (RLS_TENANT_TABLES.includes(SOURCE_TABLES[kind]))
+          test(`${kind}: an untenanted (NULL) source is invisible from T's scope; NOT_FOUND, nothing written`, async () => {
+            const source = await seedSource(kind, null);
+            await expect(write(T, input(kind, source))).rejects.toMatchObject({ code: 'NOT_FOUND' });
+            expect(await stored([source])).toEqual([]);
+          });
       }
     }
   });
