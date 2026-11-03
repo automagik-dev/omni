@@ -154,11 +154,24 @@ function bindingResolver(file: ts.SourceFile) {
     return undefined;
   };
   const reassigned = new Set<Binding>();
-  function writeTarget(node: ts.Expression): void {
+  /** Values written by plain `=`, including positional `[a] = [b]` writes (provider aliases). */
+  const assigned = new Map<Binding, ts.Expression[]>();
+  function writeTarget(node: ts.Expression, value?: ts.Expression): void {
     const target = unwrap(node);
+    const source = value && unwrap(value);
+    if (ts.isArrayLiteralExpression(target)) {
+      target.elements.forEach((element, index) => {
+        const item = source && ts.isArrayLiteralExpression(source) ? source.elements[index] : undefined;
+        if (!ts.isOmittedExpression(element))
+          writeTarget(element, item && !ts.isSpreadElement(item) ? item : undefined);
+      });
+      return;
+    }
     if (ts.isIdentifier(target)) {
       const binding = bindingFor(target);
-      if (binding) reassigned.add(binding);
+      if (!binding) return;
+      reassigned.add(binding);
+      if (value) assigned.set(binding, [...(assigned.get(binding) ?? []), value]);
     }
   }
   function writes(node: ts.Node): void {
@@ -167,7 +180,7 @@ function bindingResolver(file: ts.SourceFile) {
       node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
       node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     )
-      writeTarget(node.left);
+      writeTarget(node.left, node.operatorToken.kind === ts.SyntaxKind.EqualsToken ? node.right : undefined);
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
@@ -176,14 +189,14 @@ function bindingResolver(file: ts.SourceFile) {
     ts.forEachChild(node, writes);
   }
   writes(file);
-  return { bindingFor, reassigned };
+  return { bindingFor, reassigned, assigned };
 }
 /** Reference literal-deny policy; the new policy differs only by its channel exception.
  * Both modes inspect every comparison form, including collections and object maps.
  */
 function literalPolicy(source: string, channelException: boolean): string[] {
   const file = ts.createSourceFile('slice.ts', source, ts.ScriptTarget.Latest, true);
-  const { bindingFor, reassigned } = bindingResolver(file);
+  const { bindingFor, reassigned, assigned } = bindingResolver(file);
   function initializer(node: ts.Identifier, seen: Set<ts.Node>): ts.Expression | null | undefined {
     const binding = bindingFor(node);
     if (!binding) return undefined;
@@ -267,12 +280,31 @@ function literalPolicy(source: string, channelException: boolean): string[] {
     if (member) return discriminantName(member, seen, unwrapReceivers);
     return baselineDiscriminantName(expression);
   }
+  /** Positional source of `const [, p] = [x, agent.provider]`. */
+  function positionalValue(binding: Binding): ts.Expression | undefined {
+    if (!ts.isBindingElement(binding) || !ts.isArrayBindingPattern(binding.parent)) return undefined;
+    const declaration = binding.parent.parent;
+    const value = ts.isVariableDeclaration(declaration) && declaration.initializer && unwrap(declaration.initializer);
+    if (!value || !ts.isArrayLiteralExpression(value)) return undefined;
+    const item = value.elements[binding.parent.elements.indexOf(binding)];
+    return item && !ts.isSpreadElement(item) ? item : undefined;
+  }
+  /** Allow-only-when-known: an alias is a provider only when a write to it resolves to `provider`. */
+  function providerAlias(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
+    const expression = unwrap(node);
+    if (discriminantName(expression) === 'provider') return true;
+    const binding = ts.isIdentifier(expression) ? bindingFor(expression) : undefined;
+    if (!binding || ts.isEnumDeclaration(binding) || seen.has(binding)) return false;
+    seen.add(binding);
+    const sources = [...(assigned.get(binding) ?? []), binding.initializer, positionalValue(binding)];
+    return sources.some((source) => !!source && providerAlias(source, seen));
+  }
   function isChannel(node: ts.Expression): boolean {
     return ['channel', 'channelType'].includes(discriminantName(node, new Set(), false));
   }
   function isProvider(node: ts.Expression): boolean {
     // Provider-keyed handler maps are also provider discriminants for `in`/call rules.
-    return /^provider/i.test(discriminantName(node));
+    return /^provider/i.test(discriminantName(node)) || providerAlias(node);
   }
   const found: string[] = [];
   function deny(name: string | undefined, against: ts.Expression): boolean {
@@ -281,7 +313,7 @@ function literalPolicy(source: string, channelException: boolean): string[] {
       // Only actual channel types may gain the channel exception (currently Hermes).
       return !(channelException && CHANNEL_HARNESS_OVERLAP.has(name) && isChannel(against));
     }
-    return discriminantName(against) === 'provider' && EXTERNAL_PROVIDERS.includes(name);
+    return providerAlias(against) && EXTERNAL_PROVIDERS.includes(name);
   }
   function mapKeys(node: ts.Expression): string[] {
     const expression = unwrap(node);
@@ -605,6 +637,15 @@ const failingFixtures = [
   'providerHandlers.claude()',
   "PROVIDERS['claude']",
   'const p = agent.provider; p.claude()',
+  // Residual 5: provider aliases through reassignment or array destructuring, resolved from known writes.
+  "let p = x; p = agent.provider; p === 'claude'",
+  "let p; p = agent.provider; switch (p) { case 'openai': break; }",
+  "const [p] = [agent.provider]; p === 'claude'",
+  "const [, p] = [x, agent.provider]; ['agno'].includes(p)",
+  "let p; [p] = [agent.provider]; p === 'gemini'",
+  "const [p] = [agent.provider]; const q = p; q === 'custom'",
+  "let p = x; p = agent.provider; p.startsWith('claude')",
+  'const [p] = [agent.provider]; ({ claude: fn }[p])',
 ];
 const channelFixtures = [
   "instance.channel === 'hermes'",
@@ -634,6 +675,11 @@ const passingFixtures = [
   "const config = { defaultChannel: 'hermes' }",
   "instance.channel === 'claude'",
   'HANDLERS.find((x) => x.name === h)',
+  // Residual 5 stays allow-only-when-known: unresolvable aliases are not providers.
+  "let p = x; p = y; p === 'custom'",
+  "const [p] = [x]; p === 'claude'",
+  "const [p] = list; p === 'custom'",
+  "let p; [p] = pair; p === 'openai'",
   // Documented semantic residuals; the guard does not infer getter/field meaning.
   "getProvider(agent) === 'claude'",
   "agent.config.providerName === 'claude'",
