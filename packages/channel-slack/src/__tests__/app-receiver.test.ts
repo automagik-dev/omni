@@ -465,6 +465,21 @@ describe('SlackAppReceiver', () => {
     expect(receiver.socketHealth().state).toBe('disconnected');
   });
 
+  it('#941 clears the lifecycle callback before a deliberate stop', async () => {
+    const { receiver } = makeReceiver();
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+    const onStateChange = mock();
+    receiver.onSocketStateChange = onStateChange;
+
+    await receiver.start();
+    await receiver.stop();
+    socketClient.emit('disconnected');
+
+    expect(onStateChange).not.toHaveBeenCalled();
+    expect(receiver.isRunning).toBe(false);
+  });
+
   it('detaching the last attachment stops the receiver', async () => {
     const { receiver } = makeReceiver();
     const app = lastApp();
