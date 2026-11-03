@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-webchat",
-  "version": "2.261103.72",
+  "version": "2.261103.73",
   "description": "PROTOTYPE web chat channel for Omni: browser widget over HTTP POST (in) + Server-Sent Events (out), plus a voice echo test over WebSocket",
   "type": "module",
   "main": "src/index.ts",
