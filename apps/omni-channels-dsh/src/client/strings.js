@@ -632,6 +632,11 @@ export const STRINGS = {
   'Not connected: this app is linked to another Omni.': '未连接：这个应用关联的是另一个 Omni。',
   'Not connected: its previous key is still being cut.': '未连接：它之前的密钥还在作废中。',
   'Not connected: waiting for a key from the linked Omni.': '未连接：正在等待关联的 Omni 发来密钥。',
+  'Omni cannot make chat keys; update it.': 'Omni 无法创建聊天密钥；请先更新它。',
+  'This app holds as many chat keys as Omni allows.': '这个应用持有的聊天密钥已达 Omni 允许的上限。',
+  'Could not reach Omni. Try again in a moment.': '无法连接 Omni。请稍后重试。',
+  'This chat is a thread already.': '这个聊天已添加为话题。',
+  'This host is read-only. Add the chat from the host that owns the team.': '此主机为只读。请从持有此 Bot 团队的主机添加聊天。',
   // A message's file in the chat view (channels.js).
   'Picture': '图片',
   'Voice note': '语音消息',

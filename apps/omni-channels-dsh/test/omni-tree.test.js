@@ -316,7 +316,7 @@ test('picking a chat adds it on the host and closes the picker; a failed mint sh
   const { view } = tree(t, { roster })
   logged.length = 0
   const reason = 'Omni at omni.example.com cannot make chat keys; update it.'
-  let added = { ok: false, reason }
+  let added = { ok: false, reason, reasonCode: 'chat_keys_unavailable' }
   answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : endpoint === 'omni-thread-add' ? added : {})
   byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
   view.draw()
@@ -328,7 +328,7 @@ test('picking a chat adds it on the host and closes the picker; a failed mint sh
   root = view.draw()
   assert.deepEqual(calls.find(([endpoint]) => endpoint === 'omni-thread-add'), ['omni-thread-add', { channelId: CHANNEL_A.id, chatId: 'c2' }])
   const problem = one(root, 'ot-picker-problem')
-  assert.deepEqual([problem.props.role, text(problem)], ['alert', 'The chat was not added.'])
+  assert.deepEqual([problem.props.role, text(problem)], ['alert', 'Omni cannot make chat keys; update it.'])
   assert.equal(text(root).includes(reason), false)
   assert.deepEqual(logged, [['Could not add the chat:', reason]])
   assert.ok(one(root, 'ot-picker'), 'the picker stays open')
@@ -841,3 +841,71 @@ for (const [label, failure] of [['Error', new Error('PRIVATE-CHAT-LIST-ERROR')],
     assert.equal(one(root, 'ot-picker-chat').props.disabled, false, 'the chat can be tried again')
   })
 }
+
+const ADD_REASONS = [
+  ['chat_keys_unavailable', 'Omni cannot make chat keys; update it.'],
+  ['chat_key_limit', 'This app holds as many chat keys as Omni allows.'],
+  ['omni_unreachable', 'Could not reach Omni. Try again in a moment.'],
+  ['not_linked', NOT_LINKED],
+  ['other_omni', OTHER_OMNI],
+  ['needs_newer_team', NEEDS_NEWER_TEAM],
+  ['already_thread', 'This chat is a thread already.'],
+  ['read_only', 'This host is read-only. Add the chat from the host that owns the team.'],
+]
+
+test('the picker translates known add reason codes without rendering their diagnostic text', async (t) => {
+  answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+  const reason = 'PRIVATE-HOST-REASON \u009b\u202e'
+  let result
+  const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => result, onClose: () => {} }))
+  t.after(() => view.unmount())
+  view.draw()
+  await settle()
+  for (const [reasonCode, message] of ADD_REASONS) {
+    logged.length = 0
+    result = { ok: false, reasonCode, reason }
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    const root = view.draw()
+    assert.equal(text(one(root, 'ot-picker-problem')), message, reasonCode)
+    assert.equal(text(root).includes(reason), false, reasonCode)
+    assert.deepEqual(logged, [['Could not add the chat:', reason]], reasonCode)
+    assert.ok(Object.hasOwn(STRINGS, message), `Chinese copy for ${reasonCode}`)
+  }
+})
+
+test('an unknown add reason stays generic, even if its text resembles a known message', async (t) => {
+  answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+  const reason = 'Omni cannot make chat keys; update it. PRIVATE-REMOTE-TEXT'
+  let result
+  const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => result, onClose: () => {} }))
+  t.after(() => view.unmount())
+  view.draw()
+  await settle()
+  for (const reasonCode of [undefined, 'unknown', '__proto__', 'constructor', {}, 42]) {
+    logged.length = 0
+    result = { ok: false, reasonCode, reason }
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    const root = view.draw()
+    assert.equal(text(one(root, 'ot-picker-problem')), 'The chat was not added.')
+    assert.equal(text(root).includes('PRIVATE-REMOTE-TEXT'), false)
+    assert.deepEqual(logged, [['Could not add the chat:', reason]])
+  }
+})
+
+test('a read-only add error shows the fixed guidance and logs its raw diagnostic', async (t) => {
+  logged.length = 0
+  answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+  const failure = Object.assign(new Error('PRIVATE-READ-ONLY-HOST'), { code: 'bot/read-only' })
+  const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => { throw failure }, onClose: () => {} }))
+  t.after(() => view.unmount())
+  view.draw()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  const root = view.draw()
+  assert.equal(text(one(root, 'ot-picker-problem')), ADD_REASONS.find(([code]) => code === 'read_only')[1])
+  assert.equal(text(root).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not add the chat:', failure]])
+})

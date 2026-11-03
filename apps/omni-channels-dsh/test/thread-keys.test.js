@@ -255,6 +255,33 @@ test('a mint is offered only on a Bot team with the restart hook, and only with 
   assert.equal(existsSync(join(old.home, KEYS_FILE)) || existsSync(join(none.home, KEYS_FILE)), false)
 })
 
+test('mint refusals carry only known reason codes; remote words remain diagnostic text', async (t) => {
+  const omni = fakeOmni()
+  const { rt, home } = runtime(t, { link: linked(omni.linkKey()) })
+  const raw = 'PRIVATE-OMNI-SAID \u009b\u202e'
+  const cases = [
+    [0, null, 'omni_unreachable'],
+    [404, {}, 'chat_keys_unavailable'],
+    [409, {}, 'chat_key_limit'],
+    [409, { error: { code: 'CHILD_LIMIT', message: raw } }, 'chat_key_limit'],
+    [404, { error: { message: raw } }, undefined],
+    [409, { error: { code: 'OTHER', message: raw } }, undefined],
+    [403, { error: { message: raw } }, undefined],
+    [500, { error: { message: raw } }, undefined],
+  ]
+  for (const [status, body, reasonCode] of cases) {
+    globalThis.fetch = async () => {
+      if (status === 0) throw new Error(raw)
+      return new Response(JSON.stringify(body), { status })
+    }
+    const result = await rt.threadKeys.mint('t1', CHAT)
+    assert.equal(result.ok, false)
+    assert.equal(result.reasonCode, reasonCode, `status ${status}, body ${JSON.stringify(body)}`)
+    if (body?.error) assert.ok(result.reason.includes(raw), 'remote text retained for diagnostics')
+    assert.equal(existsSync(join(home, KEYS_FILE)), false, 'a refusal writes no key')
+  }
+})
+
 test('a per-call key is the only key a request uses', async (t) => {
   const omni = fakeOmni()
   const parent = omni.linkKey()
