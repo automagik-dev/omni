@@ -372,6 +372,14 @@ describe('SlackAppReceiver', () => {
     expect(() => receiverKeyFor({ botToken: 'xoxb', mode: 'http' })).toThrow(SlackError);
   });
 
+  it.each([undefined, ''])('rejects HTTP construction without a signing secret (%p)', (signingSecret) => {
+    expect(() => new SlackAppReceiver({ mode: 'http', signingSecret }, () => undefined, noopLogger)).toThrow(
+      SlackError,
+    );
+    expect(httpReceiverOptions).toEqual([]);
+    expect(constructedApps).toEqual([]);
+  });
+
   it('authorize returns the most recently attached bot token for the team', async () => {
     const { receiver } = makeReceiver();
     const authorize = authorizeOf(lastApp());
@@ -463,6 +471,21 @@ describe('SlackAppReceiver', () => {
     socketClient.emit('disconnected');
 
     expect(receiver.socketHealth().state).toBe('disconnected');
+  });
+
+  it('#941 clears the lifecycle callback before a deliberate stop', async () => {
+    const { receiver } = makeReceiver();
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+    const onStateChange = mock();
+    receiver.onSocketStateChange = onStateChange;
+
+    await receiver.start();
+    await receiver.stop();
+    socketClient.emit('disconnected');
+
+    expect(onStateChange).not.toHaveBeenCalled();
+    expect(receiver.isRunning).toBe(false);
   });
 
   it('detaching the last attachment stops the receiver', async () => {

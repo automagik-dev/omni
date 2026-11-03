@@ -457,6 +457,14 @@ async function deliverTeamMessage(teamId = 'T_SHARED', authorizedUserIds: string
 }
 
 describe('SlackPlugin — instances behind one Slack app share one receiver', () => {
+  it('rejects HTTP mode without a signing secret as INVALID_TOKEN', async () => {
+    const { plugin } = await makeSharedPlugin();
+    const config = { ...configFor('inst-http'), options: { botToken: 'xoxb-fake', mode: 'http' } };
+    await expect(plugin.connect('inst-http', config)).rejects.toMatchObject({
+      channelCode: SlackErrorCode.INVALID_TOKEN,
+    });
+  });
+
   it('two instances on one app token share a single receiver, and one team event reaches both', async () => {
     const { plugin, internals } = await makeSharedPlugin();
 

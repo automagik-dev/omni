@@ -50,7 +50,7 @@ import {
   withBodyLimit,
 } from './bolt-client';
 
-/** Default port for Bolt's built-in HTTP receiver, as in startBoltConnection. */
+/** Default port for Bolt's built-in HTTP receiver. */
 const DEFAULT_HTTP_PORT = 3001;
 
 /**
@@ -978,10 +978,11 @@ export class SlackAppReceiver {
     const clientOptions: AppOptions['clientOptions'] = { retryConfig: this.retryConfig };
 
     if (this.mode === 'http') {
-      if (!opts.signingSecret) {
+      const { signingSecret } = opts;
+      if (!signingSecret) {
         throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'signingSecret is required for HTTP mode');
       }
-      const receiver = new HTTPReceiver({ signingSecret: opts.signingSecret });
+      const receiver = new HTTPReceiver({ signingSecret });
       const app = new App({ authorize, clientOptions, receiver });
       // Refuse oversized bodies with 413 before Bolt buffers them.
       return { app, httpHandler: withBodyLimit(receiver.requestListener, this.logger) };

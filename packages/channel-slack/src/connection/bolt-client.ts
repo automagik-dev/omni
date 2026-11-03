@@ -100,8 +100,8 @@ export interface BoltConnection {
   /** Connection mode: 'socket' (default) or 'http' */
   mode?: 'socket' | 'http';
   /**
-   * Port for HTTP receiver mode. When mode is 'http', startBoltConnection()
-   * calls app.start(httpPort) to start Bolt's built-in HTTP server.
+   * Port for HTTP receiver mode. The shared receiver calls app.start(httpPort)
+   * to start Bolt's built-in HTTP server.
    * Defaults to 3001 if not provided.
    */
   httpPort?: number;
@@ -122,7 +122,7 @@ export interface BoltConnection {
   /**
    * Hook invoked on every Socket Mode lifecycle transition. plugin.ts assigns
    * it after a verified start so a socket dying later drives a real instance
-   * status change (#941). Cleared by destroyBoltConnection so a deliberate
+   * status change (#941). Cleared by the shared receiver on stop so a deliberate
    * stop is not reported as a lost socket.
    */
   onSocketStateChange?: (state: SocketConnectionState) => void;
@@ -281,112 +281,12 @@ function buildBodyLimitHandler(
 }
 
 /**
- * Start a previously created Bolt.js app.
- *
- * - Socket Mode: connects via WebSocket. Call AFTER all handlers are registered.
- * - HTTP mode: starts Bolt's built-in HTTP server on connection.httpPort (default 3001).
- *   Slack must be configured to send events to that port. The httpHandler field is also
- *   available for external-server integration if preferred.
- */
-export async function startBoltConnection(connection: BoltConnection, logger: Logger): Promise<BoltConnection> {
-  await resolveIdentities(connection, logger);
-
-  // User mode (#889) MUST NOT start without a resolved acting-user id. Self-
-  // filtering compares the human's own typing against actingUserId; when it is
-  // undefined the check in shouldSkipMessage silently no-ops and the agent
-  // answers the operator's OWN messages. Fail fast rather than start broken.
-  if (connection.userClient && !connection.actingUserId) {
-    throw new SlackError(
-      SlackErrorCode.CONNECTION_FAILED,
-      'User mode requires a resolved acting user id, but it could not be determined from the user token. Refusing to start.',
-    );
-  }
-
-  if (connection.mode === 'http') {
-    // HTTP mode: start Bolt's built-in HTTP server so inbound Slack events are received.
-    // Bolt's HTTPReceiver listens on the given port and routes requests to registered handlers.
-    const port = connection.httpPort ?? 3001;
-    try {
-      await connection.app.start(port);
-      logger.info('Bolt.js HTTP receiver started', { port });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('Failed to start Bolt.js HTTP receiver', { error: message, port });
-      throw new SlackError(
-        SlackErrorCode.CONNECTION_FAILED,
-        `Failed to start Slack HTTP listener on port ${port}: ${message}`,
-      );
-    }
-    return connection;
-  }
-
-  // Socket Mode: connect via WebSocket, then VERIFY the socket really opened.
-  // `app.start()` resolving is not proof of a live connection (#941): an
-  // instance produced the full success log sequence with zero TCP connections
-  // to Slack. Success is only logged once the WebSocket state confirms it.
-  try {
-    await connection.app.start();
-    await waitForSocketOpen(connection);
-    logger.info('Bolt.js app started in Socket Mode (WebSocket verified open)');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to start Bolt.js app', { error: message });
-    if (error instanceof SlackError) throw error;
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, `Failed to start Slack connection: ${message}`);
-  }
-
-  return connection;
-}
-
-/**
- * Resolve bot identity first to avoid race conditions in Socket Mode where
- * messages can arrive before botUserId is set (self-message filtering requires
- * it). Failures are logged, not thrown — startBoltConnection enforces the one
- * hard invariant (user mode without a resolved acting-user id) itself.
- */
-async function resolveIdentities(connection: BoltConnection, logger: Logger): Promise<void> {
-  try {
-    const authResult = await connection.app.client.auth.test();
-    connection.botUserId = authResult.user_id ?? undefined;
-    connection.botId = (authResult.bot_id as string | undefined) ?? undefined;
-    connection.botName = authResult.user ?? undefined;
-    connection.teamId = authResult.team_id ?? undefined;
-    connection.teamName = authResult.team ?? undefined;
-    logger.info('Bot identity resolved', {
-      botUserId: connection.botUserId,
-      botName: connection.botName,
-      teamId: connection.teamId,
-      teamName: connection.teamName,
-    });
-
-    // In user mode, resolve the authorizing human too (#889). Self-filtering
-    // needs it: a message that person types themselves carries no bot_id and
-    // their own user id, so comparing only against botUserId would let the
-    // agent answer on their behalf in their own conversation.
-    if (connection.userClient) {
-      const userAuth = await connection.userClient.auth.test();
-      connection.actingUserId = (userAuth.user_id as string | undefined) ?? undefined;
-      logger.info('Acting user identity resolved', {
-        actingUserId: connection.actingUserId,
-        actingUser: userAuth.user,
-      });
-    }
-  } catch (error) {
-    logger.warn('Failed to resolve bot identity before start — self-message filtering may be unreliable', {
-      error: String(error),
-    });
-  }
-}
-
-/**
  * Resolve a workspace's bot identity from a bot-token `WebClient`.
  *
  * The shared receiver (app-receiver.ts) builds its Bolt `App` with `authorize`
- * and no `token`, so `app.client` carries no token and the
- * `connection.app.client.auth.test()` path above cannot serve it. Callers that
- * hold a workspace bot client resolve identity here instead. Unlike
- * {@link resolveIdentities}, a partial answer is an error: every field is
- * required by `authorize` (botId, botUserId), by the attachment map (teamId)
+ * and no `token`, so `app.client` carries no token. Callers that hold a
+ * workspace bot client resolve identity here instead. A partial answer is an
+ * error: every field is required by `authorize` (botId, botUserId), by the attachment map (teamId)
  * and by the connected-event metadata (botName).
  */
 export async function resolveWorkspaceIdentity(
@@ -530,36 +430,4 @@ export function isSocketStale(connection: BoltConnection, now = Date.now()): boo
   const last = connection.lastSocketActivityAt;
   if (last === undefined) return false;
   return now - last > (connection.socketStaleAfterMs ?? SOCKET_STALE_AFTER_MS);
-}
-
-/**
- * Stop and disconnect a Bolt.js App
- */
-export async function destroyBoltConnection(connection: BoltConnection, logger: Logger): Promise<void> {
-  // A deliberate stop must not be reported as a lost socket (#941).
-  connection.onSocketStateChange = undefined;
-  try {
-    await connection.app.stop();
-    logger.info('Bolt.js connection stopped');
-  } catch (error) {
-    logger.warn('Error stopping Bolt.js connection', { error: String(error) });
-  }
-}
-
-/**
- * Check if a Bolt.js connection is healthy.
- *
- * auth.test() only proves the Web API (HTTPS) is reachable; in socket mode the
- * events transport is the WSS connection, so a deaf socket must fail the check
- * even while auth.test() succeeds (#941) — otherwise connect() answers
- * 'already connected' and there is no recovery path from the CLI.
- */
-export async function checkBoltHealth(connection: BoltConnection): Promise<boolean> {
-  if (!isSocketOpen(connection)) return false;
-  try {
-    const result = await connection.client.auth.test();
-    return result.ok === true;
-  } catch {
-    return false;
-  }
 }
