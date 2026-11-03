@@ -67,5 +67,5 @@ The key cannot pull or ack, because that scope (`events:write`) would also let i
 ## Limits
 
 - **Multitenancy:** pairing is off on a multitenant Omni, so an agent host cannot pair there.
-- **Revoking:** `omni keys revoke <id>`. The key id is in the approval's `access.device_authorized` event and in `omni keys list` as `device: <deviceName>`.
+- **Revoking:** `omni keys revoke <id>`. The id is `data.keyId` in the step 4 answer; `omni keys list` shows its first 8 characters next to `device: <deviceName>`, and `revoke` accepts that prefix.
 - **Expiry:** keys last as long as `OMNI_DEVICE_KEY_TTL_DAYS` says, or until revoked.
