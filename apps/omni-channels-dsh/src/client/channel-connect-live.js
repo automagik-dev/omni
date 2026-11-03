@@ -236,7 +236,7 @@ function TokenFlow({ type, omni, Tile, PreviewChip }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const unfinished = useUnfinished()
-  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => { unfinished.current = null; setDone(reply) })
+  const { problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => { unfinished.current = null; setDone(reply) })
 
   // Coming back from Telegram with a token copied: offer it. The clipboard is read only on that
   // focus, which browsers allow; a refusal changes nothing.

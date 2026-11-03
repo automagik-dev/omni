@@ -279,7 +279,6 @@ export const STRINGS = {
   'Older Omnis can\'t approve this app. Paste its API key instead; it stays on this computer.': '较旧的 Omni 无法批准这个应用。请改为粘贴它的 API 密钥；密钥只保存在这台电脑上。',
   'Find the key where that app keeps its settings.': '在那个应用保存设置的地方找到密钥。',
   'API key for this Omni': '这个 Omni 的 API 密钥',
-  'Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.': 'Omni {version} 太旧，无法从这里配对。请更新它，或粘贴 API 密钥或它发给你的链接。',
   'This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.': '这个 Omni 太旧，无法从这里配对。请更新它，或粘贴 API 密钥或它发给你的链接。',
   'Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.': '这个 Omni 已关闭配对。它的所有者可以开启，或者你可以粘贴 API 密钥。',
   'This key can do everything on your Omni; consider giving this device its own key.': '这个密钥可以在你的 Omni 上做任何事；建议为这台设备单独创建一个密钥。',
