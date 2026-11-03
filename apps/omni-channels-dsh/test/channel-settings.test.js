@@ -11,7 +11,8 @@ const ISSUE_FIELDS = `agentReplyFilter agentSessionStrategy agentPrefixSenderNam
 const META = 'metaPhoneNumberId metaWabaId metaAppId metaBusinessId metaApiVersion metaConnectionMethod metaConnectedAt metaDisplayPhoneNumber'.split(' ')
 const ID = '11111111-2222-4333-8444-555555555555'
 const AGENT = '66666666-7777-4888-8999-aaaaaaaaaaaa'
-const ui = await bundleClient(["export { ChannelSettings } from './channel-settings.js'"], { team: { omni }, globals: { setTimeout, clearTimeout } })
+const warnings = []
+const ui = await bundleClient(["export { ChannelSettings } from './channel-settings.js'"], { team: { omni }, globals: { setTimeout, clearTimeout, console: { ...console, warn: (...args) => warnings.push(args) } } })
 const button = (tree, label) => nodes(tree).find(node => node.type === 'button' && text(node) === label)
 const change = (tree, label, value) => byLabel(tree, label).props.onChange({ target: { value } })
 const initial = { agentId: AGENT, agentProviderId: null, processAudio: true, inboundMaxAgeMinutes: 10,
@@ -80,6 +81,7 @@ test('read-only settings remain readable but every change control is disabled an
 })
 
 test('repair uses current Meta identifiers, write-only password and existing id; double submit is blocked', async () => {
+  warnings.length = 0
   let release
   const { calls, draw, view } = world({ answer: async endpoint => {
     if (endpoint === 'omni-channel-settings') return { settings: initial }
@@ -103,7 +105,8 @@ test('repair uses current Meta identifiers, write-only password and existing id;
   assert.equal(byLabel(view.draw(), 'Access token').props.value, '')
   view.unmount()
   const source = readFileSync(new URL('../src/client/channel-settings.js', import.meta.url), 'utf8')
-  assert.doesNotMatch(source, /localStorage|sessionStorage|console\./)
+  assert.doesNotMatch(source, /localStorage|sessionStorage|console\.(?!warn\b)/)
+  assert.deepEqual(warnings, [], 'successful credential repair never logs its token or payload')
 })
 
 test('load/save/list failures are visible and never clear the assigned id or claim success', async () => {
@@ -116,7 +119,8 @@ test('load/save/list failures are visible and never clear the assigned id or cla
     if (fail === 'omni-channel-settings-save') {
       change(tree, 'processAudio', 'false'); button(view.draw(), 'Save settings').props.onClick(); await settle(); tree = view.draw()
     }
-    assert.ok(text(tree).includes(fail === 'omni-channel-agents' ? 'Could not load agents' : 'refused fixture'))
+    assert.ok(text(tree).includes(fail === 'omni-channel-agents' ? 'Could not load agents' : fail === 'omni-channel-settings' ? 'Could not load channel settings. Try again.' : 'Could not save channel settings. Try again.'))
+    assert.ok(!text(tree).includes('refused fixture'))
     assert.ok(!text(tree).includes('Settings saved'))
     if (fail !== 'omni-channel-settings') assert.equal(byLabel(tree, 'agentId').props.value, AGENT)
     view.unmount()
@@ -156,7 +160,7 @@ test('repair rereads normalized Meta state even after partial failure; later sav
     assert.equal(byLabel(tree, 'Access token').props.value, '')
     assert.equal(text(tree).includes('Settings saved'), !failed)
     if (failed) assert.ok(text(tree).includes('Credentials may have been saved. Reload this channel before retrying.'))
-    if (failed === 'verify') assert.ok(text(tree).includes('Reload unavailable'))
+    if (failed === 'verify') assert.ok(!text(tree).includes('Reload unavailable'))
     button(tree, 'Save settings').props.onClick(); await settle()
     assert.deepEqual(calls.find(([endpoint]) => endpoint === 'omni-channel-settings-save')[1].patch, { processAudio: false })
     view.unmount()

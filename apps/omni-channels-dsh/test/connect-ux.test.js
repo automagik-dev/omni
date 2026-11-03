@@ -75,7 +75,7 @@ test('an Omni that cannot approve this app also takes a pasted API key; another 
 })
 
 test('a typed address that cannot approve this app says why and what to do instead', () => {
-  assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'too-old', version: '2.261006.2' }), 'Omni 2.261006.2 is too old to pair from here. Update it, or paste an API key or the link it sent you.')
+  assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'too-old', version: '2.261006.2' }), 'This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.')
   assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'too-old', version: null }), 'This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.')
   assert.equal(ui.unavailableWords({ status: 'unavailable', reason: 'off' }), 'Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.')
   assert.equal(ui.noticeWords('broad-key'), 'This key can do everything on your Omni; consider giving this device its own key.')

@@ -21,7 +21,10 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
     alive.current = true
     request('omni-channel-settings', { id: channel.id }).then(reply => {
       if (alive.current) setRecord(reply.settings)
-    }, failure => { if (alive.current) setError(failure.message) })
+    }, failure => {
+      console.warn('Could not load channel settings:', failure)
+      if (alive.current) setError(t('Could not load channel settings. Try again.'))
+    })
     request('omni-channel-agents').then(reply => {
       if (alive.current) setAgents(reply.items)
     }, () => { if (alive.current) setAgentError(t('Could not load agents. The current assignment is unchanged.')) })
@@ -52,7 +55,8 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
           }
         } catch { /* Keep the failure visible even when the authoritative reload also fails. */ }
       }
-      if (alive.current) setError(endpoint === 'omni-wab-repair' ? `${failure.message} ${t('Credentials may have been saved. Reload this channel before retrying.')}` : failure.message)
+      console.warn('Could not update channel settings:', failure)
+      if (alive.current) setError(endpoint === 'omni-wab-repair' ? t('Credentials may have been saved. Reload this channel before retrying.') : t('Could not save channel settings. Try again.'))
     } finally {
       inFlight.current = false
       if (alive.current) setBusy(false)
@@ -62,7 +66,10 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
     try {
       const patch = Object.fromEntries(Object.entries(draft).map(([key, text]) => [key, text === null ? null : inputValue(FIELDS[key], text)]))
       void run('omni-channel-settings-save', { id: channel.id, patch })
-    } catch (failure) { setError(failure.message) }
+    } catch (failure) {
+      console.warn('Invalid channel settings:', failure)
+      setError(t('Check the settings values and try again.'))
+    }
   }
   const control = key => {
     const field = FIELDS[key]
@@ -83,7 +90,9 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
     const accessToken = token.trim()
     if (!accessToken) return
     try {
-      if (Object.entries(draft).some(([key, item]) => key.startsWith('meta') && item === null)) throw new Error(t('Save cleared Meta identifiers before reconnecting.'))
+      if (Object.entries(draft).some(([key, item]) => key.startsWith('meta') && item === null)) {
+        setToken(''); setError(t('Save cleared Meta identifiers before reconnecting.')); return
+      }
       const read = key => Object.hasOwn(draft, key) ? inputValue(FIELDS[key], draft[key]) : record[key]
       const credentials = { accessToken, phoneNumberId: read('metaPhoneNumberId'), wabaId: read('metaWabaId') }
       for (const [key, name] of [['metaAppId', 'appId'], ['metaBusinessId', 'businessId']]) {
@@ -92,7 +101,10 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
       }
       setToken('')
       void run('omni-wab-repair', { id: channel.id, ...credentials })
-    } catch (failure) { setToken(''); setError(failure.message) }
+    } catch (failure) {
+      console.warn('Invalid Meta identifiers:', failure)
+      setToken(''); setError(t('Check the Meta identifiers and try again.'))
+    }
   }
   return h('section', { 'aria-label': t('Channel settings') },
     h('h2', { className: 'oc-section' }, t('Channel settings')),

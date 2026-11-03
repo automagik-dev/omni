@@ -35,13 +35,15 @@ export async function connectFromApp(url, grant) {
     }
     const reply = await call('omni-pair-start', { url, auto: true })
     if (reply.status === 'unavailable') {
-      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: unavailableWords(reply) } }))
+      console.warn('Omni cannot approve this app:', reply)
+      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: true, reasonCode: reply.reason } }))
       return
     }
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }))
     if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, '_blank', 'noopener')
   } catch (error) {
-    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: error.message } }))
+    console.warn('Could not connect to Omni:', error)
+    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: true } }))
   }
 }
 
@@ -103,14 +105,15 @@ export function foundRow(omni, { mac = false, linked = false } = {}) {
  * What the page says when a typed address answers that it cannot approve this app
  * (omni-link.js start): too old (`version` from its health), or pairing off.
  */
+const UNAVAILABLE_REASONS = Object.freeze({
+  'too-old': 'This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.',
+  off: 'Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.',
+})
 export function unavailableWords(reply) {
-  if (reply?.reason === 'too-old') {
-    return reply.version
-      ? t('Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.', { version: reply.version })
-      : t('This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.')
-  }
-  if (reply?.reason === 'off') return t('Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.')
-  return reply?.message ?? null
+  console.warn('Omni cannot approve this app:', reply)
+  const code = reply?.reason
+  return typeof code === 'string' && Object.hasOwn(UNAVAILABLE_REASONS, code)
+    ? t(UNAVAILABLE_REASONS[code]) : t('Could not connect to Omni. Try again.')
 }
 
 // A link made with a key that can do everything (it could not make this device its own).
@@ -207,7 +210,10 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
     })
     const onPairing = (event) => {
       if (!alive.current) return
-      if (event.detail?.problem) setProblem(event.detail.problem)
+      if (event.detail?.problem) {
+        console.warn('Omni pairing problem:', event.detail.problem)
+        setProblem(unavailableWords({ reason: event.detail.reasonCode }))
+      }
       else if (event.detail?.paired) void finish(REMOTE, event.detail.paired)
       else if (event.detail) setPairing(event.detail)
     }
@@ -240,7 +246,8 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
           return
         }
       } catch (error) {
-        if (alive.current) setProblem(error.message)
+        console.warn('Could not check the sign-in:', error)
+        if (alive.current) setProblem(t('Could not check the sign-in. Retrying soon.'))
       }
       if (alive.current) timer = setTimeout(tick, pairing.pollIntervalMs ?? DEFAULT_POLL_MS)
     }
@@ -266,9 +273,13 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
       } else if (reply.pairing) {
         pairingRow.current = row
         setPairing(reply.pairing)
-      } else if (reply.message) setNote(reply.message)
+      } else if (reply.message) {
+        console.warn('Omni connect action did not complete:', reply.message)
+        setProblem(t('Could not connect to Omni. Try again.'))
+      }
     } catch (error) {
-      if (alive.current) setProblem(error.message)
+      console.warn('Could not connect to Omni:', error)
+      if (alive.current) setProblem(t('Could not connect to Omni. Try again.'))
     } finally {
       if (alive.current) setBusy(null)
     }

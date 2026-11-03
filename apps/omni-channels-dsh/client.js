@@ -11553,11 +11553,13 @@ function usePairing(channel, on2, onConnected) {
       try {
         const reply = await call("omni-channel-pairing", { id: channel.id });
         if (!live) return;
+        if (reply.message) console.warn("Channel pairing status:", reply.message);
         setPairing(reply);
         setProblem(null);
         if (reply.connected) return onConnected(reply);
       } catch (error) {
-        if (live) setProblem(error.message);
+        console.warn("Could not refresh the connection:", error);
+        if (live) setProblem(t("Could not refresh the connection. Retrying soon."));
       }
       if (live) timer = setTimeout(poll, POLL_MS2);
     };
@@ -11600,7 +11602,8 @@ function WhatsAppFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
       unfinished.current = made.id;
       setChannel(made);
     } catch (error) {
-      setProblem(error.message);
+      console.warn("Could not create the channel:", error);
+      setProblem(t("Could not create the channel. Try again."));
     } finally {
       setBusy(false);
     }
@@ -11638,7 +11641,8 @@ function QrStep({ info, channel, pairing }) {
     try {
       setCode((await call("omni-channel-phone-code", { id: channel.id, phone })).code);
     } catch (error) {
-      setProblem(error.message);
+      console.warn("Could not get a phone code:", error);
+      setProblem(t("Could not get a phone code. Try again."));
     }
   };
   if (byPhone) {
@@ -11730,7 +11734,7 @@ function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   const [busy, setBusy] = (0, import_react4.useState)(false);
   const [problem, setProblem] = (0, import_react4.useState)(null);
   const unfinished = useUnfinished();
-  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => {
+  const { problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => {
     unfinished.current = null;
     setDone(reply);
   });
@@ -11752,7 +11756,8 @@ function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
       setToken("");
       setChannel(made);
     } catch (error) {
-      setProblem(error.message);
+      console.warn("Could not connect the bot:", error);
+      setProblem(t("Could not connect the bot. Check its token and try again."));
     } finally {
       setBusy(false);
     }
@@ -11782,7 +11787,7 @@ function TokenFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   } else if (done) {
     body = (0, import_react4.createElement)(Connected, { type, channel, detail: done.detail, omni: omni2 });
   } else if (channel) {
-    body = (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)("h2", null, t("Connecting…")), (0, import_react4.createElement)(Spinner, { text: pairing?.message ?? t("Waiting for Omni to say the bot is up") }));
+    body = (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)("h2", null, t("Connecting…")), (0, import_react4.createElement)(Spinner, { text: t("Waiting for Omni to say the bot is up") }));
   } else {
     body = (0, import_react4.createElement)(
       import_react4.Fragment,
@@ -11841,11 +11846,13 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
         if (!live) return;
         if (reply.status === "done") return setDone({ id: reply.id });
         if (reply.status === "error") {
+          console.warn("Slack sign-in failed:", reply.message);
           setFlow(null);
-          return setProblem(reply.message);
+          return setProblem(t("Slack did not finish the sign-in. Try again."));
         }
       } catch (error) {
-        if (live) setProblem(error.message);
+        console.warn("Could not refresh the Slack sign-in:", error);
+        if (live) setProblem(t("Could not refresh the Slack sign-in. Retrying soon."));
       }
       if (live) timer = setTimeout(poll, POLL_MS2);
     };
@@ -11863,7 +11870,8 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
       setFlow(reply);
       window.open(reply.authorizeUrl, "_blank", "noopener,noreferrer");
     } catch (error) {
-      setProblem(error.message);
+      console.warn("Could not start the Slack sign-in:", error);
+      setProblem(t("Could not start the Slack sign-in. Try again."));
     }
   };
   const at2 = done ? 2 : flow ? 1 : 0;
@@ -11939,7 +11947,8 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
       setFields({ accessToken: "", phoneNumberId: "", wabaId: "" });
       setChannel(made);
     } catch (error) {
-      setProblem(error.message);
+      console.warn("Could not connect the Business number:", error);
+      setProblem(t("Could not connect the Business number. Check its details and try again."));
     } finally {
       setBusy(false);
     }
@@ -12057,7 +12066,8 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
     request("omni-channel-settings", { id: channel.id }).then((reply) => {
       if (alive.current) setRecord(reply.settings);
     }, (failure) => {
-      if (alive.current) setError(failure.message);
+      console.warn("Could not load channel settings:", failure);
+      if (alive.current) setError(t("Could not load channel settings. Try again."));
     });
     request("omni-channel-agents").then((reply) => {
       if (alive.current) setAgents(reply.items);
@@ -12101,7 +12111,8 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
         } catch {
         }
       }
-      if (alive.current) setError(endpoint === "omni-wab-repair" ? `${failure.message} ${t("Credentials may have been saved. Reload this channel before retrying.")}` : failure.message);
+      console.warn("Could not update channel settings:", failure);
+      if (alive.current) setError(endpoint === "omni-wab-repair" ? t("Credentials may have been saved. Reload this channel before retrying.") : t("Could not save channel settings. Try again."));
     } finally {
       inFlight.current = false;
       if (alive.current) setBusy(false);
@@ -12112,7 +12123,8 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
       const patch = Object.fromEntries(Object.entries(draft).map(([key, text]) => [key, text === null ? null : inputValue(FIELDS[key], text)]));
       void run("omni-channel-settings-save", { id: channel.id, patch });
     } catch (failure) {
-      setError(failure.message);
+      console.warn("Invalid channel settings:", failure);
+      setError(t("Check the settings values and try again."));
     }
   };
   const control = (key) => {
@@ -12139,7 +12151,11 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
     const accessToken = token.trim();
     if (!accessToken) return;
     try {
-      if (Object.entries(draft).some(([key, item]) => key.startsWith("meta") && item === null)) throw new Error(t("Save cleared Meta identifiers before reconnecting."));
+      if (Object.entries(draft).some(([key, item]) => key.startsWith("meta") && item === null)) {
+        setToken("");
+        setError(t("Save cleared Meta identifiers before reconnecting."));
+        return;
+      }
       const read = (key) => Object.hasOwn(draft, key) ? inputValue(FIELDS[key], draft[key]) : record[key];
       const credentials = { accessToken, phoneNumberId: read("metaPhoneNumberId"), wabaId: read("metaWabaId") };
       for (const [key, name] of [["metaAppId", "appId"], ["metaBusinessId", "businessId"]]) {
@@ -12149,8 +12165,9 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
       setToken("");
       void run("omni-wab-repair", { id: channel.id, ...credentials });
     } catch (failure) {
+      console.warn("Invalid Meta identifiers:", failure);
       setToken("");
-      setError(failure.message);
+      setError(t("Check the Meta identifiers and try again."));
     }
   };
   return h5(
@@ -12311,12 +12328,16 @@ function useMediaFile(id, wanted) {
     call("omni-media", { messageId: id }).then(
       (reply) => {
         if (!on2) return;
-        if (!reply.ok) return setFile({ failed: reply.reason });
+        if (!reply.ok) {
+          console.warn("Could not load the media file:", reply.reason);
+          return setFile({ failed: true });
+        }
         url = URL.createObjectURL(blobOf(reply.data, reply.mime));
         setFile({ url });
       },
       (error) => {
-        if (on2) setFile({ failed: error.message });
+        console.warn("Could not load the media file:", error);
+        if (on2) setFile({ failed: true });
       }
     );
     return () => {
@@ -12342,7 +12363,7 @@ function MediaPart({ message, onSized }) {
   if (kind === "document") {
     return (0, import_react5.createElement)("div", { className: "oc-media-doc" }, (0, import_react5.createElement)(DocMark), (0, import_react5.createElement)("span", null, message.fileName ?? label));
   }
-  if (file?.failed) return (0, import_react5.createElement)("div", { className: "oc-media-miss", title: file.failed }, label, " · ", t("not available"));
+  if (file?.failed) return (0, import_react5.createElement)("div", { className: "oc-media-miss", title: t("Could not load this file. Try again.") }, label, " · ", t("not available"));
   if (kind === "video" && !played) {
     return (0, import_react5.createElement)("button", { type: "button", className: "oc-media-still", "aria-label": t("Play video"), onClick: () => setPlayed(true) }, (0, import_react5.createElement)("span", { className: "oc-media-play" }, (0, import_react5.createElement)(PlayMark)));
   }
@@ -14190,13 +14211,15 @@ async function connectFromApp(url, grant) {
     }
     const reply = await call("omni-pair-start", { url, auto: true });
     if (reply.status === "unavailable") {
-      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: unavailableWords(reply) } }));
+      console.warn("Omni cannot approve this app:", reply);
+      window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: true, reasonCode: reply.reason } }));
       return;
     }
     window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: reply.pairing }));
     if (reply.pairing?.approveUrl) window.open(reply.pairing.approveUrl, "_blank", "noopener");
   } catch (error) {
-    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: error.message } }));
+    console.warn("Could not connect to Omni:", error);
+    window.dispatchEvent(new CustomEvent(PAIRING_EVENT, { detail: { problem: true } }));
   }
 }
 var onMac = (scope = globalThis) => /Mac/i.test(scope.navigator?.platform ?? "") || /Mac OS X/.test(scope.navigator?.userAgent ?? "");
@@ -14234,12 +14257,14 @@ function foundRow(omni2, { mac = false, linked = false } = {}) {
   if (omni2.pairing === "off") return row(t("Sign-in off"), "muted", null, t("Sign-in from devices is off on this Omni."));
   return row(t("Ready"), "ok", "connect", t("Approve this device from your phone."));
 }
+var UNAVAILABLE_REASONS = Object.freeze({
+  "too-old": "This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.",
+  off: "Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key."
+});
 function unavailableWords(reply) {
-  if (reply?.reason === "too-old") {
-    return reply.version ? t("Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.", { version: reply.version }) : t("This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.");
-  }
-  if (reply?.reason === "off") return t("Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.");
-  return reply?.message ?? null;
+  console.warn("Omni cannot approve this app:", reply);
+  const code = reply?.reason;
+  return typeof code === "string" && Object.hasOwn(UNAVAILABLE_REASONS, code) ? t(UNAVAILABLE_REASONS[code]) : t("Could not connect to Omni. Try again.");
 }
 var noticeWords = (notice) => notice === "broad-key" ? t("This key can do everything on your Omni; consider giving this device its own key.") : null;
 function firstOpen(found, { mac = false } = {}) {
@@ -14329,8 +14354,10 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
     });
     const onPairing = (event) => {
       if (!alive.current) return;
-      if (event.detail?.problem) setProblem(event.detail.problem);
-      else if (event.detail?.paired) void finish(REMOTE, event.detail.paired);
+      if (event.detail?.problem) {
+        console.warn("Omni pairing problem:", event.detail.problem);
+        setProblem(unavailableWords({ reason: event.detail.reasonCode }));
+      } else if (event.detail?.paired) void finish(REMOTE, event.detail.paired);
       else if (event.detail) setPairing(event.detail);
     };
     window.addEventListener(PAIRING_EVENT, onPairing);
@@ -14360,7 +14387,8 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
           return;
         }
       } catch (error) {
-        if (alive.current) setProblem(error.message);
+        console.warn("Could not check the sign-in:", error);
+        if (alive.current) setProblem(t("Could not check the sign-in. Retrying soon."));
       }
       if (alive.current) timer = setTimeout(tick, pairing.pollIntervalMs ?? DEFAULT_POLL_MS);
     };
@@ -14383,9 +14411,13 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       } else if (reply.pairing) {
         pairingRow.current = row;
         setPairing(reply.pairing);
-      } else if (reply.message) setNote(reply.message);
+      } else if (reply.message) {
+        console.warn("Omni connect action did not complete:", reply.message);
+        setProblem(t("Could not connect to Omni. Try again."));
+      }
     } catch (error) {
-      if (alive.current) setProblem(error.message);
+      console.warn("Could not connect to Omni:", error);
+      if (alive.current) setProblem(t("Could not connect to Omni. Try again."));
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -16701,6 +16733,21 @@ var PERMISSIONS_CSS = `
 
 // src/client/strings.js
 var STRINGS = {
+  "Could not refresh the connection. Retrying soon.": "无法刷新连接。稍后将重试。",
+  "Could not create the channel. Try again.": "无法创建渠道。请重试。",
+  "Could not get a phone code. Try again.": "无法获取手机配对码。请重试。",
+  "Could not connect the bot. Check its token and try again.": "无法连接机器人。请检查令牌后重试。",
+  "Slack did not finish the sign-in. Try again.": "Slack 未完成登录。请重试。",
+  "Could not refresh the Slack sign-in. Retrying soon.": "无法刷新 Slack 登录状态。稍后将重试。",
+  "Could not start the Slack sign-in. Try again.": "无法开始 Slack 登录。请重试。",
+  "Could not connect the Business number. Check its details and try again.": "无法连接企业号码。请检查详细信息后重试。",
+  "Could not load channel settings. Try again.": "无法加载渠道设置。请重试。",
+  "Could not save channel settings. Try again.": "无法保存渠道设置。请重试。",
+  "Check the settings values and try again.": "请检查设置值后重试。",
+  "Check the Meta identifiers and try again.": "请检查 Meta 标识后重试。",
+  "Could not load this file. Try again.": "无法加载此文件。请重试。",
+  "Could not connect to Omni. Try again.": "无法连接到 Omni。请重试。",
+  "Could not check the sign-in. Retrying soon.": "无法检查登录状态。稍后将重试。",
   "(including your own device)": "（包括你自己的设备）",
   "Example": "示例",
   "Credentials may have been saved. Reload this channel before retrying.": "凭据可能已保存。重试前请重新加载此频道。",
@@ -16963,7 +17010,6 @@ var STRINGS = {
   "Older Omnis can't approve this app. Paste its API key instead; it stays on this computer.": "较旧的 Omni 无法批准这个应用。请改为粘贴它的 API 密钥；密钥只保存在这台电脑上。",
   "Find the key where that app keeps its settings.": "在那个应用保存设置的地方找到密钥。",
   "API key for this Omni": "这个 Omni 的 API 密钥",
-  "Omni {version} is too old to pair from here. Update it, or paste an API key or the link it sent you.": "Omni {version} 太旧，无法从这里配对。请更新它，或粘贴 API 密钥或它发给你的链接。",
   "This Omni is too old to pair from here. Update it, or paste an API key or the link it sent you.": "这个 Omni 太旧，无法从这里配对。请更新它，或粘贴 API 密钥或它发给你的链接。",
   "Pairing is off on this Omni. Its owner can turn it on, or you can paste an API key.": "这个 Omni 已关闭配对。它的所有者可以开启，或者你可以粘贴 API 密钥。",
   "This key can do everything on your Omni; consider giving this device its own key.": "这个密钥可以在你的 Omni 上做任何事；建议为这台设备单独创建一个密钥。",

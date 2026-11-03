@@ -98,11 +98,13 @@ function usePairing(channel, on, onConnected) {
       try {
         const reply = await call('omni-channel-pairing', { id: channel.id })
         if (!live) return
+        if (reply.message) console.warn('Channel pairing status:', reply.message)
         setPairing(reply)
         setProblem(null)
         if (reply.connected) return onConnected(reply)
       } catch (error) {
-        if (live) setProblem(error.message)
+        console.warn('Could not refresh the connection:', error)
+        if (live) setProblem(t('Could not refresh the connection. Retrying soon.'))
       }
       if (live) timer = setTimeout(poll, POLL_MS)
     }
@@ -141,7 +143,8 @@ function WhatsAppFlow({ type, omni, Tile, PreviewChip }) {
       unfinished.current = made.id
       setChannel(made)
     } catch (error) {
-      setProblem(error.message)
+      console.warn('Could not create the channel:', error)
+      setProblem(t('Could not create the channel. Try again.'))
     } finally {
       setBusy(false)
     }
@@ -172,7 +175,8 @@ function QrStep({ info, channel, pairing }) {
     try {
       setCode((await call('omni-channel-phone-code', { id: channel.id, phone })).code)
     } catch (error) {
-      setProblem(error.message)
+      console.warn('Could not get a phone code:', error)
+      setProblem(t('Could not get a phone code. Try again.'))
     }
   }
   if (byPhone) {
@@ -232,7 +236,7 @@ function TokenFlow({ type, omni, Tile, PreviewChip }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const unfinished = useUnfinished()
-  const { pairing, problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => { unfinished.current = null; setDone(reply) })
+  const { problem: pollProblem } = usePairing(channel, channel !== null && done === null, (reply) => { unfinished.current = null; setDone(reply) })
 
   // Coming back from Telegram with a token copied: offer it. The clipboard is read only on that
   // focus, which browsers allow; a refusal changes nothing.
@@ -255,7 +259,8 @@ function TokenFlow({ type, omni, Tile, PreviewChip }) {
       setToken('')
       setChannel(made)
     } catch (error) {
-      setProblem(error.message)
+      console.warn('Could not connect the bot:', error)
+      setProblem(t('Could not connect the bot. Check its token and try again.'))
     } finally {
       setBusy(false)
     }
@@ -276,7 +281,7 @@ function TokenFlow({ type, omni, Tile, PreviewChip }) {
   } else if (done) {
     body = h(Connected, { type, channel, detail: done.detail, omni })
   } else if (channel) {
-    body = h(Fragment, null, h('h2', null, t('Connecting…')), h(Spinner, { text: pairing?.message ?? t('Waiting for Omni to say the bot is up') }))
+    body = h(Fragment, null, h('h2', null, t('Connecting…')), h(Spinner, { text: t('Waiting for Omni to say the bot is up') }))
   } else {
     body = h(Fragment, null,
       TOKEN_HELP[type](),
@@ -315,9 +320,13 @@ function SlackFlow({ type, omni, Tile, PreviewChip }) {
         const reply = await call('omni-slack-result', { nonce: flow.nonce })
         if (!live) return
         if (reply.status === 'done') return setDone({ id: reply.id })
-        if (reply.status === 'error') { setFlow(null); return setProblem(reply.message) }
+        if (reply.status === 'error') {
+          console.warn('Slack sign-in failed:', reply.message)
+          setFlow(null); return setProblem(t('Slack did not finish the sign-in. Try again.'))
+        }
       } catch (error) {
-        if (live) setProblem(error.message)
+        console.warn('Could not refresh the Slack sign-in:', error)
+        if (live) setProblem(t('Could not refresh the Slack sign-in. Retrying soon.'))
       }
       if (live) timer = setTimeout(poll, POLL_MS)
     }
@@ -332,7 +341,8 @@ function SlackFlow({ type, omni, Tile, PreviewChip }) {
       setFlow(reply)
       window.open(reply.authorizeUrl, '_blank', 'noopener,noreferrer')
     } catch (error) {
-      setProblem(error.message)
+      console.warn('Could not start the Slack sign-in:', error)
+      setProblem(t('Could not start the Slack sign-in. Try again.'))
     }
   }
   const at = done ? 2 : flow ? 1 : 0
@@ -387,7 +397,8 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
       setFields({ accessToken: '', phoneNumberId: '', wabaId: '' })
       setChannel(made)
     } catch (error) {
-      setProblem(error.message)
+      console.warn('Could not connect the Business number:', error)
+      setProblem(t('Could not connect the Business number. Check its details and try again.'))
     } finally {
       setBusy(false)
     }
