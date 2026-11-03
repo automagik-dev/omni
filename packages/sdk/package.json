@@ -1,6 +1,6 @@
 {
   "name": "@omni/sdk",
-  "version": "2.261103.73",
+  "version": "2.261103.74",
   "license": "Apache-2.0",
   "type": "module",
   "main": "dist/index.js",
