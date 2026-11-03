@@ -16,6 +16,7 @@ import type { Login } from '../login';
 import { DEFAULT_DEVICE_KEY_SCOPES } from '../login/config';
 import { ApiKeyService } from '../services/api-keys';
 import { MAX_CONSUMERS_PER_OWN_ONLY_KEY } from '../services/event-consumers';
+import { EventService } from '../services/events';
 import { createMigratedTestDatabase } from './fixtures/pg-clone';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -49,6 +50,7 @@ const ConsumerBody = z.object({
 });
 const ConsumerList = z.object({ items: z.array(z.object({ name: z.string() })) });
 const PullBody = z.object({ items: z.array(z.object({ id: z.string() })), cursor: z.number() });
+const TypesBody = z.object({ items: z.array(z.object({ eventType: z.string(), consumers: z.array(z.string()) })) });
 
 /** Read SSE text until `until` matches (or the body ends), then cancel the body (client disconnect). */
 async function readUntil(response: Response, until: RegExp): Promise<string> {
@@ -299,6 +301,69 @@ postgresDescribe('the omni-agent-host device key (real PostgreSQL)', () => {
       expect(await consumerRow(own)).toBeUndefined();
     } finally {
       await db.delete(durableConsumers).where(like(durableConsumers.name, 'agent-host-writer-%'));
+    }
+  });
+
+  test('its event-type inventory names only its own consumers; events:write and admin keys see them all', async () => {
+    const own = `agent-host-types-${crypto.randomUUID().slice(0, 8)}`;
+    expect(
+      (await asAgentHost('POST', '/api/v2/events/consumers', { name: own, eventType: 'custom.agent-host.*' })).status,
+    ).toBe(201);
+    const writer = (
+      await new ApiKeyService(db).create({ name: 'events writer', scopes: ['events:read', 'events:write'] })
+    ).plainTextKey;
+    const inventory = async (key: string) => {
+      const response = await asKey(key, 'GET', '/api/v2/events/types');
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      const row = TypesBody.parse(JSON.parse(text)).items.find((item) => item.eventType === 'custom.agent-host.proof');
+      if (!row) throw new Error('the proof event type is missing from the inventory');
+      return { text, consumers: [...row.consumers].sort() };
+    };
+    try {
+      expect((await inventory(agentKey)).consumers).toEqual([own]);
+      // Not ownOnly: byte for byte the inventory without an owner rule, which names the
+      // operator's consumer and the host's.
+      const unfiltered = JSON.stringify({ items: await new EventService(db).getTypes({}), meta: { since: null } });
+      for (const key of [adminKey, writer]) {
+        const seen = await inventory(key);
+        expect(seen.consumers).toEqual([consumer, own].sort());
+        expect(seen.text).toBe(unfiltered);
+      }
+    } finally {
+      await db.delete(durableConsumers).where(eq(durableConsumers.name, own));
+    }
+  });
+
+  test('a create body naming another key as owner is ignored: the owner is the calling key', async () => {
+    const writerKey = await new ApiKeyService(db).create({
+      name: 'events writer',
+      scopes: ['events:read', 'events:write'],
+    });
+    const hostClaim = `agent-host-claim-${crypto.randomUUID().slice(0, 8)}`;
+    const writerClaim = `agent-host-claim-${crypto.randomUUID().slice(0, 8)}`;
+    try {
+      // The host cannot hand its consumer to another key...
+      const created = await asAgentHost('POST', '/api/v2/events/consumers', {
+        name: hostClaim,
+        eventType: 'custom.agent-host.*',
+        ownerKeyId: writerKey.key.id,
+      });
+      expect(created.status).toBe(201);
+      expect(ConsumerBody.parse(await created.json()).data.ownerKeyId).toBe(agentKeyId);
+      expect((await consumerRow(hostClaim))?.ownerKeyId).toBe(agentKeyId);
+      expect((await asAgentHost('GET', `/api/v2/events/consumers/${hostClaim}`)).status).toBe(200);
+      // ...and another key cannot plant a consumer in the host's set.
+      const planted = await asKey(writerKey.plainTextKey, 'POST', '/api/v2/events/consumers', {
+        name: writerClaim,
+        eventType: 'custom.agent-host.*',
+        ownerKeyId: agentKeyId,
+      });
+      expect(planted.status).toBe(201);
+      expect((await consumerRow(writerClaim))?.ownerKeyId).toBeNull();
+      expect(await listedNames(agentKey)).not.toContain(writerClaim);
+    } finally {
+      await db.delete(durableConsumers).where(like(durableConsumers.name, 'agent-host-claim-%'));
     }
   });
 
