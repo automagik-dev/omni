@@ -34,6 +34,9 @@ export {
 } from './online-ddl';
 export type { OnlineDdlBlocker, OnlineDdlPreflight, OnlineDdlReport, OnlineDdlStep } from './online-ddl';
 
+// Paired-agent grants: the only sanctioned agent_source_grants writer (stamps the source's tenant).
+export { insertAgentSourceGrant } from './agent-source-grants';
+
 // Tenant RLS enforcement (G3) — explicitly invoked, never journaled.
 export {
   AUTH_PLANE_READABLE_TABLES,
