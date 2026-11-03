@@ -8,9 +8,11 @@
  */
 
 import {
+  ChannelTypeSchema,
   type ConnectorEventPublisher,
   type DeadLetterEntry,
   type EventBus,
+  type EventMetadata,
   type EventType,
   NotFoundError,
   PUBLISH_NOT_DECLARED,
@@ -26,11 +28,13 @@ import {
 import type { Database, DeadLetterStatus } from '@omni/db';
 import { deadLetterEvents, resolveEnforcementMode } from '@omni/db';
 import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
+import { DEAD_LETTER_RETRY_SOURCES } from './dead-letter-sources';
 import { EventSchemaService } from './event-schemas';
 
 const log = createLogger('dead-letters');
@@ -44,6 +48,53 @@ function isGovernanceRefusal(error: string): boolean {
   return [SCHEMA_VALIDATION_FAILED, SCHEMA_NOT_REGISTERED, PUBLISH_NOT_DECLARED].some((reason) =>
     error.startsWith(`${reason}:`),
   );
+}
+
+const optional = <T extends z.ZodTypeAny>(schema: T) =>
+  schema
+    .nullish()
+    .catch(undefined)
+    .transform((value) => value ?? undefined);
+
+/**
+ * The consumed envelope `create` stores as the row's payload. Only the fields
+ * that scope the event to its instance and flow come back on a retry. The
+ * tenant is never read from here: ownership is the row's persisted tenant_id.
+ * Producer identity, the envelope version and timings are stamped by the
+ * factory and are not restored either.
+ */
+const StoredEnvelopeSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  payload: z.record(z.unknown()),
+  metadata: z.object({
+    correlationId: optional(z.string()),
+    causationId: optional(z.string()),
+    instanceId: optional(z.string()),
+    channelType: optional(ChannelTypeSchema),
+    personId: optional(z.string()),
+    platformIdentityId: optional(z.string()),
+    traceId: optional(z.string()),
+    ingestMode: optional(z.enum(['realtime', 'history-sync'])),
+  }),
+});
+
+/**
+ * The original event of a row filed by `create`, or null for a row whose
+ * payload is not that row's own envelope (schema refusals store the refused
+ * payload itself).
+ */
+function storedEnvelope(
+  entry: { eventId: string; eventType: string; error: string },
+  stored: Record<string, unknown>,
+): { payload: Record<string, unknown>; metadata: Partial<EventMetadata> } | null {
+  if (isGovernanceRefusal(entry.error)) return null;
+  const parsed = StoredEnvelopeSchema.safeParse(stored);
+  if (!parsed.success || parsed.data.id !== entry.eventId || parsed.data.type !== entry.eventType) return null;
+  const metadata = Object.fromEntries(
+    Object.entries(parsed.data.metadata).filter(([, value]) => value !== undefined),
+  ) as Partial<EventMetadata>;
+  return { payload: parsed.data.payload, metadata };
 }
 
 /**
@@ -334,7 +385,9 @@ export class DeadLetterService {
       );
       await this.eventBus.publishConnector(entry.eventType, restored.payload, { ...restored.metadata, source });
     } else {
-      await this.eventBus.publishGeneric(entry.eventType as EventType, payload, {
+      const original = storedEnvelope(entry, payload);
+      await this.eventBus.publishGeneric(entry.eventType as EventType, original?.payload ?? payload, {
+        ...original?.metadata,
         source,
         // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
         // stable across attempts for consumer-side idempotency. Do not reuse
@@ -374,7 +427,7 @@ export class DeadLetterService {
     }
 
     try {
-      await this.republish(deadLetter, deadLetter.payload, 'dead-letter-retry');
+      await this.republish(deadLetter, deadLetter.payload, DEAD_LETTER_RETRY_SOURCES[0]);
     } catch (err) {
       const [updated] = await this.db
         .update(deadLetterEvents)
@@ -548,7 +601,7 @@ export class DeadLetterService {
         processed++;
 
         try {
-          await this.republish(deadLetter, deadLetter.payload, 'dead-letter-auto-retry');
+          await this.republish(deadLetter, deadLetter.payload, DEAD_LETTER_RETRY_SOURCES[1]);
         } catch (err) {
           failed += await this.workDb(tenantId, () => this.recordAutoRetryFailure(deadLetter, err, now));
           continue;

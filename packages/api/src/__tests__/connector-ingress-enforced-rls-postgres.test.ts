@@ -586,6 +586,43 @@ postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () =>
     await inTenant(TENANT_A, () => services.deadLetters.abandon(dead.id));
   });
 
+  test('a retried generic dead letter runs under its row tenant, never the stored envelope tenant (#1552)', async () => {
+    const eventId = randomUUID();
+    const type = 'custom.dlq-envelope-tenant';
+    const dead = await inTenant(TENANT_A, () =>
+      services.deadLetters.create({
+        event: {
+          id: eventId,
+          type,
+          payload: { value: 'enforced' },
+          metadata: { correlationId: eventId, tenantId: TENANT_B, envelopeVersion: CURRENT_ENVELOPE_VERSION },
+          timestamp: Date.now(),
+        },
+        subject: type,
+        error: new Error('consumer failed'),
+        retryCount: 0,
+        autoRetry: false,
+      }),
+    );
+    expect(dead.tenantId).toBe(TENANT_A);
+    await expect(inTenant(TENANT_B, () => services.deadLetters.retry(dead.id))).rejects.toThrow('not found');
+    const published: Parameters<GenericEventHandler>[0][] = [];
+    const subscription = await bus.subscribePattern(type, async (event) => {
+      published.push(event);
+    });
+    try {
+      expect((await inTenant(TENANT_A, () => services.deadLetters.retry(dead.id))).success).toBe(true);
+    } finally {
+      await subscription.unsubscribe();
+    }
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      id: dead.id,
+      payload: { value: 'enforced' },
+      metadata: { tenantId: TENANT_A, correlationId: eventId, source: 'dead-letter-retry' },
+    });
+  });
+
   test('scheduler retries tenant-owned dead letters in scope while tenant B cannot see or retry them', async () => {
     const [row] = await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`);
     if (!row || !handle) throw new Error('missing enforced ingress fixture');
