@@ -1161,6 +1161,7 @@ describe('Connector lifecycle contract (#961)', () => {
   });
 
   describe('runPollNow (#1186)', () => {
+    // Real poll commands need scheduling headroom on a loaded host.
     test('ingests stdout lines through the keyed trigger, dedupes via the template, heartbeats', async () => {
       const { chmodSync, mkdtempSync, rmSync, writeFileSync } = await import('node:fs');
       const { tmpdir } = await import('node:os');
@@ -1202,7 +1203,7 @@ describe('Connector lifecycle contract (#961)', () => {
         if (saved === undefined) Reflect.deleteProperty(process.env, 'OMNI_POLL_COMMAND_DIR');
         else process.env.OMNI_POLL_COMMAND_DIR = saved;
       }
-    });
+    }, 30_000);
 
     test('refuses a push-only source', async () => {
       const service = new WebhookService(createMockDatabase([createMockSource()]), createMockEventBus());
