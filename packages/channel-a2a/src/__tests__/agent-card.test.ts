@@ -106,28 +106,15 @@ describe('buildAgentCard', () => {
       expect(card.skills[0]?.id).toBe('messaging');
     });
 
-    it('adds vision skill for "image" capability', () => {
-      const card = buildAgentCard({ ...BASE, capabilities: ['image'] });
+    it.each([
+      ['image', 'vision'],
+      ['vision', 'vision'],
+      ['audio', 'audio'],
+      ['transcription', 'audio'],
+    ])('adds %s capability -> %s skill', (capability, skill) => {
+      const card = buildAgentCard({ ...BASE, capabilities: [capability] });
       const skillIds = card.skills.map((s) => s.id);
-      expect(skillIds).toContain('vision');
-    });
-
-    it('adds vision skill for "vision" capability', () => {
-      const card = buildAgentCard({ ...BASE, capabilities: ['vision'] });
-      const skillIds = card.skills.map((s) => s.id);
-      expect(skillIds).toContain('vision');
-    });
-
-    it('adds audio skill for "audio" capability', () => {
-      const card = buildAgentCard({ ...BASE, capabilities: ['audio'] });
-      const skillIds = card.skills.map((s) => s.id);
-      expect(skillIds).toContain('audio');
-    });
-
-    it('adds audio skill for "transcription" capability', () => {
-      const card = buildAgentCard({ ...BASE, capabilities: ['transcription'] });
-      const skillIds = card.skills.map((s) => s.id);
-      expect(skillIds).toContain('audio');
+      expect(skillIds).toContain(skill);
     });
 
     it('adds all skills for combined capabilities', () => {

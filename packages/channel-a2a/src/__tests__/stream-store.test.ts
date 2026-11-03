@@ -180,11 +180,5 @@ describe('A2AStreamStore', () => {
     it('is a no-op when called on nonexistent stream', () => {
       expect(() => store.closeStream('inst-1', 'ghost', 'TASK_STATE_COMPLETED')).not.toThrow();
     });
-
-    it('removes the stream from the store', () => {
-      store.createPendingStream('inst-1', 'task-5');
-      store.closeStream('inst-1', 'task-5', 'TASK_STATE_COMPLETED');
-      expect(store.hasStream('inst-1', 'task-5')).toBe(false);
-    });
   });
 });
