@@ -33,6 +33,7 @@ import {
 import { type DeviceKey, deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import * as output from '../output.js';
 import { normalizeServerUrl } from '../signing.js';
+import { stripTerminalControls } from '../utils/terminal.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -135,10 +136,11 @@ async function verifyServer(url: string, apiKey: string | undefined): Promise<Ve
 
 /** Abort with a message that distinguishes "wrong URL" from "wrong key". */
 function exitVerificationFailed(name: string, url: string, failure: Extract<VerifyResult, { ok: false }>): never {
+  const detail = stripTerminalControls(failure.detail);
   const message =
     failure.kind === 'unreachable'
-      ? `Server '${name}' is unreachable at ${url}: ${failure.detail}`
-      : `Server '${name}' rejected the API key (unauthorized): ${failure.detail}`;
+      ? `Server '${name}' is unreachable at ${url}: ${detail}`
+      : `Server '${name}' rejected the API key (unauthorized): ${detail}`;
   return output.error(message, {
     hint: 'Fix the value, or pass --skip-verify to register the entry anyway.',
   });

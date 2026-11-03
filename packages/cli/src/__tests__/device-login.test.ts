@@ -4,7 +4,7 @@
  * network or a config file.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, spyOn, test } from 'bun:test';
 import { type DeviceLoginResult, SLOW_DOWN_STEP_S, devicePromptLines, runDeviceLogin } from '../device-login';
 
 const URL_BASE = 'http://omni.test';
@@ -126,6 +126,30 @@ describe('runDeviceLogin', () => {
     expect(outcome.prompts.join('\n')).toContain('http://omni.test/api/login/device?user_code=ABCDEFGH');
     expect(outcome.prompts.join('\n')).toContain('omni approve ABCDEFGH');
     expectNoSecrets(outcome);
+  });
+
+  test('strips C1 and bidi controls at the minted-key metadata boundary', async () => {
+    const outcome = await run([
+      json(200, CODE),
+      granted,
+      json(200, {
+        data: {
+          ...MINTED.data,
+          keyId: '\u009b31mkey-0001\u202e',
+          scopes: ['\u009b31minstances:*\u202e', '\u009b31msystem:read\u202e'],
+          keyExpiresAt: '\u009b31m2026-12-01T00:00:00Z\u202e',
+        },
+      }),
+    ]);
+    expect(outcome.result).toEqual({
+      status: 'approved',
+      key: {
+        apiKey: DEVICE_KEY,
+        keyId: 'key-0001',
+        scopes: ['instances:*', 'system:read'],
+        keyExpiresAt: '2026-12-01T00:00:00Z',
+      },
+    });
   });
 
   test.each([0, 0.25])('floors a server interval of %s to one second', async (interval) => {
@@ -253,5 +277,68 @@ describe('runDeviceLogin', () => {
   test('an unreachable server fails cleanly', async () => {
     const outcome = await run([new TypeError('Unable to connect')]);
     expect(outcome.result).toEqual({ status: 'failed', message: 'Unable to connect' });
+  });
+});
+
+describe('token poll deadline (#1461)', () => {
+  test.each(['headers', 'body'])('aborts a stalled token %s at the remaining deadline', async (stage) => {
+    const timeout = AbortSignal.timeout.bind(AbortSignal);
+    const budgets: number[] = [];
+    const timeoutSpy = spyOn(AbortSignal, 'timeout').mockImplementation((ms) => {
+      budgets.push(ms);
+      // First poll completes immediately; only the second request stalls. Keep the test fast.
+      return budgets.length === 1 ? new AbortController().signal : timeout(5);
+    });
+    let clock = 0;
+    let polls = 0;
+    let mints = 0;
+    const stalled = (signal?: AbortSignal | null) =>
+      new Promise<never>((_resolve, reject) => {
+        const watchdog = setTimeout(() => {
+          signal?.removeEventListener('abort', abort);
+          reject(new Error('token poll outlived its deadline'));
+        }, 100);
+        function abort() {
+          clearTimeout(watchdog);
+          clock = 3000;
+          reject(signal?.reason);
+        }
+        if (signal?.aborted) abort();
+        else signal?.addEventListener('abort', abort, { once: true });
+      });
+    try {
+      const result = await runDeviceLogin({
+        url: URL_BASE,
+        onPrompt: () => {},
+        now: () => clock,
+        sleep: async (ms) => {
+          clock += ms;
+        },
+        fetch: (async (input, init) => {
+          const path = String(input);
+          if (path.endsWith('/code')) return Response.json({ ...CODE, expires_in: 3, interval: 1 });
+          if (path.endsWith('/device-key')) {
+            mints += 1;
+            return Response.json(MINTED);
+          }
+          polls += 1;
+          if (polls === 1) return Response.json({ error: 'authorization_pending' }, { status: 400 });
+          if (stage === 'headers') return stalled(init?.signal);
+          return new Response(
+            new ReadableStream({
+              start(controller) {
+                void stalled(init?.signal).catch((error) => controller.error(error));
+              },
+            }),
+          );
+        }) as typeof fetch,
+      });
+      expect(result).toEqual({ status: 'expired' });
+      expect(budgets).toEqual([2000, 1000]);
+      expect(polls).toBe(2);
+      expect(mints).toBe(0);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 });

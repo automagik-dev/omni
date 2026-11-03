@@ -50,9 +50,9 @@ const DeviceTokenErrorSchema = z.object({ error: z.string().min(1) });
 const DeviceKeyResponseSchema = z.object({
   data: z.object({
     apiKey: z.string().regex(/^\S+$/),
-    keyId: z.string().min(1),
-    scopes: z.array(z.string()),
-    keyExpiresAt: z.string().nullable(),
+    keyId: z.string().min(1).transform(stripTerminalControls),
+    scopes: z.array(z.string().transform(stripTerminalControls)),
+    keyExpiresAt: z.string().transform(stripTerminalControls).nullable(),
   }),
 });
 
@@ -120,15 +120,18 @@ function serverMessage(body: unknown): string | null {
   return parsed.success ? stripTerminalControls(parsed.data.error.message) : null;
 }
 
-type Post = (path: string, body: unknown, bearer?: string) => Promise<Response>;
+type Post = (path: string, body: unknown, bearer?: string, signal?: AbortSignal) => Promise<Response>;
 type Outcome = Exclude<DeviceLoginResult, { status: 'approved' }>;
 
 /** A POST to the server that turns an abort into Cancelled. */
 function poster(options: DeviceLoginOptions): Post {
   const doFetch = options.fetch ?? fetch;
-  const { signal } = options;
-  return async (path, body, bearer) => {
-    if (signal?.aborted) throw new Cancelled();
+  return async (path, body, bearer, requestSignal) => {
+    if (options.signal?.aborted) throw new Cancelled();
+    const signal =
+      requestSignal && options.signal
+        ? AbortSignal.any([options.signal, requestSignal])
+        : (requestSignal ?? options.signal);
     try {
       return await doFetch(`${options.url}${path}`, {
         method: 'POST',
@@ -142,7 +145,7 @@ function poster(options: DeviceLoginOptions): Post {
         ...(signal ? { signal } : {}),
       });
     } catch (error) {
-      if (signal?.aborted) throw new Cancelled();
+      if (options.signal?.aborted) throw new Cancelled();
       throw error;
     }
   };
@@ -163,12 +166,17 @@ async function requestCode(post: Post): Promise<z.infer<typeof DeviceCodeSchema>
 /** What one token poll says: the token, wait (with a new interval), or a final outcome. */
 type Poll = { token: string } | { waitS: number } | Outcome;
 
-async function pollOnce(post: Post, deviceCode: string, intervalS: number): Promise<Poll> {
-  const reply = await post('/api/auth/device/token', {
-    grant_type: DEVICE_GRANT,
-    device_code: deviceCode,
-    client_id: DEVICE_CLIENT_ID,
-  });
+async function pollOnce(post: Post, deviceCode: string, intervalS: number, signal: AbortSignal): Promise<Poll> {
+  const reply = await post(
+    '/api/auth/device/token',
+    {
+      grant_type: DEVICE_GRANT,
+      device_code: deviceCode,
+      client_id: DEVICE_CLIENT_ID,
+    },
+    undefined,
+    signal,
+  );
   const body = await jsonOf(reply);
   if (reply.ok) {
     const granted = DeviceTokenSchema.safeParse(body);
@@ -197,6 +205,29 @@ async function pollOnce(post: Post, deviceCode: string, intervalS: number): Prom
   }
 }
 
+/** A token poll may wait for headers or its body only until the device code expires. */
+async function pollBeforeDeadline(
+  options: DeviceLoginOptions,
+  post: Post,
+  deviceCode: string,
+  intervalS: number,
+  deadline: number,
+): Promise<Poll> {
+  const now = options.now ?? Date.now;
+  const remainingMs = deadline - now();
+  if (remainingMs <= 0) return { status: 'expired' };
+  const timeoutSignal = AbortSignal.timeout(Math.max(1, Math.ceil(remainingMs)));
+  try {
+    const poll = await pollOnce(post, deviceCode, intervalS, timeoutSignal);
+    if (options.signal?.aborted) throw new Cancelled();
+    return timeoutSignal.aborted || now() >= deadline ? { status: 'expired' } : poll;
+  } catch (error) {
+    if (options.signal?.aborted) throw new Cancelled();
+    if (timeoutSignal.aborted) return { status: 'expired' };
+    throw error;
+  }
+}
+
 /** Step 2: wait for the owner, at the server's pace, until the code expires. */
 async function waitForToken(
   options: DeviceLoginOptions,
@@ -212,8 +243,7 @@ async function waitForToken(
     if (remainingMs <= 0) return { status: 'expired' };
     await sleep(Math.min(intervalS * 1000, remainingMs), options.signal);
     if (options.signal?.aborted) throw new Cancelled();
-    if (now() >= deadline) return { status: 'expired' };
-    const poll = await pollOnce(post, code.device_code, intervalS);
+    const poll = await pollBeforeDeadline(options, post, code.device_code, intervalS, deadline);
     if (!('waitS' in poll)) return poll;
     intervalS = poll.waitS;
   }
