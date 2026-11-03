@@ -10,3 +10,20 @@ Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 - Do not start services, access databases or production systems, or send external messages without explicit approval.
 - Prefer safe static gates for routine validation.
 - Use a disposable database for database-backed or full integration tests.
+
+## Working across residences
+
+Two teams, on two machines with two GitHub accounts, work this repo. Coordinate on GitHub only; there is no shared hc.
+
+- Claim before you work: self-assign the GitHub issue before branching. For unplanned work, open an issue first
+  (neutral wording) and self-assign it. Skip issues assigned to someone else; ask on the issue instead.
+- Before branching, run `git fetch`, then check `gh pr list --state open` and `git ls-remote --heads origin` for the
+  same files or area. If another claim or branch overlaps, coordinate on the issue or PR; do not start.
+- Branch from fresh `origin/dev`. Never push to a branch your team did not create. Never force-push or rebase a shared
+  branch.
+- Push and open a draft PR as early as the gate allows, so the other team sees the work. Link the issue.
+- Merge only PRs your own team opened; review or merge another team's PR only if they ask on it. Comment "merging" on
+  the PR before queueing it.
+- Migration numbers: the "whoever merges second renumbers their own migration" rule (`.claude/CLAUDE.md`, parallel
+  worktree numbering collisions) applies across teams too.
+- Orchestrators: at the start of each assignment cycle, read open PRs and assigned issues and avoid overlap.
