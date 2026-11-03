@@ -57,6 +57,12 @@ mock.module('@slack/bolt', () => {
   return { App: MockApp, SocketModeReceiver: MockSocketModeReceiver, HTTPReceiver: MockHTTPReceiver };
 });
 
+// mock.module outlives this file in a single-process sweep (`bun test packages`):
+// every later importer of @slack/web-api gets this module. Keep the real
+// exports (ChatStreamer, error codes, ...) and replace only WebClient, so a
+// later file's named import, e.g. native-stream.test.ts's ChatStreamer, still resolves.
+const realWebApi = await import('@slack/web-api');
+
 mock.module('@slack/web-api', () => {
   class MockWebClient {
     token: string | undefined;
@@ -102,7 +108,7 @@ mock.module('@slack/web-api', () => {
       };
     }
   }
-  return { WebClient: MockWebClient };
+  return { ...realWebApi, WebClient: MockWebClient };
 });
 
 // Only the plugin has to be imported AFTER the mocks — it is what builds a
