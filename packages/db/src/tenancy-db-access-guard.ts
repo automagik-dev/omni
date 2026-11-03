@@ -2052,4 +2052,12 @@ export const REGISTERED_DB_ACCESS: readonly RegisteredDbAccess[] = [
   { file: 'packages/api/src/services/connectors.ts', table: 'automations', class: 'tenant-boundary' },
   { file: 'packages/api/src/lib/key-agent.ts', table: 'instances', class: 'tenant-boundary' },
   { file: 'packages/api/src/lib/key-agent.ts', table: 'agents', class: 'tenant-boundary' },
+  // Paired-agent grant writer (follow-up 1): `insertAgentSourceGrant` reads the
+  // grant source's tenant through the handle its caller passes (`scopedHandle`
+  // in the API), so under enforcement another tenant's source is invisible and
+  // the write is refused; agent-source-grants-postgres.test.ts proves it.
+  { file: 'packages/db/src/agent-source-grants.ts', table: 'agents', class: 'tenant-boundary' },
+  { file: 'packages/db/src/agent-source-grants.ts', table: 'connector_event_subscriptions', class: 'tenant-boundary' },
+  { file: 'packages/db/src/agent-source-grants.ts', table: 'connectors', class: 'tenant-boundary' },
+  { file: 'packages/db/src/agent-source-grants.ts', table: 'webhook_sources', class: 'tenant-boundary' },
 ];

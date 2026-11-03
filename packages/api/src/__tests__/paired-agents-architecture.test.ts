@@ -3,17 +3,20 @@
  * intersected with the paths changed by G1-G4 implementation/repair commits
  * 564338b94, 909dbe94c, 192eb4761, e31dcba02, 4137ef3de, b343ae284,
  * d99dd3f1f, ea0c3ba41; plus G5 source paths below. Unrelated dev changes
- * are outside this wish. routes/v2/instances.ts is beyond the planned inventory:
+ * are outside this wish. Follow-up 1 adds its grant writer and input schema.
+ * routes/v2/instances.ts is beyond the planned inventory:
  * G2 repair e31dcba02 added producer-scope exits there, so the whole file belongs.
  * includes/Set/map detection is NEW coverage, not parity with the original
  * equality/switch baseline. The literal-policy reference covers all forms;
  * only real channel/harness overlap on channel discriminants relaxes either policy.
- * Residuals: getProvider(agent) === 'claude' and agent.config.providerName === 'claude'
- * require semantic knowledge beyond this syntactic guard. Unresolvable channel-named
- * parameters, for-of and catch bindings retain the channel exception. A Hermes-keyed
- * Object.entries map dispatch has no literal at its use and remains unresolved.
- * Contrived template concatenation, spread collections/calls and obfuscated regexes
- * are outside this syntactic guard. Later slices extend the inventory.
+ * Provider discriminants are recognised by name: `provider`, any `provider*` or
+ * `getProvider*` field or getter (getProvider(agent), agent.config.providerName), and
+ * aliases resolved from known writes, including reassignment and array destructuring.
+ * Residuals: unresolvable channel-named parameters, for-of and catch bindings retain
+ * the channel exception (the G5 captain ruling defines a channel discriminant by name).
+ * A Hermes-keyed Object.entries map dispatch has no literal at its use and remains
+ * unresolved. Contrived template concatenation, spread collections/calls and
+ * obfuscated regexes are outside this syntactic guard. Later slices extend the inventory.
  */
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -46,7 +49,9 @@ const PAIRED_AGENT_SLICE_FILES = [
   'packages/core/src/events/factory.ts',
   'packages/core/src/events/index.ts',
   'packages/core/src/events/types.ts',
+  'packages/core/src/schemas/agent-source-grant.ts',
   'packages/db/scripts/online-ddl.ts',
+  'packages/db/src/agent-source-grants.ts',
   'packages/db/src/online-ddl.ts',
   'packages/db/src/paired-agent-online-ddl.ts',
   'packages/db/src/pg-migrated-template.ts',
@@ -151,11 +156,24 @@ function bindingResolver(file: ts.SourceFile) {
     return undefined;
   };
   const reassigned = new Set<Binding>();
-  function writeTarget(node: ts.Expression): void {
+  /** Values written by plain `=`, including positional `[a] = [b]` writes (provider aliases). */
+  const assigned = new Map<Binding, ts.Expression[]>();
+  function writeTarget(node: ts.Expression, value?: ts.Expression): void {
     const target = unwrap(node);
+    const source = value && unwrap(value);
+    if (ts.isArrayLiteralExpression(target)) {
+      target.elements.forEach((element, index) => {
+        const item = source && ts.isArrayLiteralExpression(source) ? source.elements[index] : undefined;
+        if (!ts.isOmittedExpression(element))
+          writeTarget(element, item && !ts.isSpreadElement(item) ? item : undefined);
+      });
+      return;
+    }
     if (ts.isIdentifier(target)) {
       const binding = bindingFor(target);
-      if (binding) reassigned.add(binding);
+      if (!binding) return;
+      reassigned.add(binding);
+      if (value) assigned.set(binding, [...(assigned.get(binding) ?? []), value]);
     }
   }
   function writes(node: ts.Node): void {
@@ -164,7 +182,7 @@ function bindingResolver(file: ts.SourceFile) {
       node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
       node.operatorToken.kind <= ts.SyntaxKind.LastAssignment
     )
-      writeTarget(node.left);
+      writeTarget(node.left, node.operatorToken.kind === ts.SyntaxKind.EqualsToken ? node.right : undefined);
     if (
       (ts.isPrefixUnaryExpression(node) || ts.isPostfixUnaryExpression(node)) &&
       [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.operator)
@@ -173,14 +191,14 @@ function bindingResolver(file: ts.SourceFile) {
     ts.forEachChild(node, writes);
   }
   writes(file);
-  return { bindingFor, reassigned };
+  return { bindingFor, reassigned, assigned };
 }
 /** Reference literal-deny policy; the new policy differs only by its channel exception.
  * Both modes inspect every comparison form, including collections and object maps.
  */
 function literalPolicy(source: string, channelException: boolean): string[] {
   const file = ts.createSourceFile('slice.ts', source, ts.ScriptTarget.Latest, true);
-  const { bindingFor, reassigned } = bindingResolver(file);
+  const { bindingFor, reassigned, assigned } = bindingResolver(file);
   function initializer(node: ts.Identifier, seen: Set<ts.Node>): ts.Expression | null | undefined {
     const binding = bindingFor(node);
     if (!binding) return undefined;
@@ -264,12 +282,38 @@ function literalPolicy(source: string, channelException: boolean): string[] {
     if (member) return discriminantName(member, seen, unwrapReceivers);
     return baselineDiscriminantName(expression);
   }
+  /** Positional source of `const [, p] = [x, agent.provider]`. */
+  function positionalValue(binding: Binding): ts.Expression | undefined {
+    if (!ts.isBindingElement(binding) || !ts.isArrayBindingPattern(binding.parent)) return undefined;
+    const declaration = binding.parent.parent;
+    const value = ts.isVariableDeclaration(declaration) && declaration.initializer && unwrap(declaration.initializer);
+    if (!value || !ts.isArrayLiteralExpression(value)) return undefined;
+    const item = value.elements[binding.parent.elements.indexOf(binding)];
+    return item && !ts.isSpreadElement(item) ? item : undefined;
+  }
+  /** `provider`, a `provider*` field or a `getProvider*` getter, e.g. agent.config.providerName. */
+  function providerNamed(expression: ts.Expression): boolean {
+    const callee = ts.isCallExpression(expression) ? expression.expression : undefined;
+    const getter =
+      callee && (ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) && callee.name.text);
+    return [discriminantName(expression), getter || ''].some((name) => /^(get)?provider/i.test(name));
+  }
+  /** Allow-only-when-known: an alias is a provider only when a write to it resolves to `provider`. */
+  function providerAlias(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
+    const expression = unwrap(node);
+    if (providerNamed(expression)) return true;
+    const binding = ts.isIdentifier(expression) ? bindingFor(expression) : undefined;
+    if (!binding || ts.isEnumDeclaration(binding) || seen.has(binding)) return false;
+    seen.add(binding);
+    const sources = [...(assigned.get(binding) ?? []), binding.initializer, positionalValue(binding)];
+    return sources.some((source) => !!source && providerAlias(source, seen));
+  }
   function isChannel(node: ts.Expression): boolean {
     return ['channel', 'channelType'].includes(discriminantName(node, new Set(), false));
   }
   function isProvider(node: ts.Expression): boolean {
     // Provider-keyed handler maps are also provider discriminants for `in`/call rules.
-    return /^provider/i.test(discriminantName(node));
+    return providerAlias(node);
   }
   const found: string[] = [];
   function deny(name: string | undefined, against: ts.Expression): boolean {
@@ -278,7 +322,7 @@ function literalPolicy(source: string, channelException: boolean): string[] {
       // Only actual channel types may gain the channel exception (currently Hermes).
       return !(channelException && CHANNEL_HARNESS_OVERLAP.has(name) && isChannel(against));
     }
-    return discriminantName(against) === 'provider' && EXTERNAL_PROVIDERS.includes(name);
+    return providerAlias(against) && EXTERNAL_PROVIDERS.includes(name);
   }
   function mapKeys(node: ts.Expression): string[] {
     const expression = unwrap(node);
@@ -602,6 +646,22 @@ const failingFixtures = [
   'providerHandlers.claude()',
   "PROVIDERS['claude']",
   'const p = agent.provider; p.claude()',
+  // Residual 5: provider aliases through reassignment or array destructuring, resolved from known writes.
+  "let p = x; p = agent.provider; p === 'claude'",
+  "let p; p = agent.provider; switch (p) { case 'openai': break; }",
+  "const [p] = [agent.provider]; p === 'claude'",
+  "const [, p] = [x, agent.provider]; ['agno'].includes(p)",
+  "let p; [p] = [agent.provider]; p === 'gemini'",
+  "const [p] = [agent.provider]; const q = p; q === 'custom'",
+  "let p = x; p = agent.provider; p.startsWith('claude')",
+  'const [p] = [agent.provider]; ({ claude: fn }[p])',
+  // Residual 1: provider getters and provider-named fields.
+  "getProvider(agent) === 'claude'",
+  "agent.config.providerName === 'claude'",
+  "svc.getProvider(agent) === 'openai'",
+  "switch (agent.config.providerName) { case 'gemini': break; }",
+  "getProvider(agent).startsWith('agno')",
+  "['custom'].includes(agent.providerType)",
 ];
 const channelFixtures = [
   "instance.channel === 'hermes'",
@@ -631,9 +691,11 @@ const passingFixtures = [
   "const config = { defaultChannel: 'hermes' }",
   "instance.channel === 'claude'",
   'HANDLERS.find((x) => x.name === h)',
-  // Documented semantic residuals; the guard does not infer getter/field meaning.
-  "getProvider(agent) === 'claude'",
-  "agent.config.providerName === 'claude'",
+  // Residual 5 stays allow-only-when-known: unresolvable aliases are not providers.
+  "let p = x; p = y; p === 'custom'",
+  "const [p] = [x]; p === 'claude'",
+  "const [p] = list; p === 'custom'",
+  "let p; [p] = pair; p === 'openai'",
   'config.custom',
   // The exempt Hermes definition has no literal at the Object.entries dispatch.
   'const H = { hermes: fn }; Object.entries(H).find(([name]) => name === agent.harness)',

@@ -15,6 +15,7 @@ import {
   connectors,
   createDbHandle,
   durableConsumers,
+  insertAgentSourceGrant,
   instances,
   omniEvents,
   tenants,
@@ -368,6 +369,20 @@ pgDescribe('paired-agent active source grants (C2, real PostgreSQL)', () => {
     expect((await pull(name)).items).toEqual([]);
     // A wildcard owned consumer proves webhook exclusion independently of the type predicate.
     expect((await pull(await create())).items).toEqual([]);
+  });
+
+  test('the sanctioned writer stamps the source tenant, and its grant delivers the T-stamped claim', async () => {
+    const name = await create('connector.gitlab.*');
+    const granted = await typed();
+    expect((await pull(name)).items).toEqual([]);
+    const written = await insertAgentSourceGrant(db, {
+      agentId: A,
+      sourceKind: 'connector',
+      sourceId: C,
+      approvedByKeyId: plain.key.id,
+    });
+    expect(written.tenantId).toBe(T);
+    expect((await pull(name)).items.map((item) => item.id)).toEqual([granted.id]);
   });
 
   test('positive legacy subscription and webhook grants authorize only their exact kind and id', async () => {

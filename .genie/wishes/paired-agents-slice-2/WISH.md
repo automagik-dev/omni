@@ -507,6 +507,7 @@ The 21 suites with a local `urlFor` were migrated to `pgRoleUrl` in three PRs, e
 1. Slice 6 grant writer:
    - it MUST stamp the grant's tenant from its source (G6 N1 ruling); a NULL grant is not a wildcard;
    - keep the hashable coalesce predicate (G6 amendment).
+   - **In review** (branch `fix/pa-grant-tenant-c12`): `insertAgentSourceGrant` in `@omni/db` is the only sanctioned writer and stamps the source's tenant (no `tenantId` input; a missing or RLS-invisible source throws). `agent-source-grant-writer.test.ts` guards it, and `agent-source-grants-postgres.test.ts` proves the stamp under legacy and enforced RLS. The coalesce predicate is unchanged.
 2. Migrate the 21 pre-existing `-postgres` suites that define a local `urlFor` to `pgRoleUrl`, and shrink `LOCAL_URLFOR_ACKNOWLEDGED` to 0. **Done:** #1536, #1538, #1539 (see "Follow-up 2 done").
 3. Accepted C12 residuals, documented in the guard header:
    - getter and `providerName` fields;
@@ -514,6 +515,7 @@ The 21 suites with a local `urlFor` were migrated to `pgRoleUrl` in three PRs, e
    - a `hermes` map dispatched via `Object.entries`;
    - contrived forms;
    - provider aliases through reassignment or array destructuring.
+   - **In review** (branch `fix/pa-grant-tenant-c12`): getter and `providerName` fields, and provider aliases through reassignment or array destructuring, are now rejected. The residual-1 commit moves 2 `C12 permits` fixtures to `C12 rejects` (t201 ruling: keep). Still accepted: `channel`-named parameters, for-of and catch bindings (G5 ruling), the `hermes` `Object.entries` map, and contrived forms.
 4. Optional G6 review nits: an index-name check on branch I, and filter-only and Seq Scan negative fixtures for the EXPLAIN checker.
 5. Branch A plan note: its seek uses `omni_events_agent_id_idx` or a bitmap rather than the G1 composite index. Accepted as the planner's choice.
 

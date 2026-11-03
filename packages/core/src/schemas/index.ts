@@ -18,3 +18,4 @@ export * from './person';
 export * from './whatsapp-business';
 export * from './whatsapp-flows';
 export * from './hermes';
+export * from './agent-source-grant';
