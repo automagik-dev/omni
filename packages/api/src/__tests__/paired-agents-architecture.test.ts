@@ -9,12 +9,14 @@
  * includes/Set/map detection is NEW coverage, not parity with the original
  * equality/switch baseline. The literal-policy reference covers all forms;
  * only real channel/harness overlap on channel discriminants relaxes either policy.
- * Residuals: getProvider(agent) === 'claude' and agent.config.providerName === 'claude'
- * require semantic knowledge beyond this syntactic guard. Unresolvable channel-named
- * parameters, for-of and catch bindings retain the channel exception. A Hermes-keyed
- * Object.entries map dispatch has no literal at its use and remains unresolved.
- * Contrived template concatenation, spread collections/calls and obfuscated regexes
- * are outside this syntactic guard. Later slices extend the inventory.
+ * Provider discriminants are recognised by name: `provider`, any `provider*` or
+ * `getProvider*` field or getter (getProvider(agent), agent.config.providerName), and
+ * aliases resolved from known writes, including reassignment and array destructuring.
+ * Residuals: unresolvable channel-named parameters, for-of and catch bindings retain
+ * the channel exception (the G5 captain ruling defines a channel discriminant by name).
+ * A Hermes-keyed Object.entries map dispatch has no literal at its use and remains
+ * unresolved. Contrived template concatenation, spread collections/calls and
+ * obfuscated regexes are outside this syntactic guard. Later slices extend the inventory.
  */
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -289,10 +291,17 @@ function literalPolicy(source: string, channelException: boolean): string[] {
     const item = value.elements[binding.parent.elements.indexOf(binding)];
     return item && !ts.isSpreadElement(item) ? item : undefined;
   }
+  /** `provider`, a `provider*` field or a `getProvider*` getter, e.g. agent.config.providerName. */
+  function providerNamed(expression: ts.Expression): boolean {
+    const callee = ts.isCallExpression(expression) ? expression.expression : undefined;
+    const getter =
+      callee && (ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) && callee.name.text);
+    return [discriminantName(expression), getter || ''].some((name) => /^(get)?provider/i.test(name));
+  }
   /** Allow-only-when-known: an alias is a provider only when a write to it resolves to `provider`. */
   function providerAlias(node: ts.Expression, seen = new Set<ts.Node>()): boolean {
     const expression = unwrap(node);
-    if (discriminantName(expression) === 'provider') return true;
+    if (providerNamed(expression)) return true;
     const binding = ts.isIdentifier(expression) ? bindingFor(expression) : undefined;
     if (!binding || ts.isEnumDeclaration(binding) || seen.has(binding)) return false;
     seen.add(binding);
@@ -304,7 +313,7 @@ function literalPolicy(source: string, channelException: boolean): string[] {
   }
   function isProvider(node: ts.Expression): boolean {
     // Provider-keyed handler maps are also provider discriminants for `in`/call rules.
-    return /^provider/i.test(discriminantName(node)) || providerAlias(node);
+    return providerAlias(node);
   }
   const found: string[] = [];
   function deny(name: string | undefined, against: ts.Expression): boolean {
@@ -646,6 +655,13 @@ const failingFixtures = [
   "const [p] = [agent.provider]; const q = p; q === 'custom'",
   "let p = x; p = agent.provider; p.startsWith('claude')",
   'const [p] = [agent.provider]; ({ claude: fn }[p])',
+  // Residual 1: provider getters and provider-named fields.
+  "getProvider(agent) === 'claude'",
+  "agent.config.providerName === 'claude'",
+  "svc.getProvider(agent) === 'openai'",
+  "switch (agent.config.providerName) { case 'gemini': break; }",
+  "getProvider(agent).startsWith('agno')",
+  "['custom'].includes(agent.providerType)",
 ];
 const channelFixtures = [
   "instance.channel === 'hermes'",
@@ -680,9 +696,6 @@ const passingFixtures = [
   "const [p] = [x]; p === 'claude'",
   "const [p] = list; p === 'custom'",
   "let p; [p] = pair; p === 'openai'",
-  // Documented semantic residuals; the guard does not infer getter/field meaning.
-  "getProvider(agent) === 'claude'",
-  "agent.config.providerName === 'claude'",
   'config.custom',
   // The exempt Hermes definition has no literal at the Object.entries dispatch.
   'const H = { hermes: fn }; Object.entries(H).find(([name]) => name === agent.harness)',
