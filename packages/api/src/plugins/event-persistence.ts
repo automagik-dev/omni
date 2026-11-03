@@ -39,7 +39,7 @@ import {
   omniEvents,
   persons,
 } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
+import { type SQL, and, eq, isNull, sql } from 'drizzle-orm';
 import { resolveKeyAgent } from '../lib/key-agent';
 import { AccessService, accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import { ChatService } from '../services/chats';
@@ -86,6 +86,18 @@ function mapContentType(contentType: string | undefined): ContentType | null {
 
 function eventIdInsert(eventId: string | undefined): Partial<Pick<NewOmniEvent, 'id'>> {
   return eventId && isValidUuid(eventId) ? { id: eventId } : {};
+}
+
+/**
+ * The rows a delivered/read receipt may update: same instance and externalId,
+ * like the message.failed flip. A receipt without an instance only matches
+ * rows without one, so it can never reach another instance's message.
+ */
+function receiptRowMatch(instanceId: string | undefined | null, externalId: string): SQL | undefined {
+  return and(
+    instanceId ? eq(omniEvents.instanceId, instanceId) : isNull(omniEvents.instanceId),
+    eq(omniEvents.externalId, externalId),
+  );
 }
 
 type ChatLink = { chatUuid: string | null; canonicalChatId: string | null };
@@ -401,14 +413,18 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
-            // Try to update existing event, or create new record
+            // Try to update existing event, or create new record. One guarded
+            // statement: the first deliveredAt wins, and a row that is already
+            // failed or read keeps its status. The row still matches, so a late
+            // receipt never falls through to the insert below.
+            const deliveredAt = new Date(payload.deliveredAt);
             const updated = await sdb
               .update(omniEvents)
               .set({
-                deliveredAt: new Date(payload.deliveredAt),
-                status: 'completed',
+                deliveredAt: sql`coalesce(${omniEvents.deliveredAt}, ${deliveredAt.toISOString()}::timestamptz)`,
+                status: sql`case when ${omniEvents.status} = 'failed' or ${omniEvents.readAt} is not null then ${omniEvents.status} else 'completed' end`,
               })
-              .where(eq(omniEvents.externalId, payload.externalId))
+              .where(receiptRowMatch(metadata.instanceId, payload.externalId))
               .returning();
 
             if (updated.length === 0) {
@@ -457,12 +473,14 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
+            // First readAt wins: a redelivered read receipt does not move it.
+            const readAt = new Date(payload.readAt);
             const updated = await sdb
               .update(omniEvents)
               .set({
-                readAt: new Date(payload.readAt),
+                readAt: sql`coalesce(${omniEvents.readAt}, ${readAt.toISOString()}::timestamptz)`,
               })
-              .where(eq(omniEvents.externalId, payload.externalId))
+              .where(receiptRowMatch(metadata.instanceId, payload.externalId))
               .returning();
 
             if (updated.length === 0) {

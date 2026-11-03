@@ -1499,9 +1499,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               return;
             }
 
-            // Update delivery status
-            await services.messages.updateDeliveryStatus(message.id, 'delivered');
-            log.debug('Updated message delivery status', { messageId: message.id, status: 'delivered' });
+            // Forward-only: a late or redelivered `delivered` never overwrites `read`.
+            const advanced = await services.messages.advanceDeliveryStatus(message.id, 'delivered');
+            log.debug(advanced ? 'Updated message delivery status' : 'Delivery status already at or past target', {
+              messageId: message.id,
+              status: 'delivered',
+            });
           });
         } catch (error) {
           log.error('Failed to update delivery status', {
@@ -1552,9 +1555,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               return;
             }
 
-            // Update delivery status to read
-            await services.messages.updateDeliveryStatus(message.id, 'read');
-            log.debug('Updated message delivery status', { messageId: message.id, status: 'read' });
+            // Forward-only: a redelivered `read` is a no-op.
+            const advanced = await services.messages.advanceDeliveryStatus(message.id, 'read');
+            log.debug(advanced ? 'Updated message delivery status' : 'Delivery status already at or past target', {
+              messageId: message.id,
+              status: 'read',
+            });
           });
         } catch (error) {
           log.error('Failed to update read status', {
