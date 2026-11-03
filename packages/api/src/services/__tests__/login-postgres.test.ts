@@ -155,11 +155,14 @@ postgresDescribe('human login (real PostgreSQL)', () => {
   });
 
   afterAll(async () => {
-    await close?.().catch(() => undefined);
-    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
-    for (const key of ENV) {
-      if (saved[key] === undefined) Reflect.deleteProperty(process.env, key);
-      else process.env[key] = saved[key];
+    try {
+      await close?.().catch(() => undefined);
+      dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
+    } finally {
+      for (const key of ENV) {
+        if (saved[key] === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = saved[key];
+      }
     }
   });
 

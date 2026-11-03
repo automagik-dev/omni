@@ -64,6 +64,19 @@ async function provisionDatabase(): Promise<{
 }
 
 /**
+ * Clean up after a scenario that threw, then rethrow its error. A cleanup
+ * failure never replaces it: both surface, the scenario's error first.
+ */
+async function cleanupAfterFailure(cleanup: () => Promise<void>, error: unknown): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    throw new AggregateError([error, cleanupError], 'scenario failed, then its cleanup failed');
+  }
+  throw error;
+}
+
+/**
  * Wrap a database handle so a `DELETE FROM platform_identities` throws — a fault
  * injected into the SECOND phase of a group's mutation (`absorbIdentity`), i.e.
  * AFTER the first phase (`mergePersons`, which deletes the merged-away person)
@@ -231,9 +244,10 @@ postgresDescribe('reconciliation script --apply write-path safety (real PostgreS
       // re-point) have already committed, so this snapshot differs.
       const after = await snapshot(db);
       expect(after).toBe(before);
-    } finally {
-      await cleanup();
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   }, 120_000);
 
   // Bug #2: Step-2 backfill must keep the OLDEST person (oldest-survives),
@@ -265,8 +279,9 @@ postgresDescribe('reconciliation script --apply write-path safety (real PostgreS
       const [survivor] = survivors;
       expect(survivor?.id).toBe(PERSON_LID);
       expect(survivor?.primaryPhone).toBe('+5511666660000');
-    } finally {
-      await cleanup();
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   }, 120_000);
 });

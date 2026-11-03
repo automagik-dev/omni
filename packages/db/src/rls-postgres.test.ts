@@ -250,11 +250,23 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
     for (const handle of [provisioner, ddl, runtime, pooledRuntime, authPlane, legacy, legacyScoped]) {
       if (handle) await handle.close();
     }
-    dropDatabaseOrThrow({ superUrl, psqlBin }, enforcedDbName);
-    dropDatabaseOrThrow({ superUrl, psqlBin }, legacyDbName);
+    // Every step runs even after one fails; a single failure surfaces as is,
+    // several surface together in order.
+    const errors: unknown[] = [];
+    const step = (run: () => void) => {
+      try {
+        run();
+      } catch (error) {
+        errors.push(error);
+      }
+    };
+    step(() => dropDatabaseOrThrow({ superUrl, psqlBin }, enforcedDbName));
+    step(() => dropDatabaseOrThrow({ superUrl, psqlBin }, legacyDbName));
     // Roles are cluster-wide; the synthetic cutover role must not outlive the
     // databases it was scoped to.
-    runSqlOn(superUrl, `DROP ROLE IF EXISTS "${LEGACY_SCOPED_ROLE}";`);
+    step(() => runSqlOn(superUrl, `DROP ROLE IF EXISTS "${LEGACY_SCOPED_ROLE}";`));
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'rls suite teardown failed');
   });
 
   // -------------------------------------------------------------------------
