@@ -10,6 +10,7 @@ interface CliOption {
   short?: string;
   required: boolean;
   optional: boolean;
+  preparsed?: boolean;
 }
 interface CommanderNode {
   name(): string;
@@ -73,6 +74,7 @@ export async function loadCommandTree(): Promise<CommandTree> {
     const create: () => CommanderNode = module[imported.name];
     commands.push(snapshot(create()));
   }
+  const registryStart = registry.pos;
   const options: CliOption[] = [help];
   function visit(node: ts.Node): void {
     if (
@@ -92,7 +94,7 @@ export async function loadCommandTree(): Promise<CommandTree> {
       }
     }
     // index.ts consumes JSON/server flags before Commander: read those declarations too.
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+    if (node.pos < registryStart && ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const arg = node.arguments[0];
       if (arg && ts.isStringLiteral(arg)) {
         if (
@@ -100,9 +102,9 @@ export async function loadCommandTree(): Promise<CommandTree> {
           node.expression.expression.getText(ast) === 'process.argv' &&
           /^--[\w-]+$/.test(arg.text)
         )
-          options.push({ long: arg.text, required: false, optional: false });
+          options.push({ long: arg.text, required: false, optional: false, preparsed: true });
         if (node.expression.name.text === 'startsWith' && /^--[\w-]+=$/.test(arg.text)) {
-          options.push({ long: arg.text.slice(0, -1), required: true, optional: false });
+          options.push({ long: arg.text.slice(0, -1), required: true, optional: false, preparsed: true });
         }
       }
     }
@@ -136,7 +138,7 @@ interface Token {
 function tokenize(text: string): Token[] {
   const tokens: Token[] = [];
   const pattern =
-    /\\\r?\n|#[^\n]*|<[^<>\s]+>|\d*[<>]{1,2}|(?:[^\s'";|&()<>\\]+|'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n])+|[\n;|&()<>]/g;
+    /\\\r?\n|#[^\n]*|<[^<>\s]+>|\d*[<>]{1,2}&?|(?:[^\s'";|&()<>\\]+|'[^']*'|"(?:\\.|[^"\\])*"|\\[^\n])+|[\n;|&()<>]/g;
   for (const match of text.matchAll(pattern)) {
     const raw = match[0];
     if (raw.startsWith('#') || raw.startsWith('\\\n') || raw.startsWith('\\\r\n')) continue;
@@ -145,26 +147,37 @@ function tokenize(text: string): Token[] {
   return tokens;
 }
 
+interface ScanCounts {
+  invocations: number;
+}
 /** Validate each command in an excerpt; flag values and positional arguments are not commands. */
-export function checkExcerpt(text: string, tree: CommandTree): { offset: number; message: string }[] {
+export function checkExcerpt(
+  text: string,
+  tree: CommandTree,
+  counts?: ScanCounts,
+): { offset: number; message: string }[] {
   const tokens = tokenize(text);
   const errors: { offset: number; message: string }[] = [];
   for (let i = 0; i < tokens.length; i++) {
     if (tokens[i]?.value !== 'omni') continue;
+    if (counts) counts.invocations++;
     let command = tree;
     const ancestors = [tree];
     let positional = false;
+    let seekingHelp = false;
     for (i++; i < tokens.length; i++) {
       const token = tokens[i];
       if (!token || /^[\n;|&()]$/.test(token.value)) break;
-      if (/^\d*[<>]{1,2}$/.test(token.value)) {
+      if (/^\d*[<>]{1,2}&?$/.test(token.value)) {
         i++;
         continue;
       }
       const value = token.value;
       if (value.startsWith('-')) {
         const flag = value.split('=')[0];
-        const option = ancestors.flatMap((c) => c.options).find((o) => o.long === flag || o.short === flag);
+        const option = ancestors
+          .flatMap((c) => c.options.filter((o) => c !== tree || command === tree || o.preparsed))
+          .find((o) => o.long === flag || o.short === flag);
         if (!option) errors.push({ offset: token.offset, message: `${command.name}: unknown flag ${flag}` });
         if (option && !value.includes('=') && (option.required || option.optional)) {
           const next = tokens[i + 1]?.value;
@@ -172,6 +185,9 @@ export function checkExcerpt(text: string, tree: CommandTree): { offset: number;
         }
       } else if (/^(<.*>|\[.*\]|\*|\.\.\.|\$[\w@]+)$/.test(value)) {
         positional = true;
+      } else if (command === tree && value === 'help' && !positional && !seekingHelp) {
+        // Commander adds root "help [command]" without registering it as a child.
+        seekingHelp = true;
       } else {
         const child = command.commands.find((c) => c.name === value || c.aliases.includes(value));
         if (!positional && child) {
@@ -188,30 +204,41 @@ export function checkExcerpt(text: string, tree: CommandTree): { offset: number;
 }
 
 /** Check executable examples in fenced blocks and inline code; retain source offsets for errors. */
-export function checkMarkdown(text: string, tree: CommandTree): { line: number; message: string }[] {
+export function checkMarkdown(
+  text: string,
+  tree: CommandTree,
+  counts?: ScanCounts,
+): { line: number; message: string }[] {
   const errors: { line: number; message: string }[] = [];
-  const code = /```[^\n]*\n([\s\S]*?)```|`([^`\n]+)`/g;
+  const code = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*$|`([^`\n]+)`/gm;
   let uncovered = text;
   for (const match of text.matchAll(code)) {
-    const excerpt = match[1] ?? match[2] ?? '';
+    const excerpt = match[3] ?? match[4] ?? '';
     const start = match.index + match[0].indexOf(excerpt);
     uncovered =
       uncovered.slice(0, match.index) +
       match[0].replace(/[^\n]/g, ' ') +
       uncovered.slice(match.index + match[0].length);
-    for (const error of checkExcerpt(excerpt, tree)) {
+    const language = match[2]?.trim().split(/\s+/)[0]?.toLowerCase() ?? '';
+    if (match[1] && !['', 'sh', 'bash', 'shell', 'zsh', 'console'].includes(language)) continue;
+    for (const error of checkExcerpt(excerpt, tree, counts)) {
       errors.push({ line: text.slice(0, start + error.offset).split('\n').length, message: error.message });
     }
   }
   for (const match of uncovered.matchAll(/^[ \t]*(?:\$ )?omni(?:[ \t]+[^\n]*)?$/gm)) {
-    for (const error of checkExcerpt(match[0], tree)) {
+    for (const error of checkExcerpt(match[0], tree, counts)) {
       errors.push({ line: text.slice(0, match.index + error.offset).split('\n').length, message: error.message });
     }
   }
   return errors;
 }
 /** Check literal shell commands and argv arrays in plugin hooks/scripts, not log messages. */
-export function checkScript(file: string, text: string, tree: CommandTree): { line: number; message: string }[] {
+export function checkScript(
+  file: string,
+  text: string,
+  tree: CommandTree,
+  counts?: ScanCounts,
+): { line: number; message: string }[] {
   const errors: { line: number; message: string }[] = [];
   const ast = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   function visit(node: ts.Node): void {
@@ -233,7 +260,7 @@ export function checkScript(file: string, text: string, tree: CommandTree): { li
       }
       if (excerpt) {
         const line = ast.getLineAndCharacterOfPosition(node.getStart()).line + 1;
-        errors.push(...checkExcerpt(excerpt, tree).map((error) => ({ line, message: error.message })));
+        errors.push(...checkExcerpt(excerpt, tree, counts).map((error) => ({ line, message: error.message })));
       }
     }
     ts.forEachChild(node, visit);
@@ -242,7 +269,7 @@ export function checkScript(file: string, text: string, tree: CommandTree): { li
   if (file.endsWith('.json')) {
     const visitJson = (value: unknown): void => {
       if (typeof value === 'string') {
-        errors.push(...checkExcerpt(value, tree).map((error) => ({ line: 1, message: error.message })));
+        errors.push(...checkExcerpt(value, tree, counts).map((error) => ({ line: 1, message: error.message })));
       } else if (value && typeof value === 'object') Object.values(value).forEach(visitJson);
     };
     visitJson(JSON.parse(text));
@@ -255,25 +282,41 @@ function files(dir: string): string[] {
     return entry.isDirectory() ? files(path) : [path];
   });
 }
-async function main(): Promise<void> {
-  const tree = await loadCommandTree();
+export function scanPluginFiles(
+  dir: string,
+  tree: CommandTree,
+): { count: number; invocations: number; errors: string[] } {
   let count = 0;
+  let invocations = 0;
   const errors: string[] = [];
-  for (const file of files(join(root, 'plugins/omni'))) {
+  for (const file of files(dir)) {
     const text = readFileSync(file, 'utf8');
+    const counts = { invocations: 0 };
     const problems = file.endsWith('.md')
-      ? checkMarkdown(text, tree)
+      ? checkMarkdown(text, tree, counts)
       : file.endsWith('.sh')
-        ? checkExcerpt(text, tree).map((error) => ({
+        ? checkExcerpt(text, tree, counts).map((error) => ({
             line: text.slice(0, error.offset).split('\n').length,
             message: error.message,
           }))
-        : checkScript(file, text, tree);
+        : checkScript(file, text, tree, counts);
     count++;
+    invocations += counts.invocations;
     errors.push(...problems.map((p) => `${relative(root, file)}:${p.line}: ${p.message}`));
   }
+  if (count === 0) errors.push('No plugin files scanned');
+  if (tree.commands.length === 0) errors.push('No CLI commands scanned');
+  if (invocations === 0) errors.push('No omni commands checked');
+  return { count, invocations, errors };
+}
+async function main(): Promise<void> {
+  const tree = await loadCommandTree();
+  const { count, invocations, errors } = scanPluginFiles(join(root, 'plugins/omni'), tree);
   for (const error of errors) console.error(error);
   if (errors.length) process.exitCode = 1;
-  else console.log(`Skill CLI drift check: ${count} files match ${tree.commands.length} registered command groups`);
+  else
+    console.log(
+      `Skill CLI drift check: ${count} files, ${invocations} invocations match ${tree.commands.length} registered command groups`,
+    );
 }
 if (import.meta.main) await main();
