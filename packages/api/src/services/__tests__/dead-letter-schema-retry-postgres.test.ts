@@ -1,6 +1,6 @@
 /** Refusal recovery uses current persisted schemas in legacy and enforced RLS. */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
-import type { ConnectorEventPublisher, EventBus } from '@omni/core';
+import type { ConnectorEventPublisher, EventBus, EventMetadata } from '@omni/core';
 import {
   DEFAULT_ROLE_NAMES,
   type Database,
@@ -51,6 +51,7 @@ for (const enforced of [false, true]) {
     let onRetryPublish: (() => Promise<void>) | undefined;
     const workers: Array<{ db: Database; service: DeadLetterService }> = [];
     const published: Array<{ type: string; payload: Record<string, unknown>; tenantId?: unknown }> = [];
+    const retryMetadata: Array<Partial<EventMetadata> | undefined> = [];
     const inWorld = <T>(fn: () => Promise<T>, tenantId = TENANT_A): Promise<T> =>
       enforced ? runTenantWorkDb(db, tenantId, fn) : fn();
     const read = (id: string) => inWorld(() => service.getById(id));
@@ -115,6 +116,9 @@ for (const enforced of [false, true]) {
         });
         closers.push(() => authHandle.close());
         authDb = authHandle.db;
+        // Instance ownership as the bus derives it: every instance here belongs to tenant A,
+        // the tenant each row is written in, so a retry may restore its instanceId (#1566).
+        (await import('@omni/core')).setEnvelopeInstanceTenantResolver(() => TENANT_A);
       }
       bus = {
         connect: async () => {},
@@ -132,6 +136,7 @@ for (const enforced of [false, true]) {
             if (metadata.source !== 'dead-letter-service') await onRetryPublish?.();
             if (failPublish) throw new Error('test bus unavailable');
             published.push({ type: eventType, payload, tenantId: metadata.tenantId });
+            retryMetadata.push(metadata);
           }
           return { id: crypto.randomUUID(), sequence: 0, stream: 'memory' };
         },
@@ -158,6 +163,7 @@ for (const enforced of [false, true]) {
         for (const close of closers.reverse()) await close();
         dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
       } finally {
+        (await import('@omni/core')).setEnvelopeInstanceTenantResolver(null);
         for (const [key, value] of Object.entries({
           OMNI_MULTITENANCY_ENABLED: previousFlags.multitenancy,
           OMNI_DB_ENFORCEMENT: previousFlags.enforcement,
@@ -346,8 +352,9 @@ for (const enforced of [false, true]) {
         id: crypto.randomUUID(),
         type: eventType as `custom.${string}`,
         timestamp: Date.now(),
-        payload: { orderId: 7 },
-        metadata: { correlationId: crypto.randomUUID() },
+        payload: { orderId: 7, externalId: `ext-${crypto.randomUUID()}` },
+        // A forged tenant claim in the stored envelope; the row's scope decides.
+        metadata: { correlationId: crypto.randomUUID(), instanceId: crypto.randomUUID(), tenantId: TENANT_B },
       };
       const row = await inWorld(() =>
         service.create({ event, subject: eventType, error: new Error('delivery failed'), retryCount: 0 }),
@@ -355,8 +362,17 @@ for (const enforced of [false, true]) {
       const countBefore = published.length;
       expect((await inWorld(() => service.retry(row.id))).success).toBe(true);
       expect(published.slice(countBefore)).toEqual([
-        { type: eventType, payload: row.payload, tenantId: enforced ? TENANT_A : undefined },
+        { type: eventType, payload: event.payload, tenantId: enforced ? TENANT_A : undefined },
       ]);
+      // The envelope is retained as the event's own identity: flow and instance
+      // metadata come back, the tenant never does.
+      const metadata = retryMetadata.at(-1);
+      expect(metadata).toMatchObject({
+        correlationId: event.metadata.correlationId,
+        instanceId: event.metadata.instanceId,
+      });
+      expect((published.at(-1)?.payload as { externalId?: string }).externalId).toBe(event.payload.externalId);
+      expect(metadata?.tenantId).not.toBe(TENANT_B);
     });
 
     function barrier() {

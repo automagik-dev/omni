@@ -8,9 +8,11 @@
  */
 
 import {
+  ChannelTypeSchema,
   type ConnectorEventPublisher,
   type DeadLetterEntry,
   type EventBus,
+  type EventMetadata,
   type EventType,
   NotFoundError,
   PUBLISH_NOT_DECLARED,
@@ -22,15 +24,18 @@ import {
   generateId,
   isConnectorEventType,
   prepareDeadLetterInsert,
+  resolveInstanceOwnerTenantId,
 } from '@omni/core';
 import type { Database, DeadLetterStatus } from '@omni/db';
 import { deadLetterEvents, resolveEnforcementMode } from '@omni/db';
 import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
-import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
+import { DEAD_LETTER_RETRY_SOURCES } from './dead-letter-sources';
 import { EventSchemaService } from './event-schemas';
 
 const log = createLogger('dead-letters');
@@ -44,6 +49,71 @@ function isGovernanceRefusal(error: string): boolean {
   return [SCHEMA_VALIDATION_FAILED, SCHEMA_NOT_REGISTERED, PUBLISH_NOT_DECLARED].some((reason) =>
     error.startsWith(`${reason}:`),
   );
+}
+
+const optional = <T extends z.ZodTypeAny>(schema: T) =>
+  schema
+    .nullish()
+    .catch(undefined)
+    .transform((value) => value ?? undefined);
+
+/**
+ * The consumed envelope `create` stores as the row's payload. Only the fields
+ * that scope the event to its instance and flow come back on a retry. The
+ * tenant is never read from here: ownership is the row's persisted tenant_id.
+ * Producer identity, the envelope version and timings are stamped by the
+ * factory and are not restored either.
+ */
+const StoredEnvelopeSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  payload: z.record(z.unknown()),
+  metadata: z.object({
+    correlationId: optional(z.string()),
+    causationId: optional(z.string()),
+    instanceId: optional(z.string()),
+    channelType: optional(ChannelTypeSchema),
+    personId: optional(z.string()),
+    platformIdentityId: optional(z.string()),
+    traceId: optional(z.string()),
+    ingestMode: optional(z.enum(['realtime', 'history-sync'])),
+  }),
+});
+
+/**
+ * A retry must never move an event into a tenant its row was not already in. A
+ * restored instanceId lets the publish derive the instance owner's tenant (the
+ * owner registry is filled whatever the flag), so it stays only when that owner
+ * IS the row's tenant. A NULL-owned row never equals a resolved owner. With no
+ * resolved owner it stays only while the flag is off (the single-tenant restore);
+ * with the flag on an unknown owner drops it. A dropped instance means an
+ * instance-less receipt replay, which event-persistence does not insert.
+ */
+function confineToRowTenant(metadata: Partial<EventMetadata>, rowTenantId: string | null): Partial<EventMetadata> {
+  if (!metadata.instanceId) return metadata;
+  const owner = resolveInstanceOwnerTenantId(metadata.instanceId);
+  // An unknown owner keeps the single-tenant restore only with the flag off.
+  if (owner === null ? !isMultitenancyEnabled() : owner === rowTenantId) return metadata;
+  const { instanceId: _foreign, ...confined } = metadata;
+  return confined;
+}
+
+/**
+ * The original event of a row filed by `create`, or null for a row whose
+ * payload is not that row's own envelope (schema refusals store the refused
+ * payload itself).
+ */
+function storedEnvelope(
+  entry: { eventId: string; eventType: string; error: string },
+  stored: Record<string, unknown>,
+): { payload: Record<string, unknown>; metadata: Partial<EventMetadata> } | null {
+  if (isGovernanceRefusal(entry.error)) return null;
+  const parsed = StoredEnvelopeSchema.safeParse(stored);
+  if (!parsed.success || parsed.data.id !== entry.eventId || parsed.data.type !== entry.eventType) return null;
+  const metadata = Object.fromEntries(
+    Object.entries(parsed.data.metadata).filter(([, value]) => value !== undefined),
+  ) as Partial<EventMetadata>;
+  return { payload: parsed.data.payload, metadata };
 }
 
 /**
@@ -334,14 +404,21 @@ export class DeadLetterService {
       );
       await this.eventBus.publishConnector(entry.eventType, restored.payload, { ...restored.metadata, source });
     } else {
-      await this.eventBus.publishGeneric(entry.eventType as EventType, payload, {
-        source,
-        // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
-        // stable across attempts for consumer-side idempotency. Do not reuse
-        // entry.eventId: it may already have a retained failed-handler claim.
-        publishEventId: entry.id,
-        ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
-      });
+      const original = storedEnvelope(entry, payload);
+      const eventBus = this.eventBus;
+      const publish = () =>
+        eventBus.publishGeneric(entry.eventType as EventType, original?.payload ?? payload, {
+          ...(original ? confineToRowTenant(original.metadata, entry.tenantId ?? null) : {}),
+          source,
+          // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
+          // stable across attempts for consumer-side idempotency. Do not reuse
+          // entry.eventId: it may already have a retained failed-handler claim.
+          publishEventId: entry.id,
+          // The row's tenant, explicitly. A NULL-owned row has none to give, so it is
+          // published outside any request scope rather than inheriting the caller's.
+          ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
+        });
+      await (entry.tenantId ? publish() : runDetachedFromTenantScope(publish));
     }
   }
 
@@ -359,6 +436,13 @@ export class DeadLetterService {
       return { success: false, deadLetterId: id, error: 'Dead letter already retrying' };
     }
 
+    // A NULL-owned row has no tenant to republish in, and a manual retry runs in
+    // the caller's request scope. Under multitenancy refuse it here; the scheduler
+    // (no request scope) still republishes such rows tenantless.
+    if (!current.tenantId && isMultitenancyEnabled()) {
+      return { success: false, deadLetterId: id, error: 'Dead letter has no owning tenant' };
+    }
+
     // A status read is not ownership: only the pending-to-retrying claim wins.
     const [deadLetter] = await this.db
       .update(deadLetterEvents)
@@ -374,7 +458,7 @@ export class DeadLetterService {
     }
 
     try {
-      await this.republish(deadLetter, deadLetter.payload, 'dead-letter-retry');
+      await this.republish(deadLetter, deadLetter.payload, DEAD_LETTER_RETRY_SOURCES[0]);
     } catch (err) {
       const [updated] = await this.db
         .update(deadLetterEvents)
@@ -548,7 +632,7 @@ export class DeadLetterService {
         processed++;
 
         try {
-          await this.republish(deadLetter, deadLetter.payload, 'dead-letter-auto-retry');
+          await this.republish(deadLetter, deadLetter.payload, DEAD_LETTER_RETRY_SOURCES[1]);
         } catch (err) {
           failed += await this.workDb(tenantId, () => this.recordAutoRetryFailure(deadLetter, err, now));
           continue;
