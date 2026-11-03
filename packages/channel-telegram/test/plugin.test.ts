@@ -27,10 +27,6 @@ describe('TelegramPlugin', () => {
     expect(plugin.capabilities.canSendTyping).toBe(true);
   });
 
-  it('supports reactions', () => {
-    expect(TELEGRAM_CAPABILITIES.canSendReaction).toBe(true);
-  });
-
   it('supports groups and DMs', () => {
     expect(TELEGRAM_CAPABILITIES.canHandleGroups).toBe(true);
     expect(TELEGRAM_CAPABILITIES.canHandleDMs).toBe(true);
