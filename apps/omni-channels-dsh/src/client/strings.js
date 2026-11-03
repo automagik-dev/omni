@@ -2,6 +2,21 @@
 // (omni-ui) through addStrings, so the team's `t` translates them; the keys are the English
 // text. Words the team shows too (Channels, connected, Plugins…) are in its own copy.
 export const STRINGS = {
+  'Could not refresh the connection. Retrying soon.': '无法刷新连接。稍后将重试。',
+  'Could not create the channel. Try again.': '无法创建渠道。请重试。',
+  'Could not get a phone code. Try again.': '无法获取手机配对码。请重试。',
+  'Could not connect the bot. Check its token and try again.': '无法连接机器人。请检查令牌后重试。',
+  'Slack did not finish the sign-in. Try again.': 'Slack 未完成登录。请重试。',
+  'Could not refresh the Slack sign-in. Retrying soon.': '无法刷新 Slack 登录状态。稍后将重试。',
+  'Could not start the Slack sign-in. Try again.': '无法开始 Slack 登录。请重试。',
+  'Could not connect the Business number. Check its details and try again.': '无法连接企业号码。请检查详细信息后重试。',
+  'Could not load channel settings. Try again.': '无法加载渠道设置。请重试。',
+  'Could not save channel settings. Try again.': '无法保存渠道设置。请重试。',
+  'Check the settings values and try again.': '请检查设置值后重试。',
+  'Check the Meta identifiers and try again.': '请检查 Meta 标识后重试。',
+  'Could not load this file. Try again.': '无法加载此文件。请重试。',
+  'Could not connect to Omni. Try again.': '无法连接到 Omni。请重试。',
+  'Could not check the sign-in. Retrying soon.': '无法检查登录状态。稍后将重试。',
   '(including your own device)': '（包括你自己的设备）',
   'Example': '示例',
   'Credentials may have been saved. Reload this channel before retrying.': '凭据可能已保存。重试前请重新加载此频道。',

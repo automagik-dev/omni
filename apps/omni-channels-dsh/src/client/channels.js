@@ -139,11 +139,17 @@ function useMediaFile(id, wanted) {
     call('omni-media', { messageId: id }).then(
       (reply) => {
         if (!on) return
-        if (!reply.ok) return setFile({ failed: reply.reason })
+        if (!reply.ok) {
+          console.warn('Could not load the media file:', reply.reason)
+          return setFile({ failed: true })
+        }
         url = URL.createObjectURL(blobOf(reply.data, reply.mime))
         setFile({ url })
       },
-      (error) => { if (on) setFile({ failed: error.message }) })
+      (error) => {
+        console.warn('Could not load the media file:', error)
+        if (on) setFile({ failed: true })
+      })
     return () => {
       on = false
       if (url) URL.revokeObjectURL(url)
@@ -166,7 +172,7 @@ function MediaPart({ message, onSized }) {
   if (kind === 'document') {
     return h('div', { className: 'oc-media-doc' }, h(DocMark), h('span', null, message.fileName ?? label))
   }
-  if (file?.failed) return h('div', { className: 'oc-media-miss', title: file.failed }, label, ' · ', t('not available'))
+  if (file?.failed) return h('div', { className: 'oc-media-miss', title: t('Could not load this file. Try again.') }, label, ' · ', t('not available'))
   if (kind === 'video' && !played) {
     return h('button', { type: 'button', className: 'oc-media-still', 'aria-label': t('Play video'), onClick: () => setPlayed(true) }, h('span', { className: 'oc-media-play' }, h(PlayMark)))
   }
