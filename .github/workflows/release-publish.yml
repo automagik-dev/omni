@@ -447,7 +447,10 @@ jobs:
 
       # Last step: tell automagik-dev/automagik that v<semver> is published.
       # Automagik treats the event as a hint only, so a missing secret or a
-      # failed send leaves a warning and never fails this release. The token is
+      # failed send leaves a warning and never fails this release. The send is
+      # capped at 60 s and the step at 2 min, so a stalled connection cannot use
+      # up the job's 10-minute limit (continue-on-error covers exit codes, not a
+      # job timeout). VERSION is already X.Y.Z (steps.meta). The token is
       # the fine-grained AUTOMAGIK_DISPATCH_TOKEN PAT (that repository only),
       # not GITHUB_TOKEN; the job's permissions above stay as they are. The
       # commit sha is read from the tag fetched and checked against
@@ -458,6 +461,7 @@ jobs:
           github.event_name != 'pull_request' &&
           github.event_name != 'pull_request_target'
         continue-on-error: true
+        timeout-minutes: 2
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.AUTOMAGIK_DISPATCH_TOKEN }}
@@ -473,8 +477,8 @@ jobs:
             echo "::notice::v${VERSION} stays a draft; no omni-release dispatch until it is published"
             exit 0
           fi
-          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
-            echo "::warning::release version is not X.Y.Z[-pre]; skipping the omni-release dispatch"
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::warning::release version is not X.Y.Z; skipping the omni-release dispatch"
             exit 0
           fi
           TAG="v${VERSION}"
@@ -485,9 +489,13 @@ jobs:
           fi
           payload=$(jq -n --arg version "${VERSION}" --arg tag "${TAG}" --arg sha "${SHA}" \
             '{event_type: "omni-release", client_payload: {version: $version, tag: $tag, sha: $sha}}')
-          if response=$(gh api --include --method POST repos/automagik-dev/automagik/dispatches \
-              --input - <<<"${payload}" 2>&1); then
+          rc=0
+          response=$(timeout 60 gh api --include --method POST repos/automagik-dev/automagik/dispatches \
+            --input - <<<"${payload}" 2>&1) || rc=$?
+          if [[ "${rc}" -eq 0 ]]; then
             echo "Dispatched omni-release for ${TAG} (${SHA})"
+          elif [[ "${rc}" -eq 124 ]]; then
+            echo "::warning::omni-release dispatch for ${TAG} failed (HTTP unknown (timed out))"
           else
             status=$(grep -m1 -oE '^HTTP/[0-9.]+ [0-9]{3}' <<<"${response}" | grep -oE '[0-9]{3}$' || true)
             [[ -n "${status}" ]] || status=$(grep -m1 -oE 'HTTP [0-9]{3}' <<<"${response}" | grep -oE '[0-9]{3}$' || true)
