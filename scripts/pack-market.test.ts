@@ -7,6 +7,8 @@ import { MarketManifestSchema } from '../packages/api/src/market/manifest';
 import { discoverPlugins, packMarket } from './pack-market';
 
 const repoRoot = join(import.meta.dir, '..');
+// Archive-backed tests use the marketplace budget of 120 s: bun pm pack and tar run
+// subprocesses for each package. Discovery and pre-pack validation tests keep the 5 s default.
 const root = mkdtempSync(join(tmpdir(), 'omni-pack-market-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -72,7 +74,7 @@ describe('pack-market', () => {
     });
     // The out dir holds exactly this release: the stale tarball is gone.
     expect(() => readFileSync(join(outDir, 'stale.tgz'))).toThrow();
-  });
+  }, 120_000);
 
   test('packs a plugin at its own version, the Omni release of its last change', async () => {
     const appsDir = join(root, 'lagging');
@@ -89,7 +91,7 @@ describe('pack-market', () => {
       ['kept-dsh', '2.261024.6', 'kept-dsh-2.261024.6.tgz'],
       ['moved-dsh', '2.261025.2', 'moved-dsh-2.261025.2.tgz'],
     ]);
-  });
+  }, 120_000);
 
   test('refuses a plugin newer than Omni, or at a version that is no Omni release', async () => {
     for (const [dir, version] of [
@@ -169,7 +171,7 @@ describe('pack-market', () => {
         automagik: { pinFile, from: tampered },
       }),
     ).rejects.toThrow(/is not the pinned tarball/);
-  });
+  }, 120_000);
 
   test("the repository's own pin names a release of automagik-dev/automagik", async () => {
     // @ts-expect-error -- plain Node ESM without types

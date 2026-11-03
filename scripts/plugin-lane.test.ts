@@ -8,6 +8,8 @@ import { LaneSchema } from '../packages/api/src/market/lane';
 import { packMarket } from './pack-market';
 import { KEY_ID, LANE_BASE, manifest, readKeys, sequenceOf, signLane, verifyLane } from './plugin-lane';
 
+// Archive-backed tests use the marketplace budget of 120 s: packed() runs bun pm pack,
+// and kept tarballs are inspected with tar. Sequence/key-only tests keep the 5 s default.
 const root = mkdtempSync(join(tmpdir(), 'omni-plugin-lane-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const COMMIT = 'a'.repeat(40);
@@ -63,7 +65,7 @@ describe('plugin-lane', () => {
       size: bytes.byteLength,
       engines: { dsh: '>=0.2.1-rc.3 <0.2.2-0' },
     });
-  });
+  }, 120_000);
 
   test('a version the lane already carries keeps its tarball, byte for byte', async () => {
     const kept = await packed('kept', 'export default { first: true };\n');
@@ -72,7 +74,7 @@ describe('plugin-lane', () => {
     const before = readFileSync(join(kept, 'automagik-one-dsh-2.261025.2.tgz'));
     expect(readFileSync(join(dir, 'automagik-one-dsh-2.261025.2.tgz'))).toEqual(before);
     expect(lane.plugins[0]?.sha256).toBe(createHash('sha256').update(before).digest('hex'));
-  });
+  }, 120_000);
 
   test('a kept tarball that holds another package is refused', async () => {
     const dir = await packed('mismatch');
@@ -86,7 +88,7 @@ describe('plugin-lane', () => {
     expect(() =>
       manifest(dir, { version: '2.261025.2', commit: COMMIT, issuedAt: '2026-10-25T00:00:00Z', kept }),
     ).toThrow(/holds @automagik\/one-dsh@2\.261025\.1/);
-  });
+  }, 120_000);
 
   test('a signed lane verifies; changed bytes, another key or another publisher do not', async () => {
     const { privateKey, publicKey } = generateKeyPairSync('ed25519');
@@ -107,7 +109,7 @@ describe('plugin-lane', () => {
     expect(() =>
       verifyLane(theirs, signLane(theirs, privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()), keys),
     ).toThrow(/published by automagik/);
-  });
+  }, 120_000);
 
   test('plugin-lane/keys.json pins the key the lane names', () => {
     expect(readKeys().map((key) => key.keyId)).toContain(KEY_ID);

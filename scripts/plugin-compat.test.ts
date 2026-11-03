@@ -12,6 +12,8 @@ import { join } from 'node:path';
 import { minimumOf, ownPlugins, releaseCommit } from './lib/plugin-versions';
 import { apiSurface, checkPlugin, pluginUses, serves } from './plugin-compat';
 
+// Git/archive-backed tests use the marketplace budget of 120 s: release lookup can fetch
+// tags (including a missing tag), then git archive/show and tar inspect the release. Pure tests keep 5 s.
 const root = join(import.meta.dir, '..');
 const readJson = (path: string) => JSON.parse(readFileSync(join(root, path), 'utf8'));
 const repoVersion: string = readJson('package.json').version;
@@ -33,7 +35,7 @@ describe("Omni's plugins and the Omni they need", () => {
       const result = checkPlugin(plugin.dir, plugin.omniRange, repoVersion, root);
       expect({ dir: plugin.dir, problems: result.problems }).toEqual({ dir: plugin.dir, problems: [] });
     }
-  }, 60_000);
+  }, 120_000);
 
   test('the scan sees the calls the channels plugin makes, with their methods', () => {
     const uses = pluginUses(join(root, 'apps/omni-channels-dsh'), here).map((use) => `${use.method} ${use.path}`);
@@ -57,7 +59,7 @@ describe("Omni's plugins and the Omni they need", () => {
       'Omni 2.261023.14 serves no POST /api/v2/keys/children/self/revoke (src/host/thread-keys.js): raise engines.omni',
       'Omni 2.261023.14 serves no POST /api/v2/login/connect (src/host/omni-link.js): raise engines.omni',
     ]);
-  }, 60_000);
+  }, 120_000);
 
   test('a planted call to an API newer than the minimum fails', () => {
     const dir = mkdtempSync(join(tmpdir(), 'omni-compat-'));
@@ -80,7 +82,7 @@ describe("Omni's plugins and the Omni they need", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 120_000);
 
   test('a path this Omni does not serve fails as unseen, never passes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'omni-compat-'));
@@ -108,7 +110,7 @@ describe("Omni's plugins and the Omni they need", () => {
     expect(checkPlugin('apps/omni-channels-dsh', '^2.261023.1', repoVersion, root).problems).toContain(
       'engines.omni "^2.261023.1" is not ">=<Omni release>"',
     );
-  });
+  }, 120_000);
 });
 
 describe("Omni's plugins and the Bot team", () => {
