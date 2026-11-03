@@ -63,6 +63,11 @@ on:
         description: 'Set only by release.yml reusable orchestration'
         required: true
         type: boolean
+    secrets:
+      # A called workflow sees only the secrets passed to it. Optional: without
+      # it the omni-release dispatch below is skipped with a warning.
+      AUTOMAGIK_DISPATCH_TOKEN:
+        required: false
   # Manual-recovery escape hatch — operators can re-publish from a stranded
   # sign-attest run by passing version + run_id explicitly. draft defaults
   # to true here so a replay never auto-promotes by accident.
@@ -439,3 +444,52 @@ jobs:
             echo "::error::remote tag target after publication is ${final_tag_sha}, expected ${EXPECTED_SHA}"
             exit 1
           }
+
+      # Last step: tell automagik-dev/automagik that v<semver> is published.
+      # Automagik treats the event as a hint only, so a missing secret or a
+      # failed send leaves a warning and never fails this release. The token is
+      # the fine-grained AUTOMAGIK_DISPATCH_TOKEN PAT (that repository only),
+      # not GITHUB_TOKEN; the job's permissions above stay as they are. The
+      # commit sha is read from the tag fetched and checked against
+      # inputs.expected_sha just above. A draft is not a published release.
+      - name: Dispatch omni-release to automagik-dev/automagik
+        if: >-
+          github.repository == 'automagik-dev/omni' &&
+          github.event_name != 'pull_request' &&
+          github.event_name != 'pull_request_target'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMAGIK_DISPATCH_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          REQUESTED_DRAFT: ${{ inputs.draft || false }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "::warning::AUTOMAGIK_DISPATCH_TOKEN is not set; skipping the omni-release dispatch"
+            exit 0
+          fi
+          if [[ "${REQUESTED_DRAFT}" == "true" ]]; then
+            echo "::notice::v${VERSION} stays a draft; no omni-release dispatch until it is published"
+            exit 0
+          fi
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::warning::release version is not X.Y.Z[-pre]; skipping the omni-release dispatch"
+            exit 0
+          fi
+          TAG="v${VERSION}"
+          SHA=$(git rev-parse --verify --quiet "refs/tags/${TAG}^{commit}" || true)
+          if [[ ! "${SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::warning::could not resolve a 40-hex commit for ${TAG}; skipping the omni-release dispatch"
+            exit 0
+          fi
+          payload=$(jq -n --arg version "${VERSION}" --arg tag "${TAG}" --arg sha "${SHA}" \
+            '{event_type: "omni-release", client_payload: {version: $version, tag: $tag, sha: $sha}}')
+          if response=$(gh api --include --method POST repos/automagik-dev/automagik/dispatches \
+              --input - <<<"${payload}" 2>&1); then
+            echo "Dispatched omni-release for ${TAG} (${SHA})"
+          else
+            status=$(grep -m1 -oE '^HTTP/[0-9.]+ [0-9]{3}' <<<"${response}" | grep -oE '[0-9]{3}$' || true)
+            [[ -n "${status}" ]] || status=$(grep -m1 -oE 'HTTP [0-9]{3}' <<<"${response}" | grep -oE '[0-9]{3}$' || true)
+            echo "::warning::omni-release dispatch for ${TAG} failed (HTTP ${status:-unknown})"
+          fi

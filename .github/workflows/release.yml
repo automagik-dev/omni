@@ -155,6 +155,9 @@ jobs:
       expected_digest: ${{ inputs.expected_digest }}
       orchestrator_run_id: ${{ inputs.orchestrator_run_id }}
       orchestrated: true
+    # Only the omni-release dispatch PAT, never secrets: inherit.
+    secrets:
+      AUTOMAGIK_DISPATCH_TOKEN: ${{ secrets.AUTOMAGIK_DISPATCH_TOKEN }}
 
   # ---------------------------------------------------------------------------
   # Plugin lane — after a stable publish, Omni's channels and canvases go on the
