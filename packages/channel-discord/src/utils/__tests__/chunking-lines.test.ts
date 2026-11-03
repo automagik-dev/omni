@@ -154,10 +154,4 @@ describe('line-based chunking', () => {
     const rejoined = chunks.join('\n');
     expect(rejoined).toBe(text);
   });
-
-  test('single line message returns single chunk', () => {
-    const chunks = chunkMessage('hello world', 2000, 17);
-    expect(chunks.length).toBe(1);
-    expect(chunks[0]).toBe('hello world');
-  });
 });

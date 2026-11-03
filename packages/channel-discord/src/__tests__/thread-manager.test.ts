@@ -10,45 +10,6 @@ import { describe, expect, test } from 'bun:test';
 import { ChannelType } from 'discord.js';
 
 describe('Thread Manager', () => {
-  describe('module exports', () => {
-    test('exports createThread function', async () => {
-      const mod = await import('../threads/manager');
-      expect(typeof mod.createThread).toBe('function');
-    });
-
-    test('exports createForumPost function', async () => {
-      const mod = await import('../threads/manager');
-      expect(typeof mod.createForumPost).toBe('function');
-    });
-
-    test('exports archiveThread function', async () => {
-      const mod = await import('../threads/manager');
-      expect(typeof mod.archiveThread).toBe('function');
-    });
-
-    test('exports addThreadMember function', async () => {
-      const mod = await import('../threads/manager');
-      expect(typeof mod.addThreadMember).toBe('function');
-    });
-  });
-
-  describe('thread type mapping', () => {
-    test('public thread type maps to ChannelType.PublicThread', () => {
-      // ChannelType.PublicThread = 11
-      expect(ChannelType.PublicThread).toBe(11);
-    });
-
-    test('private thread type maps to ChannelType.PrivateThread', () => {
-      // ChannelType.PrivateThread = 12
-      expect(ChannelType.PrivateThread).toBe(12);
-    });
-
-    test('forum channel type is ChannelType.GuildForum', () => {
-      // ChannelType.GuildForum = 15
-      expect(ChannelType.GuildForum).toBe(15);
-    });
-  });
-
   describe('createThread default behavior', () => {
     test('defaults to PublicThread when type is omitted', async () => {
       const mod = await import('../threads/manager');

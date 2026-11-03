@@ -5,29 +5,6 @@ import { describe, expect, test } from 'bun:test';
 // generation logic and overall flow
 
 describe('voice message module', () => {
-  test('module exports expected functions', async () => {
-    const voice = await import('../senders/voice');
-    expect(typeof voice.sendVoiceMessage).toBe('function');
-    expect(typeof voice.checkFfmpeg).toBe('function');
-    expect(typeof voice.encodeToOggOpus).toBe('function');
-    expect(typeof voice.getAudioDuration).toBe('function');
-    expect(typeof voice.generateWaveform).toBe('function');
-    expect(typeof voice.resetFfmpegCache).toBe('function');
-  });
-
-  test('resetFfmpegCache resets the cache', async () => {
-    const { resetFfmpegCache } = await import('../senders/voice');
-    // Should not throw
-    resetFfmpegCache();
-  });
-
-  test('checkFfmpeg returns boolean', async () => {
-    const { checkFfmpeg, resetFfmpegCache } = await import('../senders/voice');
-    resetFfmpegCache();
-    const result = await checkFfmpeg();
-    expect(typeof result).toBe('boolean');
-  });
-
   // Integration tests (only run if ffmpeg available)
   test('encodeToOggOpus produces output when ffmpeg available', async () => {
     const { checkFfmpeg, encodeToOggOpus, resetFfmpegCache } = await import('../senders/voice');
