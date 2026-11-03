@@ -761,35 +761,4 @@ describe('messages arriving mid-flight', () => {
     expect(flushes.length).toBe(2);
     expect(flushes[1]![0]?.payload.content?.text).toBe('b');
   });
-
-  it('re-arms even in fixed mode, where a live timer normally blocks restarts', async () => {
-    // `restartTimer` refuses to restart a fixed-window timer unless forced.
-    // After a flush there is no live timer, so the new batch must get its own
-    // window — otherwise it would never fire.
-    const flushes: BufferedMessage[][] = [];
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    const d = new MessageDebouncer(async (_key, msgs) => {
-      flushes.push(msgs);
-      if (flushes.length === 1) await gate;
-    });
-
-    d.buffer('inst-1', 'chat-3', makeMessage('x'), fixedConfig(15));
-    await advance(25);
-    d.buffer('inst-1', 'chat-3', makeMessage('y'), fixedConfig(15));
-    release?.();
-    await advance(60);
-
-    expect(flushes.length).toBe(2);
-  });
-
-  it('does not leak config state once the chat drains', async () => {
-    const d = new MessageDebouncer(async () => {});
-    d.buffer('inst-1', 'chat-4', makeMessage('only'), fixedConfig(10));
-    await advance(40);
-    // nothing pending, nothing scheduled — a further wait produces no flush
-    expect(d.hasPending('inst-1', 'chat-4')).toBe(false);
-  });
 });

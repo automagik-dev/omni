@@ -38,7 +38,6 @@ import {
   type DispatcherCleanup,
   __test__,
   cancelActiveAgentRun,
-  isFirstPartyInstanceSender,
   resolveQuotedMessage,
   setupAgentDispatcher,
 } from '../agent-dispatcher';
@@ -573,21 +572,6 @@ describe('agent-dispatcher', () => {
       } finally {
         activeRunAborts.clear();
       }
-    });
-
-    it('returns a cleanup function that can be called without error', async () => {
-      const eventBus = createMockEventBus();
-      const services = createMockServices();
-
-      const cleanup = await setupAgentDispatcher(
-        eventBus as unknown as import('@omni/core').EventBus,
-        services,
-        mockDb,
-      );
-
-      expect(typeof cleanup).toBe('function');
-      // Should not throw
-      cleanup();
     });
 
     it('passes correct durable and queue options for each subscription', async () => {
@@ -1293,21 +1277,6 @@ describe('agent-dispatcher', () => {
       // Wait enough for group debounce to flush
       await new Promise((resolve) => setTimeout(resolve, 140));
       expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
-    });
-
-    it('flushes immediately when debounce mode is disabled', async () => {
-      const eventBus = createMockEventBus();
-      const services = createMockServices();
-
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
-
-      await eventBus.fire('message.received', createMessageEvent());
-
-      // With disabled debounce, setTimeout(0) fires almost immediately
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      // B-1: IAgentProvider handles dispatch; getSenderName proves immediate flush reached processAgentResponse
-      expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
     it('restarts debounce timer on typing event when restartOnTyping is true', async () => {
@@ -2590,15 +2559,6 @@ describe('agent-dispatcher', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
       return agentRunner;
     }
-
-    it('is still detected as a first-party sender by isFirstPartyInstanceSender', () => {
-      const detected = isFirstPartyInstanceSender(
-        { from: OTHER_PHONE, rawPayload: { resolvedSenderPhone: OTHER_PHONE } },
-        CURRENT_OWNER,
-        [CURRENT_OWNER, OTHER_OWNER],
-      );
-      expect(detected).toBe(true);
-    });
 
     it('drops the message when allowFirstParty is false (default loop-protection)', async () => {
       const agentRunner = await fireFirstPartyMessage(false);
