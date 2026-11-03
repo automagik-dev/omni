@@ -43,6 +43,7 @@ import { type SQL, and, eq, isNull, sql } from 'drizzle-orm';
 import { resolveKeyAgent } from '../lib/key-agent';
 import { AccessService, accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import { ChatService } from '../services/chats';
+import { DEAD_LETTER_RETRY_SOURCES } from '../services/dead-letter-sources';
 import { isMultitenancyEnabled, pairedAgentFlagState } from '../tenancy/feature-flag';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext, runTenantWorkDb, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
@@ -97,6 +98,21 @@ function receiptRowMatch(instanceId: string | undefined | null, externalId: stri
   return and(
     instanceId ? eq(omniEvents.instanceId, instanceId) : isNull(omniEvents.instanceId),
     eq(omniEvents.externalId, externalId),
+  );
+}
+
+/**
+ * Whether a receipt that matched no row must not be inserted (#1552 N1). A
+ * receipt REPUBLISHED by dead-letter retry without an instance names a message
+ * whose original row we can no longer find; inserting it would file a stray
+ * NULL-instance row beside that row, so it is dropped. A live receipt without an
+ * instance still inserts: it is the only record of that receipt. message.failed
+ * also still inserts: its row is the failure's own record, not an update to
+ * another row, and the synchronous-failure path depends on it.
+ */
+function isOrphanedReceiptReplay(metadata: EventMetadata): boolean {
+  return (
+    !metadata.instanceId && (DEAD_LETTER_RETRY_SOURCES as readonly (string | undefined)[]).includes(metadata.source)
   );
 }
 
@@ -427,6 +443,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               .where(receiptRowMatch(metadata.instanceId, payload.externalId))
               .returning();
 
+            // Option 1 (#1552): a dead-letter replay with no instance matched nothing and must
+            // not file a NULL-instance row. Live receipts and message.failed still insert; see
+            // isOrphanedReceiptReplay for why.
+            if (updated.length === 0 && isOrphanedReceiptReplay(metadata)) {
+              log.debug('Dropped dead-letter receipt replay without an instance', { externalId: payload.externalId });
+              return;
+            }
             if (updated.length === 0) {
               // No existing event found, create a new record
               const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
@@ -483,6 +506,13 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
               .where(receiptRowMatch(metadata.instanceId, payload.externalId))
               .returning();
 
+            // Option 1 (#1552): a dead-letter replay with no instance matched nothing and must
+            // not file a NULL-instance row. Live receipts and message.failed still insert; see
+            // isOrphanedReceiptReplay for why.
+            if (updated.length === 0 && isOrphanedReceiptReplay(metadata)) {
+              log.debug('Dropped dead-letter receipt replay without an instance', { externalId: payload.externalId });
+              return;
+            }
             if (updated.length === 0) {
               // No existing event found, create a new record
               const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
