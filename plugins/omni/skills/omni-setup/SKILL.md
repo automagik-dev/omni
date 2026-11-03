@@ -14,11 +14,19 @@ For an existing server:
 
 ```bash
 omni server list --json
-omni server add <name> <url>                  # registers the URL; obtains no credential
-omni auth login --server <name> --api-key-stdin < /secure/path/omni-api-key
+omni server add <name> <url>                  # no key: starts owner-approved device sign-in
 omni server use <name>                       # or use --server <name> per command
 omni status --json
 omni auth status --json
+```
+
+In an interactive terminal, keyless `server add` shows an approval code and link, waits for the owner to approve, then saves the device key in that server entry. The CLI caps the approval wait at 15 minutes. Keyless device sign-in requires an interactive terminal; without a TTY it exits 2 and saves nothing. To sign in to an existing entry, use `omni auth login --server <name>`; bare `omni auth login` targets the current server. `auth login` starts device sign-in only when no key flag, stdin key, or `OMNI_CLI_API_KEY` is supplied. If the server does not offer device sign-in (login disabled, or multitenancy enabled), interactive `server add` can save a new entry without a key; sign in with an existing credential instead.
+
+For scripts or an existing credential, register the entry without verification, then sign in with protected input:
+
+```bash
+omni server add <name> <url> --skip-verify
+omni auth login --server <name> --api-key-stdin < /secure/path/omni-api-key
 ```
 
 Read the key from a protected file as above or pipe it from your secret manager. If `OMNI_CLI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides that env var; do not combine the flags. Do not ask for a key in chat or paste its value into a command.
@@ -26,9 +34,9 @@ Read the key from a protected file as above or pipe it from your secret manager.
 `OMNI_API_KEY` is the API server's primary key and is ignored by login. Only
 `OMNI_CLI_API_KEY` is used as the CLI environment fallback. Stdin is limited to
 8 KB including the optional trailing LF/CRLF. A successful login reports
-`keySource` as `flag`, `stdin`, or `env`, without printing the key.
+`keySource` as `device`, `flag`, `stdin`, or `env`, without printing the key.
 
-An API key is still required. There is no CLI device-code sign-in: adding a keyless server entry only saves its address. `auth login` validates the supplied key and saves it in the targeted server entry. Currently owner-approved device keys cannot pass that validation because they lack `auth:validate`; ask the operator for an appropriate existing CLI credential rather than widening a key or disabling scope checks.
+Device sign-in obtains a scoped API key through owner approval. Owner-approved device keys work with CLI validation without adding `auth:validate` or widening their scopes. With a supplied key, `auth login` validates it and saves it in the targeted server entry.
 
 Only when a local install is requested:
 
@@ -40,7 +48,7 @@ omni status --json
 
 `--non-interactive` is a deprecated no-op. Choose `--port`, `--database-url` (external Postgres), or `--systemd` when appropriate. `--sandbox` installs an isolated runtime; inspect `omni sandbox --help` and install help for `--home`, `--at-login`, `--no-start` and other sandbox options. `omni desktop --help` covers the desktop app. Installing or starting services needs authorization.
 
-### Operator device approval is separate
+### Operator approval and app pairing
 
 An operator already holding a key with `auth:admin` can use `omni claim`, `omni approve <code>`, or bare `omni connect` (optionally `--url https://omni.example.com`). Claim makes an unclaimed Omni theirs; approve accepts a waiting device code; connect prints a one-time link/QR for a supported app. These are not ways for a keyless agent or CLI to grant itself access. Human login must be enabled and is unavailable with multitenancy. The full app flow is in `docs/guides/pair-dsh-with-omni.md` in the Omni repository.
 
