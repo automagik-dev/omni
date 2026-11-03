@@ -476,6 +476,15 @@ _What must be verified on dev after merge. The QA agent tests each criterion._
 
 _The read-only reviewer returns evidence; the invoking orchestrator appends a timestamped block here after plan, execution, and PR reviews._
 
+### Follow-up 2 done — 2026-11-02
+
+The 21 suites with a local `urlFor` were migrated to `pgRoleUrl` in three PRs, each with an Opus SHIP and a green gate:
+- #1536 (0a8c6e79a): 21 to 14;
+- #1538 (7fcad1992): 14 to 7;
+- #1539 (465520ad0): 7 to 0.
+
+`LOCAL_URLFOR_ACKNOWLEDGED` is empty and `LOCAL_URLFOR_CEILING` is 0. The inventory test also asserts that its scanner sees the `TWO_TENANT_PROOFS` suites and more than 60 files, so the empty list cannot pass vacuously.
+
 ### Group 6 delivered and slice 2 close-out — 2026-11-02
 
 #1534 merged to dev as 749c362c (G6). Opus round-2 SHIP on exactly 2323bd61b. CI passed 13/13 (3 skipped). Every group has now merged:
@@ -498,7 +507,7 @@ _The read-only reviewer returns evidence; the invoking orchestrator appends a ti
 1. Slice 6 grant writer:
    - it MUST stamp the grant's tenant from its source (G6 N1 ruling); a NULL grant is not a wildcard;
    - keep the hashable coalesce predicate (G6 amendment).
-2. Migrate the 21 pre-existing `-postgres` suites that define a local `urlFor` to `pgRoleUrl`, and shrink `LOCAL_URLFOR_ACKNOWLEDGED` to 0.
+2. Migrate the 21 pre-existing `-postgres` suites that define a local `urlFor` to `pgRoleUrl`, and shrink `LOCAL_URLFOR_ACKNOWLEDGED` to 0. **Done:** #1536, #1538, #1539 (see "Follow-up 2 done").
 3. Accepted C12 residuals, documented in the guard header:
    - getter and `providerName` fields;
    - unresolvable `channel`-named parameters, for-of and catch bindings;
