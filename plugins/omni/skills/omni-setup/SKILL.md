@@ -20,11 +20,12 @@ omni status --json
 omni auth status --json
 ```
 
-In a terminal, keyless `server add` shows an approval code and link, waits for the owner to approve, then saves the device key in that server entry. To sign in to an existing entry, use `omni auth login --server <name>`; bare `omni auth login` targets the current server. `auth login` starts device sign-in only when no key flag, stdin key, or `OMNI_CLI_API_KEY` is supplied. If the server does not offer device sign-in, a new `server add` entry can be saved without a key; sign in with an existing credential instead.
+In an interactive terminal, keyless `server add` shows an approval code and link, waits for the owner to approve, then saves the device key in that server entry. The CLI caps the approval wait at 15 minutes. Keyless device sign-in requires an interactive terminal; without a TTY it exits 2 and saves nothing. To sign in to an existing entry, use `omni auth login --server <name>`; bare `omni auth login` targets the current server. `auth login` starts device sign-in only when no key flag, stdin key, or `OMNI_CLI_API_KEY` is supplied. If the server does not offer device sign-in (login disabled, or multitenancy enabled), interactive `server add` can save a new entry without a key; sign in with an existing credential instead.
 
-For scripts or an existing credential, sign in to the saved entry with protected input:
+For scripts or an existing credential, register the entry without verification, then sign in with protected input:
 
 ```bash
+omni server add <name> <url> --skip-verify
 omni auth login --server <name> --api-key-stdin < /secure/path/omni-api-key
 ```
 

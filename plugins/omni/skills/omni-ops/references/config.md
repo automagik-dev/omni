@@ -11,7 +11,7 @@ omni status --server <name> --json            # one-command target override
 omni server remove <name>                    # switch away first if active
 ```
 
-Keyless `server add` shows a device approval code and link, waits for owner approval, and saves the resulting key in that entry. If device sign-in is unavailable, it can save a new entry without a key; use an existing credential to sign in instead. Owner-approved device keys work with CLI validation without adding `auth:validate` or expanding permissions. `claim`, `approve`, and bare `connect` are privileged operator actions requiring an existing `auth:admin` key, not agent self-service (setup skill).
+In an interactive terminal, keyless `server add` shows a device approval code and link, waits for owner approval, and saves the resulting key in that entry. The CLI caps the approval wait at 15 minutes. If device sign-in is unavailable (login disabled, or multitenancy enabled), interactive `server add` can save a new entry without a key; use an existing credential to sign in instead. Owner-approved device keys work with CLI validation without adding `auth:validate` or expanding permissions. `claim`, `approve`, and bare `connect` are privileged operator actions requiring an existing `auth:admin` key, not agent self-service (setup skill).
 
 Remote registry entries are distinct from `server.*`, which configure the locally supervised runtime. Manage `servers.*` through `omni server`, not `omni config set`; `servers.active` is a read-only row in config list.
 
@@ -20,13 +20,14 @@ Remote registry entries are distinct from `server.*`, which configure the locall
 ```bash
 omni auth login                              # no key input/env fallback: device sign-in to current server
 omni auth login --server <name>              # same flow for a saved entry
-omni auth login --api-url http://localhost:8882 --json --api-key-stdin < /secure/path/omni-api-key
+omni server add <name> <url> --skip-verify     # scripts: save the entry without signing in
+omni auth login --server <name> --json --api-key-stdin < /secure/path/omni-api-key
 omni auth status --json
 omni auth recover --json             # recover API key via local PM2 access; add --rotate to rotate
 omni auth logout
 ```
 
-Use a terminal for owner-approved device sign-in. For scripts or an existing credential, prefer a protected-file redirect as above or a secret-manager pipe. `auth login` saves the approved or validated key in the targeted server entry; `auth logout` clears that entry's credentials. With an already securely supplied `OMNI_CLI_API_KEY`, `omni auth login --server <name>` needs no key flag. Explicit `--api-key-stdin` or legacy `--api-key` overrides the environment; those flags are mutually exclusive. Do not paste secrets into commands, shell history, or chat. Stdin must contain one non-empty key, at most 8 KB including its optional trailing LF/CRLF.
+Keyless device sign-in requires an interactive terminal; without a TTY it exits 2 and saves nothing. For scripts or an existing credential, register the entry with `omni server add <name> <url> --skip-verify` before signing in with a protected-file redirect as above or a secret-manager pipe. `auth login` saves the approved or validated key in the targeted server entry; `auth logout` clears that entry's credentials. With an already securely supplied `OMNI_CLI_API_KEY`, `omni auth login --server <name>` needs no key flag. Explicit `--api-key-stdin` or legacy `--api-key` overrides the environment; those flags are mutually exclusive. Do not paste secrets into commands, shell history, or chat. Stdin must contain one non-empty key, at most 8 KB including its optional trailing LF/CRLF.
 
 `OMNI_API_KEY` is the API server's primary key and is ignored by login. Only
 `OMNI_CLI_API_KEY` is used as the CLI environment fallback. Stdin is limited to
