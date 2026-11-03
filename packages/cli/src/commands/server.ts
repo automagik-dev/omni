@@ -33,6 +33,7 @@ import {
 import { type DeviceKey, deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import * as output from '../output.js';
 import { normalizeServerUrl } from '../signing.js';
+import { stripTerminalControls } from '../utils/terminal.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -135,10 +136,11 @@ async function verifyServer(url: string, apiKey: string | undefined): Promise<Ve
 
 /** Abort with a message that distinguishes "wrong URL" from "wrong key". */
 function exitVerificationFailed(name: string, url: string, failure: Extract<VerifyResult, { ok: false }>): never {
+  const detail = stripTerminalControls(failure.detail);
   const message =
     failure.kind === 'unreachable'
-      ? `Server '${name}' is unreachable at ${url}: ${failure.detail}`
-      : `Server '${name}' rejected the API key (unauthorized): ${failure.detail}`;
+      ? `Server '${name}' is unreachable at ${url}: ${detail}`
+      : `Server '${name}' rejected the API key (unauthorized): ${detail}`;
   return output.error(message, {
     hint: 'Fix the value, or pass --skip-verify to register the entry anyway.',
   });
@@ -181,6 +183,13 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
     output.error('Server name must not be empty');
   }
 
+  if (!options.apiKey && !options.skipVerify && !process.stdin.isTTY) {
+    output.error(
+      'Device sign-in requires an interactive terminal. Provide --api-key, or use --skip-verify to register without signing in.',
+      undefined,
+      2,
+    );
+  }
   const servers = loadServers();
   const normalized = normalizeServerUrl(url);
 
@@ -196,6 +205,13 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
   // No key and a verified server: sign in by device code instead of saving it keyless.
   const signedIn = !options.apiKey && !options.skipVerify ? await signInByDevice(normalized) : null;
   if (signedIn) entry.apiKey = signedIn.apiKey;
+  if (!entry.apiKey && !options.skipVerify && servers.list[name]?.apiKey) {
+    output.error(
+      `This server does not offer device sign-in. Existing entry '${name}' is unchanged; provide --api-key to replace it.`,
+      undefined,
+      2,
+    );
+  }
 
   const existed = servers.list[name] !== undefined;
   const next: ServersConfig = {
@@ -315,7 +331,7 @@ Target one entry for a single command with the global flag:
   server
     .command('add <name> <url>')
     .description('Register a server (verifies reachability and key; without a key, signs in by device code)')
-    .option('--api-key <key>', 'API key for this server (omit it to sign in by device code)')
+    .option('--api-key <key>', 'API key for this server (omit it for device sign-in in an interactive terminal)')
     .option('--skip-verify', 'Save the entry without probing the server first (and without signing in)')
     .option('--use', 'Also make this the active server')
     .action(handleAdd);

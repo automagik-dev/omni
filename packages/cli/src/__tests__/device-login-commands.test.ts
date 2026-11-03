@@ -24,8 +24,9 @@ interface FakeOmni {
   url: string;
   token: TokenMode;
   deviceCode: 'ok' | 'missing';
-  keyReply: 'ok' | 'malformed';
+  keyReply: 'ok' | 'malformed' | 'controls';
   polls: number;
+  requests: number;
   close(): void;
 }
 
@@ -59,9 +60,12 @@ function deviceKeyReply(omni: FakeOmni, request: Request): Response {
   return reply(200, {
     data: {
       apiKey: DEVICE_KEY,
-      keyId: 'device-key-id-1',
-      scopes: ['instances:*', 'system:read'],
-      keyExpiresAt: null,
+      keyId: omni.keyReply === 'controls' ? '\u009b31mdevice-key-id-1\u202e' : 'device-key-id-1',
+      scopes:
+        omni.keyReply === 'controls'
+          ? ['\u009b31minstances:*\u202e', '\u009b31msystem:read\u202e']
+          : ['instances:*', 'system:read'],
+      keyExpiresAt: omni.keyReply === 'controls' ? '\u009b31m2026-12-01T00:00:00Z\u202e' : null,
       apiUrl: omni.url,
       companions: [],
     },
@@ -95,6 +99,7 @@ function startFakeOmni(): FakeOmni {
     port: 0,
     hostname: '127.0.0.1',
     fetch(request) {
+      omni.requests += 1;
       const path = new URL(request.url).pathname;
       const route = routes[path];
       return route ? route(request) : reply(404, { error: { code: 'NOT_FOUND', message: `no ${path}` } });
@@ -106,6 +111,7 @@ function startFakeOmni(): FakeOmni {
     deviceCode: 'ok',
     keyReply: 'ok',
     polls: 0,
+    requests: 0,
     close: () => server.stop(true),
   };
   return omni;
@@ -130,8 +136,12 @@ function writeInitialConfig() {
   return config;
 }
 
-function spawnCli(args: string[]) {
-  return Bun.spawn(['bun', CLI_PATH, ...args], {
+function spawnCli(args: string[], interactive = true, fetchOverride = '') {
+  // Simulate only stdin's TTY bit for device-flow tests; keep output piped for JSON/secret assertions.
+  // Noninteractive regressions use the real ignored stdin, with no preload.
+  const preload = join(home, 'tty.cjs');
+  writeFileSync(preload, `Object.defineProperty(process.stdin, 'isTTY', { value: true });${fetchOverride}`);
+  return Bun.spawn(['bun', ...(interactive ? ['--preload', preload] : []), CLI_PATH, ...args], {
     env: {
       PATH: process.env.PATH,
       HOME: home,
@@ -140,13 +150,14 @@ function spawnCli(args: string[]) {
       OMNI_TELEMETRY: 'false',
       NO_COLOR: '1',
     },
+    stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
   });
 }
 
-async function cli(args: string[]) {
-  const child = spawnCli(args);
+async function cli(args: string[], interactive = true, fetchOverride = '') {
+  const child = spawnCli(args, interactive, fetchOverride);
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
@@ -165,7 +176,7 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'omni-device-login-'));
   rmSync(join(home, '.omni'), { recursive: true, force: true });
   mkdirSync(join(home, '.omni'), { recursive: true });
-  Object.assign(fake, { token: 'approve', deviceCode: 'ok', keyReply: 'ok', polls: 0 });
+  Object.assign(fake, { token: 'approve', deviceCode: 'ok', keyReply: 'ok', polls: 0, requests: 0 });
 });
 afterEach(() => rmSync(home, { recursive: true, force: true }));
 
@@ -289,4 +300,72 @@ describe('omni auth login --api-key with a device key', () => {
     expect(result.stdout + result.stderr).not.toContain(OTHER_SERVER_KEY);
     expect(readConfig()).toEqual(initial);
   });
+});
+
+describe('device login hardening (#1461)', () => {
+  test.each(['auth', 'server'])('%s without a key or TTY exits 2 before any server request', async (command) => {
+    const initial = writeInitialConfig();
+    fake.token = 'deny'; // Bound the RED run on the old CLI too.
+    const args = command === 'auth' ? ['auth', 'login', '--server', 'prod'] : ['server', 'add', 'lab', fake.url];
+    const result = await cli(args, false);
+    expect(result.exitCode).toBe(2);
+    expect(result.stdout + result.stderr).toContain('requires an interactive terminal');
+    expect(fake.requests).toBe(0);
+    expect(readConfig()).toEqual(initial);
+  });
+
+  test('the 404 fallback never overwrites a keyed entry, even when the URL changes', async () => {
+    const initial = writeInitialConfig();
+    fake.deviceCode = 'missing';
+    const result = await cli(['server', 'add', 'default', fake.url, '--use']);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain('unchanged');
+    expect(readConfig()).toEqual(initial);
+  });
+});
+
+describe('device login review hardening (#1461)', () => {
+  for (const [command, json] of [
+    ['auth', false],
+    ['auth', true],
+    ['server', false],
+    ['server', true],
+  ] as const) {
+    test(`${command} strips C1 and bidi controls from key metadata (${json ? '--json' : 'human'})`, async () => {
+      writeInitialConfig();
+      fake.keyReply = 'controls';
+      fake.polls = 1; // Approval is ready on the next poll; this case checks output, not pending polling.
+      const args = command === 'auth' ? ['auth', 'login', '--server', 'prod'] : ['server', 'add', 'lab', fake.url];
+      const result = await cli([...args, ...(json ? ['--json'] : [])]);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout + result.stderr).not.toMatch(/[\u009b\u202e]/);
+      const shown = JSON.parse(result.stdout.slice(result.stdout.indexOf('{')));
+      expect(shown).toMatchObject({
+        keyId: 'device-key-id-1',
+        scopes: ['instances:*', 'system:read'],
+      });
+      if (command === 'auth') expect(shown.keyExpiresAt).toBe('2026-12-01T00:00:00Z');
+      expect(readConfig().servers.list[command === 'auth' ? 'prod' : 'lab'].apiKey).toBe(DEVICE_KEY);
+    });
+  }
+
+  test.each(['health status', 'health error', 'auth error'])(
+    'server add strips controls from %s verification failures',
+    async (source) => {
+      const initial = writeInitialConfig();
+      const hostile = JSON.stringify('BAD\u009b31m VERIFICATION\u202e');
+      // A preload can supply a hostile statusText that an HTTP stack might refuse to encode.
+      const fetchOverride = `globalThis.fetch = async (input) => {
+      if (String(input).endsWith('/health')) {
+        ${source === 'health status' ? `return { ok: false, status: 503, statusText: ${hostile} };` : source === 'health error' ? `throw new Error(${hostile});` : "return Response.json({ status: 'healthy' });"}
+      }
+      return Response.json({ error: { code: 'UNAUTHORIZED', message: ${hostile} } }, { status: 401 });
+    };`;
+      const result = await cli(['server', 'add', 'lab', fake.url, '--api-key', DEVICE_KEY], true, fetchOverride);
+      expect(result.exitCode).not.toBe(0);
+      expect(result.stdout + result.stderr).not.toMatch(/[\u009b\u202e]/);
+      expect(result.stdout + result.stderr).toContain('BAD VERIFICATION');
+      expect(readConfig()).toEqual(initial);
+    },
+  );
 });
