@@ -78,7 +78,7 @@ describe('substituteTemplate', () => {
   test('handles env variables', () => {
     const context = createTemplateContext({}, { variables: {} });
     // Note: This will depend on actual env vars
-    expect(substituteTemplate('Path: {{env.PATH}}', context)).toContain(':');
+    expect(substituteTemplate('{{env.PATH}}', context)).toBe(process.env.PATH ?? '');
   });
 
   test('handles stored variables', () => {

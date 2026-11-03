@@ -306,6 +306,7 @@ describe('NatsGenieProvider.trigger() — env pass-through', () => {
     };
     await provider.trigger(trigger);
     expect(publishCalls.length).toBeGreaterThan(0);
+    expect(publishCalls[0]?.subject).toBe('omni.message.inst-1.5511999999999@s.whatsapp.net');
     const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
     expect(payload.env).toMatchObject({
       OMNI_INSTANCE: 'inst-1',
