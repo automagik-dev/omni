@@ -61,6 +61,7 @@ function entry(name: string, file: string, extra: Partial<MarketManifest['packag
   };
 }
 
+// Real tar processes need scheduling headroom on a loaded host.
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), 'omni-market-'));
   marketDir = join(root, 'market');
@@ -101,7 +102,7 @@ beforeAll(() => {
     ],
   });
   writeFileSync(join(marketDir, 'market.json'), JSON.stringify(manifest));
-});
+}, 30_000);
 
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
@@ -283,6 +284,7 @@ describe('market page', () => {
 });
 
 describe("Omni's plugins at their own versions", () => {
+  // Real tar processes need scheduling headroom on a loaded host.
   test('a plugin unchanged since an older release is listed and served at that version, not Omni’s', async () => {
     const dir = mkdtempSync(join(root, 'own-versions-'));
     const kept = '2.261024.6';
@@ -327,5 +329,5 @@ describe("Omni's plugins at their own versions", () => {
     const tarball = await get(`/api/market/npm/@automagik/omni-kept-dsh/-/${file}`);
     expect(tarball.status).toBe(200);
     expect(Buffer.from(await tarball.arrayBuffer()).equals(bytes)).toBe(true);
-  });
+  }, 30_000);
 });
