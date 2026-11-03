@@ -1,7 +1,8 @@
 /**
  * Tenancy for the agent-host scope set (#1461): under FORCE RLS and a tenant context, a
- * credential holding exactly the agent host's scopes sees only its own tenant's events and
- * consumers.
+ * credential holding exactly the agent host's scopes sees only its own tenant's events, and of
+ * the consumers only those it created in its own tenant: another tenant's consumer is a 404
+ * even when it carries the same owner key id.
  *
  * Why not a key from the device flow or ApiKeyService: login is off under multitenancy
  * (login/config.ts loginWanted), so no device key can exist there today; and an api_keys
@@ -52,6 +53,10 @@ pgDescribe('the agent-host scope set under FORCE RLS and a tenant context', () =
     eventId: randomUUID(),
   })) as [Fixture, Fixture];
   type Fixture = { tenantId: string; instanceId: string; consumer: string; eventId: string };
+  /** One key id for every request: the owner the consumer rules compare against. */
+  const hostKeyId = randomUUID();
+  /** In the other tenant, owned by the same key id: tenancy alone must hide it. */
+  const theirsOwned = `agent-host-owned-${randomUUID().slice(0, 8)}`;
   const closers: (() => Promise<void>)[] = [];
   const previous = process.env.OMNI_MULTITENANCY_ENABLED;
   let runtime: Database;
@@ -88,6 +93,15 @@ pgDescribe('the agent-host scope set under FORCE RLS and a tenant context', () =
         scoped: false,
         cursor: 0,
       });
+      if (f === theirs) {
+        await owner.insert(durableConsumers).values({
+          name: theirsOwned,
+          tenantId: f.tenantId,
+          eventType: 'custom.agent-host.*',
+          ownerKeyId: hostKeyId,
+          cursor: 0,
+        });
+      }
       // The event's tenant is derived from its instance by the ownership trigger.
       await owner.insert(omniEvents).values({
         id: f.eventId,
@@ -108,7 +122,7 @@ pgDescribe('the agent-host scope set under FORCE RLS and a tenant context', () =
     app.use('*', async (c, next) => {
       c.set('authContext', buildWorkerTenantContext(mine.tenantId));
       c.set('apiKey', {
-        id: randomUUID(),
+        id: hostKeyId,
         name: 'device: agent host',
         scopes: AGENT_HOST_SCOPES,
         instanceIds: null,
@@ -144,7 +158,7 @@ pgDescribe('the agent-host scope set under FORCE RLS and a tenant context', () =
   const get = (path: string) => app.request(`/api/v2${path}`);
 
   test('the credential holds exactly the agent-host set, and no device key can be minted here', () => {
-    expect(AGENT_HOST_SCOPES).toEqual(['events:read']);
+    expect(AGENT_HOST_SCOPES).toEqual(['events:read', 'events:consume']);
     expect(readLoginConfig({ ...process.env, OMNI_AUTH_SECRET: 'x'.repeat(40) })).toBeNull();
   });
 
@@ -182,24 +196,68 @@ pgDescribe('the agent-host scope set under FORCE RLS and a tenant context', () =
     expect((await get(`/events/${theirs.eventId}/trace`)).status).toBe(404);
   });
 
-  test("lists and inspects its own tenant's consumers, never the other tenant's", async () => {
+  const send = (method: string, path: string, body?: unknown) =>
+    app.request(`/api/v2${path}`, {
+      method,
+      ...(body === undefined ? {} : { headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }),
+    });
+  const row = async (name: string) =>
+    (await owner.select().from(durableConsumers).where(eq(durableConsumers.name, name)))[0];
+
+  test("sees no consumer it did not create: its own tenant's unowned one, and the other tenant's", async () => {
     const list = await get('/events/consumers');
     expect(list.status).toBe(200);
     const listed = await list.text();
-    expect(listed).toContain(mine.consumer);
-    expect(listed).not.toContain(theirs.consumer);
-    expect((await get(`/events/consumers/${mine.consumer}`)).status).toBe(200);
-    expect((await get(`/events/consumers/${theirs.consumer}`)).status).toBe(404);
+    for (const name of [mine.consumer, theirs.consumer, theirsOwned]) expect(listed).not.toContain(name);
+    const before = await Promise.all([mine.consumer, theirs.consumer, theirsOwned].map(row));
+    for (const name of [mine.consumer, theirs.consumer, theirsOwned]) {
+      for (const [method, suffix, body] of [
+        ['GET', '', undefined],
+        ['POST', '/pull', undefined],
+        ['POST', '/ack', { cursor: 0 }],
+        ['GET', '/stream', undefined],
+        ['DELETE', '', undefined],
+      ] as const) {
+        const status = (await send(method, `/events/consumers/${name}${suffix}`, body)).status;
+        expect({ name, method, suffix, status }).toEqual({ name, method, suffix, status: 404 });
+      }
+    }
+    expect(await Promise.all([mine.consumer, theirs.consumer, theirsOwned].map(row))).toEqual(before);
   });
 
-  test('still cannot pull or ack, even its own tenant consumer', async () => {
-    for (const suffix of ['/pull', '/ack']) {
-      const response = await app.request(`/api/v2/events/consumers/${mine.consumer}${suffix}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ cursor: 0 }),
-      });
-      expect(response.status).toBe(403);
+  test("runs its own consumer in its own tenant, paging only its tenant's events", async () => {
+    const own = `agent-host-tenant-own-${randomUUID().slice(0, 8)}`;
+    const created = await send('POST', '/events/consumers', {
+      name: own,
+      eventType: 'custom.agent-host.*',
+      startFrom: 'beginning',
+    });
+    expect(created.status).toBe(201);
+    expect(await row(own)).toMatchObject({ tenantId: mine.tenantId, ownerKeyId: hostKeyId, scoped: false });
+    expect(await (await get('/events/consumers')).text()).toContain(own);
+    expect((await get(`/events/consumers/${own}`)).status).toBe(200);
+
+    const pulled = await send('POST', `/events/consumers/${own}/pull`);
+    expect(pulled.status).toBe(200);
+    const page = (await pulled.json()) as { items: { id: string }[]; cursor: number };
+    expect(page.items.map((item) => item.id)).toEqual([mine.eventId]);
+    expect((await send('POST', `/events/consumers/${own}/ack`, { cursor: page.cursor })).status).toBe(200);
+
+    const stream = await get(`/events/consumers/${own}/stream?after=0`);
+    expect(stream.status).toBe(200);
+    const reader = stream.body?.getReader();
+    if (!reader) throw new Error('no body');
+    let text = '';
+    while (!text.includes(mine.eventId)) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
     }
+    await reader.cancel();
+    expect(text).toContain(mine.eventId);
+    expect(text).not.toContain(theirs.eventId);
+
+    expect((await send('DELETE', `/events/consumers/${own}`)).status).toBe(200);
+    expect(await row(own)).toBeUndefined();
   });
 });

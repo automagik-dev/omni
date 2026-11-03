@@ -16,9 +16,13 @@ export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthes
  * Broader scopes that also grant a narrower one. `system:update` asks the owner to confirm
  * an update on WhatsApp, or starts it on a loopback-only Omni set up for the app's yes
  * (system/update.ts; device keys carry it); `system:admin` covers it too.
+ * `events:consume` runs durable consumers (create, pull, ack, stream, delete; #1461): a key
+ * holding only it touches the consumers it created (services/event-consumers.ts); one holding
+ * `events:write` keeps the wider consumer access it always had.
  */
 export const SCOPE_IMPLIED_BY: Readonly<Record<string, readonly string[]>> = {
   'system:update': ['system:admin'],
+  'events:consume': ['events:write'],
 };
 
 /**
@@ -198,11 +202,12 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /events/schemas': 'events:write',
   'POST /events/schemas/:eventType/validate': 'events:read', // dry run, read-only (#1076)
   'GET /events/consumers/:name': 'events:read',
-  'POST /events/consumers': 'events:write',
-  'DELETE /events/consumers/:name': 'events:write',
-  'POST /events/consumers/:name/pull': 'events:write',
-  'POST /events/consumers/:name/ack': 'events:write',
-  'GET /events/consumers/:name/stream': 'events:write', // same as pull (leases/cursors are consumer state)
+  // events:consume, which events:write implies (SCOPE_IMPLIED_BY): leases and cursors are consumer state
+  'POST /events/consumers': 'events:consume',
+  'DELETE /events/consumers/:name': 'events:consume',
+  'POST /events/consumers/:name/pull': 'events:consume',
+  'POST /events/consumers/:name/ack': 'events:consume',
+  'GET /events/consumers/:name/stream': 'events:consume', // same as pull
 
   // --- events ---
   'GET /events': 'events:read',

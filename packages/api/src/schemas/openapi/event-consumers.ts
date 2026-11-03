@@ -72,7 +72,11 @@ export const DurableConsumerSchema = z.object({
     .string()
     .uuid()
     .nullable()
-    .openapi({ description: 'Scoped consumers: id of the API key that registered it; null when unscoped' }),
+    .openapi({
+      description:
+        'Id of the API key that owns it: set for scoped consumers and for every consumer created by a key with ' +
+        'events:consume but not events:write; null otherwise',
+    }),
   head: z.number().int().openapi({ description: 'Highest journal_seq currently in the journal' }),
   lag: z.number().int().openapi({ description: 'head - cursor (all journal rows past the cursor, not only matches)' }),
   caughtUp: z
@@ -277,7 +281,9 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
       'contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. ' +
       "startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). " +
       'scoped: true binds the consumer to the calling key and an instance set (see instanceIds). ' +
-      'Instance-restricted keys always create scoped consumers, including when scoped is false or omitted.',
+      'Instance-restricted keys always create scoped consumers, including when scoped is false or omitted. ' +
+      'Requires events:consume (events:write implies it). A key with events:consume but not events:write owns ' +
+      'what it creates, sees and runs only its own consumers (any other is 404), and owns at most 10.',
     request: { body: { content: { 'application/json': { schema: CreateConsumerSchema } } } },
     responses: {
       201: {
@@ -293,7 +299,9 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
         content: { 'application/json': { schema: ErrorSchema } },
       },
       409: {
-        description: 'A consumer with this name already exists',
+        description:
+          'A consumer with this name already exists (CONFLICT), or a key with events:consume but not ' +
+          'events:write already owns 10 consumers (CONSUMER_LIMIT_REACHED)',
         content: { 'application/json': { schema: ErrorSchema } },
       },
     },
@@ -388,7 +396,7 @@ export function registerEventConsumerSchemas(registry: OpenAPIRegistry): void {
       '`connected` event; a `: heartbeat` comment is sent every EVENT_STREAM_HEARTBEAT_MS (default 15000). ' +
       'READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with ' +
       'POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A ' +
-      'consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and ' +
+      'consumer deleted mid-stream ends the stream with an `error` event. Requires events:consume (as pull) and ' +
       'a scoped consumer the key may not see is 404, a restricted owner ' +
       'streams only its narrowed instances, and an instance-restricted API key only receives rows of its own ' +
       'instances. A restricted key cannot stream an unscoped consumer (403); create a scoped consumer instead. ' +

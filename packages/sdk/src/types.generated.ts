@@ -3991,7 +3991,7 @@ export interface paths {
         put?: never;
         /**
          * Register a durable event consumer
-         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). scoped: true binds the consumer to the calling key and an instance set (see instanceIds). Instance-restricted keys always create scoped consumers, including when scoped is false or omitted.
+         * @description Registers a named consumer over the event journal: a type filter (trailing-* prefix glob, the events-wait contract) plus optional payload conditions (the automation-trigger matcher), and a stored cursor. startFrom 'now' (default) begins at the journal head; 'beginning' replays the full journal (projections). scoped: true binds the consumer to the calling key and an instance set (see instanceIds). Instance-restricted keys always create scoped consumers, including when scoped is false or omitted. Requires events:consume (events:write implies it). A key with events:consume but not events:write owns what it creates, sees and runs only its own consumers (any other is 404), and owns at most 10.
          */
         post: operations["createEventConsumer"];
         delete?: never;
@@ -4053,7 +4053,7 @@ export interface paths {
         };
         /**
          * Stream journal events for a consumer (SSE)
-         * @description Opt-in Server-Sent Events push over the same journal scan as pull (type glob, excludeTypes, payload conditions, journal_seq order), always behind the journal readiness gate: a claimed-but-unfilled row is held until it is filled or older than EVENT_CONSUMER_SETTLE_MS. Starts strictly after Last-Event-ID, else ?after, else the stored cursor; catches up, then follows live. Each matching row is one event (`id: <journal_seq>`, `event: <eventType>`, `data: <the row as pull returns it>`), after an initial `connected` event; a `: heartbeat` comment is sent every EVENT_STREAM_HEARTBEAT_MS (default 15000). READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A consumer deleted mid-stream ends the stream with an `error` event. Requires events:write (as pull) and a scoped consumer the key may not see is 404, a restricted owner streams only its narrowed instances, and an instance-restricted API key only receives rows of its own instances. A restricted key cannot stream an unscoped consumer (403); create a scoped consumer instead. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a `reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect with Last-Event-ID to resume and re-authenticate. Past EVENT_STREAM_MAX_PER_PROCESS open streams, or EVENT_STREAM_MAX_PER_KEY for the calling key, a new one is refused with 429.
+         * @description Opt-in Server-Sent Events push over the same journal scan as pull (type glob, excludeTypes, payload conditions, journal_seq order), always behind the journal readiness gate: a claimed-but-unfilled row is held until it is filled or older than EVENT_CONSUMER_SETTLE_MS. Starts strictly after Last-Event-ID, else ?after, else the stored cursor; catches up, then follows live. Each matching row is one event (`id: <journal_seq>`, `event: <eventType>`, `data: <the row as pull returns it>`), after an initial `connected` event; a `: heartbeat` comment is sent every EVENT_STREAM_HEARTBEAT_MS (default 15000). READ-ONLY: the stream never moves the stored cursor and never takes a lease — keep acking with POST /events/consumers/{name}/ack. Fan-out consumers only: a shared consumer is refused with 400. A consumer deleted mid-stream ends the stream with an `error` event. Requires events:consume (as pull) and a scoped consumer the key may not see is 404, a restricted owner streams only its narrowed instances, and an instance-restricted API key only receives rows of its own instances. A restricted key cannot stream an unscoped consumer (403); create a scoped consumer instead. An access-filtered consumer holds an unfilled row until its verdict lands. A stream lives at most EVENT_STREAM_MAX_LIFETIME_MS (default and maximum 30000, the revocation ceiling), then ends with a `reconnect` event carrying `retry:` and `id:` (the scanned position, past filtered-out rows) — reconnect with Last-Event-ID to resume and re-authenticate. Past EVENT_STREAM_MAX_PER_PROCESS open streams, or EVENT_STREAM_MAX_PER_KEY for the calling key, a new one is refused with 429.
          */
         get: operations["streamEventConsumer"];
         put?: never;
@@ -8960,7 +8960,7 @@ export interface components {
             instanceIds: string[] | null;
             /**
              * Format: uuid
-             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+             * @description Id of the API key that owns it: set for scoped consumers and for every consumer created by a key with events:consume but not events:write; null otherwise
              */
             ownerKeyId: string | null;
             /** @description Highest journal_seq currently in the journal */
@@ -24305,7 +24305,7 @@ export interface operations {
                             instanceIds: string[] | null;
                             /**
                              * Format: uuid
-                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             * @description Id of the API key that owns it: set for scoped consumers and for every consumer created by a key with events:consume but not events:write; null otherwise
                              */
                             ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
@@ -24444,7 +24444,7 @@ export interface operations {
                             instanceIds: string[] | null;
                             /**
                              * Format: uuid
-                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             * @description Id of the API key that owns it: set for scoped consumers and for every consumer created by a key with events:consume but not events:write; null otherwise
                              */
                             ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
@@ -24509,7 +24509,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description A consumer with this name already exists */
+            /** @description A consumer with this name already exists (CONFLICT), or a key with events:consume but not events:write already owns 10 consumers (CONSUMER_LIMIT_REACHED) */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -24601,7 +24601,7 @@ export interface operations {
                             instanceIds: string[] | null;
                             /**
                              * Format: uuid
-                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             * @description Id of the API key that owns it: set for scoped consumers and for every consumer created by a key with events:consume but not events:write; null otherwise
                              */
                             ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */
@@ -24989,7 +24989,7 @@ export interface operations {
                             instanceIds: string[] | null;
                             /**
                              * Format: uuid
-                             * @description Scoped consumers: id of the API key that registered it; null when unscoped
+                             * @description Id of the API key that owns it: set for scoped consumers and for every consumer created by a key with events:consume but not events:write; null otherwise
                              */
                             ownerKeyId: string | null;
                             /** @description Highest journal_seq currently in the journal */

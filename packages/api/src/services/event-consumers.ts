@@ -46,6 +46,9 @@
  * only; grant branches are enabled by the paired-agent consumers flag.
  * Tenant credentials additionally require a matching tenant stamp, even without
  * database enforcement; unstamped pre-0091 registrations are hidden from them.
+ * A key with events:consume but not events:write (`ownOnly`, #1461) owns what it creates
+ * (owner_key_id, also unscoped), reaches only those consumers (any other is a 404) and owns
+ * at most MAX_CONSUMERS_PER_OWN_ONLY_KEY of them.
  */
 
 import { randomUUID } from 'node:crypto';
@@ -61,7 +64,7 @@ import type {
   SharedLeaseState,
 } from '@omni/db';
 import { agentSourceGrants, durableConsumers, instances, omniEvents } from '@omni/db';
-import { type SQL, and, asc, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
+import { type SQL, and, asc, count, eq, gt, inArray, isNotNull, isNull, lte, or, sql } from 'drizzle-orm';
 import { unionAll } from 'drizzle-orm/pg-core';
 import { z } from 'zod';
 import type { KeyAgentResolution } from '../lib/key-agent';
@@ -69,6 +72,42 @@ import { pairedAgentFlagState } from '../tenancy/feature-flag';
 import { runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
 import { eventTypeFilterClause } from './events';
+
+type NewDurableConsumer = typeof durableConsumers.$inferInsert;
+
+/** The row a create inserts. The scope columns are written only when scoped or owned. */
+function consumerInsertValues(
+  input: CreateConsumerInput,
+  row: { tenantId: string | null; agentId: string | null; cursor: number; scope: ConsumerScope },
+): NewDurableConsumer {
+  return {
+    name: input.name,
+    tenantId: row.tenantId,
+    agentId: row.agentId,
+    eventType: input.eventType,
+    excludeTypes: input.excludeTypes?.length ? input.excludeTypes : null,
+    filters: input.filters ?? null,
+    cursor: row.cursor,
+    shared: input.shared ?? false,
+    waitForReady: input.waitForReady ?? false,
+    leaseState: input.shared ? { claimed: row.cursor, leases: [] } : null,
+    ...(row.scope.scoped || row.scope.ownerKeyId ? row.scope : {}),
+    accessFilter: input.access ?? 'all',
+  };
+}
+
+/** Insert one consumer; undefined when its name is taken (the caller answers 409). */
+async function insertConsumer(
+  db: Pick<Database, 'insert'>,
+  values: NewDurableConsumer,
+): Promise<DurableConsumer | undefined> {
+  const [created] = await db
+    .insert(durableConsumers)
+    .values(values)
+    .onConflictDoNothing({ target: durableConsumers.name })
+    .returning();
+  return created;
+}
 
 /** Source namespaces are distinct: a parent connector never authorizes its legacy subscriptions. */
 // Do not simplify the NULL-safe equality below to IS NOT DISTINCT FROM: that
@@ -151,11 +190,23 @@ export interface ConsumerCaller {
   keyId: string | null;
   /** The key's instance restriction; null = every instance (ApiKeyService.instanceAllowed's rule). */
   instanceIds: string[] | null;
+  /**
+   * The key holds `events:consume` without `events:write` (#1461): it sees, runs and deletes
+   * only the consumers it created (owner_key_id = keyId); any other consumer is a 404, and it
+   * may own at most MAX_CONSUMERS_PER_OWN_ONLY_KEY. Unset for every other caller.
+   */
+  ownOnly?: boolean;
 }
 
-/** The ownership columns a create writes: all null/false unless the consumer is scoped. */
+/** How many consumers one `ownOnly` key may own (#1461). Callers with events:write are not capped. */
+export const MAX_CONSUMERS_PER_OWN_ONLY_KEY = 10;
+
+/**
+ * The ownership columns a create writes: all null/false unless the consumer is scoped, or
+ * created by an `ownOnly` key (unscoped, but owned by that key).
+ */
 export type ConsumerScope =
-  | { scoped: false; instanceIds: null; ownerKeyId: null }
+  | { scoped: false; instanceIds: null; ownerKeyId: string | null }
   | { scoped: true; instanceIds: string[]; ownerKeyId: string };
 
 /** A consumer row plus its live lag (journal head minus cursor). */
@@ -350,7 +401,16 @@ export function resolveConsumerScope(
   caller?: ConsumerCaller,
 ): ConsumerScope {
   if (!input.scoped && (!caller || caller.instanceIds === null)) {
-    return { scoped: false, instanceIds: null, ownerKeyId: null };
+    if (!caller?.ownOnly) return { scoped: false, instanceIds: null, ownerKeyId: null };
+    // An ownOnly key owns what it creates, also unscoped: scoping would page only instance
+    // rows, and a host follows instance-less events too.
+    const ownerKeyId = ownerKeyOf(caller);
+    if (!ownerKeyId) {
+      throw new ValidationError('this API key can only create consumers it owns, and it has no owner id', {
+        keyId: ['no calling API key'],
+      });
+    }
+    return { scoped: false, instanceIds: null, ownerKeyId };
   }
 
   const parsedIds = ScopedInstanceIdsSchema.safeParse(input.instanceIds);
@@ -409,6 +469,7 @@ export function canAccessConsumer(
   caller?: ConsumerCaller,
 ): boolean {
   if (caller?.tenantId && consumer.tenantId !== caller.tenantId) return false;
+  if (caller?.ownOnly && !ownsConsumer(consumer, caller)) return false;
   if (consumer.agentId) {
     if (!caller) return true;
     if (caller.principal?.kind === 'unresolved') return false;
@@ -420,8 +481,24 @@ export function canAccessConsumer(
   return consumer.ownerKeyId !== null && consumer.ownerKeyId === caller.keyId;
 }
 
-/** Mutations by restricted keys require a scoped consumer they own, also in SQL. */
+/** An `ownOnly` key's consumers: those whose owner_key_id is the key's own (uuid) id. */
+function ownsConsumer(consumer: Pick<DurableConsumer, 'ownerKeyId'>, caller: ConsumerCaller): boolean {
+  const keyId = ownerKeyOf(caller);
+  return keyId !== null && consumer.ownerKeyId === keyId;
+}
+
+/**
+ * Mutations by restricted keys require a scoped consumer they own, also in SQL. An `ownOnly`
+ * key additionally requires owner_key_id = its key; every other caller gets the unchanged clause.
+ */
 export function consumerAccessClause(caller?: ConsumerCaller): SQL | undefined {
+  const clause = keyConsumerAccessClause(caller);
+  if (!caller?.ownOnly) return clause;
+  const keyId = ownerKeyOf(caller);
+  return and(clause, keyId ? eq(durableConsumers.ownerKeyId, keyId) : sql`false`);
+}
+
+function keyConsumerAccessClause(caller?: ConsumerCaller): SQL | undefined {
   const tenant = caller?.tenantId ? eq(durableConsumers.tenantId, caller.tenantId) : undefined;
   if (!caller || (caller.admin && caller.instanceIds === null && caller.principal?.kind !== 'unresolved'))
     return tenant;
@@ -682,24 +759,11 @@ export class EventConsumerService {
     const head = await this.head(tenantId);
     const cursor = resolveInitialCursor(input.startFrom ?? 'now', head);
 
-    const [created] = await this.db
-      .insert(durableConsumers)
-      .values({
-        name: input.name,
-        tenantId,
-        agentId,
-        eventType: input.eventType,
-        excludeTypes: input.excludeTypes?.length ? input.excludeTypes : null,
-        filters: input.filters ?? null,
-        cursor,
-        shared: input.shared ?? false,
-        waitForReady: input.waitForReady ?? false,
-        leaseState: input.shared ? { claimed: cursor, leases: [] } : null,
-        ...(scope.scoped ? scope : {}),
-        accessFilter: input.access ?? 'all',
-      })
-      .onConflictDoNothing({ target: durableConsumers.name })
-      .returning();
+    const values = consumerInsertValues(input, { tenantId, agentId, cursor, scope });
+    const created =
+      caller?.ownOnly && scope.ownerKeyId
+        ? await this.insertWithinOwnerCap(values, scope.ownerKeyId, tenantId)
+        : await insertConsumer(this.db, values);
     if (!created) {
       throw new ConflictError('DurableConsumer', `a consumer named '${input.name}' already exists`, {
         name: input.name,
@@ -719,10 +783,44 @@ export class EventConsumerService {
         cursor: created.cursor,
         shared: created.shared,
         ...(created.scoped ? { scoped: true, instanceIds: created.instanceIds, ownerKeyId: created.ownerKeyId } : {}),
+        ...(!created.scoped && created.ownerKeyId ? { ownerKeyId: created.ownerKeyId } : {}),
       });
     }
 
     return this.withLag(created, head, caller);
+  }
+
+  /**
+   * An `ownOnly` key's create, under MAX_CONSUMERS_PER_OWN_ONLY_KEY. The count and the insert
+   * run in one transaction behind an advisory lock keyed on the owner, so concurrent creates
+   * by one key queue rather than overshoot the cap.
+   */
+  private async insertWithinOwnerCap(
+    values: NewDurableConsumer,
+    ownerKeyId: string,
+    tenantId: string | null,
+  ): Promise<DurableConsumer | undefined> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`omni:consumer-owner:${ownerKeyId}`}))`);
+      const [row] = await tx
+        .select({ owned: count() })
+        .from(durableConsumers)
+        .where(
+          and(
+            eq(durableConsumers.ownerKeyId, ownerKeyId),
+            tenantId ? eq(durableConsumers.tenantId, tenantId) : undefined,
+          ),
+        );
+      if ((row?.owned ?? 0) >= MAX_CONSUMERS_PER_OWN_ONLY_KEY) {
+        throw new OmniError({
+          code: ERROR_CODES.CONSUMER_LIMIT_REACHED,
+          message: `This API key already owns ${MAX_CONSUMERS_PER_OWN_ONLY_KEY} consumers, the most it may own. Delete one to create another.`,
+          context: { limit: MAX_CONSUMERS_PER_OWN_ONLY_KEY },
+          recoverable: true,
+        });
+      }
+      return insertConsumer(tx, values);
+    });
   }
 
   async delete(name: string, caller?: ConsumerCaller): Promise<void> {

@@ -96,6 +96,8 @@ const TIER_BY_VERB: Readonly<Record<string, ScopeTier>> = Object.freeze({
    * operator set OMNI_UPDATE_CONFIRM=app, starts it (system/update.ts).
    */
   update: 'write',
+  /** `events:consume` — creates, pulls, acks and deletes durable consumers: cursor and lease state. */
+  consume: 'write',
   admin: 'admin',
   /**
    * `chats:keys` — mints and revokes a legacy key's own chat keys. Key

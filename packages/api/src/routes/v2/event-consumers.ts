@@ -15,6 +15,7 @@
  * Every handler passes the caller's key (id + instance restriction, read
  * the same way as the /events routes) to the service. Restricted keys need a
  * scoped consumer to pull, stream, ack or delete; scoped streams apply their instance filter.
+ * A key with events:consume but not events:write reaches only the consumers it created.
  * Tenant ownership always applies.
  */
 
@@ -30,6 +31,7 @@ import {
   StreamConsumerHeaderSchema,
   StreamConsumerQuerySchema,
 } from '../../schemas/openapi/event-consumers';
+import { ApiKeyService } from '../../services/api-keys';
 import {
   DEFAULT_STREAM_HEARTBEAT_MS,
   DEFAULT_STREAM_POLL_FALLBACK_MS,
@@ -52,15 +54,23 @@ const log = createLogger('event-consumer-stream');
 
 const eventConsumersRoutes = new Hono<{ Variables: AppVariables }>();
 
-/** The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule). */
+/**
+ * The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule).
+ * A key with events:consume but not events:write is `ownOnly`: it reaches only its own consumers.
+ */
 async function consumerCaller(c: Context<{ Variables: AppVariables }>): Promise<ConsumerCaller> {
   const apiKey = c.get('apiKey');
   const principal = apiKey ? await resolveKeyAgent(c.get('services').db, apiKey.id) : undefined;
+  const ownOnly =
+    !!apiKey &&
+    ApiKeyService.scopeAllows(apiKey.scopes, 'events:consume') &&
+    !ApiKeyService.scopeAllows(apiKey.scopes, 'events:write');
   return {
     keyId: apiKey?.id ?? null,
     instanceIds: apiKey?.instanceIds ?? null,
     tenantId: c.get('authContext')?.tenantId ?? null,
     ...(principal ? { principal, admin: principal.kind !== 'unresolved' && !!apiKey && isAdminTierKey(apiKey) } : {}),
+    ...(ownOnly ? { ownOnly } : {}),
   };
 }
 
@@ -145,7 +155,7 @@ eventConsumersRoutes.post('/events/consumers/:name/ack', zValidator('json', AckC
  * Read-only w.r.t. the consumer: the position lives in memory, the stored
  * cursor is never written and no lease is taken (shared consumers are
  * refused). Clients keep acking with POST /events/consumers/:name/ack.
- * events:write like pull; an instance-restricted key needs a scoped consumer
+ * events:consume like pull; an instance-restricted key needs a scoped consumer
  * and only streams its own instances' rows. Each stream lives at most
  * EVENT_STREAM_MAX_LIFETIME_MS (the revocation ceiling), then asks the client
  * to reconnect, which re-authenticates.

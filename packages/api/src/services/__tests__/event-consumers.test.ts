@@ -22,6 +22,7 @@ import {
   canAccessConsumer,
   claimLease,
   computeLag,
+  consumerAccessClause,
   matchesConsumerAccess,
   matchesConsumerPayload,
   narrowToCaller,
@@ -768,5 +769,67 @@ describe('pull: access filter + waitForReady over a claimed-but-unfilled row', (
     const page = await new EventConsumerService(pool.db).pull('c1');
     expect(seqs(page.items)).toEqual([2]);
     expect(page.cursor).toBe(2);
+  });
+});
+
+describe('ownOnly keys: events:consume without events:write (#1461)', () => {
+  const HOST = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const OTHER = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const TENANT = '11111111-1111-4111-8111-111111111111';
+  const host: ConsumerCaller = { keyId: HOST, instanceIds: null, ownOnly: true };
+  const sqlOf = (clause: SQL | undefined) => (clause ? new PgDialect().sqlToQuery(clause) : undefined);
+
+  test('a create is stamped with the key as owner, unscoped', () => {
+    expect(resolveConsumerScope({}, host)).toEqual({ scoped: false, instanceIds: null, ownerKeyId: HOST });
+    expect(resolveConsumerScope({ scoped: false }, host)).toEqual({
+      scoped: false,
+      instanceIds: null,
+      ownerKeyId: HOST,
+    });
+    // Without a uuid key there is no owner to stamp: refused, never an unowned consumer.
+    expect(() => resolveConsumerScope({}, { keyId: null, instanceIds: null, ownOnly: true })).toThrow(ValidationError);
+    expect(() => resolveConsumerScope({}, { keyId: 'not-a-uuid', instanceIds: null, ownOnly: true })).toThrow(
+      ValidationError,
+    );
+  });
+
+  test('it sees only consumers it owns: unowned, foreign, scoped or agent-owned ones are hidden', () => {
+    expect(canAccessConsumer(consumerRow({ ownerKeyId: HOST }), host)).toBe(true);
+    expect(canAccessConsumer(consumerRow({ ownerKeyId: HOST, scoped: true, instanceIds: [] }), host)).toBe(true);
+    for (const row of [
+      consumerRow({ ownerKeyId: null }),
+      consumerRow({ ownerKeyId: OTHER }),
+      consumerRow({ ownerKeyId: OTHER, scoped: true, instanceIds: [] }),
+      consumerRow({ ownerKeyId: null, agentId: OTHER }),
+    ]) {
+      expect(canAccessConsumer(row, host)).toBe(false);
+    }
+    // Tenancy still applies first: its own key id in another tenant is hidden.
+    expect(canAccessConsumer(consumerRow({ ownerKeyId: HOST, tenantId: null }), { ...host, tenantId: TENANT })).toBe(
+      false,
+    );
+  });
+
+  test('every other caller keeps its access to the same rows', () => {
+    const unowned = consumerRow({ ownerKeyId: null });
+    const hostOwned = consumerRow({ ownerKeyId: HOST });
+    for (const caller of [
+      { keyId: OTHER, instanceIds: null },
+      { keyId: OTHER, instanceIds: null, ownOnly: false },
+    ]) {
+      expect(canAccessConsumer(unowned, caller)).toBe(true);
+      expect(canAccessConsumer(hostOwned, caller)).toBe(true);
+    }
+  });
+
+  test('in SQL, it adds owner_key_id = key to the unchanged clause; without the flag nothing changes', () => {
+    const base: ConsumerCaller = { keyId: HOST, instanceIds: null };
+    expect(sqlOf(consumerAccessClause({ ...base, ownOnly: false }))).toEqual(sqlOf(consumerAccessClause(base)));
+    const owned = sqlOf(consumerAccessClause(host));
+    expect(owned?.sql).toContain('"owner_key_id" = $');
+    expect(owned?.params).toContain(HOST);
+    expect(sqlOf(consumerAccessClause(base))?.sql ?? '').not.toContain('owner_key_id');
+    // A keyless ownOnly caller can reach nothing.
+    expect(sqlOf(consumerAccessClause({ keyId: null, instanceIds: null, ownOnly: true }))?.sql).toContain('false');
   });
 });

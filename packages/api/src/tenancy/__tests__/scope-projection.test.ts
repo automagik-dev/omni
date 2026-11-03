@@ -79,6 +79,13 @@ describe('tiers expand to what the role ceiling means', () => {
     expect(write).toContain('instances:write');
   });
 
+  test('events:consume is write-tier: tenant:write projects it, tenant:read does not (#1461)', () => {
+    expect(classifyLegacyScope('events:consume')).toBe('write');
+    expect(projectTenantScopes(['tenant:write'])).toContain('events:consume');
+    expect(projectTenantScopes(['tenant:write'])).toContain('events:write');
+    expect(projectTenantScopes(['tenant:read'])).not.toContain('events:consume');
+  });
+
   test('tenant:write still cannot administer turns', () => {
     // `turns:admin` is the one verb the operator ceiling must not reach:
     // `tenant-operator`'s policy tops out at `tenant:write`.
