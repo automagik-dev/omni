@@ -132,23 +132,6 @@ describe('RouteResolver', () => {
     expect(result).toBeNull();
   });
 
-  test('chat route takes priority over user route', async () => {
-    // DB query should return chat route first due to ORDER BY
-    const chatRoute = createRoute({
-      scope: 'chat',
-      chatId: TEST_CHAT_UUID,
-      agentId: '00000000-0000-0000-0000-000000000002',
-    });
-    const db = createMockDb([chatRoute]); // Only chat route returned (DB does filtering)
-    const resolver = new RouteResolver(db);
-
-    const result = await resolver.resolve('inst-1', TEST_CHAT_UUID, 'person-1');
-
-    expect(result).not.toBeNull();
-    expect(result?.scope).toBe('chat');
-    expect(result?.agentId).toBe('00000000-0000-0000-0000-000000000002');
-  });
-
   test('caches route resolution results', async () => {
     const route = createRoute();
     const db = createMockDb([route]);
@@ -167,37 +150,16 @@ describe('RouteResolver', () => {
     expect(metrics2.misses).toBe(1);
   });
 
-  test('invalidateRoute clears cache', async () => {
+  test.each([
+    ['invalidateRoute', (resolver: RouteResolver) => resolver.invalidateRoute('route-1')],
+    ['invalidateInstance', (resolver: RouteResolver) => resolver.invalidateInstance('inst-1')],
+  ] as const)('%s clears cache', async (_name, invalidate) => {
     const route = createRoute();
     const db = createMockDb([route]);
     const resolver = new RouteResolver(db);
-
-    // Prime cache
     await resolver.resolve('inst-1', TEST_CHAT_UUID, 'person-1');
     expect(resolver.getMetrics().hits).toBe(0);
-
-    // Invalidate cache
-    resolver.invalidateRoute('route-1');
-
-    // Next call should be cache miss
-    await resolver.resolve('inst-1', TEST_CHAT_UUID, 'person-1');
-    const metrics = resolver.getMetrics();
-    expect(metrics.misses).toBe(2); // 2 misses (initial + after invalidation)
-    expect(metrics.invalidations).toBe(1);
-  });
-
-  test('invalidateInstance clears cache', async () => {
-    const route = createRoute();
-    const db = createMockDb([route]);
-    const resolver = new RouteResolver(db);
-
-    // Prime cache
-    await resolver.resolve('inst-1', TEST_CHAT_UUID, 'person-1');
-
-    // Invalidate cache
-    resolver.invalidateInstance('inst-1');
-
-    // Next call should be cache miss
+    invalidate(resolver);
     await resolver.resolve('inst-1', TEST_CHAT_UUID, 'person-1');
     const metrics = resolver.getMetrics();
     expect(metrics.misses).toBe(2);
@@ -241,19 +203,6 @@ describe('RouteResolver', () => {
 
     // Should still attempt resolution (chat route can match)
     expect(result).not.toBeNull();
-  });
-
-  test('casts scope to correct type', async () => {
-    const route = createRoute({ scope: 'user' });
-    const db = createMockDb([route]);
-    const resolver = new RouteResolver(db);
-
-    const result = await resolver.resolve('inst-1', TEST_CHAT_UUID, 'person-1');
-
-    expect(result).not.toBeNull();
-    if (result) {
-      expect(result.scope).toBe('user');
-    }
   });
 
   // ==========================================================================

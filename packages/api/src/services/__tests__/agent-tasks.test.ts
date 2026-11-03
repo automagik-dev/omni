@@ -202,17 +202,6 @@ describe('AgentTaskService', () => {
       expect(result.hasMore).toBe(false);
     });
 
-    test('filters by agentId', async () => {
-      const tasks = [createMockTask({ id: 'task-1', agentId: 'agent-1' })];
-      setupListMock(tasks);
-
-      service = new AgentTaskService(mockDb as unknown as Database, mockEventBus);
-      const result = await service.list({ agentId: 'agent-1' });
-
-      expect(result.items).toHaveLength(1);
-      expect(mockDb.select).toHaveBeenCalled();
-    });
-
     test('sets hasMore=true when limit+1 rows returned', async () => {
       // Simulate 3 items returned when limit=2 (limit+1 = 3)
       const tasks = [

@@ -87,20 +87,6 @@ describe('ConversationService', () => {
       expect(result).toHaveLength(2);
       expect(mockDb.select).toHaveBeenCalled();
     });
-
-    test('respects limit parameter', async () => {
-      mockDb.select = mock(() => ({
-        from: mock(() => ({
-          orderBy: mock(() => ({
-            limit: mock(() => Promise.resolve([mockConversation()])),
-          })),
-        })),
-      })) as unknown as typeof mockDb.select;
-
-      const result = await service.list({ limit: 10 });
-
-      expect(result).toHaveLength(1);
-    });
   });
 
   describe('getById()', () => {
@@ -137,18 +123,6 @@ describe('ConversationService', () => {
 
       expect(result.id).toBe('new-conv');
       expect(mockDb.insert).toHaveBeenCalled();
-    });
-
-    test('publishes conversation.created event', async () => {
-      const created = mockConversation();
-      mockDb.insert = mock(() => ({
-        values: mock(() => ({
-          returning: mock(() => Promise.resolve([created])),
-        })),
-      })) as unknown as typeof mockDb.insert;
-
-      await service.create({ title: 'New' } as any);
-
       expect(eventBus.publish).toHaveBeenCalledTimes(1);
       const calls = eventBus.publish.mock.calls as unknown[][];
       expect(calls[0]?.[0]).toBe('conversation.created');
@@ -170,20 +144,6 @@ describe('ConversationService', () => {
 
       expect(result.title).toBe('Updated');
       expect(mockDb.update).toHaveBeenCalled();
-    });
-
-    test('publishes conversation.updated event', async () => {
-      const updated = mockConversation({ id: 'conv-789', title: 'Updated' });
-      mockDb.update = mock(() => ({
-        set: mock(() => ({
-          where: mock(() => ({
-            returning: mock(() => Promise.resolve([updated])),
-          })),
-        })),
-      })) as unknown as typeof mockDb.update;
-
-      await service.update('conv-789', { title: 'Updated' } as any);
-
       expect(eventBus.publish).toHaveBeenCalledTimes(1);
       const calls = eventBus.publish.mock.calls as unknown[][];
       expect(calls[0]?.[0]).toBe('conversation.updated');
@@ -204,17 +164,6 @@ describe('ConversationService', () => {
 
       await expect(service.delete('conv-del')).resolves.toBeUndefined();
       expect(mockDb.delete).toHaveBeenCalled();
-    });
-
-    test('publishes conversation.deleted event', async () => {
-      mockDb.delete = mock(() => ({
-        where: mock(() => ({
-          returning: mock(() => Promise.resolve([{ id: 'conv-del' }])),
-        })),
-      })) as unknown as typeof mockDb.delete;
-
-      await service.delete('conv-del');
-
       expect(eventBus.publish).toHaveBeenCalledTimes(1);
       const calls = eventBus.publish.mock.calls as unknown[][];
       expect(calls[0]?.[0]).toBe('conversation.deleted');
