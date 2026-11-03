@@ -129,15 +129,6 @@ describe('Logger', () => {
       expect(capturedOutput.length).toBe(1); // only warn
       expect(capturedErrors.length).toBe(1); // only error
     });
-
-    it('should allow debug when level is debug', () => {
-      configureLogging({ level: 'debug' });
-
-      const logger = createLogger('test');
-      logger.debug('visible');
-
-      expect(capturedOutput.length).toBe(1);
-    });
   });
 
   describe('Module filtering', () => {

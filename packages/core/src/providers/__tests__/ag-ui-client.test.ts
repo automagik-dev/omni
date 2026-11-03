@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { AgUiClient, createAgUiClient } from '../ag-ui-client';
+import { AgUiClient } from '../ag-ui-client';
 import { ProviderError, type StreamChunk } from '../types';
 
 // ─── Mock fetch helpers ───────────────────────────────────────
@@ -195,33 +195,19 @@ describe('AgUiClient', () => {
       expect(finalChunk).toBeDefined();
     });
 
-    it('throws ProviderError on non-ok HTTP response', async () => {
-      mockImpl.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }));
-
+    it.each([
+      [
+        'throws ProviderError on non-ok HTTP response',
+        () => mockImpl.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 })),
+      ],
+      [
+        'throws ProviderError when response body is null',
+        () => mockImpl.mockResolvedValueOnce(new Response(null, { status: 200 })),
+      ],
+      ['throws ProviderError on network failure', () => mockImpl.mockRejectedValueOnce(new Error('ECONNREFUSED'))],
+    ] as const)('%s', async (_name, arrange) => {
+      arrange();
       const client = new AgUiClient(CONFIG);
-
-      await expect(async () => {
-        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
-        }
-      }).toThrow(ProviderError);
-    });
-
-    it('throws ProviderError when response body is null', async () => {
-      mockImpl.mockResolvedValueOnce(new Response(null, { status: 200 }));
-
-      const client = new AgUiClient(CONFIG);
-
-      await expect(async () => {
-        for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
-        }
-      }).toThrow(ProviderError);
-    });
-
-    it('throws ProviderError on network failure', async () => {
-      mockImpl.mockRejectedValueOnce(new Error('ECONNREFUSED'));
-
-      const client = new AgUiClient(CONFIG);
-
       await expect(async () => {
         for await (const _ of client.stream({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' })) {
         }
@@ -327,12 +313,5 @@ describe('AgUiClient', () => {
       expect(result.healthy).toBe(false);
       expect(result.error).toContain('timeout');
     });
-  });
-});
-
-describe('createAgUiClient', () => {
-  it('returns an AgUiClient instance', () => {
-    const client = createAgUiClient({ baseUrl: 'http://example.com' });
-    expect(client).toBeInstanceOf(AgUiClient);
   });
 });

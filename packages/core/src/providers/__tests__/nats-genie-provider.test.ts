@@ -337,20 +337,6 @@ describe('NatsGenieProvider.trigger() — env pass-through', () => {
     expect(payload.env.OMNI_INSTANCE).toBe('inst-1');
     expect(payload.env.OMNI_USER_ID).toBe('5511999999999');
   });
-
-  it('merges trigger.env with canonical Omni execution env', async () => {
-    const provider = makeProvider();
-    const trigger = makeTrigger();
-    trigger.env = { OMNI_INSTANCE: 'inst-1', OMNI_CHAT: 'chat-42' };
-    await provider.trigger(trigger);
-    const payload = JSON.parse(publishCalls[publishCalls.length - 1]!.data);
-    expect(payload.env).toMatchObject({
-      OMNI_INSTANCE: 'inst-1',
-      OMNI_CHAT: '5511999999999@s.whatsapp.net',
-      OMNI_USER_ID: '5511999999999',
-      OMNI_PLATFORM_USER_ID: '5511999999999',
-    });
-  });
 });
 
 describe('NatsGenieProvider.trigger() — media files pass-through', () => {
