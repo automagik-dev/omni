@@ -75,9 +75,9 @@ function executable(path) {
 
 // The Bun to run Omni with, in this order: $BUN_INSTALL's, ~/.bun's, the first on PATH, then
 // the one this plugin downloaded. Only the pinned version can install a sandbox.
-export async function findBun({ env = process.env, home = homedir(), isExecutable = executable, readVersion } = {}) {
+export async function findBun({ env = process.env, home = homedir(), isExecutable = executable, readVersion, versionProbeTimeoutMs = 5000 } = {}) {
   const versionOf = readVersion ?? (async path => {
-    const { stdout } = await execFileAsync(path, ['--version'], { env, timeout: 5000, maxBuffer: 1024, windowsHide: true })
+    const { stdout } = await execFileAsync(path, ['--version'], { env, timeout: versionProbeTimeoutMs, maxBuffer: 1024, windowsHide: true })
     return stdout.trim()
   })
   const places = [
@@ -243,7 +243,7 @@ export function install(rt, deps = {}) {
 
   async function run(current, version) {
     try {
-      let bun = await findBun({ env, home })
+      let bun = await findBun({ env, home, versionProbeTimeoutMs: deps.versionProbeTimeoutMs })
       if (bun === null) {
         current.step = 'download-bun'
         bun = await (deps.downloadBun ?? downloadBun)({ env, home, fetchImpl, platform: deps.platform, arch: deps.arch })
