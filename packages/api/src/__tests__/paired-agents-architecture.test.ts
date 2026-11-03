@@ -3,7 +3,8 @@
  * intersected with the paths changed by G1-G4 implementation/repair commits
  * 564338b94, 909dbe94c, 192eb4761, e31dcba02, 4137ef3de, b343ae284,
  * d99dd3f1f, ea0c3ba41; plus G5 source paths below. Unrelated dev changes
- * are outside this wish. routes/v2/instances.ts is beyond the planned inventory:
+ * are outside this wish. Follow-up 1 adds its grant writer and input schema.
+ * routes/v2/instances.ts is beyond the planned inventory:
  * G2 repair e31dcba02 added producer-scope exits there, so the whole file belongs.
  * includes/Set/map detection is NEW coverage, not parity with the original
  * equality/switch baseline. The literal-policy reference covers all forms;
@@ -46,7 +47,9 @@ const PAIRED_AGENT_SLICE_FILES = [
   'packages/core/src/events/factory.ts',
   'packages/core/src/events/index.ts',
   'packages/core/src/events/types.ts',
+  'packages/core/src/schemas/agent-source-grant.ts',
   'packages/db/scripts/online-ddl.ts',
+  'packages/db/src/agent-source-grants.ts',
   'packages/db/src/online-ddl.ts',
   'packages/db/src/paired-agent-online-ddl.ts',
   'packages/db/src/pg-migrated-template.ts',
