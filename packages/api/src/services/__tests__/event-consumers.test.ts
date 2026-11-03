@@ -18,6 +18,7 @@ import {
   type ConsumerCaller,
   DEFAULT_CONSUMER_SETTLE_MS,
   EventConsumerService,
+  MAX_CONSUMERS_PER_OWN_ONLY_KEY,
   accessFilterClause,
   canAccessConsumer,
   claimLease,
@@ -778,6 +779,10 @@ describe('ownOnly keys: events:consume without events:write (#1461)', () => {
   const TENANT = '11111111-1111-4111-8111-111111111111';
   const host: ConsumerCaller = { keyId: HOST, instanceIds: null, ownOnly: true };
   const sqlOf = (clause: SQL | undefined) => (clause ? new PgDialect().sqlToQuery(clause) : undefined);
+
+  test('the cap is exactly 10 consumers per key, as the OpenAPI text, the guide and the skill say', () => {
+    expect(MAX_CONSUMERS_PER_OWN_ONLY_KEY).toBe(10);
+  });
 
   test('a create is stamped with the key as owner, unscoped', () => {
     expect(resolveConsumerScope({}, host)).toEqual({ scoped: false, instanceIds: null, ownerKeyId: HOST });

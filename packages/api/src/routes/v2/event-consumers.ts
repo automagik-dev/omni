@@ -48,23 +48,29 @@ import {
 } from '../../services/event-consumer-stream';
 import { type ConsumerCaller, resolveConsumerAgentId } from '../../services/event-consumers';
 import { currentTenantScope, runDetachedFromTenantScope } from '../../tenancy/tenant-scope';
-import type { AppVariables } from '../../types';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 const log = createLogger('event-consumer-stream');
 
 const eventConsumersRoutes = new Hono<{ Variables: AppVariables }>();
 
-/**
- * The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule).
- * A key with events:consume but not events:write is `ownOnly`: it reaches only its own consumers.
- */
-async function consumerCaller(c: Context<{ Variables: AppVariables }>): Promise<ConsumerCaller> {
-  const apiKey = c.get('apiKey');
-  const principal = apiKey ? await resolveKeyAgent(c.get('services').db, apiKey.id) : undefined;
-  const ownOnly =
+/** A key with events:consume but not events:write is `ownOnly`: it reaches only its own consumers. */
+export function isOwnOnlyConsumerKey(apiKey: ApiKeyData | undefined): apiKey is ApiKeyData {
+  return (
     !!apiKey &&
     ApiKeyService.scopeAllows(apiKey.scopes, 'events:consume') &&
-    !ApiKeyService.scopeAllows(apiKey.scopes, 'events:write');
+    !ApiKeyService.scopeAllows(apiKey.scopes, 'events:write')
+  );
+}
+
+/**
+ * The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule).
+ * Also used by GET /events/types, which lists consumer names (#1461).
+ */
+export async function consumerCaller(c: Context<{ Variables: AppVariables }>): Promise<ConsumerCaller> {
+  const apiKey = c.get('apiKey');
+  const principal = apiKey ? await resolveKeyAgent(c.get('services').db, apiKey.id) : undefined;
+  const ownOnly = isOwnOnlyConsumerKey(apiKey);
   return {
     keyId: apiKey?.id ?? null,
     instanceIds: apiKey?.instanceIds ?? null,
