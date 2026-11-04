@@ -129,6 +129,13 @@ stop, so it hands the work off: `omni install --sandbox` of that version runs in
 keeps the ports, the key, the data and the at-login choice, and logs to `<home>/logs/update.log`.
 When the API comes back on the new version, it records that the update finished.
 
+The sandbox passes that log to the API as `OMNI_UPDATE_LOG`. When an update does not complete,
+the owner's message and the `system.update.finished` reason say why, from the result the install
+logged: a Bun mismatch in fixed words ("It needs Bun 1.4.4; this computer has 1.3.9."), anything
+else as a pointer to `<home>/logs/update.log`. No text from the log itself is sent. Without a
+result written after the update started (none yet, a log cut short or too large to read, or an
+update recorded by an older Omni), the message stays the plain one.
+
 The update only takes a version npm publishes on the sandbox's channel (`latest`, or `next` for a
 prerelease), and only one update runs at a time.
 
