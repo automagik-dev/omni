@@ -1,8 +1,8 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { MarketManifestSchema } from '../packages/api/src/market/manifest';
 import { discoverPlugins, packMarket } from './pack-market';
 
@@ -20,6 +20,44 @@ function plugin(appsDir: string, dir: string, pkg: Record<string, unknown>) {
 }
 
 describe('pack-market', () => {
+  test('the API image copies the complete local import graph of its build scripts', () => {
+    const dockerfile = readFileSync(join(repoRoot, 'deploy/Dockerfile'), 'utf8');
+    const stage = dockerfile.match(/FROM [^\n]+ AS deps\n([\s\S]*?)\nFROM deps AS builder\b/)?.[1];
+    expect(stage, 'the API image has the deps stage inherited by its builder').toBeDefined();
+    const copies = (stage ?? '')
+      .split('\n')
+      .filter((line) => line.startsWith('COPY ') && !line.startsWith('COPY --from='));
+    expect(copies.length).toBeGreaterThan(0);
+    const sources = copies.map((line) => {
+      const [, source, destination, ...extra] = line.split(/\s+/);
+      expect(extra, `update this guard for COPY syntax: ${line}`).toEqual([]);
+      // Imports resolve in /src just as in the checkout; a copy to a different path is insufficient.
+      expect(resolve(repoRoot, destination ?? ''), line).toBe(resolve(repoRoot, source ?? ''));
+      return resolve(repoRoot, source ?? '');
+    });
+    const copied = (file: string) =>
+      sources.some(
+        (source) => file === source || (statSync(source).isDirectory() && file.startsWith(`${source}${sep}`)),
+      );
+    const cli = JSON.parse(readFileSync(join(repoRoot, 'packages/cli/package.json'), 'utf8'));
+    const entry = cli.scripts['build:market'].match(/^bun (\S+) /)?.[1];
+    expect(entry, 'resolve the actual build:market entry').toBeDefined();
+    const scripts = sources.filter((source) => source.startsWith(`${join(repoRoot, 'scripts')}${sep}`));
+    expect(scripts.length).toBeGreaterThan(0);
+    const queue = [resolve(repoRoot, 'packages/cli', entry ?? ''), ...scripts];
+    const seen = new Set<string>();
+    const transpiler = new Bun.Transpiler({ loader: 'ts' });
+    for (const file of queue) {
+      if (seen.has(file)) continue;
+      seen.add(file);
+      expect(copied(file), `${relative(repoRoot, file)} must be COPYed into the API builder`).toBe(true);
+      const source = readFileSync(file, 'utf8').replace(/^#![^\n]*\n/, '');
+      for (const dependency of transpiler.scanImports(source)) {
+        if (dependency.path.startsWith('.')) queue.push(Bun.resolveSync(dependency.path, dirname(file)));
+      }
+    }
+  });
+
   test('discovers every apps/*-dsh plugin, never a hard-coded list', () => {
     const dirs = discoverPlugins(join(repoRoot, 'apps')).map((dir) => basename(dir));
     expect(dirs).toContain('omni-channels-dsh');

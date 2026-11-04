@@ -57,6 +57,7 @@ COPY marketplace/automagik.json ./marketplace/automagik.json
 COPY scripts/pack-market.ts ./scripts/pack-market.ts
 # The packer's rule for the plugins' own versions (each at the Omni release of its last change).
 COPY scripts/lib/plugin-versions.ts ./scripts/lib/plugin-versions.ts
+COPY scripts/lib/bounded-exec.ts ./scripts/lib/bounded-exec.ts
 
 # ---- builder: bundle the server + copy migrations ---------------------------
 FROM deps AS builder
