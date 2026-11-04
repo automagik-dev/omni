@@ -99,6 +99,7 @@ jobs:
 
           scripts/release/release-workflow-contract.test.sh
           scripts/release/stable-release-order.test.sh
+          scripts/release/release-notes-body-guard.test.sh
           scripts/release/verify-promotion-candidate.test.sh
           scripts/release/verify-oci-release.test.sh
           scripts/release/verify-release-source.test.sh
