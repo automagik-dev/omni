@@ -16,8 +16,10 @@ official Meta BSP with its own API format (not a Cloud API mirror).
   message:
   - the contact profile name is `senderName` (and `rawPayload.pushName`);
   - inbound files surface as `mediaId` and are materialized by
-    `downloadInboundMedia`, behind the SDK download guard. The token is sent
-    only to Zenvia hosts, and only https URLs are fetched;
+    `downloadInboundMedia`, behind the SDK download guard. Redirects are
+    followed by hand (at most 5): every hop must be https to a named host (no
+    IP literal, no localhost), and the token goes only to Zenvia hosts and is
+    dropped for good once a hop leaves them. The timeout covers the body too;
   - a click-to-WhatsApp ad referral is exposed as `rawPayload.referral` in
     the Meta Cloud API shape (`source_type`, `source_id`, `source_url`,
     `headline`, `body`, `ctwa_clid`);
@@ -33,7 +35,7 @@ official Meta BSP with its own API format (not a Cloud API mirror).
 | `zenviaHandoffGroupId`  | no       | Sales group dedicated to the chatbot. Required with `zenviaSalesApiKey`.                    |
 | `zenviaHandoffUserId`   | no       | A specific agent inside that group.                                                         |
 | `zenviaHandoffSolution` | no       | `conversion` \| `zenvia_chat` \| `nlu`. Fallback routing when there is no Sales transfer.     |
-| `webhookVerifyToken`    | no       | Shared secret. When set, every webhook POST must carry `x-webhook-token`.                   |
+| `webhookVerifyToken`    | yes      | Shared secret every webhook POST must carry as `x-webhook-token`. Zenvia signs nothing, so an instance does not connect without it. |
 
 To wire up the webhook, create the subscriptions with that URL. Put the
 verify token in the subscription's fixed headers:
@@ -51,6 +53,12 @@ verify token in the subscription's fixed headers:
 
 Create one subscription per event type (`MESSAGE` and `MESSAGE_STATUS`).
 
+The webhook answers 200 to every authenticated event, 401 to a missing or
+wrong token and 503 while the instance is not connected (during a restart),
+so Zenvia can redeliver. An inbound `MESSAGE` addressed to a different sender
+of the same Zenvia account is acknowledged and dropped, so two instances on
+one account never answer each other's contacts.
+
 ## Handoff
 
 `POST /messages/send/handoff` has two modes, chosen by the instance config:
@@ -58,15 +66,19 @@ Create one subscription per event type (`MESSAGE` and `MESSAGE_STATUS`).
 **Transfer through the Sales API** (`zenviaSalesApiKey` + `zenviaHandoffGroupId`).
 This is the ZCC flow. In order:
 
-1. `GET /api/v1/prospect-by?phoneNumber=` finds the prospect of the contact
-   (with a leading `+`, then digits only). No prospect means no conversation
-   to transfer, and the handoff fails before anything is sent to the contact.
-2. `POST /api/v1/prospect/{id}/interactions` writes a `note` with the context
+1. `GET /api/v1/prospect-by?phoneNumber=` finds the prospect of the contact,
+   first with a leading `+` and then digits only (the second try also runs
+   when the first format is rejected with a 4xx). No prospect means no
+   conversation to transfer, and the handoff fails before anything is sent.
+2. `POST /api/v1/prospect/{id}/transfer` moves the prospect to the group, or
+   to `zenviaHandoffUserId` inside it. A refusal, or an explicit
+   `success: false`, fails the handoff before anything is written or sent,
+   so the agent keeps the chat. Any other 2xx, empty body included, counts as
+   done.
+3. `POST /api/v1/prospect/{id}/interactions` writes a `note` with the context
    the agent needs: `motivoHandoff`, `dadosLead` and every `handoffFields`
-   key. A note that fails is logged and the transfer goes ahead.
-3. `POST /api/v1/prospect/{id}/transfer` moves the prospect to the group, or
-   to `zenviaHandoffUserId` inside it. A refusal, or `success: false`, fails
-   the handoff and the farewell is not sent, so the agent keeps the chat.
+   key. It runs after the transfer, so a retried handoff never leaves an
+   orphan note; a note that fails is logged and the handoff stands.
 4. The farewell text is sent through the API v2 as an ordinary message.
    If only this step fails, the handoff still counts as done, because the
    contact already belongs to a person.
@@ -75,8 +87,11 @@ The route's default side effects then run (`agentPaused`, follow-up disarm,
 audit row). Requirements on the Zenvia side: the WhatsApp number must have
 its destination set to *Atendimento Comercial* and be assigned to a group
 created exclusively for the chatbot. On connect the plugin lists the groups
-visible to the Sales key and refuses an unknown `zenviaHandoffGroupId`; a Sales
-API that is merely unreachable does not block the connection.
+visible to the Sales key and logs a warning when the group is not among them,
+when the key is rejected or when the Sales API is down; none of that blocks
+the connection, because messaging must not depend on an optional feature.
+Setting only one of `zenviaSalesApiKey` / `zenviaHandoffGroupId` leaves the
+transfer off (logged) instead of failing the connect.
 
 **Conversation routing** (`zenviaHandoffSolution`, no Sales key). The only
 primitive of the API v2 is the `conversation` field on an outbound message,
@@ -146,6 +161,8 @@ these events are acknowledged and ignored.
   digits only).
 - Whether `conversation.solution` is still meaningful for a ZCC account, or
   the Sales transfer replaces it.
-- Whether inbound `fileUrl`s require authentication and how long they stay
-  valid.
+- Whether inbound `fileUrl`s require authentication, on which hosts they live
+  and how long they stay valid.
+- Whether the Sales `/groups` listing is paginated (the connect check only
+  warns, so a missing page does not block anything).
 - Rate limits for `POST /channels/whatsapp/messages` and for the Sales APIs.

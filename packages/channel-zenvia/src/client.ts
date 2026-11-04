@@ -1,34 +1,22 @@
-/**
- * Zenvia API v2 client.
- *
- * Scoped to one API token + sender. One instance per Zenvia Omni instance.
- *
- * Auth model: the static `X-API-TOKEN` header on every call (a token created
- * in the Zenvia console). There is no sign-in/refresh.
- *
- * Source of truth: the public Zenvia API v2 OpenAPI specification.
- */
+import { isIP } from 'node:net';
 
-import type { ZenviaOutboundMessage, ZenviaSendResponse } from './types';
+import { type ZenviaOutboundMessage, type ZenviaSendResponse, ZenviaSendResponseSchema } from './types';
 import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
-import { zenviaErrorFromResponse } from './utils/http-error';
+import { parseJsonOrUndefined, readBodyText, zenviaErrorFromResponse, zenviaFetch } from './utils/http';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
+const MAX_DOWNLOAD_REDIRECTS = 5;
 
 export const DEFAULT_ZENVIA_BASE_URL = 'https://api.zenvia.com/v2';
 
-/**
- * Hosts the API token may be sent to. Inbound `fileUrl`s are fetched through
- * `downloadFile`, and the token must never leak to a URL outside Zenvia.
- */
-const ZENVIA_HOST_SUFFIX = '.zenvia.com';
+const ZENVIA_HOST = 'zenvia.com';
 
 export interface ZenviaClientOptions {
-  /** API base URL (trailing slash tolerated). Defaults to Zenvia production. */
   baseUrl?: string;
-  /** API token — sent as the `X-API-TOKEN` header. */
   apiToken: string;
   timeoutMs?: number;
+  downloadTimeoutMs?: number;
 }
 
 interface ZenviaRequestInit {
@@ -37,116 +25,113 @@ interface ZenviaRequestInit {
   operation: string;
 }
 
+function isZenviaHost(url: URL): boolean {
+  const host = url.hostname.toLowerCase();
+  return host === ZENVIA_HOST || host.endsWith(`.${ZENVIA_HOST}`);
+}
+
+function assertFetchableFileUrl(url: URL): void {
+  const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (url.protocol !== 'https:') {
+    throw new ZenviaApiError(ZenviaErrorCode.INVALID_REQUEST, 'Refusing to download a non-https file URL', {
+      operation: 'downloadFile',
+    });
+  }
+  if (isIP(host) !== 0 || host === 'localhost' || host.endsWith('.localhost')) {
+    throw new ZenviaApiError(ZenviaErrorCode.INVALID_REQUEST, 'Refusing to download a file from an address host', {
+      operation: 'downloadFile',
+    });
+  }
+}
+
 export class ZenviaClient {
   private readonly baseUrl: string;
   private readonly apiToken: string;
   private readonly timeoutMs: number;
+  private readonly downloadTimeoutMs: number;
 
   constructor(opts: ZenviaClientOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_ZENVIA_BASE_URL).replace(/\/+$/, '');
     this.apiToken = opts.apiToken;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.downloadTimeoutMs = opts.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Messages
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * POST /channels/whatsapp/messages. Returns the created message; its `id`
-   * is what later `MESSAGE_STATUS` events reference.
-   */
   async sendMessage(message: ZenviaOutboundMessage): Promise<ZenviaSendResponse> {
     const res = await this.request('/channels/whatsapp/messages', {
       method: 'POST',
       body: JSON.stringify(message),
       operation: 'sendMessage',
     });
-    return this.parseJson<ZenviaSendResponse>(res);
+    const parsed = ZenviaSendResponseSchema.safeParse(
+      parseJsonOrUndefined(await readBodyText(res, 'sendMessage')) ?? {},
+    );
+    return parsed.success ? parsed.data : {};
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Media
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Fetch an inbound file by the `fileUrl` Zenvia put on the webhook. Only
-   * https URLs are fetched, and the token is attached only when the host is
-   * Zenvia's — never to a third-party URL. Returns the raw response so the caller can apply the
-   * SDK download guard before reading the body.
-   */
   async downloadFile(fileUrl: string): Promise<Response> {
-    const url = new URL(fileUrl);
-    if (url.protocol !== 'https:') {
-      throw new ZenviaApiError(ZenviaErrorCode.INVALID_REQUEST, 'Refusing to download a non-https file URL', {
-        operation: 'downloadFile',
-      });
+    let currentUrl = new URL(fileUrl);
+    assertFetchableFileUrl(currentUrl);
+    let sendToken = isZenviaHost(currentUrl);
+
+    for (let redirects = 0; redirects <= MAX_DOWNLOAD_REDIRECTS; redirects++) {
+      const headers: Record<string, string> = sendToken ? { 'X-API-TOKEN': this.apiToken } : {};
+      const res = await zenviaFetch(
+        currentUrl.toString(),
+        { method: 'GET', headers, redirect: 'manual' },
+        { timeoutMs: this.downloadTimeoutMs, operation: 'downloadFile' },
+      );
+
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get('location');
+        await readBodyText(res, 'downloadFile');
+        if (!location) {
+          throw new ZenviaApiError(ZenviaErrorCode.UPSTREAM_ERROR, 'Zenvia file redirect without a location', {
+            httpStatus: res.status,
+            operation: 'downloadFile',
+          });
+        }
+        const nextUrl = new URL(location, currentUrl);
+        assertFetchableFileUrl(nextUrl);
+        sendToken = sendToken && isZenviaHost(nextUrl);
+        currentUrl = nextUrl;
+        continue;
+      }
+
+      if (!res.ok) {
+        throw await zenviaErrorFromResponse(res, 'downloadFile');
+      }
+      return res;
     }
-    const headers: Record<string, string> = {};
-    if (url.hostname.endsWith(ZENVIA_HOST_SUFFIX)) {
-      headers['X-API-TOKEN'] = this.apiToken;
-    }
-    const res = await this.fetchWithTimeout(url.toString(), { method: 'GET', headers });
-    if (!res.ok) {
-      throw await this.errorFromResponse(res, 'downloadFile');
-    }
-    return res;
+
+    throw new ZenviaApiError(ZenviaErrorCode.UPSTREAM_ERROR, 'Zenvia file download followed too many redirects', {
+      operation: 'downloadFile',
+    });
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Health
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * True when the configured token is accepted. Uses GET /subscriptions — a
-   * cheap authenticated read available to every account.
-   */
   async ping(): Promise<boolean> {
     try {
       const res = await this.request('/subscriptions', { method: 'GET', operation: 'ping' });
-      await res.text();
+      await readBodyText(res, 'ping');
       return true;
     } catch {
       return false;
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // HTTP helpers
-  // ─────────────────────────────────────────────────────────────
-
   private async request(path: string, init: ZenviaRequestInit): Promise<Response> {
     const headers: Record<string, string> = { 'X-API-TOKEN': this.apiToken };
     if (init.body) headers['Content-Type'] = 'application/json';
 
-    const res = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
-      method: init.method,
-      headers,
-      body: init.body,
-    });
+    const res = await zenviaFetch(
+      `${this.baseUrl}${path}`,
+      { method: init.method, headers, body: init.body },
+      { timeoutMs: this.timeoutMs, operation: init.operation },
+    );
 
     if (!res.ok) {
-      throw await this.errorFromResponse(res, init.operation);
+      throw await zenviaErrorFromResponse(res, init.operation);
     }
     return res;
-  }
-
-  private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    try {
-      return await fetch(url, { ...init, signal: ctrl.signal });
-    } finally {
-      clearTimeout(timer);
-    }
-  }
-
-  private async parseJson<T>(res: Response): Promise<T> {
-    const text = await res.text();
-    return (text ? JSON.parse(text) : {}) as T;
-  }
-
-  private errorFromResponse(res: Response, operation: string): Promise<ZenviaApiError> {
-    return zenviaErrorFromResponse(res, operation);
   }
 }

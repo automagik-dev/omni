@@ -1,7 +1,3 @@
-/**
- * buildHandoffRouting — the `conversation` field a handoff message carries.
- */
-
 import { describe, expect, it } from 'bun:test';
 
 import { buildHandoffNote, buildHandoffRouting, resolveHandoffMode } from '../utils/handoff';

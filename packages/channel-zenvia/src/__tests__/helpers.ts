@@ -1,8 +1,3 @@
-/**
- * Shared test doubles for the Zenvia plugin suite — mirrors the
- * MockEventBus/MockLogger/MockStorage pattern from channel-asc.
- */
-
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
 import type { ZenviaPlugin } from '../plugin';
@@ -105,10 +100,6 @@ export function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-/**
- * Connect the plugin. The caller must have mocked `fetch` so the
- * `client.ping()` (GET /subscriptions) resolves with a 2xx.
- */
 export async function connectPlugin(
   plugin: ZenviaPlugin,
   extraCredentials: Record<string, unknown> = {},
@@ -118,6 +109,7 @@ export async function connectPlugin(
     credentials: {
       zenviaApiToken: API_TOKEN,
       zenviaSenderId: SENDER_ID,
+      webhookVerifyToken: VERIFY_TOKEN,
       ...extraCredentials,
     },
   });

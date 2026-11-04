@@ -1,20 +1,3 @@
-/**
- * Zenvia channel capabilities declaration.
- *
- * Declared conservatively — only what this plugin actually sends and
- * receives today. The Zenvia API also offers buttons, lists, contacts and
- * WhatsApp Flows; each one is a follow-up, not a claim.
- *
- * Handoff: the API has no transfer/assign endpoint. The only primitive is the
- * `conversation: { solution, properties }` field on an outbound message,
- * which routes the conversation to a Zenvia solution when the contact
- * replies (see `utils/handoff.ts`). Closing a conversation has no API at all,
- * so `canCloseContact` stays false.
- *
- * The 24h messaging window is enforced upstream by Meta — outside it only
- * approved templates ship.
- */
-
 import { DEFAULT_CAPABILITIES } from '@omni/channel-sdk';
 import type { ChannelCapabilities } from '@omni/channel-sdk';
 
@@ -23,7 +6,6 @@ export const ZENVIA_CAPABILITIES: ChannelCapabilities = {
   canSendText: true,
   canSendMedia: true,
   canSendReaction: false,
-  // The Zenvia API exposes no presence/typing endpoint.
   canSendTyping: false,
   canReceiveReadReceipts: true,
   canReceiveDeliveryReceipts: true,
@@ -41,7 +23,6 @@ export const ZENVIA_CAPABILITIES: ChannelCapabilities = {
   canHandleBroadcast: false,
   canHandleDMs: true,
   canStreamResponse: false,
-  // Meta enforces a 24h customer-service window — outside it, only templates ship.
   hasMessagingWindow: true,
   messagingWindowMs: 24 * 60 * 60 * 1000,
   maxMessageLength: 4096,

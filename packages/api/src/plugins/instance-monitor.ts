@@ -361,12 +361,6 @@ function applyAscOptions(
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
-/**
- * zenvia reconnect credentials — the plugin's `connect()` reads these from
- * `config.options` (same keys as `config.credentials` in the manual connect
- * route). Persisted on `instances` by the create/connect/PATCH routes. The
- * webhook verify token reuses the shared webhookVerifyToken column.
- */
 function applyZenviaOptions(
   options: Record<string, unknown>,
   instance: {

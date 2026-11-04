@@ -1,9 +1,3 @@
-/**
- * ZenviaPlugin — outbound payload assembly (contents + auth header), native
- * handoff routing, template descriptor, config validation, inbound media
- * download and connection guard rails.
- */
-
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { ZenviaPlugin } from '../plugin';
@@ -25,7 +19,6 @@ function sentBody(fetchSpy: ReturnType<typeof spyOn>, index: number): Record<str
   return JSON.parse((init?.body as string) ?? '{}') as Record<string, unknown>;
 }
 
-/** Body of the most recent fetch — robust to spies stacked by a second `setup()`. */
 function lastSentBody(fetchSpy: ReturnType<typeof spyOn>): Record<string, unknown> {
   return sentBody(fetchSpy, fetchSpy.mock.calls.length - 1);
 }
@@ -215,7 +208,6 @@ describe('ZenviaPlugin', () => {
       });
 
       expect(result.success).toBe(true);
-      // The route's agentPaused side effect must run: the contact's reply now belongs to people.
       expect(result.pauseAgent).toBeUndefined();
       expect(lastSentBody(fetchSpy)).toMatchObject({
         contents: [{ type: 'text', text: 'Someone from the team will take it from here.' }],
@@ -234,6 +226,64 @@ describe('ZenviaPlugin', () => {
       expect(body.contents).toEqual([{ type: 'text', text: 'hi' }]);
       expect(body.conversation).toBeUndefined();
     });
+  });
+
+  describe('downloadInboundMedia redirects', () => {
+    it('drops the token when a Zenvia file redirects off Zenvia', async () => {
+      const fetchSpy = spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(null, { status: 302, headers: { location: 'https://cdn.example.com/f.ogg' } }),
+        )
+        .mockResolvedValueOnce(new Response('abc', { headers: { 'content-type': 'audio/ogg' } }));
+      const before = fetchSpy.mock.calls.length;
+
+      const file = await plugin.downloadInboundMedia(instanceId, 'https://files.zenvia.com/f.ogg');
+
+      expect(file.buffer.toString()).toBe('abc');
+      expect(fetchCall(fetchSpy, before).init?.headers).toMatchObject({ 'X-API-TOKEN': API_TOKEN });
+      expect(fetchCall(fetchSpy, before).init?.redirect).toBe('manual');
+      expect(fetchCall(fetchSpy, before + 1).url).toBe('https://cdn.example.com/f.ogg');
+      expect(fetchCall(fetchSpy, before + 1).init?.headers).toEqual({});
+    });
+
+    it('refuses a redirect to plain http or to an address host', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: 'http://files.zenvia.com/f.ogg' } }),
+      );
+      await expect(plugin.downloadInboundMedia(instanceId, 'https://files.zenvia.com/f.ogg')).rejects.toThrow(/https/);
+
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: 'https://169.254.169.254/latest/meta-data' } }),
+      );
+      await expect(plugin.downloadInboundMedia(instanceId, 'https://files.zenvia.com/f.ogg')).rejects.toThrow(
+        /address host/,
+      );
+    });
+  });
+
+  describe('send failures', () => {
+    it('treats a 2xx whose body is not JSON as a malformed response, not a crash', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('accepted', { status: 200 }));
+      const result = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'text', text: 'hi' } });
+      expect(result.success).toBe(false);
+      expect(result.retryable).toBe(false);
+      expect(result.error).toMatch(/message id/);
+    });
+
+    it('marks a network failure as retryable', async () => {
+      spyOn(globalThis, 'fetch').mockRejectedValueOnce(new TypeError('connection reset'));
+      const result = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'text', text: 'hi' } });
+      expect(result.success).toBe(false);
+      expect(result.retryable).toBe(true);
+    });
+  });
+
+  it('drops the old connection when a reconnect fails, so it does not keep sending with stale credentials', async () => {
+    spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ code: 'UNAUTHORIZED', message: 'nope' }, 401));
+    await expect(connectPlugin(plugin, { zenviaApiToken: 'rotated-but-wrong' })).rejects.toThrow();
+    const result = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'text', text: 'hi' } });
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/not connected/);
   });
 
   describe('downloadInboundMedia', () => {

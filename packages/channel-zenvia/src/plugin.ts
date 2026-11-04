@@ -1,28 +1,3 @@
-/**
- * Zenvia channel plugin.
- *
- * Implements `BaseChannelPlugin` for WhatsApp through the Zenvia API v2
- * (api.zenvia.com/v2):
- *   - Outbound via REST (`POST /channels/whatsapp/messages`, static
- *     `X-API-TOKEN` header, `from` = the instance's sender id).
- *   - Inbound via per-instance webhook
- *     (`/api/v2/channels/zenvia/:instanceId/webhook`) fed by Zenvia
- *     subscriptions; events are validated with the Zod schemas in `types.ts`.
- *   - Native handoff through the `conversation` routing field (see
- *     `utils/handoff.ts`).
- *
- * Normalization: Omni consumers must not need to know which BSP carried a
- * message. Inbound events therefore surface the same shapes other WhatsApp
- * channels do — `senderName` from the contact profile, media through
- * `mediaId` + `downloadInboundMedia`, and the click-to-WhatsApp ad referral
- * as `rawPayload.referral` in the Meta Cloud API shape (`source_type`,
- * `source_id`, `source_url`, `headline`, `body`, `ctwa_clid`). The original
- * Zenvia message is kept under `rawPayload.zenvia`.
- *
- * Per-instance state: `ZenviaClient` (one API token) + config + dedupe cache
- * keyed by the Zenvia message id.
- */
-
 import { BaseChannelPlugin, createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
@@ -67,11 +42,6 @@ import { toZenviaPhone } from './utils/identity';
 
 const ZENVIA_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document']);
 
-/**
- * SDK download guard for inbound media. Zenvia webhooks carry a `fileUrl`
- * but no size, so the guard checks the download's Content-Length before the
- * body is read (see `downloadInboundMedia`).
- */
 const downloadGuard = createDownloadGuard();
 
 interface ZenviaInstanceState {
@@ -89,12 +59,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
   readonly version = '1.0.0';
   readonly capabilities: ChannelCapabilities = ZENVIA_CAPABILITIES;
 
-  /** instanceId → live state */
   private zenviaInstances = new Map<string, ZenviaInstanceState>();
-
-  // ─────────────────────────────────────────────────────────────
-  // Lifecycle
-  // ─────────────────────────────────────────────────────────────
 
   protected override async onInitialize(_context: PluginContext): Promise<void> {
     this.logger.info('Zenvia plugin initialized');
@@ -108,29 +73,14 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     this.logger.info('Zenvia plugin destroyed');
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Connection
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Connect an instance using the persisted Zenvia config.
-   *
-   * `config.credentials` (fallback `config.options`) is expected to carry:
-   *   - zenviaApiToken (required)
-   *   - zenviaSenderId (required — the sender registered at Zenvia)
-   *   - zenviaSalesApiKey + zenviaHandoffGroupId (optional pair — transfer through the Sales API)
-   *   - zenviaHandoffUserId (optional — a specific agent inside the group)
-   *   - zenviaHandoffSolution (optional — conversion | zenvia_chat | nlu)
-   *   - webhookVerifyToken (optional — echoed by the subscription as `x-webhook-token`)
-   */
   async connect(instanceId: string, config: InstanceConfig): Promise<void> {
+    this.dropInstanceState(instanceId);
     const zenviaConfig = readZenviaConfig(config);
 
     this.logger.info('Connecting Zenvia instance', { instanceId, senderId: zenviaConfig.senderId });
 
     const client = new ZenviaClient({ apiToken: zenviaConfig.apiToken });
 
-    // Validate the token with a cheap authenticated read.
     const reachable = await client.ping();
     if (!reachable) {
       throw new ZenviaApiError(
@@ -144,8 +94,13 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     if (zenviaConfig.salesApiKey && zenviaConfig.handoffGroupId) {
       salesClient = new ZenviaSalesClient({ apiKey: zenviaConfig.salesApiKey });
       await this.verifySalesAccess(instanceId, salesClient, zenviaConfig.handoffGroupId);
+    } else if (zenviaConfig.salesApiKey || zenviaConfig.handoffGroupId || zenviaConfig.handoffUserId) {
+      this.logger.warn('Zenvia Sales transfer needs both zenviaSalesApiKey and zenviaHandoffGroupId; it stays off', {
+        instanceId,
+      });
     }
 
+    this.zenviaInstances.get(instanceId)?.dedupeCache.dispose();
     this.zenviaInstances.set(instanceId, {
       client,
       salesClient,
@@ -170,11 +125,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
   async disconnect(instanceId: string): Promise<void> {
     this.logger.info('Disconnecting Zenvia instance', { instanceId });
 
-    const state = this.zenviaInstances.get(instanceId);
-    if (state) {
-      state.dedupeCache.dispose();
-      this.zenviaInstances.delete(instanceId);
-    }
+    this.dropInstanceState(instanceId);
 
     this.instances.setInstance(instanceId, {} as InstanceConfig, {
       state: 'disconnected',
@@ -184,10 +135,6 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
     await this.emitInstanceDisconnected(instanceId, 'Manual disconnect');
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // Outbound
-  // ─────────────────────────────────────────────────────────────
 
   async sendMessage(instanceId: string, message: OutgoingMessage): Promise<SendResult> {
     const state = this.zenviaInstances.get(instanceId);
@@ -224,12 +171,8 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     try {
       const response: ZenviaSendResponse = await state.client.sendMessage(built.payload);
 
-      // Journey timing: T11 (platformDeliveredAt) once Zenvia accepted the send.
       if (correlationId) this.captureT11(correlationId);
 
-      // The created message's id is what MESSAGE_STATUS events reference — a
-      // missing id is a malformed response, not something to paper over with
-      // a fabricated id (that would break status correlation downstream).
       const messageId = response.id;
       if (!messageId) {
         const err = 'Zenvia did not return a message id on successful send (malformed response)';
@@ -295,20 +238,20 @@ export class ZenviaPlugin extends BaseChannelPlugin {
         };
       }
 
+      const userId = state.config.handoffUserId;
+      await sales.transferProspect(prospect.id, userId ? { group: groupId, user: userId } : { group: groupId });
+
       const note = buildHandoffNote(metadata);
       if (note) {
         try {
           await sales.createNote(prospect.id, note);
         } catch (err) {
-          this.logger.warn('Zenvia handoff note failed, transferring anyway', {
+          this.logger.warn('Zenvia handoff note failed after the transfer', {
             instanceId,
             error: err instanceof Error ? err.message : String(err),
           });
         }
       }
-
-      const userId = state.config.handoffUserId;
-      await sales.transferProspect(prospect.id, userId ? { group: groupId, user: userId } : { group: groupId });
       return { ok: true };
     } catch (err) {
       const isZenvia = err instanceof ZenviaApiError;
@@ -322,42 +265,28 @@ export class ZenviaPlugin extends BaseChannelPlugin {
   }
 
   private async verifySalesAccess(instanceId: string, sales: ZenviaSalesClient, groupId: string): Promise<void> {
-    let groups: Awaited<ReturnType<ZenviaSalesClient['listGroups']>>;
     try {
-      groups = await sales.listGroups();
-    } catch (err) {
-      if (err instanceof ZenviaApiError && err.channelCode === ZenviaErrorCode.AUTH_FAILED) {
-        throw new ZenviaApiError(
-          ZenviaErrorCode.AUTH_FAILED,
-          'Zenvia Sales API rejected the key — check zenviaSalesApiKey (it is not the same token as zenviaApiToken)',
-          { operation: 'connect' },
-        );
+      const groups = await sales.listGroups();
+      if (!groups.some((group) => group.id === groupId)) {
+        this.logger.warn('Zenvia handoff group not among the groups listed for the Sales key; transfers may fail', {
+          instanceId,
+        });
       }
-      this.logger.warn('Zenvia Sales API unreachable on connect, handoff transfer is unverified', {
+    } catch (err) {
+      this.logger.warn('Zenvia Sales API check failed on connect; handoff transfer is unverified', {
         instanceId,
         error: err instanceof Error ? err.message : String(err),
       });
-      return;
-    }
-    if (!groups.some((group) => group.id === groupId)) {
-      throw new ZenviaApiError(
-        ZenviaErrorCode.INVALID_REQUEST,
-        'zenviaHandoffGroupId is not one of the groups visible to this Sales key',
-        { operation: 'connect' },
-      );
     }
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Inbound webhook
-  // ─────────────────────────────────────────────────────────────
+  private dropInstanceState(instanceId: string): void {
+    const previous = this.zenviaInstances.get(instanceId);
+    if (!previous) return;
+    previous.dedupeCache.dispose();
+    this.zenviaInstances.delete(instanceId);
+  }
 
-  /**
-   * Per-instance webhook entry point. The route
-   * (`POST /api/v2/channels/zenvia/:instanceId/webhook`) passes the raw
-   * request through; the instance id is extracted from the path (same
-   * pattern as Gupshup/Hermes/ASC).
-   */
   async handleWebhook(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const pathParts = url.pathname.split('/');
@@ -365,34 +294,31 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
     const state = this.zenviaInstances.get(instanceId);
     if (!state) {
-      return new Response('Instance not found', { status: 404 });
+      return new Response('Instance not connected', { status: 503 });
     }
 
     return handleZenviaWebhookRequest(request, this, instanceId, state.config.webhookVerifyToken);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Inbound media download
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Download an inbound file. The webhook surfaces Zenvia's `fileUrl` as the
-   * event's `mediaId`; the media pipeline hands it back here. The SDK
-   * download guard checks the declared size before the body is read.
-   */
   async downloadInboundMedia(instanceId: string, fileUrl: string): Promise<{ buffer: Buffer; mimeType: string }> {
     const state = this.requireInstanceState(instanceId, 'downloadInboundMedia');
 
     const res = await state.client.downloadFile(fileUrl);
     downloadGuard.checkResponse(res, this.logger, { instanceId, channel: 'zenvia' });
-    const bytes = await res.arrayBuffer();
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await res.arrayBuffer();
+    } catch {
+      throw new ZenviaApiError(ZenviaErrorCode.UPSTREAM_ERROR, 'Zenvia downloadFile body read failed or timed out', {
+        operation: 'downloadFile',
+      });
+    }
     downloadGuard.checkSize(bytes.byteLength, this.logger, { instanceId, channel: 'zenvia' });
 
     const mimeType = res.headers.get('content-type')?.split(';')[0]?.trim() || 'application/octet-stream';
     return { buffer: Buffer.from(bytes), mimeType };
   }
 
-  /** Live state for `instanceId`, or throw `ZENVIA_NOT_CONNECTED`. */
   private requireInstanceState(instanceId: string, operation: string): ZenviaInstanceState {
     const state = this.zenviaInstances.get(instanceId);
     if (!state) {
@@ -400,10 +326,6 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     }
     return state;
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // Health
-  // ─────────────────────────────────────────────────────────────
 
   override async getHealth(instanceId?: string): Promise<HealthStatus> {
     const checks: HealthCheck[] = [];
@@ -432,19 +354,10 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     };
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // History (not supported — the Zenvia API exposes no backfill).
-  // ─────────────────────────────────────────────────────────────
-
   async fetchHistory(_instanceId: string, _options: FetchHistoryOptions): Promise<FetchHistoryResult> {
     return { totalFetched: 0, messages: [] };
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Public accessors used by the webhook handler
-  // ─────────────────────────────────────────────────────────────
-
-  /** Look up the live state for an instance — used by the webhook handler and tests. */
   getInstanceState(instanceId: string): ZenviaInstanceState | undefined {
     return this.zenviaInstances.get(instanceId);
   }
@@ -453,22 +366,19 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     return this.logger;
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Inbound handlers (called by handlers/webhook.ts)
-  //
-  // Public wrappers around the protected emit* helpers exposed by
-  // BaseChannelPlugin — all event-emission logic stays inside the plugin
-  // class so the webhook handler remains a pure dispatcher.
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Emit `message.received` for a validated inbound Zenvia message, after
-   * dedupe. Returns `true` when an event was published.
-   */
   async handleInboundMessage(instanceId: string, msg: ZenviaInboundMessage): Promise<boolean> {
     const state = this.zenviaInstances.get(instanceId);
     if (!state) {
       this.logger.warn('[zenvia] webhook for unknown/disconnected instance — dropping', { instanceId });
+      return false;
+    }
+
+    const addressedTo = msg.to ? toZenviaPhone(msg.to) || msg.to : undefined;
+    if (addressedTo && addressedTo !== state.config.senderId) {
+      this.logger.debug('[zenvia] inbound message addressed to another sender dropped', {
+        instanceId,
+        messageId: msg.id,
+      });
       return false;
     }
 
@@ -503,8 +413,6 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     const parsedTs = msg.timestamp ? Date.parse(msg.timestamp) : Number.NaN;
     const platformTimestampMs = Number.isFinite(parsedTs) ? parsedTs : Date.now();
 
-    // Journey timing: T0 (platformReceivedAt) + T1 (pluginReceivedAt), then
-    // T2 (eventPublishedAt) after the event is on the bus.
     const timings = this.captureInboundTimings(platformTimestampMs);
 
     const correlationId = await this.emitMessageReceived({
@@ -527,11 +435,6 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     return true;
   }
 
-  /**
-   * Run inbound text (body and/or media caption) through the SDK sanitizer.
-   * Mutates `content` in place; returns `false` when the sanitizer rejects
-   * the message (null bytes / oversized) — the caller drops it.
-   */
   private sanitizeInboundContent(instanceId: string, messageId: string, content: ExtractedInboundContent): boolean {
     for (const field of ['text', 'caption'] as const) {
       const value = content[field];
@@ -551,17 +454,6 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     return true;
   }
 
-  /**
-   * Emit the matching `message.*` event for a MESSAGE_STATUS event. The
-   * message id is the one `sendMessage` returned.
-   *
-   * Maps:
-   *   SENT                      → no-op (already emitted by `sendMessage`)
-   *   DELIVERED                 → message.delivered
-   *   READ                      → message.read
-   *   REJECTED / NOT_DELIVERED  → message.failed
-   * Anything else (CLICKED, DELETED, voice codes, …) is ignored.
-   */
   async handleStatusUpdate(instanceId: string, event: ZenviaMessageStatusEvent): Promise<void> {
     const externalId = event.message?.id ?? event.messageId;
     if (!externalId) return;
@@ -595,27 +487,13 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       }
 
       default:
-        // SENT is already covered by `sendMessage`; other codes have no Omni event.
         return;
     }
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// Module-level helpers — pure, no plugin state (Biome cognitive-complexity
-// budget: sendMessage stays a thin orchestrator, payload building lives here).
-// ─────────────────────────────────────────────────────────────────────────
-
 type OutboundBuildResult = { ok: true; payload: ZenviaOutboundMessage } | { ok: false; error: string };
 
-/**
- * Build the /channels/whatsapp/messages body for an outgoing message.
- *
- * Returns `{ ok: false }` for unsupported content, missing template metadata
- * or a handoff with no configured solution — `sendMessage` surfaces that as a
- * non-retryable `SendResult` without emitting `message.failed` (nothing was
- * attempted against the Zenvia API).
- */
 function buildOutbound(config: ZenviaConfig, message: OutgoingMessage): OutboundBuildResult {
   const contentResult = buildOutboundContent(message);
   if (!contentResult.ok) return contentResult;
@@ -665,20 +543,12 @@ function buildOutboundContent(message: OutgoingMessage): ContentBuildResult {
   return { ok: false, error: `Unsupported content.type=${content.type} for zenvia` };
 }
 
-/**
- * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
- * (same contract as the other WhatsApp channels).
- */
 function resolveOutboundText(message: OutgoingMessage): string {
   const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
   const text = message.content.text ?? '';
   return formatMode === 'passthrough' ? text : markdownToWhatsApp(text);
 }
 
-/**
- * Media goes as a `file` content (Zenvia fetches the public URL). Captions:
- * image / video only (the spec's WhatsApp rule). File names: documents only.
- */
 function buildMediaContent(message: OutgoingMessage): ContentBuildResult {
   const { content } = message;
   if (!content.mediaUrl) {
@@ -695,12 +565,6 @@ function buildMediaContent(message: OutgoingMessage): ContentBuildResult {
   return { ok: true, content: file };
 }
 
-/**
- * Template descriptor via `metadata.template` (the cross-channel convention).
- * Zenvia templates are addressed by id and filled by NAMED fields, so the
- * descriptor carries `{ id | name, fields }`; positional `bodyParameters`
- * cannot be mapped and are refused rather than guessed.
- */
 function buildTemplateContent(message: OutgoingMessage): ContentBuildResult {
   const tpl = (message.metadata?.template ?? {}) as {
     id?: string;
@@ -721,7 +585,6 @@ function buildTemplateContent(message: OutgoingMessage): ContentBuildResult {
   return { ok: true, content: { type: 'template', templateId, ...(tpl.fields ? { fields: tpl.fields } : {}) } };
 }
 
-/** Read + validate the Zenvia credential block from an InstanceConfig. */
 function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
   const creds = (config.credentials ?? {}) as Record<string, unknown>;
   const opts = (config.options ?? {}) as Record<string, unknown>;
@@ -754,16 +617,10 @@ function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
     );
   }
 
-  if (salesApiKey && !handoffGroupId) {
+  if (!webhookVerifyToken) {
     throw new ZenviaApiError(
       ZenviaErrorCode.INVALID_REQUEST,
-      'zenviaHandoffGroupId is required together with zenviaSalesApiKey (the group dedicated to this chatbot)',
-    );
-  }
-  if (!salesApiKey && (handoffGroupId || handoffUserId)) {
-    throw new ZenviaApiError(
-      ZenviaErrorCode.INVALID_REQUEST,
-      'zenviaSalesApiKey is required together with zenviaHandoffGroupId and zenviaHandoffUserId',
+      'webhookVerifyToken is required for a zenvia instance: Zenvia signs nothing, so the subscription must send it as x-webhook-token',
     );
   }
 
@@ -785,14 +642,12 @@ function isHandoffSolution(value: string): value is ZenviaHandoffSolution {
 interface ExtractedInboundContent {
   type: ContentType;
   text?: string;
-  /** Zenvia's `fileUrl` — materialized by `downloadInboundMedia`. */
   mediaId?: string;
   mimeType?: string;
   caption?: string;
   filename?: string;
 }
 
-/** Normalize one inbound Zenvia content to the Omni content envelope. */
 function extractInboundContent(content: ZenviaInboundContent): ExtractedInboundContent | null {
   switch (content.type) {
     case 'text':
@@ -823,7 +678,6 @@ function extractFileContent(content: ZenviaInboundContent): ExtractedInboundCont
     fileCaption?: string;
     status?: string;
   };
-  // Zenvia reports its own upload verdict; a REJECTED file has no usable bytes.
   if (file.status === 'REJECTED' || !file.fileUrl) return null;
   return {
     type: omniTypeForMime(file.fileMimeType),
@@ -852,11 +706,6 @@ function extractContactsContent(content: ZenviaInboundContent): ExtractedInbound
   return { type: 'text', text: `Contact: ${displayName}${phone ? `: ${phone}` : ''}` };
 }
 
-/**
- * Click-to-WhatsApp referral in the Meta Cloud API shape — the same keys
- * every other WhatsApp channel's raw payload carries, so consumers read ad
- * attribution one way regardless of BSP.
- */
 function toMetaReferral(referral: ZenviaReferral | undefined): Record<string, unknown> | undefined {
   if (!referral) return undefined;
   const meta: Record<string, unknown> = {};

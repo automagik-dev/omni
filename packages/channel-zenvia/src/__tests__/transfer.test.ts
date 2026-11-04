@@ -59,19 +59,34 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(url.searchParams.get('api-key')).toBe(SALES_KEY);
   });
 
-  it('refuses to connect when the group is not visible to the Sales key', async () => {
-    await expect(connect({}, [{ id: 'another-group' }])).rejects.toThrow(/zenviaHandoffGroupId/);
+  it('still connects when the group is not listed, and still attempts the transfer', async () => {
+    await connect({}, [{ id: 'another-group' }]);
+    const fetchSpy = spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+      .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
+      .mockResolvedValueOnce(sendResponse());
+    const before = fetchSpy.mock.calls.length;
+
+    const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+    expect(result.success).toBe(true);
+    expect(call(fetchSpy, before + 1).url.pathname).toBe(`/api/v1/prospect/${PROSPECT_ID}/transfer`);
   });
 
-  it('refuses to connect when the Sales key is rejected, without echoing the key', async () => {
+  it('still connects when the Sales key is rejected; the handoff then fails without echoing the key', async () => {
     plugin = new ZenviaPlugin();
     await plugin.initialize(createContext(new MockEventBus()));
     spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse([]))
       .mockResolvedValueOnce(jsonResponse({ message: 'invalid api key' }, 401));
-    const attempt = connectPlugin(plugin, { zenviaSalesApiKey: SALES_KEY, zenviaHandoffGroupId: GROUP_ID });
-    await expect(attempt).rejects.toThrow(/zenviaSalesApiKey/);
-    await attempt.catch((err: Error) => expect(err.message).not.toContain(SALES_KEY));
+    await connectPlugin(plugin, { zenviaSalesApiKey: SALES_KEY, zenviaHandoffGroupId: GROUP_ID });
+    spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: 'invalid api key' }, 401));
+
+    const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+    expect(result.success).toBe(false);
+    expect(result.error).not.toContain(SALES_KEY);
   });
 
   it('still connects when the Sales API is down, so messaging is not held hostage', async () => {
@@ -86,21 +101,27 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(result.success).toBe(true);
   });
 
-  it('requires the key and the group together', async () => {
-    const fresh = new ZenviaPlugin();
-    await fresh.initialize(createContext(new MockEventBus()));
-    spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]));
-    await expect(connectPlugin(fresh, { zenviaSalesApiKey: SALES_KEY })).rejects.toThrow(/zenviaHandoffGroupId/);
-    await expect(connectPlugin(fresh, { zenviaHandoffGroupId: GROUP_ID })).rejects.toThrow(/zenviaSalesApiKey/);
-    await expect(connectPlugin(fresh, { zenviaHandoffUserId: USER_ID })).rejects.toThrow(/zenviaSalesApiKey/);
+  it('keeps the transfer off, without blocking the connection, when only half of the pair is set', async () => {
+    plugin = new ZenviaPlugin();
+    await plugin.initialize(createContext(new MockEventBus()));
+    spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
+    await connectPlugin(plugin, { zenviaSalesApiKey: SALES_KEY });
+    const fetchSpy = spyOn(globalThis, 'fetch');
+    const before = fetchSpy.mock.calls.length;
+
+    const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe(HANDOFF_NOT_CONFIGURED_ERROR);
+    expect(fetchSpy.mock.calls.length).toBe(before);
   });
 
-  it('looks the prospect up, writes the note, transfers to the group and then sends the farewell', async () => {
+  it('looks the prospect up, transfers to the group, writes the note and then sends the farewell', async () => {
     await connect();
     const fetchSpy = spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID, firstName: 'Ana' }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(sendResponse());
     const before = fetchSpy.mock.calls.length;
 
@@ -115,16 +136,16 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(lookup.url.searchParams.get('phoneNumber')).toBe(`+${CONTACT}`);
     expect(lookup.url.searchParams.get('api-key')).toBe(SALES_KEY);
 
-    const note = call(fetchSpy, before + 1);
+    const transfer = call(fetchSpy, before + 1);
+    expect(transfer.url.pathname).toBe(`/api/v1/prospect/${PROSPECT_ID}/transfer`);
+    expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: GROUP_ID });
+
+    const note = call(fetchSpy, before + 2);
     expect(note.url.pathname).toBe(`/api/v1/prospect/${PROSPECT_ID}/interactions`);
-    expect(bodyOf(fetchSpy, before + 1)).toEqual({
+    expect(bodyOf(fetchSpy, before + 2)).toEqual({
       type: 'note',
       content: 'Motivo do handoff: asked for a person\nDados do lead:\ncity: Fortaleza\nlives: 2\nqueue: sales',
     });
-
-    const transfer = call(fetchSpy, before + 2);
-    expect(transfer.url.pathname).toBe(`/api/v1/prospect/${PROSPECT_ID}/transfer`);
-    expect(bodyOf(fetchSpy, before + 2)).toEqual({ group: GROUP_ID });
 
     const farewell = call(fetchSpy, before + 3);
     expect(farewell.url.href).toBe('https://api.zenvia.com/v2/channels/whatsapp/messages');
@@ -135,23 +156,36 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     await connect({ zenviaHandoffUserId: USER_ID });
     const fetchSpy = spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(sendResponse());
     const before = fetchSpy.mock.calls.length;
 
     await plugin.sendMessage(instanceId, handoffMessage);
 
-    expect(bodyOf(fetchSpy, before + 2)).toEqual({ user: USER_ID, group: GROUP_ID });
+    expect(bodyOf(fetchSpy, before + 1)).toEqual({ user: USER_ID, group: GROUP_ID });
   });
 
-  it('retries the prospect lookup without the plus sign', async () => {
+  it('takes an empty 2xx transfer answer as done', async () => {
+    await connect();
+    spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
+      .mockResolvedValueOnce(sendResponse());
+
+    const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+    expect(result.success).toBe(true);
+  });
+
+  it('retries the prospect lookup without the plus sign on a 404', async () => {
     await connect();
     const fetchSpy = spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(new Response('', { status: 404 }))
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(sendResponse());
     const before = fetchSpy.mock.calls.length;
 
@@ -160,6 +194,20 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(result.success).toBe(true);
     expect(call(fetchSpy, before).url.searchParams.get('phoneNumber')).toBe(`+${CONTACT}`);
     expect(call(fetchSpy, before + 1).url.searchParams.get('phoneNumber')).toBe(CONTACT);
+  });
+
+  it('also retries without the plus sign when the first format is rejected', async () => {
+    await connect();
+    spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(jsonResponse({ message: 'invalid phone format' }, 400))
+      .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+      .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
+      .mockResolvedValueOnce(sendResponse());
+
+    const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+    expect(result.success).toBe(true);
   });
 
   it('fails the handoff, and sends nothing to the contact, when there is no prospect', async () => {
@@ -176,11 +224,10 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(fetchSpy.mock.calls.length - before).toBe(2);
   });
 
-  it('fails the handoff, and sends nothing to the contact, when the transfer is refused', async () => {
+  it('fails the handoff, and writes nothing nor sends anything, when the transfer is refused', async () => {
     await connect();
     const fetchSpy = spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ message: 'group not allowed' }, 403));
     const before = fetchSpy.mock.calls.length;
 
@@ -188,14 +235,13 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).not.toContain(SALES_KEY);
-    expect(fetchSpy.mock.calls.length - before).toBe(3);
+    expect(fetchSpy.mock.calls.length - before).toBe(2);
   });
 
   it('fails the handoff when Zenvia answers success=false', async () => {
     await connect();
     spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ success: false }));
 
     const result = await plugin.sendMessage(instanceId, handoffMessage);
@@ -204,19 +250,19 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(result.error).toMatch(/did not confirm the transfer/);
   });
 
-  it('transfers even when the note cannot be written', async () => {
+  it('keeps the handoff done when the note cannot be written', async () => {
     await connect();
     const fetchSpy = spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse({ message: 'boom' }, 500))
       .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse({ message: 'boom' }, 500))
       .mockResolvedValueOnce(sendResponse());
     const before = fetchSpy.mock.calls.length;
 
     const result = await plugin.sendMessage(instanceId, handoffMessage);
 
     expect(result.success).toBe(true);
-    expect(call(fetchSpy, before + 2).url.pathname).toBe(`/api/v1/prospect/${PROSPECT_ID}/transfer`);
+    expect(call(fetchSpy, before + 3).url.href).toBe('https://api.zenvia.com/v2/channels/whatsapp/messages');
   });
 
   it('skips the note when the handoff carries no context', async () => {
@@ -229,15 +275,15 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
 
     await plugin.sendMessage(instanceId, { ...handoffMessage, metadata: { isHandoff: true } });
 
-    expect(call(fetchSpy, before + 1).url.pathname).toBe(`/api/v1/prospect/${PROSPECT_ID}/transfer`);
+    expect(call(fetchSpy, before + 2).url.href).toBe('https://api.zenvia.com/v2/channels/whatsapp/messages');
   });
 
   it('still reports the handoff as done when only the farewell fails after the transfer', async () => {
     await connect();
     spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ message: 'down' }, 503));
 
     const result = await plugin.sendMessage(instanceId, handoffMessage);
@@ -250,8 +296,8 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     await connect({ zenviaHandoffSolution: 'conversion' });
     const fetchSpy = spyOn(globalThis, 'fetch')
       .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
-      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(jsonResponse({ success: true }))
+      .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
       .mockResolvedValueOnce(sendResponse());
     const before = fetchSpy.mock.calls.length;
 

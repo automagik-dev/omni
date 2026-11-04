@@ -168,6 +168,13 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
     body.gupshupHandoffOptions = JSON.parse(opts.gupshupHandoffOptions);
   }
   setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
+  setVal(body, 'zenviaApiToken', opts.zenviaApiToken);
+  setVal(body, 'zenviaSenderId', opts.zenviaSenderId);
+  setVal(body, 'webhookVerifyToken', opts.zenviaWebhookVerifyToken);
+  setVal(body, 'zenviaSalesApiKey', opts.zenviaSalesApiKey);
+  setVal(body, 'zenviaHandoffGroupId', opts.zenviaHandoffGroupId);
+  setVal(body, 'zenviaHandoffUserId', opts.zenviaHandoffUserId);
+  setVal(body, 'zenviaHandoffSolution', opts.zenviaHandoffSolution);
   setVal(body, 'twilioAccountSid', opts.twilioAccountSid);
   setVal(body, 'twilioAuthToken', opts.twilioAuthToken);
   setVal(body, 'twilioFrom', opts.twilioFrom);
@@ -513,6 +520,16 @@ export function createInstancesCommand(): Command {
       'Gupshup HANDOFF routing defaults and customerFields template (JSON object)',
     )
     .option('--gupshup-webhook-verify-token <token>', 'Gupshup webhook verify token')
+    .option('--zenvia-api-token <token>', 'Zenvia API token (X-API-TOKEN header)')
+    .option('--zenvia-sender-id <number>', 'Sender registered at Zenvia (the WhatsApp number)')
+    .option(
+      '--zenvia-webhook-verify-token <token>',
+      'Secret the Zenvia subscription sends as x-webhook-token (required for zenvia)',
+    )
+    .option('--zenvia-sales-api-key <key>', 'Zenvia Sales API key (not the same token as the API token)')
+    .option('--zenvia-handoff-group-id <id>', 'Zenvia Sales group dedicated to the chatbot; handoffs transfer to it')
+    .option('--zenvia-handoff-user-id <id>', 'Optional agent inside the Zenvia handoff group')
+    .option('--zenvia-handoff-solution <solution>', 'Zenvia fallback routing: conversion, zenvia_chat or nlu')
     // Twilio WhatsApp
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
     .option('--twilio-auth-token <token>', 'Twilio Auth Token')
@@ -1221,6 +1238,13 @@ export function createInstancesCommand(): Command {
       '--gupshup-handoff-options <json>',
       'Gupshup HANDOFF routing defaults and customerFields template (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
     )
+    .option('--zenvia-api-token <token>', 'Zenvia API token (use "null" to clear)')
+    .option('--zenvia-sender-id <number>', 'Sender registered at Zenvia (use "null" to clear)')
+    .option('--zenvia-webhook-verify-token <token>', 'Secret the Zenvia subscription sends as x-webhook-token')
+    .option('--zenvia-sales-api-key <key>', 'Zenvia Sales API key (use "null" to clear)')
+    .option('--zenvia-handoff-group-id <id>', 'Zenvia Sales handoff group (use "null" to clear)')
+    .option('--zenvia-handoff-user-id <id>', 'Agent inside the Zenvia handoff group (use "null" to clear)')
+    .option('--zenvia-handoff-solution <solution>', 'Zenvia fallback routing (use "null" to clear)')
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)

@@ -416,11 +416,6 @@ export function createApp(
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
 
-  // Public Zenvia webhook endpoint — auth-exempt, fed by Zenvia subscriptions.
-  // Zenvia signs nothing: authenticity rests on the per-instance path
-  // (unguessable instance UUID) plus the verify token the subscription echoes
-  // as a fixed `x-webhook-token` header, enforced by the plugin when configured.
-  // Must be mounted before protectedApp so Zenvia's servers can reach it.
   app.post('/api/v2/channels/zenvia/:instanceId/webhook', async (c) => {
     const channelRegistry = c.get('channelRegistry');
 

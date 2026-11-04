@@ -1,8 +1,3 @@
-/**
- * Zenvia webhook handler — token check, MESSAGE normalization (text, media,
- * location, referral, visitor name), dedupe, OUT echoes and MESSAGE_STATUS.
- */
-
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { ZenviaPlugin } from '../plugin';
@@ -39,7 +34,7 @@ function messageEvent(message: Record<string, unknown>, direction: 'IN' | 'OUT' 
   };
 }
 
-function post(payload: unknown, headers: Record<string, string> = {}): Request {
+function post(payload: unknown, headers: Record<string, string> = { 'x-webhook-token': VERIFY_TOKEN }): Request {
   return new Request(WEBHOOK_URL, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -214,21 +209,31 @@ describe('Zenvia webhook', () => {
     expect(eventBus.published).toHaveLength(0);
   });
 
-  it('returns 404 for an instance that is not connected', async () => {
+  it('answers 503 while the instance is not connected, so Zenvia can redeliver', async () => {
     const res = await plugin.handleWebhook(
       new Request('http://localhost/api/v2/channels/zenvia/not-connected/webhook', { method: 'POST', body: '{}' }),
     );
-    expect(res.status).toBe(404);
+    expect(res.status).toBe(503);
   });
 
-  describe('with a webhook verify token', () => {
-    beforeEach(async () => {
-      await setup({ webhookVerifyToken: VERIFY_TOKEN });
+  it('drops an inbound message addressed to another sender of the account', async () => {
+    const res = await plugin.handleWebhook(
+      post(messageEvent({ id: 'm-other', to: '5511988887777', contents: [{ type: 'text', text: 'x' }] })),
+    );
+    expect(res.status).toBe(200);
+    expect(received(eventBus)).toHaveLength(0);
+  });
+
+  describe('webhook verify token', () => {
+    it('is required to connect', async () => {
+      const fresh = new ZenviaPlugin();
+      await fresh.initialize(createContext(new MockEventBus()));
+      await expect(connectPlugin(fresh, { webhookVerifyToken: undefined })).rejects.toThrow(/webhookVerifyToken/);
     });
 
     it('rejects a request without the token header', async () => {
       const res = await plugin.handleWebhook(
-        post(messageEvent({ id: 'm-noauth', contents: [{ type: 'text', text: 'x' }] })),
+        post(messageEvent({ id: 'm-noauth', contents: [{ type: 'text', text: 'x' }] }), {}),
       );
       expect(res.status).toBe(401);
       expect(received(eventBus)).toHaveLength(0);

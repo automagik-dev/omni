@@ -51,11 +51,6 @@ import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
 
-/**
- * `conversation.solution` values a Zenvia handoff can route to. Mirrors the
- * list the `@omni/channel-zenvia` plugin validates at connect time — the API
- * does not depend on channel packages, so the literal list lives here too.
- */
 const ZENVIA_HANDOFF_SOLUTIONS = ['conversion', 'zenvia_chat', 'nlu'] as const;
 type ZenviaHandoffSolution = (typeof ZENVIA_HANDOFF_SOLUTIONS)[number];
 
@@ -555,13 +550,22 @@ function resolveChannelToken(data: {
   discordBotToken?: string | null;
   slackBotToken?: string | null;
   twilioAuthToken?: string | null;
+  zenviaApiToken?: string | null;
 }): string | undefined {
   // If a generic `token` was provided but no channel-specific field, persist it
-  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken && !data.twilioAuthToken) {
+  if (
+    data.token &&
+    !data.telegramBotToken &&
+    !data.discordBotToken &&
+    !data.slackBotToken &&
+    !data.twilioAuthToken &&
+    !data.zenviaApiToken
+  ) {
     if (data.channel === 'telegram') data.telegramBotToken = data.token;
     else if (data.channel === 'discord') data.discordBotToken = data.token;
     else if (data.channel === 'slack') data.slackBotToken = data.token;
     else if (data.channel === 'twilio-whatsapp') data.twilioAuthToken = data.token;
+    else if (data.channel === 'zenvia') data.zenviaApiToken = data.token;
   }
   return (
     data.token ??
@@ -718,6 +722,8 @@ function channelTokenField(channel: string): string | undefined {
       return 'discordBotToken';
     case 'slack':
       return 'slackBotToken';
+    case 'zenvia':
+      return 'zenviaApiToken';
     default:
       return undefined;
   }
@@ -1919,7 +1925,6 @@ function mergeAscFlowFields(
   };
 }
 
-/** zenvia credentials, body-over-persisted. Extracted to keep the callers' complexity in budget. */
 function mergeZenviaFields(
   instance: Pick<
     InstanceRecord,

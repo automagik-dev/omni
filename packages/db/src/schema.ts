@@ -985,24 +985,13 @@ export const instances = pgTable(
     /** WABA phone number (digits-only E.164) — the `originador` header. */
     ascOriginador: varchar('asc_originador', { length: 32 }),
 
-    // ---- Zenvia Configuration ----
-    // Per-instance credentials for the Zenvia API v2 (WhatsApp BSP).
-    // zenviaApiToken is sealed at rest (SEALED_CREDENTIAL_COLUMNS in the
-    // instances service). The optional webhook verify token reuses the shared
-    // webhook_verify_token column above (Gupshup precedent).
-    /** API token — the `X-API-TOKEN` header. */
     zenviaApiToken: text('zenvia_api_token'),
-    /** Sender registered at Zenvia (the WhatsApp number) — `from` on every send. */
     zenviaSenderId: varchar('zenvia_sender_id', { length: 64 }),
-    /** Solution a handoff routes the conversation to: conversion | zenvia_chat | nlu. Null = handoff refused. */
     zenviaHandoffSolution: varchar('zenvia_handoff_solution', { length: 32 }).$type<
       'conversion' | 'zenvia_chat' | 'nlu'
     >(),
-    /** Key for the Zenvia Sales APIs (`api-key` query parameter). Not the same token as `zenviaApiToken`; sealed at rest. */
     zenviaSalesApiKey: text('zenvia_sales_api_key'),
-    /** Sales group dedicated to the chatbot; the handoff transfers the prospect to it. */
     zenviaHandoffGroupId: varchar('zenvia_handoff_group_id', { length: 64 }),
-    /** Optional agent inside that group the handoff transfers to. */
     zenviaHandoffUserId: varchar('zenvia_handoff_user_id', { length: 64 }),
 
     // ---- ASC platform Flow Configuration ----
