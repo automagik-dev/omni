@@ -199,7 +199,6 @@ export const ZenviaMessageEventSchema = z
     message: ZenviaInboundMessageSchema,
   })
   .passthrough();
-export type ZenviaMessageEvent = z.infer<typeof ZenviaMessageEventSchema>;
 
 export const ZenviaMessageStatusEventSchema = z
   .object({
