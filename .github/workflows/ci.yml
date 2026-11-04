@@ -116,6 +116,12 @@ jobs:
           HELM_BIN="${tools}/helm/linux-amd64/helm" scripts/ci/test-helm-image-digest.sh
           "${tools}/actionlint/actionlint" .github/workflows/*.yml
 
+      - name: Herdr merge helper tests
+        # Stub-gh harness for .herdr/tools/merge-when-green.sh: bash and jq only, no network.
+        # Each case runs under timeout, so a polling loop that never ends fails instead of hanging.
+        timeout-minutes: 5
+        run: bash .herdr/tools/merge-when-green.test.sh
+
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
