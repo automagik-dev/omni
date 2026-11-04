@@ -7,8 +7,15 @@
 --   * zenvia_sender_id         — sender registered at Zenvia (the WhatsApp
 --                                number), sent as `from` on every message
 --   * zenvia_handoff_solution  — `conversation.solution` a handoff routes to
---                                (conversion | zenvia_chat | nlu); null means
---                                the plugin refuses handoffs
+--                                (conversion | zenvia_chat | nlu)
+--   * zenvia_sales_api_key     — key for the Zenvia Sales APIs (`api-key`
+--                                query parameter, not the same token as the
+--                                API token); sealed at rest
+--   * zenvia_handoff_group_id  — Sales group dedicated to the chatbot, the
+--                                target of the handoff transfer
+--   * zenvia_handoff_user_id   — optional agent inside that group
+-- With the Sales key and group set the handoff transfers the prospect;
+-- otherwise it falls back to the solution; with neither it is refused.
 -- The optional webhook verify token reuses the existing shared
 -- webhook_verify_token column (Gupshup precedent) — no new column.
 --
@@ -22,4 +29,7 @@
 ALTER TABLE "instances"
   ADD COLUMN IF NOT EXISTS "zenvia_api_token" text,
   ADD COLUMN IF NOT EXISTS "zenvia_sender_id" varchar(64),
-  ADD COLUMN IF NOT EXISTS "zenvia_handoff_solution" varchar(32);
+  ADD COLUMN IF NOT EXISTS "zenvia_handoff_solution" varchar(32),
+  ADD COLUMN IF NOT EXISTS "zenvia_sales_api_key" text,
+  ADD COLUMN IF NOT EXISTS "zenvia_handoff_group_id" varchar(64),
+  ADD COLUMN IF NOT EXISTS "zenvia_handoff_user_id" varchar(64);

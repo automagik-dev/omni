@@ -269,6 +269,21 @@ const createInstanceSchema = z.object({
     .optional()
     .nullable()
     .describe('Zenvia solution a handoff routes the conversation to (conversation.solution)'),
+  zenviaSalesApiKey: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Zenvia Sales API key (not the same token as zenviaApiToken)'),
+  zenviaHandoffGroupId: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Sales group dedicated to the chatbot; handoffs transfer the prospect to it'),
+  zenviaHandoffUserId: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Optional agent inside the handoff group the prospect is transferred to'),
   ascFlowBaseUrl: z
     .string()
     .optional()
@@ -595,6 +610,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'ascToken',
   'ascFlowChave',
   'zenviaApiToken',
+  'zenviaSalesApiKey',
 ] as const;
 
 /**
@@ -748,6 +764,9 @@ type InstanceConnectionOptionsInput = {
   zenviaApiToken?: string | null;
   zenviaSenderId?: string | null;
   zenviaHandoffSolution?: ZenviaHandoffSolution | null;
+  zenviaSalesApiKey?: string | null;
+  zenviaHandoffGroupId?: string | null;
+  zenviaHandoffUserId?: string | null;
   metaAccessToken?: string | null;
   metaPhoneNumberId?: string | null;
   metaWabaId?: string | null;
@@ -849,12 +868,18 @@ function applyZenviaConnectionOptions(
     zenviaApiToken?: string | null;
     zenviaSenderId?: string | null;
     zenviaHandoffSolution?: string | null;
+    zenviaSalesApiKey?: string | null;
+    zenviaHandoffGroupId?: string | null;
+    zenviaHandoffUserId?: string | null;
     webhookVerifyToken?: string | null;
   },
 ): void {
   if (input.zenviaApiToken) options.zenviaApiToken = input.zenviaApiToken;
   if (input.zenviaSenderId) options.zenviaSenderId = input.zenviaSenderId;
   if (input.zenviaHandoffSolution) options.zenviaHandoffSolution = input.zenviaHandoffSolution;
+  if (input.zenviaSalesApiKey) options.zenviaSalesApiKey = input.zenviaSalesApiKey;
+  if (input.zenviaHandoffGroupId) options.zenviaHandoffGroupId = input.zenviaHandoffGroupId;
+  if (input.zenviaHandoffUserId) options.zenviaHandoffUserId = input.zenviaHandoffUserId;
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
@@ -1271,6 +1296,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     zenviaApiToken: instance.zenviaApiToken,
     zenviaSenderId: instance.zenviaSenderId,
     zenviaHandoffSolution: instance.zenviaHandoffSolution,
+    zenviaSalesApiKey: instance.zenviaSalesApiKey,
+    zenviaHandoffGroupId: instance.zenviaHandoffGroupId,
+    zenviaHandoffUserId: instance.zenviaHandoffUserId,
     // No meta* threading here: createInstanceSchema carries no Meta fields, so
     // a whatsapp-business row is never credentialed at create — credentials
     // arrive via the whatsapp-cloud connect/OAuth route.
@@ -1834,6 +1862,15 @@ const connectInstanceSchema = z.object({
     .enum(ZENVIA_HANDOFF_SOLUTIONS)
     .optional()
     .describe('Zenvia solution a handoff routes the conversation to (conversation.solution)'),
+  zenviaSalesApiKey: z.string().optional().describe('Zenvia Sales API key (not the same token as zenviaApiToken)'),
+  zenviaHandoffGroupId: z
+    .string()
+    .optional()
+    .describe('Sales group dedicated to the chatbot; handoffs transfer the prospect to it'),
+  zenviaHandoffUserId: z
+    .string()
+    .optional()
+    .describe('Optional agent inside the handoff group the prospect is transferred to'),
   ascFlowBaseUrl: z.string().optional().describe('ASC platform base URL'),
   ascFlowLogin: z.string().optional().describe('ASC platform /authuser login'),
   ascFlowChave: z.string().optional().describe('ASC platform /authuser chave (secret)'),
@@ -1884,13 +1921,32 @@ function mergeAscFlowFields(
 
 /** zenvia credentials, body-over-persisted. Extracted to keep the callers' complexity in budget. */
 function mergeZenviaFields(
-  instance: Pick<InstanceRecord, 'zenviaApiToken' | 'zenviaSenderId' | 'zenviaHandoffSolution'>,
-  body: Pick<ConnectInstanceBody, 'zenviaApiToken' | 'zenviaSenderId' | 'zenviaHandoffSolution'>,
+  instance: Pick<
+    InstanceRecord,
+    | 'zenviaApiToken'
+    | 'zenviaSenderId'
+    | 'zenviaHandoffSolution'
+    | 'zenviaSalesApiKey'
+    | 'zenviaHandoffGroupId'
+    | 'zenviaHandoffUserId'
+  >,
+  body: Pick<
+    ConnectInstanceBody,
+    | 'zenviaApiToken'
+    | 'zenviaSenderId'
+    | 'zenviaHandoffSolution'
+    | 'zenviaSalesApiKey'
+    | 'zenviaHandoffGroupId'
+    | 'zenviaHandoffUserId'
+  >,
 ) {
   return {
     zenviaApiToken: body.zenviaApiToken ?? instance.zenviaApiToken,
     zenviaSenderId: body.zenviaSenderId ?? instance.zenviaSenderId,
     zenviaHandoffSolution: body.zenviaHandoffSolution ?? instance.zenviaHandoffSolution,
+    zenviaSalesApiKey: body.zenviaSalesApiKey ?? instance.zenviaSalesApiKey,
+    zenviaHandoffGroupId: body.zenviaHandoffGroupId ?? instance.zenviaHandoffGroupId,
+    zenviaHandoffUserId: body.zenviaHandoffUserId ?? instance.zenviaHandoffUserId,
   };
 }
 

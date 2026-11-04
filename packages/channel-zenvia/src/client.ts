@@ -10,7 +10,8 @@
  */
 
 import type { ZenviaOutboundMessage, ZenviaSendResponse } from './types';
-import { ZenviaApiError, ZenviaErrorCode, mapHttpStatusToZenviaError } from './utils/errors';
+import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
+import { zenviaErrorFromResponse } from './utils/http-error';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -145,34 +146,7 @@ export class ZenviaClient {
     return (text ? JSON.parse(text) : {}) as T;
   }
 
-  /**
-   * Zenvia errors come as `{ code, message, details[] }`. Classify by HTTP
-   * status and keep the vendor code + message (truncated) for diagnosis.
-   */
-  private async errorFromResponse(res: Response, operation: string): Promise<ZenviaApiError> {
-    let bodyText = '';
-    try {
-      bodyText = await res.text();
-    } catch {
-      /* body unreadable — keep empty */
-    }
-    let vendorCode: string | undefined;
-    let vendorMessage: string | undefined;
-    try {
-      const parsed = JSON.parse(bodyText) as { code?: unknown; message?: unknown };
-      if (typeof parsed.code === 'string') vendorCode = parsed.code;
-      if (typeof parsed.message === 'string') vendorMessage = parsed.message;
-    } catch {
-      /* not JSON — fall back to the raw body */
-    }
-    const code = mapHttpStatusToZenviaError(res.status) ?? ZenviaErrorCode.UNKNOWN;
-    const detail = vendorMessage ?? bodyText.slice(0, 200);
-    const message = `HTTP ${res.status} from Zenvia ${operation}${vendorCode ? ` (${vendorCode})` : ''}${detail ? `: ${detail}` : ''}`;
-    return new ZenviaApiError(code, message, {
-      httpStatus: res.status,
-      operation,
-      vendorCode,
-      raw: bodyText || undefined,
-    });
+  private errorFromResponse(res: Response, operation: string): Promise<ZenviaApiError> {
+    return zenviaErrorFromResponse(res, operation);
   }
 }

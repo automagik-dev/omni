@@ -46,7 +46,20 @@ export interface ZenviaConfig {
    * (`webhook.headers` on the subscription). When set, every POST must carry it.
    */
   webhookVerifyToken?: string;
+  salesApiKey?: string;
+  handoffGroupId?: string;
+  handoffUserId?: string;
 }
+
+export const ZenviaSalesProspectSchema = z.object({ id: z.string().min(1) }).passthrough();
+export type ZenviaSalesProspect = z.infer<typeof ZenviaSalesProspectSchema>;
+
+export const ZenviaSalesGroupsSchema = z.array(
+  z.object({ id: z.string().min(1), name: z.string().optional(), displayName: z.string().optional() }).passthrough(),
+);
+export type ZenviaSalesGroups = z.infer<typeof ZenviaSalesGroupsSchema>;
+
+export const ZenviaSalesTransferResponseSchema = z.object({ success: z.boolean() }).passthrough();
 
 // ─────────────────────────────────────────────────────────────
 // Outbound

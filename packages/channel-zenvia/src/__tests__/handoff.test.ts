@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { buildHandoffRouting } from '../utils/handoff';
+import { buildHandoffNote, buildHandoffRouting, resolveHandoffMode } from '../utils/handoff';
 
 describe('buildHandoffRouting', () => {
   it('routes to the configured solution with no properties when there is no context', () => {
@@ -34,5 +34,44 @@ describe('buildHandoffRouting', () => {
     expect(
       buildHandoffRouting('nlu', { motivoHandoff: '   ', dadosLead: '', handoffFields: ['not', 'an', 'object'] }),
     ).toEqual({ solution: 'nlu' });
+  });
+});
+
+describe('resolveHandoffMode', () => {
+  const base = { apiToken: 't', senderId: '5511' };
+
+  it('transfers when the Sales key and the group are set, even with a solution', () => {
+    expect(resolveHandoffMode({ ...base, salesApiKey: 'k', handoffGroupId: 'g', handoffSolution: 'nlu' })).toBe(
+      'transfer',
+    );
+  });
+
+  it('routes through the conversation field when only a solution is set', () => {
+    expect(resolveHandoffMode({ ...base, handoffSolution: 'nlu' })).toBe('routing');
+  });
+
+  it('has no mode without a group or a solution', () => {
+    expect(resolveHandoffMode({ ...base, salesApiKey: 'k' })).toBeNull();
+    expect(resolveHandoffMode(base)).toBeNull();
+  });
+});
+
+describe('buildHandoffNote', () => {
+  it('is null when there is nothing to tell the agent', () => {
+    expect(buildHandoffNote({ isHandoff: true, motivoHandoff: '  ', dadosLead: '', handoffFields: [] })).toBeNull();
+  });
+
+  it('writes the reason, the lead data and the fields, one per line', () => {
+    expect(
+      buildHandoffNote({
+        motivoHandoff: ' wants a person ',
+        dadosLead: { age: 30, plan: ['a', 'b'] },
+        handoffFields: { queue: 'sales' },
+      }),
+    ).toBe('Motivo do handoff: wants a person\nDados do lead:\nage: 30\nplan: ["a","b"]\nqueue: sales');
+  });
+
+  it('keeps free text lead data as is', () => {
+    expect(buildHandoffNote({ dadosLead: 'family account' })).toBe('Dados do lead:\nfamily account');
   });
 });

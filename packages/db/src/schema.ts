@@ -998,6 +998,12 @@ export const instances = pgTable(
     zenviaHandoffSolution: varchar('zenvia_handoff_solution', { length: 32 }).$type<
       'conversion' | 'zenvia_chat' | 'nlu'
     >(),
+    /** Key for the Zenvia Sales APIs (`api-key` query parameter). Not the same token as `zenviaApiToken`; sealed at rest. */
+    zenviaSalesApiKey: text('zenvia_sales_api_key'),
+    /** Sales group dedicated to the chatbot; the handoff transfers the prospect to it. */
+    zenviaHandoffGroupId: varchar('zenvia_handoff_group_id', { length: 64 }),
+    /** Optional agent inside that group the handoff transfers to. */
+    zenviaHandoffUserId: varchar('zenvia_handoff_user_id', { length: 64 }),
 
     // ---- ASC platform Flow Configuration ----
     // Per-instance credentials for the ASC platform REST API (/rest/v2), the

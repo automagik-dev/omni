@@ -228,6 +228,7 @@ const SECRET_BODY_FIELDS = [
   'ascToken',
   'hermesPassword',
   'zenviaApiToken',
+  'zenviaSalesApiKey',
 ] as const;
 
 /** Mask a secret for display, matching the API's `get` shape (`xoxp-****9bdc`) */

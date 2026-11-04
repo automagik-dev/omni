@@ -29,13 +29,21 @@ export { ZENVIA_CAPABILITIES } from './capabilities';
 // HTTP client — exposed for future API routes needing raw Zenvia access.
 export { ZenviaClient, DEFAULT_ZENVIA_BASE_URL } from './client';
 export type { ZenviaClientOptions } from './client';
+export { ZenviaSalesClient, DEFAULT_ZENVIA_SALES_BASE_URL } from './sales-client';
+export type { ZenviaSalesClientOptions, ZenviaTransferTarget } from './sales-client';
 
 // Webhook handler — the api-side route delegates through plugin.handleWebhook,
 // but the pure handlers are exported for direct use/testing.
 export { handleZenviaEvent, handleZenviaWebhookRequest } from './handlers/webhook';
 
 // Handoff planning
-export { buildHandoffRouting, HANDOFF_NOT_CONFIGURED_ERROR } from './utils/handoff';
+export {
+  buildHandoffNote,
+  buildHandoffRouting,
+  resolveHandoffMode,
+  HANDOFF_NOT_CONFIGURED_ERROR,
+} from './utils/handoff';
+export type { ZenviaHandoffMode } from './utils/handoff';
 
 // Errors
 export { ZenviaApiError, ZenviaErrorCode, mapHttpStatusToZenviaError, isRetryable } from './utils/errors';

@@ -168,10 +168,11 @@ describe('(g) instances.* channel tokens', () => {
         webhookVerifyToken: 'hook-A',
         twilioAuthToken: 'tw-A',
         zenviaApiToken: 'zv-A',
+        zenviaSalesApiKey: 'zs-A',
       } as never),
     );
     const at = JSON.stringify(rows[0]);
-    for (const secret of ['xoxb-A', 'xapp-A', 'sign-A', 'tg-A', 'gup-A', 'hook-A', 'tw-A', 'zv-A']) {
+    for (const secret of ['xoxb-A', 'xapp-A', 'sign-A', 'tg-A', 'gup-A', 'hook-A', 'tw-A', 'zv-A', 'zs-A']) {
       expect(at).not.toContain(secret);
     }
   });

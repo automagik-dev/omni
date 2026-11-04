@@ -1,34 +1,62 @@
 /**
  * Handoff planning for the Zenvia channel.
  *
- * The Zenvia API has no endpoint to transfer, assign or queue a
- * conversation. Its only routing primitive is the `conversation` field on an
- * outbound message:
+ * Two modes, chosen by `resolveHandoffMode`:
+ *   - `transfer`: the Sales API moves the prospect to a group (see the plugin's
+ *     `transferToHuman`); the farewell is an ordinary message.
+ *   - `routing`: the farewell carries the API v2 `conversation` field
+ *     `{ solution, properties }`, and Zenvia routes the conversation when the
+ *     contact replies.
  *
- *   { "solution": "conversion" | "zenvia_chat" | "nlu", "properties": { … } }
- *
- * When the contact REPLIES to that message, Zenvia hands the conversation to
- * the chosen solution and exposes `properties` there. Consequences:
- *   - The handoff is carried by the farewell message itself — the text the
- *     `/messages/send/handoff` route passes in.
- *   - It only takes effect on the contact's next message. Until then the
- *     conversation is still Omni's, which is why the route's default
- *     `agentPaused` side effect is the right one: the agent must not answer
- *     the reply that Zenvia is about to route to people.
- *   - Which solution receives it is per-instance config
- *     (`zenviaHandoffSolution`). Without it there is nowhere to route to, and
- *     the handoff is refused instead of pausing the agent on a conversation
- *     no human will ever see.
- *
- * `properties` carries the structured handoff context (the route's
- * `handoffFields`, `motivoHandoff` and `dadosLead`) so the receiving team
- * sees why and with what the contact arrived.
+ * With neither configured the handoff is refused instead of pausing the agent
+ * on a conversation no human will ever see.
  */
 
-import type { ZenviaConversationRouting, ZenviaHandoffSolution } from '../types';
+import type { ZenviaConfig, ZenviaConversationRouting, ZenviaHandoffSolution } from '../types';
 
 export const HANDOFF_NOT_CONFIGURED_ERROR =
-  'Zenvia handoff refused: zenviaHandoffSolution is not configured on this instance, so there is no solution to route the conversation to';
+  'Zenvia handoff refused: configure zenviaSalesApiKey and zenviaHandoffGroupId (transfer through the Sales API) or zenviaHandoffSolution (conversation routing), so there is somewhere to send the conversation';
+
+const NOTE_REASON_LABEL = 'Motivo do handoff';
+const NOTE_LEAD_LABEL = 'Dados do lead';
+
+export type ZenviaHandoffMode = 'transfer' | 'routing';
+
+export function resolveHandoffMode(config: ZenviaConfig): ZenviaHandoffMode | null {
+  if (config.salesApiKey && config.handoffGroupId) return 'transfer';
+  if (config.handoffSolution) return 'routing';
+  return null;
+}
+
+function formatScalar(value: unknown): string {
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+function formatEntries(value: unknown): string[] {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return Object.entries(value as Record<string, unknown>).map(([key, entry]) => `${key}: ${formatScalar(entry)}`);
+  }
+  return [formatScalar(value)];
+}
+
+export function buildHandoffNote(meta: Record<string, unknown>): string | null {
+  const lines: string[] = [];
+
+  const reason = meta.motivoHandoff;
+  if (typeof reason === 'string' && reason.trim()) lines.push(`${NOTE_REASON_LABEL}: ${reason.trim()}`);
+
+  const leadData = meta.dadosLead;
+  if (leadData !== undefined && leadData !== null && leadData !== '') {
+    lines.push(`${NOTE_LEAD_LABEL}:`, ...formatEntries(leadData));
+  }
+
+  const fields = meta.handoffFields;
+  if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
+    lines.push(...formatEntries(fields));
+  }
+
+  return lines.length > 0 ? lines.join('\n') : null;
+}
 
 /**
  * Build the `conversation` routing for a handoff message. Explicit
