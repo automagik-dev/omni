@@ -47,17 +47,18 @@ export function settingsSchemas(z) {
   }))
   return { read: z.object(shape), patch: z.object(shape).omit({ agentProviderId: true }).strict() }
 }
+const inputError = (field, code, message) => Object.assign(new Error(`${field.key}: ${message}`), { code, field: field.key })
 export function inputValue(field, text) {
   if (field.kind === 'json') {
-    try { return JSON.parse(text) } catch { throw new Error(`${field.key}: enter valid JSON`) }
+    try { return JSON.parse(text) } catch { throw inputError(field, 'field/json', 'enter valid JSON') }
   }
   if (field.kind === 'number') {
     const value = Number(text)
-    if (text.trim() === '' || !Number.isSafeInteger(value) || value < 0) throw new Error(`${field.key}: enter a nonnegative integer`)
+    if (text.trim() === '' || !Number.isSafeInteger(value) || value < 0) throw inputError(field, 'field/number', 'enter a nonnegative integer')
     return value
   }
-  if (field.kind === 'boolean' && !['true', 'false'].includes(text)) throw new Error(`${field.key}: choose true or false`)
-  if (field.options && !field.options.includes(text)) throw new Error(`${field.key}: choose a value`)
+  if (field.kind === 'boolean' && !['true', 'false'].includes(text)) throw inputError(field, 'field/boolean', 'choose true or false')
+  if (field.options && !field.options.includes(text)) throw inputError(field, 'field/enum', 'choose a value')
   return field.kind === 'boolean' ? text === 'true' : text
 }
 export const fieldText = (field, value) => value === undefined ? '' : field.kind === 'json' ? JSON.stringify(value, null, 2) : value === null ? '' : String(value)

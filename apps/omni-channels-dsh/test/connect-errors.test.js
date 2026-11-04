@@ -185,7 +185,7 @@ test('connect error privacy: invalid settings keep the user input but show fixed
     change(view, byLabel(view.draw(), 'triggerReactions'), raw)
     await click(view, 'Save settings')
     const tree = view.draw()
-    assert.ok(text(tree).includes('Check the settings values and try again.'))
+    assert.ok(text(tree).includes('Enter valid JSON for triggerReactions.'))
     assert.equal(byLabel(tree, 'triggerReactions').props.value, raw, 'the user can correct their own input')
     assert.equal(text(tree).includes(raw), false)
     for (const node of nodes(tree)) for (const key of ['title', 'aria-label']) assert.equal(String(node.props?.[key] ?? '').includes(raw), false)
@@ -195,7 +195,7 @@ test('connect error privacy: invalid settings keep the user input but show fixed
 })
 
 test('connect error privacy: every fixed line has Chinese copy', () => {
-  for (const key of new Set([...cases.map(([, expected]) => expected), 'Check the settings values and try again.', 'Could not load this file. Try again.']))
+  for (const key of new Set([...cases.map(([, expected]) => expected), 'Enter valid JSON for {field}.', 'Could not load this file. Try again.']))
     assert.match(STRINGS[key], /[\u3400-\u9fff]/, key)
 })
 

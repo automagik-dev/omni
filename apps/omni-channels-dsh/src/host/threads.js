@@ -515,14 +515,17 @@ export function install(rt) {
     const live = rt.readOnly?.() === undefined
     const threadList = list()
     // Each thread's reason, from one read of the key file; the team's own on a team without the hook.
-    const reasons = ready() ? rt.threadKeys?.reasonsOf(threadList.map(thread => thread.id)) ?? new Map() : null
+    const ids = threadList.map(thread => thread.id)
+    const reasons = ready() ? rt.threadKeys?.reasonsOf(ids) ?? new Map() : null
+    const reasonCodes = ready() ? rt.threadKeys?.reasonCodesOf?.(ids) ?? new Map() : null
     return {
       omniThreads: threadList.map((thread) => {
         const reason = reasons === null ? rt.teamResume?.reason ?? NEEDS_NEWER_TEAM : reasons.get(thread.id) ?? null
+        const reasonCode = reasonCodes === null ? 'needs_newer_team' : reasonCodes.get(thread.id)
         const status = live && rt.teamResume?.running?.(thread.sessionId) !== true ? 'idle' : thread.status ?? 'idle'
         return {
           id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
-          status, connected: reason === null, reason,
+          status, connected: reason === null, reason, ...(reasonCode === undefined ? {} : { reasonCode }),
           permissions: permissionsOf(thread, state.omniSettings), ownPermissions: ownPermissionsOf(thread), defaultPermissions: permissionsOf(undefined, state.omniSettings),
         }
       }),

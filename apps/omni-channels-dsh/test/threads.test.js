@@ -764,3 +764,9 @@ test('matchesChat: every word of a name in any order and case, and any three dig
   assert.equal(matchesChat({ ...guga, name: 'José Àvila' }, 'jose avila'), true, 'accents folded')
   assert.equal(matchesChat(guga, '  '), true)
 })
+
+test('a disconnected persisted thread carries its curated reason code in the team view', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, fakeOmni(), teamState({ omniThreads: { old: record('old', 'old-session') } })), { mask: true })
+  assert.equal(run.view().omniThreads[0].reasonCode, 'needs_newer_team')
+})

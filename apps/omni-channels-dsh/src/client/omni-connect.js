@@ -1,3 +1,4 @@
+import { keyProblem } from './problem-words.js'
 import { createElement as h, useEffect, useRef, useState } from 'react'
 import { parseConnectLink } from './connect-link.js'
 import { QrSvg } from './omni-live.js'
@@ -279,7 +280,7 @@ export function ConnectOmni({ onPaired, embedded = false } = {}) {
       }
     } catch (error) {
       console.warn('Could not connect to Omni:', error)
-      if (alive.current) setProblem(t('Could not connect to Omni. Try again.'))
+      if (alive.current) setProblem(keyProblem(error))
     } finally {
       if (alive.current) setBusy(null)
     }

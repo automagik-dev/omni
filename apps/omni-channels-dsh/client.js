@@ -8975,6 +8975,45 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// src/client/core.js
+var import_client = require("@automagik/bots-dsh/client");
+var { call, t, hostText, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = import_client.omni;
+var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
+var icons = import_client.omni.ui.icons;
+
+// src/client/problem-words.js
+var KEY_PROBLEMS = Object.freeze({
+  "bot/bad-key": "Paste the whole API key.",
+  "bot/bad-address": "Give the address of the Omni, like omni.example.com",
+  "bot/key-refused": "Omni did not accept that key. Check the key and try again."
+});
+var keyProblem = (error) => typeof error?.code === "string" && Object.hasOwn(KEY_PROBLEMS, error.code) ? t(KEY_PROBLEMS[error.code]) : t("Could not connect to Omni. Try again.");
+var THREAD_REASONS = Object.freeze({
+  not_linked: "Not connected: this app is not linked to an Omni.",
+  other_omni: "Not connected: this app is linked to another Omni.",
+  being_cut: "Not connected: its previous key is still being cut.",
+  waiting: "Not connected: waiting for a key from the linked Omni.",
+  no_key: "Not connected: this thread has no key.",
+  needs_newer_team: "Adding a chat needs a newer Bot team.",
+  omni_unreachable: "Could not reach Omni. Try again in a moment.",
+  chat_keys_unavailable: "Omni cannot make chat keys; update it.",
+  chat_key_limit: "This app holds as many chat keys as Omni allows."
+});
+function threadReason(thread) {
+  if (thread.reason) console.warn("Chat is not connected:", thread.reason);
+  const code = thread.reasonCode;
+  return typeof code === "string" && Object.hasOwn(THREAD_REASONS, code) ? t(THREAD_REASONS[code]) : t("Not connected. Try reconnecting this chat.");
+}
+var CHANNEL_PROBLEMS = Object.freeze({
+  not_connected: "Omni does not report this channel as connected.",
+  token_revoked: "The bot token was revoked in BotFather. Paste a new token to reconnect."
+});
+function channelProblem(channel) {
+  if (channel.problem) console.warn("Channel needs attention:", channel.problem);
+  const code = channel.problemCode;
+  return typeof code === "string" && Object.hasOwn(CHANNEL_PROBLEMS, code) ? t(CHANNEL_PROBLEMS[code]) : t("Omni does not report this channel as connected.");
+}
+
 // src/client/connect-link.js
 var APP_PAGE = /\/api\/login\/app\/?$/;
 var GRANT = /^[A-Za-z0-9_-]{24}$/;
@@ -10719,12 +10758,6 @@ async function skipConnect({ complete }, { omniAi = callOmniAi, storage: storage
   complete();
 }
 
-// src/client/core.js
-var import_client = require("@automagik/bots-dsh/client");
-var { call, t, hostText, addStrings, onShell, toolCards, nav, badges, botChildren, headerButtons, botSettings, chatSuggestions } = import_client.omni;
-var { OmniMark, BotMark, MAIN_LOOK, CHARACTERS, relativeShort, createSource } = import_client.omni.ui;
-var icons = import_client.omni.ui.icons;
-
 // src/client/wizard.js
 var import_react = require("react");
 var isOpen = false;
@@ -10941,7 +10974,10 @@ function UpdateBar({ origin }) {
     } catch (error) {
       if (!alive.current) return;
       if (error.stale) redraw(error.status);
-      else setProblem(error.message);
+      else {
+        console.warn("Could not request the update:", error);
+        setProblem(t("Could not request the update. Check your connection and access, then try again."));
+      }
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -11043,6 +11079,7 @@ function sample(now) {
       detail: "@omni_helper_bot",
       status: "attention",
       answeredBy: "Omni",
+      problemCode: "token_revoked",
       problem: "The bot token was revoked in BotFather. Paste a new token to reconnect.",
       health: { lastEventAt: ago(19 * HOUR), messagesToday: 0, replyMedianSec: null, uptime: 0.62, week: [18, 22, 25, 19, 7, 0, 0] }
     }
@@ -11146,7 +11183,10 @@ function omniActions(select, call2) {
     if (deleting.has(channelId)) return;
     if (omniStore.getSnapshot().preview || !call2) return local();
     patchChannel(channelId, { busy: action, actionError: void 0 });
-    call2("omni-channel-act", { id: channelId, action, ...token ? { token } : {} }).then(() => refreshLive(call2)).then(() => patchChannel(channelId, { busy: void 0 }), (error) => patchChannel(channelId, { busy: void 0, actionError: error.message }));
+    call2("omni-channel-act", { id: channelId, action, ...token ? { token } : {} }).then(() => refreshLive(call2)).then(() => patchChannel(channelId, { busy: void 0 }), (error) => {
+      console.warn("Could not change the channel:", error);
+      patchChannel(channelId, { busy: void 0, actionError: t("Could not change this channel. Try again.") });
+    });
   };
   return {
     setFilter: (filter) => set({ filter }),
@@ -11185,11 +11225,12 @@ function omniActions(select, call2) {
           void loadMessages(call2, chatId);
         },
         (error) => {
+          console.warn("Could not send the message:", error);
           if (!stillExists()) return;
           set((state) => ({
             messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter((message) => message.id !== localId) },
             chats: state.chats.map((chat) => chat.id === chatId ? chatOf(before, chatId) ?? chat : chat),
-            sendError: { chatId, text: body, message: error.message }
+            sendError: { chatId, text: body, message: t("Could not send this message. Check your connection and access, then try again.") }
           }));
         }
       );
@@ -11240,7 +11281,8 @@ function omniActions(select, call2) {
       try {
         await call2("omni-channel-act", { id: channelId, action: "delete" });
       } catch (error) {
-        patchChannel(channelId, { busy: void 0, deleteError: error.message });
+        console.warn("Could not delete the instance:", error);
+        patchChannel(channelId, { busy: void 0, deleteError: t("Could not delete this instance. Check your access or connection, then try again.") });
         return;
       } finally {
         deleting.delete(channelId);
@@ -11250,7 +11292,8 @@ function omniActions(select, call2) {
       try {
         await refreshLive(call2);
       } catch (error) {
-        set((state) => ({ source: { ...state.source, error: t("Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.", { reason: error.message }) } }));
+        console.warn("Could not refresh after deleting the instance:", error);
+        set((state) => ({ source: { ...state.source, error: t("Instance deleted, but the overview could not refresh. Refresh or wait for the next update.") } }));
       }
     }
   };
@@ -11265,8 +11308,9 @@ async function loadMessages(call2, chatId) {
     if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return;
     set((state) => ({ messages: { ...state.messages, [chatId]: messages } }));
   } catch (error) {
+    console.warn("Could not load messages:", error);
     if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return;
-    set((state) => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: error.message } }));
+    set((state) => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: t("Could not load messages. Retrying soon.") } }));
   }
 }
 async function refreshLive(call2) {
@@ -11312,7 +11356,8 @@ function startLive(call2, every = POLL_MS) {
       try {
         await refreshLive(call2);
       } catch (error) {
-        set((state) => ({ source: { ...state.source, error: error.message } }));
+        console.warn("Could not refresh channels:", error);
+        set((state) => ({ source: { ...state.source, error: t("Could not refresh channels. Retrying soon.") } }));
       }
     }
     if (!stopped) timer = setTimeout(tick, every);
@@ -12028,21 +12073,22 @@ function settingsSchemas(z2) {
   }));
   return { read: z2.object(shape), patch: z2.object(shape).omit({ agentProviderId: true }).strict() };
 }
+var inputError = (field, code, message) => Object.assign(new Error(`${field.key}: ${message}`), { code, field: field.key });
 function inputValue(field, text) {
   if (field.kind === "json") {
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(`${field.key}: enter valid JSON`);
+      throw inputError(field, "field/json", "enter valid JSON");
     }
   }
   if (field.kind === "number") {
     const value = Number(text);
-    if (text.trim() === "" || !Number.isSafeInteger(value) || value < 0) throw new Error(`${field.key}: enter a nonnegative integer`);
+    if (text.trim() === "" || !Number.isSafeInteger(value) || value < 0) throw inputError(field, "field/number", "enter a nonnegative integer");
     return value;
   }
-  if (field.kind === "boolean" && !["true", "false"].includes(text)) throw new Error(`${field.key}: choose true or false`);
-  if (field.options && !field.options.includes(text)) throw new Error(`${field.key}: choose a value`);
+  if (field.kind === "boolean" && !["true", "false"].includes(text)) throw inputError(field, "field/boolean", "choose true or false");
+  if (field.options && !field.options.includes(text)) throw inputError(field, "field/enum", "choose a value");
   return field.kind === "boolean" ? text === "true" : text;
 }
 var fieldText = (field, value) => value === void 0 ? "" : field.kind === "json" ? JSON.stringify(value, null, 2) : value === null ? "" : String(value);
@@ -12050,6 +12096,15 @@ var fieldText = (field, value) => value === void 0 ? "" : field.kind === "json" 
 // src/client/channel-settings.js
 var SettingsReact = __toESM(require("react"), 1);
 var { createElement: h5, useEffect: useEffect5, useRef: useRef3, useState: useState4 } = SettingsReact;
+var VALIDATION_PROBLEMS = Object.freeze({
+  "field/json": "Enter valid JSON for {field}.",
+  "field/number": "Enter a nonnegative integer for {field}.",
+  "field/boolean": "Choose true or false for {field}.",
+  "field/enum": "Choose an available value for {field}."
+});
+function validationProblem(error, fallback) {
+  return typeof error?.code === "string" && Object.hasOwn(VALIDATION_PROBLEMS, error.code) && typeof error.field === "string" && Object.hasOwn(FIELDS, error.field) ? t(VALIDATION_PROBLEMS[error.code], { field: FIELDS[error.field].key }) : t(fallback);
+}
 function ChannelSettings({ channel, writable, request = call, refresh = () => refreshLive(call) }) {
   const [record, setRecord] = useState4(null);
   const [draft, setDraft] = useState4({});
@@ -12124,7 +12179,7 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
       void run("omni-channel-settings-save", { id: channel.id, patch });
     } catch (failure) {
       console.warn("Invalid channel settings:", failure);
-      setError(t("Check the settings values and try again."));
+      setError(validationProblem(failure, "Check the settings values and try again."));
     }
   };
   const control = (key) => {
@@ -12167,7 +12222,7 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
     } catch (failure) {
       console.warn("Invalid Meta identifiers:", failure);
       setToken("");
-      setError(t("Check the Meta identifiers and try again."));
+      setError(validationProblem(failure, "Check the Meta identifiers and try again."));
     }
   };
   return h5(
@@ -12543,7 +12598,7 @@ function Overview({ state, omni: omni2 }) {
         "span",
         { className: "oc-callout-text" },
         (0, import_react5.createElement)("strong", null, t("{name} needs attention", { name: `${typeOf(channel.type).label} · ${channel.name}` })),
-        (0, import_react5.createElement)("span", null, channel.problem ?? t(STATUS[channel.status].label))
+        (0, import_react5.createElement)("span", null, channelProblem(channel))
       ),
       (0, import_react5.createElement)("span", { className: "oc-callout-go" }, t("Fix now"), (0, import_react5.createElement)(ChevronRightIcon))
     )),
@@ -12626,7 +12681,7 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
         "span",
         { className: "oc-callout-text" },
         (0, import_react5.createElement)("strong", null, channel.status === "connecting" ? t("Reconnecting…") : t("This channel stopped working")),
-        (0, import_react5.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channel.problem)
+        (0, import_react5.createElement)("span", null, channel.status === "connecting" ? t("Omni is bringing {name} back. Messages sent meanwhile are delivered after.", { name: channel.name }) : channelProblem(channel))
       ),
       writable && channel.status === "attention" && type.pairing !== "token" ? (0, import_react5.createElement)("button", { type: "button", className: "oc-primary", disabled: Boolean(channel.busy), onClick: () => omni2.reconnect(channel.id) }, channel.busy === "reconnect" ? t("Reconnecting…") : t("Reconnect")) : null,
       channel.status === "connecting" || channel.busy ? (0, import_react5.createElement)("span", { className: "oc-spinner", "aria-hidden": true }) : null
@@ -12691,7 +12746,7 @@ function ChannelDetail({ channel, state, omni: omni2 }) {
         (0, import_react5.createElement)("strong", null, confirming ? t("Delete instance {name} ({id})?", { name: channel.name, id: channel.id }) : t("Delete instance")),
         (0, import_react5.createElement)("span", null, t("Permanently deletes this instance configuration and its local chats and messages.")),
         (0, import_react5.createElement)("span", null, t("Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.")),
-        channel.deleteError ? (0, import_react5.createElement)("p", { className: "oc-problem", role: "alert" }, t("Could not delete instance: {reason}. Check your access or connection, then try again.", { reason: channel.deleteError })) : null
+        channel.deleteError ? (0, import_react5.createElement)("p", { className: "oc-problem", role: "alert" }, channel.deleteError) : null
       ),
       confirming ? (0, import_react5.createElement)(
         import_react5.Fragment,
@@ -13441,7 +13496,8 @@ function useOmniGet(path, every = 0) {
         const reply = await call("omni-get", { path });
         if (live) setState({ loading: false, data: reply.data, error: reply.ok ? null : errorText(reply.data, reply.status) });
       } catch (error) {
-        if (live) setState((previous) => ({ ...previous, loading: false, error: error.message }));
+        console.warn("Could not load Omni data:", error);
+        if (live) setState((previous) => ({ ...previous, loading: false, error: t("Could not load this Omni data. Retrying soon.") }));
       }
       if (live && every > 0) timer = setTimeout(load, document.hidden ? every * 4 : every);
     };
@@ -13453,7 +13509,10 @@ function useOmniGet(path, every = 0) {
   }, [path, every]);
   return state;
 }
-var errorText = (data, status) => data?.error?.message ?? (typeof data === "string" && data ? data.slice(0, 200) : `omni answered ${status}`);
+function errorText(data, status) {
+  console.warn("Omni request failed:", data, status);
+  return t("Omni could not complete this request. Try again.");
+}
 function stateOf(instance, status) {
   if (instance?.isActive === false) return "paused";
   const state = status?.state;
@@ -13514,6 +13573,7 @@ function LiveQr({ channelId }) {
   const connected = status.data?.data?.isConnected === true || status.data?.data?.state === "connected";
   const qr2 = useOmniGet(base && !connected ? `${base}/qr` : null, 2500);
   const code = qr2.data?.data?.qr;
+  if (qr2.data?.data?.message) console.warn("Omni QR status:", qr2.data.data.message);
   if (connected) {
     const live = status.data.data;
     return (0, import_react7.createElement)(
@@ -13533,7 +13593,7 @@ function LiveQr({ channelId }) {
       { className: "ou-qr-help" },
       (0, import_react7.createElement)("strong", null, t("Scan with WhatsApp")),
       (0, import_react7.createElement)("span", { className: "ou-muted" }, t("On the phone: Settings → Linked devices → Link a device.")),
-      (0, import_react7.createElement)("span", { className: "ou-live" }, (0, import_react7.createElement)("span", { className: "ou-live-dot", "aria-hidden": true }), qr2.data?.data?.message || t("Live · refreshes by itself"))
+      (0, import_react7.createElement)("span", { className: "ou-live" }, (0, import_react7.createElement)("span", { className: "ou-live-dot", "aria-hidden": true }), t("Live · refreshes by itself"))
     )
   );
 }
@@ -13627,7 +13687,7 @@ function parseCall(argText, content) {
   }
   return { method: String(argText("method") ?? "GET").toUpperCase(), path: String(argText("path") ?? ""), query: parseJson(argText("query")), result };
 }
-var failureOf = (result, done) => !done ? null : !result ? t("No answer.") : result.error ? result.error : result.status >= 200 && result.status < 300 ? null : errorText(result.data, result.status);
+var failureOf = (result, done) => !done ? null : !result ? t("No answer.") : result.error ? errorText(result.error, result.status) : result.status >= 200 && result.status < 300 ? null : errorText(result.data, result.status);
 var callState = (done, failure) => !done ? "working" : failure ? "failed" : "done";
 var PATH_KINDS = [[/^\/chats\/[^/]+\/messages|^\/messages/, "messages"], [/^\/chats/, "chats"], [/^\/instances/, "channels"], [/^\/events/, "events"], [/^\/automations|^\/automation-/, "automations"], [/^\/persons|^\/contacts/, "people"]];
 var kindOfPath = (path) => PATH_KINDS.find(([pattern]) => pattern.test(path))?.[1];
@@ -14083,7 +14143,10 @@ function footFor({ state, step, entered, exitCode, error }) {
   if (state === "linking") return t("Finished. Connecting…");
   if (state === "done") return t("Finished. Closing the terminal…");
   if (state === "cancelled") return t("Nothing ran. Open it again when you are ready.");
-  if (error) return error;
+  if (error) {
+    console.warn("Terminal command failed:", error);
+    return t("Could not run this command. Read the terminal output, then try again.");
+  }
   return t("It stopped with exit code {code}. Read what it printed above, then try again.", { code: exitCode ?? "?" });
 }
 function InlineTerminal({ kind, id, title, onEnded, onClose }) {
@@ -14120,8 +14183,9 @@ function InlineTerminal({ kind, id, title, onEnded, onClose }) {
           return;
         }
       } catch (error) {
+        console.warn("Could not read the terminal:", error);
         if (!alive) return;
-        setStatus({ state: "failed", error: error.message, entered });
+        setStatus({ state: "failed", error: true, entered });
         return;
       }
       timer = setTimeout(read, READ_MS);
@@ -14154,7 +14218,8 @@ function InlineTerminal({ kind, id, title, onEnded, onClose }) {
       void read();
     };
     start().catch((error) => {
-      if (alive) setStatus({ state: "failed", error: error.message, entered: false });
+      console.warn("Could not open the terminal:", error);
+      if (alive) setStatus({ state: "failed", error: true, entered: false });
     });
     return () => {
       alive = false;
@@ -14417,7 +14482,7 @@ function ConnectOmni({ onPaired, embedded = false } = {}) {
       }
     } catch (error) {
       console.warn("Could not connect to Omni:", error);
-      if (alive.current) setProblem(t("Could not connect to Omni. Try again."));
+      if (alive.current) setProblem(keyProblem(error));
     } finally {
       if (alive.current) setBusy(null);
     }
@@ -15025,7 +15090,8 @@ function ThreadDefaultsCard() {
         setNote({ ok: true, text: t("Saved.") });
       }
     } catch (error) {
-      if (alive.current) setNote({ ok: false, text: error.message });
+      console.warn("Could not save Omni settings:", error);
+      if (alive.current) setNote({ ok: false, text: t("Could not save these defaults. Try again.") });
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -15084,7 +15150,8 @@ function FreeReactionsCard() {
       show(await saveFreeReactions(text, { reset, defaults: list?.defaults }));
       if (alive.current) setNote({ ok: true, text: t("Saved.") });
     } catch (error) {
-      if (alive.current) setNote({ ok: false, text: error.message });
+      console.warn("Could not save Omni settings:", error);
+      if (alive.current) setNote({ ok: false, text: t("Could not save these reactions. Try again.") });
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -15134,7 +15201,8 @@ function OmniSettingsSection({ close }) {
       setInfo(next.info);
       setConfirming(next.confirming);
     } catch (error) {
-      if (alive.current) setProblem(error.message);
+      console.warn("Could not disconnect Omni:", error);
+      if (alive.current) setProblem(t("Could not disconnect this Omni. Try again."));
     } finally {
       if (alive.current) setBusy(false);
     }
@@ -15364,7 +15432,7 @@ function PhonePane({ params, sessionId, useRoster, visible = true }) {
         "header",
         { className: "op-head" },
         (0, import_react13.createElement)("strong", null, name),
-        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, hostText(thread.reason)) : null
+        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, threadReason(thread)) : null
       ),
       (0, import_react13.createElement)(
         "div",
@@ -16106,7 +16174,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   });
   const free = freeMarkOf(thread);
   const state = threadState(thread, { running, asking });
-  const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t("Not connected")) : null;
+  const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: "needs_newer_team" }) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
   const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const onClick = () => {
@@ -16733,6 +16801,28 @@ var PERMISSIONS_CSS = `
 
 // src/client/strings.js
 var STRINGS = {
+  "Could not change this channel. Try again.": "无法更改这个渠道。请重试。",
+  "Could not send this message. Check your connection and access, then try again.": "无法发送这条消息。请检查连接和权限后重试。",
+  "Could not delete this instance. Check your access or connection, then try again.": "无法删除这个实例。请检查权限或连接后重试。",
+  "Instance deleted, but the overview could not refresh. Refresh or wait for the next update.": "实例已删除，但总览无法刷新。请刷新或等待下次更新。",
+  "Could not refresh channels. Retrying soon.": "无法刷新渠道。稍后会重试。",
+  "Could not load this Omni data. Retrying soon.": "无法加载这些 Omni 数据。稍后会重试。",
+  "Omni could not complete this request. Try again.": "Omni 无法完成这个请求。请重试。",
+  "Could not save these defaults. Try again.": "无法保存这些默认设置。请重试。",
+  "Could not save these reactions. Try again.": "无法保存这些表情回应。请重试。",
+  "Could not disconnect this Omni. Try again.": "无法断开这个 Omni。请重试。",
+  "Could not request the update. Check your connection and access, then try again.": "无法请求更新。请检查连接和权限后重试。",
+  "Could not run this command. Read the terminal output, then try again.": "无法运行这个命令。请查看终端输出后重试。",
+  "Not connected. Try reconnecting this chat.": "尚未连接。请尝试重新连接这个聊天。",
+  "Not connected: this thread has no key.": "尚未连接：这个聊天线程没有密钥。",
+  "Omni does not report this channel as connected.": "Omni 未报告这个渠道已连接。",
+  "Paste the whole API key.": "请粘贴完整的 API 密钥。",
+  "Give the address of the Omni, like omni.example.com": "请输入 Omni 的地址，例如 omni.example.com",
+  "Omni did not accept that key. Check the key and try again.": "Omni 不接受这个密钥。请检查密钥后重试。",
+  "Enter valid JSON for {field}.": "请为 {field} 输入有效的 JSON。",
+  "Enter a nonnegative integer for {field}.": "请为 {field} 输入非负整数。",
+  "Choose true or false for {field}.": "请为 {field} 选择 true 或 false。",
+  "Choose an available value for {field}.": "请为 {field} 选择可用的值。",
   "Could not refresh the connection. Retrying soon.": "无法刷新连接。稍后将重试。",
   "Could not create the channel. Try again.": "无法创建渠道。请重试。",
   "Could not get a phone code. Try again.": "无法获取手机配对码。请重试。",
@@ -16786,8 +16876,6 @@ var STRINGS = {
   "Deleting instance…": "正在删除实例…",
   "Permanently deletes this instance configuration and its local chats and messages.": "永久删除此实例的配置及其本地聊天和消息。",
   "Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.": "将尽力断开连接、退出登录并清理会话，但不保证撤销外部令牌或解除账号关联，也不会清除所有事件。",
-  "Could not delete instance: {reason}. Check your access or connection, then try again.": "无法删除实例：{reason}。请检查权限或连接，然后重试。",
-  "Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.": "实例已删除，但刷新失败：{reason}。请刷新或等待下次更新。",
   "Every {n} days": "每 {n} 天",
   "Every {n} hours": "每 {n} 小时",
   "Every {n} min": "每 {n} 分钟",

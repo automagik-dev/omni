@@ -110,7 +110,7 @@ test('the terminal says the command waits for Enter, then that it runs, then how
   assert.equal(ui.footFor({ state: 'ready', entered: true }), 'Running… This closes on its own when it finishes.')
   assert.equal(ui.footFor({ state: 'preparing', step: 'download-bun' }), 'Getting Bun (checked against its published checksum)…')
   assert.equal(ui.footFor({ state: 'failed', exitCode: 1 }), 'It stopped with exit code 1. Read what it printed above, then try again.')
-  assert.equal(ui.footFor({ state: 'failed', error: 'No shell' }), 'No shell')
+  assert.equal(ui.footFor({ state: 'failed', error: 'No shell' }), 'Could not run this command. Read the terminal output, then try again.')
   assert.equal(ui.footFor({ state: 'cancelled' }), 'Nothing ran. Open it again when you are ready.')
   assert.equal(ui.columnsFor(800, 8), 97)
   assert.equal(ui.columnsFor(0, 8), 80)

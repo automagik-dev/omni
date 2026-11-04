@@ -362,7 +362,7 @@ test('on a stand-in team without the hook, or with no conversation on screen, a 
 test('on a stand-in Bot team without the hook, a click on the row opens the pane and the row never calls actions.openSession (:195)', async (t) => {
   reset()
   const stand = installed(t)
-  const thread = THREAD(1, CHAT_1, { connected: false, reason: NEEDS_NEWER_TEAM })
+  const thread = THREAD(1, CHAT_1, { connected: false, reason: NEEDS_NEWER_TEAM, reasonCode: 'needs_newer_team' })
   const roster = oldTeam([thread])
   const sessions = []
   const actions = { openSession: id => sessions.push(id) }

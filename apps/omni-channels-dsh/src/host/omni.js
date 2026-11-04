@@ -66,7 +66,7 @@ export function channelOf(instance, live) {
     name: instance.name,
     detail: instance.profileName || ownerText(instance.ownerIdentifier) || instance.channel,
     status,
-    ...(status === 'attention' ? { problem: live?.message || 'omni does not report this channel as connected.' } : {}),
+    ...(status === 'attention' ? { problemCode: 'not_connected', problem: live?.message || 'omni does not report this channel as connected.' } : {}),
     answeredBy: instance.agentId ? 'Omni' : 'You',
     avatarUrl: instance.profilePicUrl ?? null,
     health: { lastEventAt: time(instance.lastMessageAt), lastSeenAt: time(instance.lastSeenAt), messagesToday: null, replyMedianSec: null, uptime: null, week: null },

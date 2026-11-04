@@ -1,3 +1,4 @@
+import { threadReason } from './problem-words.js'
 import { createElement as h, useEffect, useMemo, useState } from 'react'
 import { ChatMessages, useStayAtEnd } from './channels.js'
 import { POLL_MS } from './omni-store.js'
@@ -183,7 +184,7 @@ export function PhonePane({ params, sessionId, useRoster, visible = true }) {
     h(PhoneFrame, { label: t('{name} on the phone', { name }) },
       h('header', { className: 'op-head' },
         h('strong', null, name),
-        thread.connected === false && thread.reason ? h('span', null, hostText(thread.reason)) : null),
+        thread.connected === false && thread.reason ? h('span', null, threadReason(thread)) : null),
       h('div', { ref: scroller, className: 'oc-thread op-log', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name }) },
         h('div', { className: 'oc-thread-in' },
           loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,

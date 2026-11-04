@@ -99,7 +99,7 @@ test('a channel with no added chat shows no chats; an added chat shows under its
 
 test('a thread whose channel this Omni no longer lists still shows, apart, so it can be removed', (t) => {
   linked()
-  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1), THREAD(9, { id: '99999999-9999-4999-8999-999999999999' }, { connected: false, reason: OTHER_OMNI })] }) })
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1), THREAD(9, { id: '99999999-9999-4999-8999-999999999999' }, { connected: false, reason: OTHER_OMNI, reasonCode: 'other_omni' })] }) })
   const root = view.draw()
   const others = byLabel(root, 'Other chats')
   assert.deepEqual(all(others, 'bt-thread').map(row => row.props['data-thread-id']), ['t9'])
@@ -113,7 +113,7 @@ test('a thread whose channel this Omni no longer lists still shows, apart, so it
 
 test('with no Omni linked, the threads still show under the Connect link, and remove works there (:188)', async (t) => {
   ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: true })
-  const roster = hooked({ omniThreadsOffered: false, omniThreadsReason: NOT_LINKED, omniThreads: [THREAD(1, CHANNEL_A, { connected: false, reason: NOT_LINKED })] })
+  const roster = hooked({ omniThreadsOffered: false, omniThreadsReason: NOT_LINKED, omniThreads: [THREAD(1, CHANNEL_A, { connected: false, reason: NOT_LINKED, reasonCode: 'not_linked' })] })
   const { view } = tree(t, { roster })
   const root = view.draw()
   assert.equal(text(one(root, 'ot-link')), 'Connect Omni →')
@@ -428,7 +428,7 @@ test('on a team without the hook: no +, the channels say a newer Bot team is nee
   linked()
   const opened = []
   // An older team passes BotChildren only these (bots-dsh before 3.32.1 sidebar.js BotChildren).
-  const { view } = tree(t, { roster: oldTeam({ omniThreads: [THREAD(1, CHANNEL_A, { connected: false, reason: NEEDS_NEWER_TEAM })] }), actions: { openSession: id => opened.push(id) } })
+  const { view } = tree(t, { roster: oldTeam({ omniThreads: [THREAD(1, CHANNEL_A, { connected: false, reason: NEEDS_NEWER_TEAM, reasonCode: 'needs_newer_team' })] }), actions: { openSession: id => opened.push(id) } })
   const root = view.draw()
   assert.equal(byLabel(root, 'Add a chat'), undefined)
   assert.deepEqual(all(root, 'ot-empty').map(text), [NEEDS_NEWER_TEAM, NEEDS_NEWER_TEAM])
@@ -455,7 +455,7 @@ test('a thread row has the bt-thread look: working, waiting and idle from the vi
   const idle = one(idleRoot, 'bt-thread')
   assert.deepEqual([idle.props['data-state'], classOf(idle.children[0])[0], one(idleRoot, 'ot-thread').props['data-idle']], ['idle', 'ot-thread-idle', true])
   assert.equal(one(idle, 'ot-thread-reason'), undefined)
-  const cut = one(draw(THREAD(1, CHANNEL_A, { connected: false, reason: OTHER_OMNI })), 'bt-thread')
+  const cut = one(draw(THREAD(1, CHANNEL_A, { connected: false, reason: OTHER_OMNI, reasonCode: 'other_omni' })), 'bt-thread')
   assert.equal(text(one(cut, 'ot-thread-reason')), OTHER_OMNI)
   assert.equal(cut.props.title, OTHER_OMNI)
   assert.equal(cut.props['aria-disabled'], undefined)

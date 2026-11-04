@@ -376,14 +376,14 @@ test('a pasted key the Omni refuses shows the Omni\'s own words, links nothing, 
   const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
   const local = omnis.find(omni => omni.local)
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { id: local.id, apiKey: PASTED_KEY }), (error) => {
-    assert.equal(error.code, 'bot/refused')
+    assert.equal(error.code, 'bot/key-refused')
     assert.equal(error.message, 'Omni did not accept that key: Invalid API key')
     assert.equal(error.message.includes(PASTED_KEY), false)
     return true
   })
   assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
   for (const body of [{ id: local.id, apiKey: 'short' }, { id: local.id, apiKey: 'has a space inside it' }, { id: local.id }, { id: local.id, apiKey: PASTED_KEY, extra: 1 }]) {
-    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), { code: 'bot/invalid' }, JSON.stringify(body))
+    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), { code: 'bot/bad-key' }, JSON.stringify(body))
   }
 })
 
@@ -562,4 +562,12 @@ test('a link the Omni sends reads as its address and grant, and anything else as
     `omni://other?url=https://omni.example.com&grant=${grant}`,
     `ftp://omni.example.com/api/login/app?grant=${grant}`,
   ]) assert.equal(parseConnectLink(bad), null, bad)
+})
+
+test('pasted-key failures carry curated codes independently of remote diagnostic words', async (t) => {
+  const { rt } = host(t, json => json(401, { error: { message: '<b>REMOTE</b>\u009b\u202e' } }))
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: 'short' }), { code: 'bot/bad-key' })
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'not a valid URL', apiKey: PASTED_KEY }), { code: 'bot/bad-address' })
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: PASTED_KEY }), { code: 'bot/key-refused' })
+  assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
 })

@@ -21,7 +21,8 @@ export function useOmniGet(path, every = 0) {
         const reply = await call('omni-get', { path })
         if (live) setState({ loading: false, data: reply.data, error: reply.ok ? null : errorText(reply.data, reply.status) })
       } catch (error) {
-        if (live) setState(previous => ({ ...previous, loading: false, error: error.message }))
+        console.warn('Could not load Omni data:', error)
+        if (live) setState(previous => ({ ...previous, loading: false, error: t('Could not load this Omni data. Retrying soon.') }))
       }
       if (live && every > 0) timer = setTimeout(load, document.hidden ? every * 4 : every)
     }
@@ -31,7 +32,10 @@ export function useOmniGet(path, every = 0) {
   return state
 }
 
-export const errorText = (data, status) => data?.error?.message ?? (typeof data === 'string' && data ? data.slice(0, 200) : `omni answered ${status}`)
+export function errorText(data, status) {
+  console.warn('Omni request failed:', data, status)
+  return t('Omni could not complete this request. Try again.')
+}
 
 // omni's connection states, folded into the ones the cards show.
 export function stateOf(instance, status) {
@@ -91,6 +95,7 @@ export function LiveQr({ channelId }) {
   const connected = status.data?.data?.isConnected === true || status.data?.data?.state === 'connected'
   const qr = useOmniGet(base && !connected ? `${base}/qr` : null, 2_500)
   const code = qr.data?.data?.qr
+  if (qr.data?.data?.message) console.warn('Omni QR status:', qr.data.data.message)
   if (connected) {
     const live = status.data.data
     return h('div', { className: 'ou-card ou-qr ou-qr-done' },
@@ -103,7 +108,7 @@ export function LiveQr({ channelId }) {
     h('div', { className: 'ou-qr-help' },
       h('strong', null, t('Scan with WhatsApp')),
       h('span', { className: 'ou-muted' }, t('On the phone: Settings → Linked devices → Link a device.')),
-      h('span', { className: 'ou-live' }, h('span', { className: 'ou-live-dot', 'aria-hidden': true }), qr.data?.data?.message || t('Live · refreshes by itself'))))
+      h('span', { className: 'ou-live' }, h('span', { className: 'ou-live-dot', 'aria-hidden': true }), t('Live · refreshes by itself'))))
 }
 
 export function LiveChat({ id, limit = 8 }) {
@@ -186,7 +191,7 @@ export function parseCall(argText, content) {
   return { method: String(argText('method') ?? 'GET').toUpperCase(), path: String(argText('path') ?? ''), query: parseJson(argText('query')), result }
 }
 
-const failureOf = (result, done) => (!done ? null : !result ? t('No answer.') : result.error ? result.error : result.status >= 200 && result.status < 300 ? null : errorText(result.data, result.status))
+const failureOf = (result, done) => (!done ? null : !result ? t('No answer.') : result.error ? errorText(result.error, result.status) : result.status >= 200 && result.status < 300 ? null : errorText(result.data, result.status))
 const callState = (done, failure) => (!done ? 'working' : failure ? 'failed' : 'done')
 
 // What the path is about, for the card's icon and how its rows are drawn.

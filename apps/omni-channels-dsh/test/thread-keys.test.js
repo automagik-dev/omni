@@ -956,3 +956,16 @@ test('on a home this host cannot write, a mint answers with the reason', { timeo
     chmodSync(home, 0o700)
   }
 })
+
+test('a keyless thread persists a curated retry code alongside diagnostic text and reads it after restart', async (t) => {
+  const omni = fakeOmni(), parent = omni.linkKey()
+  omni.down = true
+  const { rt, file, home } = runtime(t, { link: linked(parent), keysFile: {
+    version: 1, threads: {}, retired: [], waiting: { t1: { chatId: CHAT, origin: OMNI, reason: 'old diagnostic' } },
+  } })
+  await rt.threadKeys.drain()
+  assert.equal(file().waiting.t1.reasonCode, 'omni_unreachable')
+  assert.match(rt.threadKeys.reasonOf('t1'), /Could not reach Omni/)
+  const { rt: restarted } = runtime(t, { home })
+  assert.equal(restarted.threadKeys.reasonCodesOf(['t1']).get('t1'), 'omni_unreachable')
+})

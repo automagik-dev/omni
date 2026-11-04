@@ -1,3 +1,4 @@
+import { threadReason } from './problem-words.js'
 import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatAvatar, StatusDot, Tile, useOmni } from './channels.js'
 import { openConnectWizard } from './wizard.js'
@@ -172,7 +173,7 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   })
   const free = freeMarkOf(thread)
   const state = threadState(thread, { running, asking })
-  const reason = thread.connected === false || !opens ? hostText(thread.reason ?? t('Not connected')) : null
+  const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: 'needs_newer_team' }) : null
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
   const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const onClick = () => {
