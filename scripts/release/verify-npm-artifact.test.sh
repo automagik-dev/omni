@@ -46,11 +46,15 @@ pathlib.Path(sys.argv[4]).write_text(json.dumps({
     'time': {'2.260830.2': '2026-08-30T21:45:27Z'},
 }))
 PY
-"${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
-  --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
-  --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
-  --package @automagik/omni --version 2.260830.2 \
-  | grep -qx 'npm_artifact_verified=true' || fail "exact signed artifact was rejected"
+(
+  # Exercise the pipe with more output than its buffer before and after the matched line.
+  printf '%1048576s\n' ''
+  "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
+    --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
+    --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
+    --package @automagik/omni --version 2.260830.2 || exit "$?"
+  printf '%1048576s\n' ''
+) | grep -x 'npm_artifact_verified=true' >/dev/null || fail "exact signed artifact was rejected (pipeline statuses: ${PIPESTATUS[*]})"
 python3 - "${work}/keys.json" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
@@ -127,12 +131,16 @@ pathlib.Path(sys.argv[4]).write_text(json.dumps({
     'time': {'2.260830.3': '2026-08-30T21:45:27Z'},
 }))
 PY
-"${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
-  --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist-mixed.json" \
-  --keys-json "${work}/keys-mixed.json" --packument-json "${work}/packument.json" \
-  --package @automagik/omni --version 2.260830.2 \
-  | grep -qx 'npm_artifact_verified=true' || \
-  fail "co-signed artifact was rejected because one co-signing key expired before publication"
+(
+  # Exercise the pipe with more output than its buffer before and after the matched line.
+  printf '%1048576s\n' ''
+  "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
+    --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist-mixed.json" \
+    --keys-json "${work}/keys-mixed.json" --packument-json "${work}/packument.json" \
+    --package @automagik/omni --version 2.260830.2 || exit "$?"
+  printf '%1048576s\n' ''
+) | grep -x 'npm_artifact_verified=true' >/dev/null || \
+  fail "co-signed artifact was rejected because one co-signing key expired before publication (pipeline statuses: ${PIPESTATUS[*]})"
 # Reverse the same fixture: with the valid co-signer removed from the registry
 # key set, the surviving expired co-signer must condemn the artifact and say so.
 python3 - "${work}/keys-mixed.json" <<'PY'

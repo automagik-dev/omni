@@ -683,15 +683,20 @@ test('a mint asked while a new link is being saved waits for it, and is a child 
   const oldParent = omni.linkKey()
   const newParent = omni.linkKey()
   // Adding the Omni's market takes a while: omni.json is written after it.
-  let updating = false
-  const settings = { describe: () => [{ ns: 'plugin-market', value: { indexes: [] }, revision: 1 }], update: () => { updating = true; return delay(40) } }
+  let updating = false, markUpdating, releaseUpdate
+  const updateStarted = new Promise(resolve => { markUpdating = resolve })
+  const updatePending = new Promise(resolve => { releaseUpdate = resolve })
+  t.after(() => releaseUpdate())
+  const settings = { describe: () => [{ ns: 'plugin-market', value: { indexes: [] }, revision: 1 }], update: () => { updating = true; markUpdating(); return updatePending } }
   const { rt } = runtime(t, { link: linked(oldParent), settings })
   await rt.threadKeys.mint('t1', CHAT)
   const saving = rt.saveOmniLink(linked(newParent))
   // The save holds the hand-over (the keys' lock) once it is adding the market.
-  for (let waited = 0; waited < 1000 && !updating; waited += 5) await delay(5)
+  await updateStarted
   assert.ok(updating, 'the save is under way')
+  assert.equal(rt.omniLink().key, oldParent.text, 'the update remains blocked before the link is written')
   const minting = rt.threadKeys.mint('t2', OWN_CHAT)
+  releaseUpdate()
   await saving
   assert.equal((await minting).ok, true)
   assert.equal(omni.byText(rt.threadKeys.keyFor('t2')).parentId, newParent.id)
