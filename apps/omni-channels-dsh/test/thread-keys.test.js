@@ -567,7 +567,7 @@ test('the owner\'s own chat, added as a thread, is still seen as "self" with the
   assert.equal(isOwnChat(other.self, CHATS[CHAT].externalId), false)
 })
 
-test('pending cuts drain at start and on an unref\'d timer that goes with the plugin; a host that only reads leaves them', async (t) => {
+test('pending cuts drain at start and on an unref\'d timer that goes with the plugin; a host that only reads leaves them', { timeout: 10_000 }, async (t) => {
   const omni = fakeOmni()
   const parent = omni.linkKey()
   const pendingFile = (child) => ({
@@ -585,7 +585,9 @@ test('pending cuts drain at start and on an unref\'d timer that goes with the pl
   const readerChild = mintChild()
   const readerChecked = events()
   const reader = runtime(t, { link: linked(parent), keysFile: pendingFile(readerChild), readOnly: 'Another DeepSeek Harness holds the team.', onReadOnly: () => readerChecked.emit() })
+  const readerDrains = watchDrains(reader.rt)
   await readerChecked.next()
+  assert.equal(readerDrains.count(), 0, 'a reader never starts a drain after checking the guard')
   assert.ok(reader.file().threads.t1.pending)
   assert.equal(readerChild.revoked, false)
 
@@ -788,7 +790,7 @@ test('a host sees the keys another host on the same home kept, at its next looku
   assert.equal(one.rt.threadKeys.keyFor('t1'), null)
 })
 
-test('a lock whose holder is gone, or that is too old, is taken over', async (t) => {
+test('a lock whose holder is gone, or that is too old, is taken over', { timeout: 10_000 }, async (t) => {
   const omni = fakeOmni()
   const { rt, home } = runtime(t, { link: linked(omni.linkKey()) })
   await watchDrains(rt)()
@@ -809,7 +811,7 @@ test('a lock whose holder is gone, or that is too old, is taken over', async (t)
   assert.deepEqual(await minting, { cut: true })
 })
 
-test('an Omni that does not answer is asked once per drain, and a drain still running skips the next tick', async (t) => {
+test('an Omni that does not answer is asked once per drain, and a drain still running skips the next tick', { timeout: 10_000 }, async (t) => {
   const omni = fakeOmni()
   const parent = omni.linkKey()
   const children = [CHAT, OWN_CHAT, CHAT].map(chatId => omni.addChild('omni.example.com', { parentId: parent.id, chatId }))
@@ -835,6 +837,7 @@ test('an Omni that does not answer is asked once per drain, and a drain still ru
   release()
   omni.gate = null
   await drained()
+  assert.equal(drained.count(), 1, 'ticks cannot queue another drain after yielding to the startup drain')
   // The first unanswered request ends the pass: no other entry, and no mint, asked.
   assert.equal(omni.asked.length, 1)
   assert.equal(Object.keys(file().threads).length, 3)
@@ -916,8 +919,7 @@ test('a lock file with no holder in it is taken over once it is old, not before'
   t.mock.timers.tick(11_000)
   retry()
   const answer = await minting
-  assert.notEqual(answer, 'still waiting')
-  assert.equal(answer.ok, true)
+  assert.deepEqual(answer, { ok: true, self: OWNER })
   assert.equal(existsSync(lockOf(home)), false)
 })
 
