@@ -18,7 +18,7 @@
  * Written for the 2026-04-09 `omni-install-resilience` wish.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -32,6 +32,7 @@ import {
 } from '../install-helpers.js';
 import { NATS_BINARY_PATH } from '../nats-install.js';
 import { buildNatsServerArgs } from '../nats-server-args.js';
+import * as pm2 from '../pm2.js';
 import { PM2_PROCESSES, buildPm2StartArgs } from '../pm2.js';
 
 // ---------------------------------------------------------------------------
@@ -109,12 +110,17 @@ describe('buildAgentHandoffBlock', () => {
 describe('detectReinstall — data dir signal', () => {
   // Per-process path: concurrent runs from sibling worktrees must not rm each other's fixture.
   const FIXTURE_ROOT = join(tmpdir(), `omni-install-test-datadir-${process.pid}`);
+  let restorePm2Probe = () => {};
 
   beforeEach(() => {
+    // Data-dir assertions do not need a real PM2 daemon or its subprocess startup.
+    const probe = spyOn(pm2, 'capturePm2').mockResolvedValue({ code: 0, stdout: '[]' });
+    restorePm2Probe = () => probe.mockRestore();
     rmSync(FIXTURE_ROOT, { recursive: true, force: true });
   });
 
   afterEach(() => {
+    restorePm2Probe();
     rmSync(FIXTURE_ROOT, { recursive: true, force: true });
   });
 
@@ -123,8 +129,8 @@ describe('detectReinstall — data dir signal', () => {
     const res = await detectReinstall(FIXTURE_ROOT);
     // hasDataDir MUST be false
     expect(res.hasDataDir).toBe(false);
-    // hasConfig and hasPm2Process may be true from the host — the only
-    // assertion we make is that the data-dir signal alone is absent.
+    // Host config may exist; the PM2 probe is stubbed. Only the absence of
+    // the data-dir signal is asserted here.
   });
 
   test('empty data dir returns hasDataDir: false', async () => {
