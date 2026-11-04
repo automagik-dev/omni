@@ -1,6 +1,6 @@
 /** Real auth hints in isolated children; recovery never touches real PM2, APIs or user config. */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -80,7 +80,8 @@ ${invocation(scenario, name)}
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    return { exitCode, stdout, stderr };
+    const savedKey: unknown = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).servers.list.default?.apiKey;
+    return { exitCode, stdout, stderr, savedKey };
   } finally {
     if (child.exitCode === null) child.kill();
     await child.exited;
@@ -113,6 +114,7 @@ describe('credential hints without keys on argv', () => {
       ).toHaveLength(2);
       expect(result.stdout + result.stderr).not.toMatch(/--api-key(?:\s|=)/);
       expect(result.stdout).not.toContain('omni auth login --server prod');
+      expect(result.stdout.includes('omni server list --reveal')).toBe(scenario === 'failed-rotation');
     });
   }
 });
@@ -161,3 +163,19 @@ describe('shell-safe credential hint leftovers', () => {
     );
   });
 });
+
+// Process-spawning regressions need headroom on loaded CI workers.
+for (const json of [false, true]) {
+  test(`failed rotation hides the generated key in ${json ? 'JSON' : 'human'} output`, async () => {
+    const result = await hint('failed-rotation', 'prod', json);
+    expect(result.exitCode).toBe(0);
+    const key = result.savedKey;
+    if (typeof key !== 'string') throw new Error('Failed rotation must save the generated key in the local entry');
+    expect(key).toMatch(/^omni_sk_[0-9a-f]{32}$/);
+    const printed = result.stdout + result.stderr;
+    expect(printed).not.toContain(key);
+    expect(result.stdout).toContain('c. Restart:       OMNI_API_KEY=<your-new-key> omni start');
+    expect(result.stdout).toContain('omni server list --reveal');
+    expect(printed).toContain(`Config updated with new key (${key.slice(0, 12)}...) but API restart failed.`);
+  }, 30_000);
+}

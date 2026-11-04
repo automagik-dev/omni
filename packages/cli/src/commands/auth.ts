@@ -263,7 +263,6 @@ function updateLocalConfig(apiKey: string, apiUrl?: string): void {
 
 /** Print manual recovery instructions when automation fails. */
 function printManualInstructions(newKey?: string): void {
-  const key = newKey ?? '<your-new-key>';
   output.raw('');
   output.raw('  Manual recovery steps:');
   output.raw('');
@@ -280,11 +279,12 @@ function printManualInstructions(newKey?: string): void {
   output.raw('  3. Or to rotate to a new key:');
   output.raw('     a. Stop the API:  omni stop');
   output.raw('     b. Delete primary key from DB manually');
-  output.raw(`     c. Restart:       OMNI_API_KEY=${key} omni start`);
+  output.raw('     c. Restart:       OMNI_API_KEY=<your-new-key> omni start');
   output.raw('     d. Sign in interactively: omni auth login --server default');
   output.raw(
     '        Or read a key from stdin: omni auth login --server default --api-key-stdin < /secure/path/omni-api-key',
   );
+  if (newKey) output.raw('  View the saved key: omni server list --reveal');
   output.raw('');
 }
 
