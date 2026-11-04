@@ -326,15 +326,25 @@ jobs:
           bun scripts/release/generate-release-notes.ts "${args[@]}"
 
       - name: Update release body with changelog
+        # The notes must never turn the release red: if GitHub rejects the body
+        # (for example HTTP 422 "body is too long"), warn and keep the placeholder.
+        # The generator already caps the body under GitHub's 125000-character limit.
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
+          NOTES_FILE: /tmp/release-notes.md
         run: |
           set -euo pipefail
           TAG="${RELEASE_TAG}"
-          if [[ -s /tmp/release-notes.md ]]; then
-            gh release edit "${TAG}" --notes-file /tmp/release-notes.md
-            echo "Updated release body for ${TAG}"
+          if [[ -s "${NOTES_FILE}" ]]; then
+            if edit_output=$(gh release edit "${TAG}" --notes-file "${NOTES_FILE}" 2>&1); then
+              echo "Updated release body for ${TAG}"
+            else
+              edit_status=$?
+              reason="${edit_output//$'\r'/}"
+              reason="${reason//$'\n'/ }"
+              echo "::warning::gh release edit failed for ${TAG} (exit ${edit_status}); leaving the placeholder release body in place: ${reason}"
+            fi
           else
             echo "::warning::the notes generator produced empty notes; leaving the placeholder body in place"
           fi

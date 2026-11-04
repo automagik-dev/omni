@@ -12,6 +12,9 @@
  *   - Detail sections     — grouped by conventional type, clustered by scope
  *   - Contributors, asset-verification instructions, and a compare link
  *
+ * A body over RELEASE_NOTES_MAX_CHARS (GitHub rejects bodies over 125000 characters) keeps the
+ * newest detail entries, drops the oldest whole ones, and ends with a truncation line.
+ *
  * Everything is derived offline from git — no network calls — so the same
  * range always renders the same notes.
  *
@@ -358,11 +361,11 @@ function renderMigrations(input: ReleaseNotesInput, lines: string[]): void {
   lines.push('');
 }
 
-function renderDetailSections(input: ReleaseNotesInput, lines: string[]): void {
-  for (const section of groupSections(input.commits)) {
+function renderDetailSections(repo: string, commits: ParsedCommit[], lines: string[]): void {
+  for (const section of groupSections(commits)) {
     lines.push(`### ${section.title}`, '');
     for (const commit of section.commits) {
-      lines.push(`- **${commit.area}:** ${commit.description} (${refLink(input.repo, commit.pr, commit.hash)})`);
+      lines.push(`- **${commit.area}:** ${commit.description} (${refLink(repo, commit.pr, commit.hash)})`);
     }
     lines.push('');
   }
@@ -394,22 +397,92 @@ function renderVerification(input: ReleaseNotesInput, lines: string[]): void {
   );
 }
 
-/** Render the full release body. Empty sections are omitted. */
-export function renderReleaseNotes(input: ReleaseNotesInput): string {
+/** GitHub rejects a longer release body with HTTP 422 "body is too long (maximum is 125000 characters)". */
+export const GITHUB_RELEASE_BODY_LIMIT = 125_000;
+
+/**
+ * Cap for the rendered body, with a margin under GITHUB_RELEASE_BODY_LIMIT. Measured as JS string
+ * length (UTF-16 code units): an astral character such as an emoji counts 2, so the count is never
+ * below the code-point count GitHub validates. Bytes are never counted.
+ */
+export const RELEASE_NOTES_MAX_CHARS = 120_000;
+
+export type RenderOptions = {
+  /** Maximum body length in UTF-16 code units. Defaults to RELEASE_NOTES_MAX_CHARS. */
+  maxChars?: number;
+};
+
+function fullChangelogUrl(input: ReleaseNotesInput): string {
+  if (input.fromTag) return `https://github.com/${input.repo}/compare/${input.fromTag}...${input.toTag}`;
+  return `https://github.com/${input.repo}/commits/${input.toTag}`;
+}
+
+/** Body lines with the detail sections rendered from `detailCommits` only; every other section uses all commits. */
+function renderLines(input: ReleaseNotesInput, detailCommits: ParsedCommit[]): string[] {
   const lines: string[] = [];
   renderHighlights(input, lines);
   renderBreakingChanges(input, lines);
   renderMigrations(input, lines);
-  renderDetailSections(input, lines);
+  renderDetailSections(input.repo, detailCommits, lines);
   renderContributors(input, lines);
   renderVerification(input, lines);
   if (input.fromTag) {
-    lines.push(
-      `**Full changelog:** [${input.fromTag}...${input.toTag}](https://github.com/${input.repo}/compare/${input.fromTag}...${input.toTag})`,
-      '',
-    );
+    lines.push(`**Full changelog:** [${input.fromTag}...${input.toTag}](${fullChangelogUrl(input)})`, '');
   }
+  return lines;
+}
+
+function joinLines(lines: string[]): string {
   return `${lines.join('\n').trim()}\n`;
+}
+
+function truncationLine(input: ReleaseNotesInput, omittedEntries: number, protectedCut: boolean): string {
+  const entries = `${omittedEntries} older changelog ${omittedEntries === 1 ? 'entry' : 'entries'}`;
+  const what = protectedCut ? `${entries} and the end of the sections above were` : `${entries} were`;
+  return `> **Release notes truncated:** ${what} omitted to fit GitHub's release body limit. See the [full changelog](${fullChangelogUrl(input)}) for every change.`;
+}
+
+function withTruncationLine(lines: string[], line: string): string {
+  const body = lines.join('\n').trim();
+  return body.length > 0 ? `${body}\n\n${line}\n` : `${line}\n`;
+}
+
+/** Largest n in [0, max] with fits(n), for a fits that is true up to some n and false after it; -1 when fits(0) is false. */
+function largestFitting(max: number, fits: (n: number) => boolean): number {
+  let lo = -1;
+  let hi = max;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi + 1) / 2);
+    if (fits(mid)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+/**
+ * Render the release body. Empty sections are omitted.
+ *
+ * A body over `maxChars` keeps the newest detail entries (git log lists newest first) and drops the
+ * oldest whole entries, then ends with a truncation line linking the full changelog. Highlights,
+ * breaking changes, migrations, contributors and asset verification stay whole. Only when those
+ * alone exceed the cap are trailing whole lines dropped from them too, and the line says so.
+ */
+export function renderReleaseNotes(input: ReleaseNotesInput, options: RenderOptions = {}): string {
+  const maxChars = options.maxChars ?? RELEASE_NOTES_MAX_CHARS;
+  const full = joinLines(renderLines(input, input.commits));
+  if (full.length <= maxChars) return full;
+
+  const total = input.commits.length;
+  const keepNewest = (kept: number) =>
+    withTruncationLine(renderLines(input, input.commits.slice(0, kept)), truncationLine(input, total - kept, false));
+  const kept = largestFitting(total - 1, (n) => keepNewest(n).length <= maxChars);
+  if (kept >= 0) return keepNewest(kept);
+
+  const fixed = renderLines(input, []);
+  const cutLine = truncationLine(input, total, true);
+  const keepLeading = (count: number) => withTruncationLine(fixed.slice(0, count), cutLine);
+  const leading = largestFitting(fixed.length, (n) => keepLeading(n).length <= maxChars);
+  return keepLeading(Math.max(0, leading));
 }
 
 // ---------------------------------------------------------------------------

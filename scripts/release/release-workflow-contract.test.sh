@@ -622,6 +622,7 @@ if (root / ".well-known/homolog.json").exists():
 for gate in (
     "release-workflow-contract.test.sh",
     "stable-release-order.test.sh",
+    "release-notes-body-guard.test.sh",
     "verify-promotion-candidate.test.sh",
     "verify-oci-release.test.sh",
     "verify-release-source.test.sh",
