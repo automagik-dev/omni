@@ -2,6 +2,8 @@
 // (omni-ui) through addStrings, so the team's `t` translates them; the keys are the English
 // text. Words the team shows too (Channels, connected, Plugins…) are in its own copy.
 export const STRINGS = {
+  'Omni did not accept that key.': 'Omni 不接受这个密钥。',
+  'The bot token was revoked in BotFather. Paste a new token to reconnect.': '机器人令牌已在 BotFather 中撤销。请粘贴新令牌以重新连接。',
   'Could not change this channel. Try again.': '无法更改这个渠道。请重试。',
   'Could not send this message. Check your connection and access, then try again.': '无法发送这条消息。请检查连接和权限后重试。',
   'Could not delete this instance. Check your access or connection, then try again.': '无法删除这个实例。请检查权限或连接后重试。',

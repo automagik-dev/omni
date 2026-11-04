@@ -1,13 +1,24 @@
 import { t } from './core.js'
 
-// Only codes chosen by this host select guidance. Diagnostic strings never become copy.
+// The pinned team transports only message + code and translates host messages. Keep its
+// existing refusal codes; only exact local copy (English or translated) selects guidance.
 const KEY_PROBLEMS = Object.freeze({
-  'bot/bad-key': 'Paste the whole API key.',
-  'bot/bad-address': 'Give the address of the Omni, like omni.example.com',
-  'bot/key-refused': 'Omni did not accept that key. Check the key and try again.',
+  'bot/invalid': Object.freeze({
+    'Paste the whole API key.': 'Paste the whole API key.',
+    'Give the address of the Omni, like omni.example.com': 'Give the address of the Omni, like omni.example.com',
+  }),
+  'bot/refused': Object.freeze({
+    'Omni did not accept that key.': 'Omni did not accept that key. Check the key and try again.',
+  }),
 })
-export const keyProblem = error => typeof error?.code === 'string' && Object.hasOwn(KEY_PROBLEMS, error.code)
-  ? t(KEY_PROBLEMS[error.code]) : t('Could not connect to Omni. Try again.')
+export function keyProblem(error) {
+  if (typeof error?.code === 'string' && Object.hasOwn(KEY_PROBLEMS, error.code) && typeof error.message === 'string') {
+    for (const [message, guidance] of Object.entries(KEY_PROBLEMS[error.code])) {
+      if (error.message === message || error.message === t(message)) return t(guidance)
+    }
+  }
+  return t('Could not connect to Omni. Try again.')
+}
 
 const THREAD_REASONS = Object.freeze({
   not_linked: 'Not connected: this app is not linked to an Omni.',

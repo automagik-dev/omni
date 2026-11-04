@@ -8983,11 +8983,22 @@ var icons = import_client.omni.ui.icons;
 
 // src/client/problem-words.js
 var KEY_PROBLEMS = Object.freeze({
-  "bot/bad-key": "Paste the whole API key.",
-  "bot/bad-address": "Give the address of the Omni, like omni.example.com",
-  "bot/key-refused": "Omni did not accept that key. Check the key and try again."
+  "bot/invalid": Object.freeze({
+    "Paste the whole API key.": "Paste the whole API key.",
+    "Give the address of the Omni, like omni.example.com": "Give the address of the Omni, like omni.example.com"
+  }),
+  "bot/refused": Object.freeze({
+    "Omni did not accept that key.": "Omni did not accept that key. Check the key and try again."
+  })
 });
-var keyProblem = (error) => typeof error?.code === "string" && Object.hasOwn(KEY_PROBLEMS, error.code) ? t(KEY_PROBLEMS[error.code]) : t("Could not connect to Omni. Try again.");
+function keyProblem(error) {
+  if (typeof error?.code === "string" && Object.hasOwn(KEY_PROBLEMS, error.code) && typeof error.message === "string") {
+    for (const [message, guidance] of Object.entries(KEY_PROBLEMS[error.code])) {
+      if (error.message === message || error.message === t(message)) return t(guidance);
+    }
+  }
+  return t("Could not connect to Omni. Try again.");
+}
 var THREAD_REASONS = Object.freeze({
   not_linked: "Not connected: this app is not linked to an Omni.",
   other_omni: "Not connected: this app is linked to another Omni.",
@@ -16801,6 +16812,8 @@ var PERMISSIONS_CSS = `
 
 // src/client/strings.js
 var STRINGS = {
+  "Omni did not accept that key.": "Omni 不接受这个密钥。",
+  "The bot token was revoked in BotFather. Paste a new token to reconnect.": "机器人令牌已在 BotFather 中撤销。请粘贴新令牌以重新连接。",
   "Could not change this channel. Try again.": "无法更改这个渠道。请重试。",
   "Could not send this message. Check your connection and access, then try again.": "无法发送这条消息。请检查连接和权限后重试。",
   "Could not delete this instance. Check your access or connection, then try again.": "无法删除这个实例。请检查权限或连接后重试。",

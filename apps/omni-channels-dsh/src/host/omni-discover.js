@@ -27,8 +27,8 @@ const CLIENT_ID = process.env.OMNI_CLIENT_ID === 'omni-desktop' ? 'omni-desktop'
 // The order a found Omni's details are taken in when two places name the same one.
 const SOURCES = ['sandbox', 'cli', 'cli-server', 'running']
 
-const invalid = (message, code = 'bot/invalid') => Object.assign(new Error(message), { code })
-const refused = (message, code = 'bot/refused') => Object.assign(new Error(message), { code })
+const invalid = message => Object.assign(new Error(message), { code: 'bot/invalid' })
+const refused = message => Object.assign(new Error(message), { code: 'bot/refused' })
 
 // The CLI's config.json, as far as finding an Omni needs it (packages/cli/src/config.ts).
 const text = max => z.string().max(max)
@@ -311,12 +311,15 @@ export function install(rt) {
   // "Use it" keeps one. The key goes no further than this host.
   async function useKey(body) {
     const parsed = KeyPayload.safeParse(body)
-    if (!parsed.success) throw invalid('Paste the whole API key.', 'bot/bad-key')
+    if (!parsed.success) throw invalid('Paste the whole API key.')
     // A found Omni by its id, or one at an address the person typed.
     const url = parsed.data.id ? foundOmni(parsed.data.id)?.url : cleanOmniUrl(parsed.data.url)
-    if (!url) throw parsed.data.id ? refused('That Omni is not there any more. Look again.') : invalid('Give the address of the Omni, like omni.example.com', 'bot/bad-address')
+    if (!url) throw parsed.data.id ? refused('That Omni is not there any more. Look again.') : invalid('Give the address of the Omni, like omni.example.com')
     const linked = await linkWithKey(rt, url, parsed.data.apiKey)
-    if (linked.status !== 'paired') throw refused(linked.message ? `Omni did not accept that key: ${linked.message}` : 'Omni did not accept that key.', 'bot/key-refused')
+    if (linked.status !== 'paired') {
+      if (linked.message) rt.warn?.('omni-channels: pasted key refused: %s', linked.message)
+      throw refused('Omni did not accept that key.')
+    }
     return linked
   }
 

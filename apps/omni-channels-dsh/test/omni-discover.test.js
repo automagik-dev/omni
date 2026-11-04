@@ -11,6 +11,8 @@ import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { parseConnectLink } from '../src/client/connect-link.js'
 import { OMNI_MINIMUM } from '../src/host/version.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
+import { call as teamCall } from '@automagik/bots-dsh/src/client/api.js'
+import { clearClientErrors, clientErrors } from '@automagik/bots-dsh/src/client/diagnostics.js'
 
 const realFetch = globalThis.fetch
 const realEnv = { HOME: process.env.HOME, OMNI_CONFIG_DIR: process.env.OMNI_CONFIG_DIR, OMNI_HOME: process.env.OMNI_HOME, AUTOMAGIK_HOST: process.env.AUTOMAGIK_HOST }
@@ -371,19 +373,19 @@ test('a pasted API key for an Omni that cannot approve this app links it like Us
   assert.equal(JSON.stringify(await rt.omniDiscoverEndpoint('omni-discover')).includes(PASTED_KEY), false)
 })
 
-test('a pasted key the Omni refuses shows the Omni\'s own words, links nothing, and never echoes the key', async (t) => {
+test('a refused pasted key shows fixed guidance, links nothing, and never echoes the key', async (t) => {
   const { rt } = host(t, json => json(401, { error: { code: 'UNAUTHORIZED', message: 'Invalid API key' } }))
   const { omnis } = await rt.omniDiscoverEndpoint('omni-discover')
   const local = omnis.find(omni => omni.local)
   await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { id: local.id, apiKey: PASTED_KEY }), (error) => {
-    assert.equal(error.code, 'bot/key-refused')
-    assert.equal(error.message, 'Omni did not accept that key: Invalid API key')
+    assert.equal(error.code, 'bot/refused')
+    assert.equal(error.message, 'Omni did not accept that key.')
     assert.equal(error.message.includes(PASTED_KEY), false)
     return true
   })
   assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
   for (const body of [{ id: local.id, apiKey: 'short' }, { id: local.id, apiKey: 'has a space inside it' }, { id: local.id }, { id: local.id, apiKey: PASTED_KEY, extra: 1 }]) {
-    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), { code: 'bot/bad-key' }, JSON.stringify(body))
+    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), { code: 'bot/invalid' }, JSON.stringify(body))
   }
 })
 
@@ -566,8 +568,37 @@ test('a link the Omni sends reads as its address and grant, and anything else as
 
 test('pasted-key failures carry curated codes independently of remote diagnostic words', async (t) => {
   const { rt } = host(t, json => json(401, { error: { message: '<b>REMOTE</b>\u009b\u202e' } }))
-  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: 'short' }), { code: 'bot/bad-key' })
-  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'not a valid URL', apiKey: PASTED_KEY }), { code: 'bot/bad-address' })
-  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: PASTED_KEY }), { code: 'bot/key-refused' })
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: 'short' }), { code: 'bot/invalid' })
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'not a valid URL', apiKey: PASTED_KEY }), { code: 'bot/invalid' })
+  await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: PASTED_KEY }), { code: 'bot/refused' })
   assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
+})
+
+test('a refused pasted key keeps remote words only in the host warning, never the thrown message', async (t) => {
+  for (const raw of ['<b>REMOTE</b>', '\u009b31mREMOTE\u202e', 'REMOTE-' + 'x'.repeat(5000)]) {
+    const { rt } = host(t, json => json(401, { error: { message: raw } }))
+    const warnings = []
+    rt.warn = (...args) => warnings.push(args)
+    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', { url: 'https://omni.example.com', apiKey: PASTED_KEY }), error => {
+      assert.equal(error.code, 'bot/refused', 'the pinned client treats this as a refusal, not a Recent error')
+      assert.equal(error.message, 'Omni did not accept that key.')
+      assert.equal(error.message.includes(raw), false)
+      return true
+    })
+    if (raw.length <= 500) assert.ok(warnings.some(args => args.includes(raw)), 'validated diagnostic remains on the host')
+    else assert.deepEqual(warnings, [], 'oversized refusal was already discarded by the response schema')
+    assert.equal(existsSync(join(rt.home, LINK_FILE)), false)
+  }
+})
+
+test('pasted-key refusals stay out of the pinned Bot team Recent errors', async (t) => {
+  for (const body of [{ url: 'https://omni.example.com', apiKey: 'short' }, { url: 'bad address', apiKey: PASTED_KEY }, { url: 'https://omni.example.com', apiKey: PASTED_KEY }]) {
+    const { rt } = host(t, json => json(401, { error: { message: '<b>REMOTE</b>\u009b\u202e' } }))
+    let failure
+    await assert.rejects(rt.omniDiscoverEndpoint('omni-discover-key', body), error => { failure = error; return true })
+    globalThis.fetch = async () => Response.json({ ok: false, error: { code: failure.code, message: failure.message } })
+    clearClientErrors()
+    await assert.rejects(teamCall('omni-discover-key', body))
+    assert.deepEqual(clientErrors(), [], 'the pinned client treats this as a user refusal')
+  }
 })

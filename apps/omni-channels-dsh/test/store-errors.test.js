@@ -148,9 +148,9 @@ test('store error privacy: all fixed guidance has Chinese copy', () => {
 })
 
 const keyCodes = [
-  ['bot/bad-key', 'Paste the whole API key.'],
-  ['bot/bad-address', 'Give the address of the Omni, like omni.example.com'],
-  ['bot/key-refused', 'Omni did not accept that key. Check the key and try again.'],
+  ['bot/invalid', 'Paste the whole API key.', 'Paste the whole API key.'],
+  ['bot/invalid', 'Give the address of the Omni, like omni.example.com', 'Give the address of the Omni, like omni.example.com'],
+  ['bot/refused', 'Omni did not accept that key.', 'Omni did not accept that key. Check the key and try again.'],
 ]
 async function keyFailure(code, raw) {
   const old = answer
@@ -168,10 +168,17 @@ async function keyFailure(code, raw) {
   await keyForm.props.onSubmit({ preventDefault() {} })
   return view
 }
-for (const [code, expected] of keyCodes) test(`store curated guidance: ${code}`, async () => {
+for (const [code, message, expected] of keyCodes) test(`store curated guidance: ${message}`, async () => {
+  reset(); const view = await keyFailure(code, message)
+  try {
+    assert.ok(text(await draw(view)).includes(expected))
+    assert.match(STRINGS[expected], /[\u3400-\u9fff]/)
+  } finally { view.unmount() }
+})
+for (const code of ['bot/invalid', 'bot/refused']) test(`store key guidance: ${code} never displays unknown refusal text`, async () => {
   for (const raw of probes) {
     reset(); const view = await keyFailure(code, raw)
-    try { clean(await draw(view), raw, expected); assert.match(STRINGS[expected], /[\u3400-\u9fff]/) } finally { view.unmount() }
+    try { clean(await draw(view), raw, 'Could not connect to Omni. Try again.') } finally { view.unmount() }
   }
 })
 for (const [field, expected] of [
@@ -218,8 +225,33 @@ test('store reason codes: known thread codes carry fixed translated guidance to 
 })
 
 test('store key guidance: inherited and non-string codes stay generic', async () => {
-  for (const code of ['__proto__', 'constructor', ['bot/bad-key'], new String('bot/key-refused'), { toString: () => 'bot/bad-address' }]) {
-    reset(); const raw = probes[0], view = await keyFailure(code, raw)
-    try { clean(await draw(view), raw, 'Could not connect to Omni. Try again.') } finally { view.unmount() }
+  for (const code of ['__proto__', 'constructor', ['bot/invalid'], new String('bot/invalid'), { toString: () => 'bot/invalid' }]) {
+    reset(); const view = await keyFailure(code, 'Paste the whole API key.')
+    try { assert.ok(text(await draw(view)).includes('Could not connect to Omni. Try again.')) } finally { view.unmount() }
   }
+})
+
+test('channel problem allow-list rejects non-string and inherited codes', async () => {
+  for (const problemCode of [undefined, 'unknown', '__proto__', 'constructor', 'toString', ['token_revoked'], new String('token_revoked'), { toString: () => 'token_revoked' }]) {
+    reset(); const raw = probes[0]
+    ui.omniStore.set(s => ({ ...s, channels: [{ ...channel, status: 'attention', problem: raw, problemCode }] }))
+    const view = page()
+    try { clean(await draw(view), raw, 'Omni does not report this channel as connected.') } finally { view.unmount() }
+  }
+})
+test('channel problem allow-list preserves token_revoked guidance with Chinese copy', async () => {
+  const expected = 'The bot token was revoked in BotFather. Paste a new token to reconnect.'
+  assert.match(STRINGS[expected], /[\u3400-\u9fff]/)
+  reset(); const raw = probes[0]
+  ui.omniStore.set(s => ({ ...s, channels: [{ ...channel, status: 'attention', problem: raw, problemCode: 'token_revoked' }] }))
+  const view = page()
+  try { clean(await draw(view), raw, expected) } finally { view.unmount() }
+})
+
+test('key refusal guidance recognizes translated local messages', async () => {
+  const translated = await bundleClient(["export { keyProblem } from './problem-words.js'"], { team: { omni: { ...omni, t: key => STRINGS[key] ?? key } } })
+  for (const [code, message, expected] of keyCodes) {
+    assert.equal(translated.keyProblem({ code, message: STRINGS[message] }), STRINGS[expected])
+  }
+  assert.equal(translated.keyProblem({ code: 'bot/refused', message: probes[0] }), STRINGS['Could not connect to Omni. Try again.'])
 })
