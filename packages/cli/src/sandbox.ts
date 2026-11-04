@@ -422,6 +422,8 @@ export function sandboxChildSpecs(
               // the update off.
               OMNI_UPDATE_COMMAND: JSON.stringify(sandboxUpdateCommand(layout, state)),
               OMNI_UPDATE_CONFIRM: 'app',
+              // Where the handed-off install writes its result, so the API can say why one failed.
+              OMNI_UPDATE_LOG: sandboxUpdateLogPath(layout),
             }),
       },
       readyPort: state.ports.api,
@@ -446,6 +448,11 @@ export function supervisorCommand(layout: SandboxLayout, state: SandboxState): s
 export function sandboxUpdateCommand(layout: SandboxLayout, state: SandboxState): string[] {
   const [bun, cli] = supervisorCommand(layout, state);
   return [bun as string, cli as string, 'sandbox', 'update', '--home', layout.home];
+}
+
+/** The log a handed-off update appends to; the API reads its last result line (OMNI_UPDATE_LOG). */
+export function sandboxUpdateLogPath(layout: SandboxLayout): string {
+  return join(layout.logsDir, 'update.log');
 }
 
 // ----------------------------------------------------------------------------
@@ -1401,7 +1408,7 @@ export async function handOffSandboxUpdate(
     '--json',
   ];
   const env = sandboxBaseEnv(layout, deps.env);
-  const logPath = join(layout.logsDir, 'update.log');
+  const logPath = sandboxUpdateLogPath(layout);
   if (deps.platform === 'linux') {
     const names = sandboxUnitNames(layout.home, unitDefaultHome(state, opts.defaultHome));
     const unit = names.sessionUnit.replace(/-session\.service$/, `-update-${deps.now().getTime()}.service`);

@@ -53,6 +53,7 @@ import {
   sandboxStatus,
   sandboxUnitNames,
   sandboxUpdateCommand,
+  sandboxUpdateLogPath,
   startSandbox,
   stopSandbox,
   supervisorCommand,
@@ -772,6 +773,15 @@ describe('sandboxChildSpecs', () => {
     const command = [BUN, '/s/runtime/node_modules/@automagik/omni/bin/omni', 'sandbox', 'update', '--home', '/s'];
     expect(JSON.parse(api?.env.OMNI_UPDATE_COMMAND ?? '[]')).toEqual(command);
     expect(sandboxUpdateCommand(layout, state)).toEqual(command);
+  });
+
+  test('the API reads why an update failed from the log the hand-off writes', () => {
+    const layout = sandboxLayout('/s');
+    const api = sandboxChildSpecs(layout, state, 'omni_sk_test', LEAKY_ENV)[2];
+    expect(api?.env.OMNI_UPDATE_LOG).toBe('/s/logs/update.log');
+    expect(sandboxUpdateLogPath(layout)).toBe('/s/logs/update.log');
+    const embedded = sandboxChildSpecs(layout, state, 'omni_sk_test', LEAKY_ENV, { embedded: true })[2];
+    expect(embedded?.env.OMNI_UPDATE_LOG).toBeUndefined();
   });
 
   test('without --embedded: crash reports, updates and the database URL stay as they were', () => {
