@@ -144,7 +144,7 @@ jobs:
           # the version token. If the omni CLI does not implement --version
           # via the same path on every platform, replace with `omni --help`
           # presence-check and re-validate G4 smoke.
-          ACTUAL=$("${STAGE}/omni" --version 2>&1 | head -n1 | awk '{print $NF}' | sed 's/^v//')
+          ACTUAL=$("${STAGE}/omni" --version 2>&1 | awk 'NR==1 {print $NF}' | sed 's/^v//')
           if [[ "${ACTUAL}" != "${VERSION}" ]]; then
             echo "::warning::omni --version mismatch: expected '${VERSION}', got '${ACTUAL}' (non-fatal — known omni CLI version-flag drift; tarball still uploaded)"
           fi

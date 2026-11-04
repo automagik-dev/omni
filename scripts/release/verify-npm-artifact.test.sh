@@ -49,6 +49,7 @@ PY
 (
   # Exercise the pipe with more output than its buffer before and after the matched line.
   printf '%1048576s\n' ''
+  # Carry the script status out of this padded subshell; the || exit "$?" must stay.
   "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
     --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist.json" \
     --keys-json "${work}/keys.json" --packument-json "${work}/packument.json" \
@@ -134,6 +135,7 @@ PY
 (
   # Exercise the pipe with more output than its buffer before and after the matched line.
   printf '%1048576s\n' ''
+  # Carry the script status out of this padded subshell; the || exit "$?" must stay.
   "${SCRIPT}" --expected-tarball "${work}/expected.tgz" \
     --registry-tarball "${work}/registry.tgz" --dist-json "${work}/dist-mixed.json" \
     --keys-json "${work}/keys-mixed.json" --packument-json "${work}/packument.json" \

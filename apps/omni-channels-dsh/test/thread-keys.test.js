@@ -5,7 +5,8 @@
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { open as openFile } from 'node:fs/promises'
+import fsPromises, { open as openFile } from 'node:fs/promises'
+import { syncBuiltinESMExports } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
@@ -42,7 +43,8 @@ function fakeOmni() {
   const keys = new Map()
   const asked = []
   const fail = new Set()
-  const omni = { asked, fail, down: false, keys, refuseWith: null, tamper: null, gate: null }
+  const requests = events()
+  const omni = { requests, asked, fail, down: false, keys, refuseWith: null, tamper: null, gate: null }
   const add = (host, kind, extra = {}) => {
     const record = { id: randomUUID(), text: `omni_sk_${kind}_${randomUUID().slice(0, 8)}`, host, kind, revoked: false, parentId: null, chatId: null, ...extra }
     keys.set(record.text, record)
@@ -65,7 +67,9 @@ function fakeOmni() {
     const key = init.headers?.['x-api-key'] ?? null
     const method = init.method ?? 'GET'
     const path = url.pathname.replace(/^\/api\/v2/, '')
-    asked.push({ method, host: url.host, path, key })
+    const request = { method, host: url.host, path, key }
+    asked.push(request)
+    requests.emit(request)
     if (omni.gate) await omni.gate
     if (omni.down) throw new TypeError('fetch failed')
     const json = (status, body) => new Response(JSON.stringify(body), { status })
@@ -123,7 +127,7 @@ function fakeOmni() {
 }
 
 // The link, the Omni requests and the thread keys on one runtime, as index.js installs them.
-function runtime(t, { link, keysFile, ready = true, readOnly, settings, home: shared } = {}) {
+function runtime(t, { link, keysFile, ready = true, readOnly, settings, onReadOnly, home: shared } = {}) {
   const home = shared ?? mkdtempSync(join(tmpdir(), 'thread-keys-'))
   if (link) writeFileSync(join(home, LINK_FILE), JSON.stringify(link))
   if (keysFile) writeFileSync(join(home, KEYS_FILE), JSON.stringify(keysFile), { mode: 0o600 })
@@ -135,7 +139,7 @@ function runtime(t, { link, keysFile, ready = true, readOnly, settings, home: sh
     ctx: { effect: (run) => { const dispose = run(); if (typeof dispose === 'function') disposers.push(dispose) }, get: () => undefined, settings },
     teamResume: { ready, reason: ready ? null : NEEDS_NEWER_TEAM },
     warn: (...args) => warnings.push(args.join(' ')),
-    ...(readOnly ? { readOnly: () => readOnly } : {}),
+    ...(readOnly ? { readOnly: () => { onReadOnly?.(); return readOnly } } : {}),
   }
   installHooks(rt)
   installLink(rt)
@@ -153,7 +157,46 @@ function runtime(t, { link, keysFile, ready = true, readOnly, settings, home: sh
 
 const linked = record => ({ url: OMNI, key: record.text, keyId: record.id, scopes: ['chats:*'], pairedAt: '2026-10-27T00:00:00.000Z' })
 const keyFileText = home => (existsSync(join(home, KEYS_FILE)) ? readFileSync(join(home, KEYS_FILE), 'utf8') : '')
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
+// Queue exact milestones, including ones reached before the test starts awaiting them.
+function events() {
+  const queued = [], waiting = []
+  return {
+    emit: value => waiting.length ? waiting.shift()(value) : queued.push(value),
+    next: () => queued.length ? Promise.resolve(queued.shift()) : new Promise(resolve => waiting.push(resolve)),
+  }
+}
+// Install before the startup tick resumes from its first await. Observe the real
+// lifecycle call, rather than enqueueing a separate drain and assuming startup is done.
+function watchDrains(rt) {
+  const calls = events(), drain = rt.threadKeys.drain
+  let count = 0
+  rt.threadKeys.drain = (...args) => {
+    count += 1
+    const done = drain(...args)
+    calls.emit({ done })
+    return done
+  }
+  const next = async () => { const { done } = await calls.next(); await done }
+  next.count = () => count
+  return next
+}
+// Pause at the lock's actual retry sleep, then explicitly advance that timer.
+function lockSleeps(t) {
+  const sleeps = events()
+  t.mock.method(globalThis, 'setTimeout', (resume) => { sleeps.emit(resume); return 0 })
+  return () => sleeps.next()
+}
+function lockWrites(t, path) {
+  const writes = events(), write = fsPromises.writeFile
+  const mock = t.mock.method(fsPromises, 'writeFile', async (...args) => {
+    const answer = await write(...args)
+    if (args[0] === path) writes.emit()
+    return answer
+  })
+  syncBuiltinESMExports()
+  t.after(() => { mock.mock.restore(); syncBuiltinESMExports() })
+  return () => writes.next()
+}
 
 // setInterval and clearInterval watched for one test: each timer, its period, and whether it
 // was unref'd and cleared.
@@ -524,7 +567,7 @@ test('the owner\'s own chat, added as a thread, is still seen as "self" with the
   assert.equal(isOwnChat(other.self, CHATS[CHAT].externalId), false)
 })
 
-test('pending cuts drain at start and on an unref\'d timer that goes with the plugin; a host that only reads leaves them', async (t) => {
+test('pending cuts drain at start and on an unref\'d timer that goes with the plugin; a host that only reads leaves them', { timeout: 10_000 }, async (t) => {
   const omni = fakeOmni()
   const parent = omni.linkKey()
   const pendingFile = (child) => ({
@@ -537,14 +580,14 @@ test('pending cuts drain at start and on an unref\'d timer that goes with the pl
     omni.keys.set(record.text, record)
     return record
   }
-  const settle = async (done) => {
-    for (let waited = 0; waited < 2000 && !done(); waited += 10) await new Promise(resolve => setTimeout(resolve, 10))
-  }
 
   // A host that only reads the team leaves the drain to the one that holds it.
   const readerChild = mintChild()
-  const reader = runtime(t, { link: linked(parent), keysFile: pendingFile(readerChild), readOnly: 'Another DeepSeek Harness holds the team.' })
-  await new Promise(resolve => setTimeout(resolve, 30))
+  const readerChecked = events()
+  const reader = runtime(t, { link: linked(parent), keysFile: pendingFile(readerChild), readOnly: 'Another DeepSeek Harness holds the team.', onReadOnly: () => readerChecked.emit() })
+  const readerDrains = watchDrains(reader.rt)
+  await readerChecked.next()
+  assert.equal(readerDrains.count(), 0, 'a reader never starts a drain after checking the guard')
   assert.ok(reader.file().threads.t1.pending)
   assert.equal(readerChild.revoked, false)
 
@@ -562,9 +605,10 @@ test('pending cuts drain at start and on an unref\'d timer that goes with the pl
   installLink(rt)
   installOmni(rt)
   installKeys(rt)
+  const drained = watchDrains(rt)
   const read = () => JSON.parse(readFileSync(join(home, KEYS_FILE), 'utf8'))
   // At start.
-  await settle(() => child.revoked && Object.keys(read().threads).length === 0)
+  await drained()
   assert.equal(child.revoked, true)
   assert.deepEqual(read().threads, {})
   const [timer] = drainTimers()
@@ -578,7 +622,7 @@ test('pending cuts drain at start and on an unref\'d timer that goes with the pl
   await rt.threadKeys.revoke('t2')
   omni.down = false
   timer.run()
-  await settle(() => second.revoked && read().threads.t2 === undefined)
+  await drained()
   assert.equal(second.revoked, true)
   assert.equal(read().threads.t2, undefined)
 
@@ -746,9 +790,11 @@ test('a host sees the keys another host on the same home kept, at its next looku
   assert.equal(one.rt.threadKeys.keyFor('t1'), null)
 })
 
-test('a lock whose holder is gone, or that is too old, is taken over', async (t) => {
+test('a lock whose holder is gone, or that is too old, is taken over', { timeout: 10_000 }, async (t) => {
   const omni = fakeOmni()
   const { rt, home } = runtime(t, { link: linked(omni.linkKey()) })
+  await watchDrains(rt)()
+  const sleep = lockSleeps(t)
   const lockFile = join(home, `${KEYS_FILE}.lock`)
   writeFileSync(lockFile, JSON.stringify({ pid: 2 ** 22 + 7, token: 'gone', at: Date.now() }))
   assert.equal((await rt.threadKeys.mint('t1', CHAT)).ok, true)
@@ -758,13 +804,14 @@ test('a lock whose holder is gone, or that is too old, is taken over', async (t)
   writeFileSync(lockFile, JSON.stringify({ pid: process.pid, token: 'live', at: Date.now() }))
   let done = false
   const minting = rt.threadKeys.revoke('t1').then((answer) => { done = true; return answer })
-  await delay(60)
+  const retry = await sleep()
   assert.equal(done, false)
   rmSync(lockFile)
+  retry()
   assert.deepEqual(await minting, { cut: true })
 })
 
-test('an Omni that does not answer is asked once per drain, and a drain still running skips the next tick', async (t) => {
+test('an Omni that does not answer is asked once per drain, and a drain still running skips the next tick', { timeout: 10_000 }, async (t) => {
   const omni = fakeOmni()
   const parent = omni.linkKey()
   const children = [CHAT, OWN_CHAT, CHAT].map(chatId => omni.addChild('omni.example.com', { parentId: parent.id, chatId }))
@@ -779,16 +826,18 @@ test('an Omni that does not answer is asked once per drain, and a drain still ru
   omni.down = true
   const drainTimers = watchTimers(t)
   const { rt, file } = runtime(t, { link: linked(parent), keysFile })
+  const drained = watchDrains(rt)
   const [timer] = drainTimers()
   // The start drain's first request, however long a loaded machine takes to make it.
-  for (let waited = 0; waited < 1000 && omni.asked.length === 0; waited += 5) await delay(5)
+  await omni.requests.next()
   timer.run()
   timer.run()
-  await delay(10)
+  assert.equal(drained.count(), 1, 'ticks cannot queue another drain while the start drain is running')
   assert.equal(omni.asked.length, 1, 'the start drain waits on its first request; the ticks add none')
   release()
   omni.gate = null
-  await delay(30)
+  await drained()
+  assert.equal(drained.count(), 1, 'ticks cannot queue another drain after yielding to the startup drain')
   // The first unanswered request ends the pass: no other entry, and no mint, asked.
   assert.equal(omni.asked.length, 1)
   assert.equal(Object.keys(file().threads).length, 3)
@@ -860,19 +909,17 @@ test('a lock file with no holder in it is taken over once it is old, not before'
   const omni = fakeOmni()
   t.mock.timers.enable({ apis: ['Date'], now: Date.now() })
   const { rt, home } = runtime(t, { link: linked(omni.linkKey()) })
+  await watchDrains(rt)()
+  const sleep = lockSleeps(t)
   writeFileSync(lockOf(home), '')
   let done = false
   const minting = rt.threadKeys.mint('t1', CHAT).then((answer) => { done = true; return answer })
-  await delay(60)
+  const retry = await sleep()
   assert.equal(done, false, 'a fresh empty lock may be one being made')
   t.mock.timers.tick(11_000)
-  let guard
-  const answer = await Promise.race([minting, new Promise((resolve) => { guard = setTimeout(resolve, 3000, 'still waiting') })])
-  clearTimeout(guard)
-  // Let a stuck one go, so the plugin can stop.
-  if (answer === 'still waiting') rmSync(lockOf(home), { force: true })
-  assert.notEqual(answer, 'still waiting')
-  assert.equal(answer.ok, true)
+  retry()
+  const answer = await minting
+  assert.deepEqual(answer, { ok: true, self: OWNER })
   assert.equal(existsSync(lockOf(home)), false)
 })
 
@@ -896,33 +943,37 @@ test('a live holder renews its lock, so a long hand-over is not taken over', { t
   const parent = omni.linkKey()
   t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: Date.now() })
   const one = runtime(t, { link: linked(parent) })
+  const oneStarted = watchDrains(one.rt)
   const two = runtime(t, { home: one.home })
+  const twoStarted = watchDrains(two.rt)
   // Both hosts' start drains done first, so the only other holder is the second mint below.
-  await Promise.all([one.rt.threadKeys.drain(), two.rt.threadKeys.drain()])
+  await Promise.all([oneStarted(), twoStarted()])
+  const sleep = lockSleeps(t)
+  const renewed = lockWrites(t, lockOf(one.home))
   let release
   omni.gate = new Promise((resolve) => { release = resolve })
   const first = one.rt.threadKeys.mint('t1', CHAT)
   // The lock is read once the mint holds it and has reached Omni: a lock seen earlier may be a
   // drain's brief one, or one still being written.
   const minting = () => omni.asked.some(call => call.method === 'POST' && call.path.startsWith('/keys/children'))
-  for (let waited = 0; waited < 1000 && !minting(); waited += 5) await delay(5)
+  await omni.requests.next()
   assert.ok(minting(), 'the mint reached Omni')
   const { token } = holderIn(one.home)
   // Three minutes of a slow Omni, renewed every 30 s: each beat's write lands before the next.
-  const heldAt = () => { try { return holderIn(one.home).at } catch { return null } }
   for (let beat = 0; beat < 6; beat += 1) {
     t.mock.timers.tick(30_000)
-    for (let waited = 0; waited < 1000 && heldAt() !== Date.now(); waited += 5) await delay(5)
+    await renewed()
   }
   assert.equal(holderIn(one.home).token, token)
   assert.ok(Date.now() - holderIn(one.home).at < 60_000, 'renewed')
   let done = false
   const second = two.rt.threadKeys.mint('t2', OWN_CHAT).then((answer) => { done = true; return answer })
-  await delay(80)
+  const retry = await sleep()
   assert.equal(done, false, 'not taken over')
   omni.gate = null
   release()
   assert.equal((await first).ok, true)
+  retry()
   assert.equal((await second).ok, true)
   assert.deepEqual(Object.keys(one.file().threads).sort(), ['t1', 't2'])
 })
@@ -935,7 +986,7 @@ test('letting go of a lock never removes another holder\'s', { timeout: 10_000 }
   const minting = rt.threadKeys.mint('t1', CHAT)
   // The mint holds the lock once it has reached Omni; a lock seen earlier may be a drain's.
   const asking = () => omni.asked.some(call => call.method === 'POST' && call.path.startsWith('/keys/children'))
-  for (let waited = 0; waited < 1000 && !asking(); waited += 5) await delay(5)
+  await omni.requests.next()
   assert.ok(asking(), 'the mint reached Omni')
   // Taken over meanwhile (this one looked gone to another host).
   const other = JSON.stringify({ pid: process.pid, token: 'other', at: Date.now() })
@@ -973,4 +1024,17 @@ test('a keyless thread persists a curated retry code alongside diagnostic text a
   assert.match(rt.threadKeys.reasonOf('t1'), /Could not reach Omni/)
   const { rt: restarted } = runtime(t, { home })
   assert.equal(restarted.threadKeys.reasonCodesOf(['t1']).get('t1'), 'omni_unreachable')
+})
+
+test('unknown waiting reasons have no inferred reason code (M24)', async (t) => {
+  const omni = fakeOmni(), parent = omni.linkKey()
+  const reasons = [NOT_LINKED, OTHER_OMNI, BEING_CUT, 'Not connected: waiting for a key from the linked Omni.', 'Not connected: this thread has no key.'].map(reason => `${reason} REMOTE`)
+  reasons.push('unknown REMOTE reason')
+  const { rt } = runtime(t, { link: linked(parent), readOnly: 'Another host holds the team.', keysFile: {
+    version: 1, threads: {}, retired: [], waiting: Object.fromEntries(reasons.map((reason, index) => [`t${index}`, { chatId: CHAT, origin: OMNI, reason }])),
+  } })
+  for (const [index, reason] of reasons.entries()) {
+    assert.equal(rt.threadKeys.reasonOf(`t${index}`), reason)
+    assert.equal(rt.threadKeys.reasonCodesOf([`t${index}`]).get(`t${index}`), undefined)
+  }
 })

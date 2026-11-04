@@ -28,6 +28,7 @@ const ui = await bundleClient([
   "export { PhonePane } from './omni-phone.js'",
   "export { ConnectOmni } from './omni-connect.js'",
   "export { ChannelSettings } from './channel-settings.js'",
+  "export { FIELDS } from '../host/channel-settings.js'",
 ], { team: { omni: { ...omni, call: (...args) => answer(...args) } }, modules: {
   '@xterm/xterm': { Terminal }, '@xterm/xterm/css/xterm.css': '',
 }, globals: {
@@ -254,4 +255,38 @@ test('key refusal guidance recognizes translated local messages', async () => {
     assert.equal(translated.keyProblem({ code, message: STRINGS[message] }), STRINGS[expected])
   }
   assert.equal(translated.keyProblem({ code: 'bot/refused', message: probes[0] }), STRINGS['Could not connect to Omni. Try again.'])
+})
+
+// Exact local copy is the boundary: similar remote messages cannot select it.
+test('key guidance rejects prefix matches (M34)', async () => {
+  for (const [code, message] of keyCodes) for (const raw of probes.map(probe => `${message}: ${probe}`)) {
+    reset(); const view = await keyFailure(code, raw)
+    try { clean(await draw(view), raw, 'Could not connect to Omni. Try again.') } finally { view.unmount() }
+  }
+})
+test('key guidance rejects case and whitespace normalization (M36)', async () => {
+  for (const [code, message] of keyCodes) for (const raw of [message.toUpperCase(), message.toLowerCase(), ` ${message}`, `${message} `, `${message}\n`]) {
+    reset(); const view = await keyFailure(code, raw)
+    try { clean(await draw(view), raw, 'Could not connect to Omni. Try again.') } finally { view.unmount() }
+  }
+})
+test('validation guidance interpolates the canonical inventory key (M25)', async () => {
+  reset()
+  // Model an inventory alias: the parser reports the alias, whose entry names the
+  // canonical field. Guidance must use that entry, never echo the reported alias.
+  const field = ui.FIELDS.inboundMaxAgeMinutes, alias = 'minutesAlias'
+  ui.FIELDS[alias] = { ...field }
+  field.key = alias
+  const view = element(ui.ChannelSettings, { channel: { id: 'channel', type: 'telegram' }, writable: true })
+  try {
+    await draw(view)
+    byLabel(view.draw(), 'inboundMaxAgeMinutes').props.onChange({ target: { value: '-1' } })
+    await click(view, 'Save settings')
+    const tree = await draw(view)
+    assert.equal(text(nodes(tree).find(n => n.props?.role === 'alert')), 'Enter a nonnegative integer for inboundMaxAgeMinutes.')
+    assert.equal(text(tree).includes(alias), false)
+    assert.ok(warnings.some(args => args.some(error => error?.field === alias)))
+  } finally {
+    view.unmount(); field.key = 'inboundMaxAgeMinutes'; delete ui.FIELDS[alias]
+  }
 })
