@@ -52,6 +52,7 @@ final="$(git -C "${repo}" rev-parse HEAD)"
   # verifier's stdout contract, so do not let the runner redirect it.
   unset GITHUB_OUTPUT
   cd "${repo}"
+  # Carry the script status out of this padded subshell; the || exit "$?" must stay.
   "${SCRIPT}" \
     --candidate-sha "${candidate}" \
     --final-sha "${final}" \

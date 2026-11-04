@@ -7,6 +7,9 @@ python3 - "${ROOT}" <<'PY'
 import json
 import re
 import sys
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 root = Path(sys.argv[1])
@@ -24,6 +27,20 @@ deploy_readme = (root / "deploy/README.md").read_text(encoding="utf-8")
 claude_reference = (root / ".claude/CLAUDE.md").read_text(encoding="utf-8")
 upgrade_runbook = (root / "docs/deployment/upgrade-2.260902.5-to-2.260908.20.md").read_text(encoding="utf-8")
 errors: list[str] = []
+
+# Run the workflow's actual version pipeline: trailing diagnostics must not SIGPIPE
+# the executable under GitHub's bash -e -o pipefail shell.
+version_line = next(line.strip() for line in workflows["build-tarballs.yml"].splitlines()
+                    if 'ACTUAL=$("${STAGE}/omni" --version' in line)
+with tempfile.TemporaryDirectory(prefix="tarball-version-") as stage:
+    executable = Path(stage) / "omni"
+    executable.write_text("#!/usr/bin/env bash\nset -euo pipefail\nprintf 'omni v2.260830.2\\n'\ndd if=/dev/zero bs=1048576 count=1 2>/dev/null\n")
+    executable.chmod(0o755)
+    result = subprocess.run(["bash", "-eo", "pipefail", "-c",
+                             version_line + '\n[[ "$ACTUAL" == "2.260830.2" ]]'],
+                            env={**os.environ, "STAGE": stage}, capture_output=True, text=True)
+    if result.returncode:
+        errors.append(f"tarball version pipeline truncated producer output (exit {result.returncode})")
 
 
 def require(text: str, pattern: str, message: str) -> None:
