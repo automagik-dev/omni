@@ -21,8 +21,8 @@ For claiming and coordination, GitHub issues, assignments and PR comments on aut
   (neutral wording) and self-assign it. Skip issues assigned to someone else; ask on the issue instead.
 - Before branching, run `git fetch`, then check `gh pr list --state open` and `git ls-remote --heads origin` for the
   same files or area. If another claim or branch overlaps, coordinate on the issue or PR; do not start.
-- Branch feature work from fresh `origin/dev`. Never push to a feature branch your team did not create. Never
-  force-push or rebase a shared branch. This branch rule covers feature branches; the direct-to-`dev` fixes in
+- Branch feature work from fresh `origin/dev`. A feature branch is any branch other than `dev` and `main`. Never push
+  to a feature branch your team did not create. Never force-push or rebase a shared branch. This branch rule covers feature branches; the direct-to-`dev` fixes in
   `.claude/CLAUDE.md` still apply.
 - Push and open a draft PR as early as the gate allows, so the other team sees the work. Link the issue.
 - Merge only PRs your own team opened; review or merge another team's PR only if they ask on it. Comment "merging" on
@@ -30,3 +30,5 @@ For claiming and coordination, GitHub issues, assignments and PR comments on aut
 - Migration numbers: the "whoever merges second renumbers their own migration" rule (`.claude/CLAUDE.md`, parallel
   worktree numbering collisions) applies across teams too.
 - Orchestrators: at the start of each assignment cycle, read open PRs and assigned issues and avoid overlap.
+- Gate wrapper: on a host with a shared gate wrapper (a script that queues bun runs on host load), export
+  `OMNI_GATE_WRAPPER` to its path before starting the bots, or have the orchestrator name it in every brief.

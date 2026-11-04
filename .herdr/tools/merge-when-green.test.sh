@@ -2,17 +2,34 @@
 # merge-when-green.test.sh: tests merge-when-green.sh against a stub gh. No network: a fake gh and a
 # no-op sleep are first on PATH, and the fake applies each --jq filter (with jq) to canned JSON.
 # Usage: .herdr/tools/merge-when-green.test.sh   (needs bash and jq; exits non-zero on any failure)
+# MWG_SCRIPT=<path> tests another copy of the script. Each case runs under timeout (or gtimeout) for
+# CASE_SECONDS, so a polling loop that never ends fails its case instead of hanging the run.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-script="$here/merge-when-green.sh"
+script="${MWG_SCRIPT:-$here/merge-when-green.sh}"
 command -v jq >/dev/null || {
   echo "merge-when-green.test.sh needs jq" >&2
   exit 1
 }
+readonly CASE_SECONDS=20
+limit="$(command -v timeout || command -v gtimeout || true)"
+if [ -z "$limit" ]; then
+  echo "note: no timeout or gtimeout on PATH; cases run without a time limit" >&2
+fi
 
+# The temp dir must sit under ${TMPDIR:-/tmp} (both resolved), checked before the cleanup trap is set.
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+tmp_real="$(cd "$tmp" && pwd -P)"
+base_real="$(cd "${TMPDIR:-/tmp}" && pwd -P)"
+case "$tmp_real" in
+  "$base_real"/?*) ;;
+  *)
+    echo "temp dir $tmp_real is not under $base_real; leaving it in place" >&2
+    exit 1
+    ;;
+esac
+trap 'rm -rf "${tmp:?}"' EXIT
 mkdir -p "$tmp/bin"
 
 # The fake gh. Per-case files in $STUB_DIR: head, checks and queue hold one answer per line, used in
@@ -131,8 +148,16 @@ run() {
   else
     shift
   fi
-  bash "$script" "$@" >"$STUB_DIR/out" 2>&1 || rc=$?
-  if [ "$rc" != "$want" ]; then fail "exit $rc, want $want: $(tr '\n' ' ' <"$STUB_DIR/out")"; fi
+  if [ -n "$limit" ]; then
+    "$limit" "$CASE_SECONDS" bash "$script" "$@" >"$STUB_DIR/out" 2>&1 || rc=$?
+  else
+    bash "$script" "$@" >"$STUB_DIR/out" 2>&1 || rc=$?
+  fi
+  if [ -n "$limit" ] && [ "$rc" = 124 ]; then
+    fail "timed out after ${CASE_SECONDS}s (want exit $want)"
+  elif [ "$rc" != "$want" ]; then
+    fail "exit $rc, want $want: $(tr '\n' ' ' <"$STUB_DIR/out")"
+  fi
 }
 has() { grep -qF -- "$1" "$STUB_DIR/log" || fail "no call matching: $1"; }
 lacks() { if grep -qF -- "$1" "$STUB_DIR/log"; then fail "unexpected call: $1"; fi; }
