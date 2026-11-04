@@ -48,7 +48,8 @@ function headersWithOptionalAuthorization(botToken: string, preserveAuthorizatio
 
 async function fetchSlackPrivateUrl(url: string, botToken: string): Promise<Response> {
   let currentUrl = new URL(url);
-  let preserveAuthorization = true;
+  // A file URL off Slack's own hosts never gets the token, not even on the first request.
+  let preserveAuthorization = isSlackHost(currentUrl);
 
   for (let redirects = 0; redirects <= 5; redirects++) {
     const response: Response = await fetch(currentUrl.toString(), {

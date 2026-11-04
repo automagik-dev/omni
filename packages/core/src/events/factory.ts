@@ -10,7 +10,7 @@
  */
 
 import { currentEventCausality } from './causality';
-import { CURRENT_ENVELOPE_VERSION, resolvePublishTenantId } from './envelope';
+import { CURRENT_ENVELOPE_VERSION, resolveAmbientProducingKeyId, resolvePublishTenantId } from './envelope';
 import type { EventMetadata, EventType, OmniEvent } from './types';
 
 /**
@@ -49,6 +49,7 @@ export function createOmniEvent(
   // instance — both fields stay undefined and the envelope is `legacy`, i.e.
   // byte-identical to pre-G5.
   const tenantId = resolvePublishTenantId(metadata?.tenantId, metadata?.instanceId);
+  const producingKeyId = resolveAmbientProducingKeyId();
   const ambient = currentEventCausality();
   const causationId = metadata?.causationId ?? ambient?.causationId;
 
@@ -66,9 +67,11 @@ export function createOmniEvent(
       platformIdentityId: metadata?.platformIdentityId,
       traceId: metadata?.traceId ?? eventId,
       source: metadata?.source ?? serviceName,
+      ...(metadata?.test ? { test: true } : {}),
       ingestMode: metadata?.ingestMode,
       timings: metadata?.timings,
       ...(tenantId ? { envelopeVersion: CURRENT_ENVELOPE_VERSION, tenantId } : {}),
+      ...(producingKeyId ? { producingKeyId } : {}),
     },
   };
 }

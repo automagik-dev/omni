@@ -13,6 +13,9 @@
  */
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { OmniApiError, type OmniClient } from '@omni/sdk';
 
 /**
@@ -476,14 +479,36 @@ describe('control-plane failure UX', () => {
     expect(() => renderPlatformError(err, 'get the tenant')).toThrow('Failed to get the tenant: tenant not found');
   });
 
-  test('401 explains that only PLATFORM-class credentials are accepted (pinned verbatim)', () => {
-    const err = new OmniApiError('Platform credential required', 'UNAUTHORIZED', undefined, 401);
-    expect(() => renderPlatformError(err, 'list tenants')).toThrow(
-      'Failed to list tenants: the server rejected the credential (401). ' +
-        'The platform control plane accepts only PLATFORM-class credentials — legacy admin/god keys and ' +
-        'tenant data-plane keys are denied by design. Authenticate with a platform key: ' +
-        'omni auth login --api-key <platform-key>.',
+  test.each([
+    { name: 'prod', argument: 'prod' },
+    { name: "prod team; $HOME's", argument: "'prod team; $HOME'\\''s'" },
+  ])('401 offers stdin login with a shell-safe server: $name', ({ name, argument }) => {
+    const dir = mkdtempSync(join(tmpdir(), 'omni-tenant-auth-hint-'));
+    const previousDir = process.env.OMNI_CONFIG_DIR;
+    const previousServer = process.env.__OMNI_RUNTIME_SERVER;
+    process.env.OMNI_CONFIG_DIR = dir;
+    process.env.__OMNI_RUNTIME_SERVER = name;
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({
+        servers: {
+          active: 'default',
+          list: { default: { url: 'http://default.invalid' }, [name]: { url: 'https://prod.invalid' } },
+        },
+      }),
     );
+    try {
+      const err = new OmniApiError('Platform credential required', 'UNAUTHORIZED', undefined, 401);
+      expect(() => renderPlatformError(err, 'list tenants')).toThrow(
+        `Failed to list tenants: the server rejected the credential (401). The platform control plane accepts only PLATFORM-class credentials — legacy admin/god keys and tenant data-plane keys are denied by design. Authenticate with a platform key from stdin: omni auth login --server ${argument} --api-key-stdin < /secure/path/omni-api-key`,
+      );
+    } finally {
+      if (previousDir === undefined) Reflect.deleteProperty(process.env, 'OMNI_CONFIG_DIR');
+      else process.env.OMNI_CONFIG_DIR = previousDir;
+      if (previousServer === undefined) Reflect.deleteProperty(process.env, '__OMNI_RUNTIME_SERVER');
+      else process.env.__OMNI_RUNTIME_SERVER = previousServer;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('403 explains the scope requirement for an authenticated non-platform key (pinned verbatim)', () => {

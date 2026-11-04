@@ -1,0 +1,911 @@
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { pathToFileURL } from 'node:url'
+import { runInNewContext } from 'node:vm'
+import { build } from 'esbuild'
+import { isOmniBot } from '../src/client/omni-store.js'
+import { STRINGS } from '../src/client/strings.js'
+import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
+import { BEING_CUT, NOT_LINKED, OTHER_OMNI, WAITING } from '../src/host/thread-keys.js'
+import { WORKER_MOVED } from '../src/host/subscriptions.js'
+import { all, bundleClient, byLabel, classOf, mount, nodes, one, plain, react, settle, text } from './client-stand-in.js'
+import { omni } from './omni-client.js'
+
+// The tree's modules bundled as DSH bundles the client, with the stand-in React of
+// client-stand-in.js and a host stand-in for `call`: nothing leaves the test.
+const calls = []
+const logged = []
+let answer = () => ({})
+const fakeCall = async (endpoint, body) => {
+  calls.push([endpoint, plain(body)])
+  const reply = await answer(endpoint, body)
+  if (reply instanceof Error) throw reply
+  return reply
+}
+// The page's pointer listeners, so a test can click outside a menu.
+const pointer = new Set()
+const document = {
+  body: { dataset: {} },
+  addEventListener: (type, listener) => { if (type === 'pointerdown') pointer.add(listener) },
+  removeEventListener: (type, listener) => { if (type === 'pointerdown') pointer.delete(listener) },
+}
+const pointerDown = target => { for (const listener of pointer) listener({ target }) }
+const storage = new Map()
+const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
+
+const loadTree = () => bundleClient([
+  'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { openConnectWizard } from \'./wizard.js\'',
+  'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
+  'export { relativeShort } from \'./core.js\'',
+], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
+const ui = await loadTree()
+
+test('only the Bot of kind omni carries the channel tree', () => {
+  assert.equal(isOmniBot({ kind: 'omni' }), true)
+  assert.equal(isOmniBot({ name: 'Omni' }), false)
+  assert.equal(isOmniBot(undefined), false)
+})
+
+const CHANNEL_A = { id: '11111111-1111-4111-8111-111111111111', type: 'whatsapp-baileys', name: 'Sales', status: 'connected' }
+const CHANNEL_B = { id: '22222222-2222-4222-8222-222222222222', type: 'whatsapp-baileys', name: 'Personal', status: 'connected' }
+const CHAT = (n, channel = CHANNEL_A) => ({ id: `c${n}`, channelId: channel.id, name: `Chat ${n}`, at: n, unread: 0 })
+const THREAD = (n, channel = CHANNEL_A, extra = {}) => ({ id: `t${n}`, sessionId: `s${n}`, chatId: `c${n}`, channelId: channel.id, title: `Chat ${n}`, status: 'idle', connected: true, reason: null, ...extra })
+const BOT = { id: 'omni-bot', kind: 'omni', name: 'Omni' }
+
+// The roster as the host's view makes it (threads.js threadsView): a team with the hook names
+// the row props; one without names none and says why.
+const hooked = (extra = {}) => ({ omniThreads: [], omniThreadsOffered: true, omniThreadsReason: null, omniRowProps: [...TEAM_CONTRACT.rowProps], ...extra })
+const oldTeam = (extra = {}) => ({ omniThreads: [], omniThreadsOffered: false, omniThreadsReason: NEEDS_NEWER_TEAM, omniRowProps: [], ...extra })
+
+function linked({ chats = [CHAT(1), CHAT(2), CHAT(3, CHANNEL_B)], link = { origin: 'omni.example.com', version: '2.261027.3', outdated: false }, open = [CHANNEL_A.id, CHANNEL_B.id] } = {}) {
+  const fresh = ui.omniStore.getSnapshot()
+  ui.omniStore.set({ ...fresh, preview: false, source: { kind: 'live', origin: 'omni.example.com' }, channels: [CHANNEL_A, CHANNEL_B], chats, link })
+  storage.set('omni.tree.open', JSON.stringify(open))
+}
+
+// Draws the tree the way the team's BotChildren does: `props` are the row props it passes.
+function tree(t, props) {
+  answer = endpoint => (endpoint === 'omni-overview' ? { configured: false } : {})
+  calls.length = 0
+  const opened = []
+  const actions = { selectPanel: () => {}, openSession: id => opened.push(id), ...props.actions }
+  const view = mount(() => react.createElement(ui.OmniTree, { bot: BOT, wide: true, ...props, actions }))
+  t.after(() => { view.unmount(); ui.startLive(fakeCall)?.() })
+  return { view, opened }
+}
+const channelOf = (root, channel) => nodes(root).find(node => classOf(node).includes('ot-channel') && nodes(node).some(inner => inner.props?.id === `omni-tree-${channel.id}`))
+
+test('a channel with no added chat shows no chats; an added chat shows under its own channel only (:185)', (t) => {
+  linked()
+  const roster = hooked({ omniThreads: [THREAD(1)] })
+  const { view } = tree(t, { roster })
+  const root = view.draw()
+  const [a, b] = [channelOf(root, CHANNEL_A), channelOf(root, CHANNEL_B)]
+  assert.deepEqual(all(a, 'bt-thread').map(row => row.props['data-thread-id']), ['t1'])
+  assert.deepEqual(all(b, 'bt-thread'), [])
+  // The channel's other chats are not listed here; the Channels page keeps them, a click away.
+  assert.equal(text(a).includes('Chat 2'), false)
+  assert.equal(text(b).includes('Chat 3'), false)
+  assert.equal(text(one(b, 'ot-all')), 'All chats')
+  // A channel with no chats at all offers its health instead.
+  linked({ chats: [CHAT(1)] })
+  assert.equal(text(one(channelOf(view.draw(), CHANNEL_B), 'ot-all')), 'Channel health')
+  linked()
+  assert.equal(all(root, 'ot-chat').filter(node => !classOf(node).includes('ot-all')).length, 0)
+})
+
+test('a thread whose channel this Omni no longer lists still shows, apart, so it can be removed', (t) => {
+  linked()
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1), THREAD(9, { id: '99999999-9999-4999-8999-999999999999' }, { connected: false, reason: OTHER_OMNI, reasonCode: 'other_omni' })] }) })
+  const root = view.draw()
+  const others = byLabel(root, 'Other chats')
+  assert.deepEqual(all(others, 'bt-thread').map(row => row.props['data-thread-id']), ['t9'])
+  assert.equal(text(one(others, 'ot-thread-reason')), OTHER_OMNI)
+  assert.ok(one(others, 'ot-thread-remove'))
+  assert.deepEqual(all(channelOf(root, CHANNEL_A), 'bt-thread').map(row => row.props['data-thread-id']), ['t1'])
+  // None of that while every thread's channel is listed.
+  const { view: tidy } = tree(t, { roster: hooked({ omniThreads: [THREAD(1)] }) })
+  assert.equal(byLabel(tidy.draw(), 'Other chats'), undefined)
+})
+
+test('with no Omni linked, the threads still show under the Connect link, and remove works there (:188)', async (t) => {
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: true })
+  const roster = hooked({ omniThreadsOffered: false, omniThreadsReason: NOT_LINKED, omniThreads: [THREAD(1, CHANNEL_A, { connected: false, reason: NOT_LINKED, reasonCode: 'not_linked' })] })
+  const { view } = tree(t, { roster })
+  const root = view.draw()
+  assert.equal(text(one(root, 'ot-link')), 'Connect Omni →')
+  const others = byLabel(root, 'Other chats')
+  assert.equal(text(one(others, 'ot-thread-reason')), NOT_LINKED)
+  calls.length = 0
+  answer = () => ({ ok: true })
+  one(view.draw(), 'ot-thread-remove').props.onClick()
+  one(view.draw(), 'ot-thread-remove').props.onClick()
+  await settle()
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-remove'), [['omni-thread-remove', { threadId: 't1' }]])
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: false })
+})
+
+test('a thread row remounts when the team starts or stops passing the status hooks', (t) => {
+  linked()
+  const thread = THREAD(1)
+  const orphan = THREAD(9, { id: '99999999-9999-4999-8999-999999999999' })
+  let props = { roster: hooked({ omniThreads: [thread, orphan] }) }
+  const { view } = tree(t, new Proxy({}, { get: (_, name) => props[name], ownKeys: () => Reflect.ownKeys(props), getOwnPropertyDescriptor: (_, name) => ({ value: props[name], enumerable: true, configurable: true }) }))
+  view.draw()
+  const bare = view.keys('ThreadRow')
+  props = { ...props, useSessionStatus: select => select(new Map()), useSessionRetainInfo: (_id, select) => select(undefined) }
+  view.draw()
+  const full = view.keys('ThreadRow')
+  assert.equal(bare.length, 2)
+  assert.equal(full.length, 2)
+  for (const [index, key] of bare.entries()) assert.notEqual(key, full[index])
+})
+
+test('the + gets the focus back when its picker closes, and folding a channel closes its picker', async (t) => {
+  linked()
+  const { view } = tree(t, { roster: hooked() })
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : endpoint === 'omni-thread-add' ? { ok: true, threadId: 't2' } : {})
+  let focused = 0
+  const open = () => {
+    const plus = byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat')
+    plus.props.ref.current = { focus: () => { focused += 1 } }
+    plus.props.onClick()
+    return view.draw()
+  }
+  one(open(), 'ot-picker').props.onKeyDown({ key: 'Escape', stopPropagation: () => {} })
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+  assert.equal(focused, 1)
+  open()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  await settle()
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+  assert.equal(focused, 2)
+  // Folded with its picker open, the channel opens again without it.
+  open()
+  one(channelOf(view.draw(), CHANNEL_A), 'ot-channel-row').props.onClick()
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+  one(channelOf(view.draw(), CHANNEL_A), 'ot-channel-row').props.onClick()
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+})
+
+test('picking a chat opens its new thread once its row comes, the owner\'s own click; a refused add opens nothing', async (t) => {
+  linked()
+  const props = { roster: hooked() }
+  const { view, opened } = tree(t, props)
+  let added = { ok: false, reason: 'Could not reach Omni. Try again in a moment.' }
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : endpoint === 'omni-thread-add' ? added : {})
+  const pick = async () => {
+    byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+    view.draw()
+    await settle()
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    await settle()
+  }
+  await pick()
+  assert.deepEqual(opened, [])
+  added = { ok: true, threadId: 't2', sessionId: 's2' }
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  await settle()
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+  assert.deepEqual(opened, [], 'not before its row is drawn')
+  // The team's next roster brings the row, which opens it, once; a thread no pick added does not.
+  props.roster = hooked({ omniThreads: [THREAD(2), THREAD(3)] })
+  view.draw()
+  view.draw()
+  assert.deepEqual(opened, ['s2'])
+  // The other order: the roster with the new row comes before the add answers. The row is
+  // there already, so the answer opens it, once.
+  let answerAdd
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c4', name: 'Chat 4', added: false }] } : endpoint === 'omni-thread-add' ? new Promise((resolve) => { answerAdd = resolve }) : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  props.roster = hooked({ omniThreads: [THREAD(2), THREAD(3), THREAD(4)] })
+  view.draw()
+  view.draw()
+  assert.deepEqual(opened, ['s2'], 'not before the add answered')
+  answerAdd({ ok: true, threadId: 't4', sessionId: 's4' })
+  await settle()
+  await settle()
+  view.draw()
+  view.draw()
+  assert.deepEqual(opened, ['s2', 's4'])
+})
+
+test('a roster that does not say whether a chat can be added shows no + and says it is not ready, never a bare row', (t) => {
+  linked()
+  const { view } = tree(t, { roster: { omniThreads: [], omniRowProps: [...TEAM_CONTRACT.rowProps] } })
+  const root = view.draw()
+  assert.equal(byLabel(root, 'Add a chat'), undefined)
+  assert.deepEqual(all(root, 'ot-empty').map(text), [ui.OFFER_UNKNOWN, ui.OFFER_UNKNOWN])
+  assert.deepEqual(plain(ui.plusOf({}, { link: null })), { offered: false, reason: ui.OFFER_UNKNOWN })
+})
+
+test('the + is always visible, faint, and full on a channel\'s hover or keyboard focus and while its picker is open', () => {
+  // Never hidden: in the app a hover on the channel name did not reach the row (owner, 2026-10-29).
+  const base = ui.OMNI_TREE_CSS.match(/\.ot-plus\{([^}]*)\}/)[1]
+  const opacity = Number(base.match(/opacity:([0-9.]+)/)?.[1] ?? 1)
+  assert.ok(opacity >= 0.5, `the + at rest has opacity ${opacity}`)
+  assert.doesNotMatch(base, /visibility:hidden|display:none/)
+  assert.match(ui.OMNI_TREE_CSS, /\.ot-channel-head:hover \.ot-plus,\.ot-channel-head:focus-within \.ot-plus,\.ot-plus\[aria-expanded=true\]\{opacity:1\}/)
+})
+
+test('a folded channel keeps its thread rows out of the tab order', (t) => {
+  linked({ open: [] })
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1)] }) })
+  let root = view.draw()
+  assert.deepEqual([one(root, 'bt-thread').props.tabIndex, one(root, 'ot-thread-remove').props.tabIndex], [-1, -1])
+  one(channelOf(root, CHANNEL_A), 'ot-channel-row').props.onClick()
+  root = view.draw()
+  assert.deepEqual([one(root, 'bt-thread').props.tabIndex, one(root, 'ot-thread-remove').props.tabIndex], [undefined, undefined])
+})
+
+test('the + lists that channel\'s chats; a chat that is a thread already cannot be picked again (:185)', async (t) => {
+  linked()
+  const roster = hooked({ omniThreads: [THREAD(1)] })
+  const { view } = tree(t, { roster })
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c1', name: 'Chat 1', jid: '1@s.whatsapp.net', added: true }, { id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : {})
+  let root = view.draw()
+  const plus = byLabel(channelOf(root, CHANNEL_A), 'Add a chat')
+  assert.equal(plus.type, 'button')
+  assert.equal(all(root, 'ot-picker').length, 0)
+  plus.props.onClick()
+  root = view.draw()
+  await settle()
+  root = view.draw()
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats'), [['omni-thread-chats', { channelId: CHANNEL_A.id }]])
+  const picker = one(channelOf(root, CHANNEL_A), 'ot-picker')
+  assert.ok(picker)
+  assert.equal(all(channelOf(root, CHANNEL_B), 'ot-picker').length, 0)
+  const [taken, free] = all(picker, 'ot-picker-chat')
+  assert.deepEqual([taken.props['data-chat-id'], taken.props.disabled, text(one(taken, 'ot-picker-tag'))], ['c1', true, 'Added'])
+  assert.deepEqual([free.props['data-chat-id'], free.props.disabled], ['c2', false])
+  // A search asks the host again, once the typing stops.
+  one(picker, 'ot-picker-search').props.onChange({ target: { value: ' Mar ' } })
+  view.draw()
+  await settle()
+  assert.equal(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats').length, 1, 'nothing is asked while the typing goes on')
+  await new Promise(resolve => setTimeout(resolve, 300))
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats').at(-1), ['omni-thread-chats', { channelId: CHANNEL_A.id, query: 'Mar' }])
+})
+
+test('the picker draws each chat as the chat list does: picture or initials, name, time, a direct chat\'s number and its last message', async (t) => {
+  linked()
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1)] }) })
+  const at = Date.now() - 5 * 60_000
+  answer = endpoint => (endpoint === 'omni-thread-chats'
+    ? { chats: [
+      { id: 'c1', name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at, avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: '5511988887777@s.whatsapp.net', added: true },
+      { id: 'c2', name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at, avatarUrl: null, number: null, jid: '120363000000000000@g.us', added: false },
+      { id: 'c3', name: null, initials: 'GR', kind: 'group', preview: '', at, avatarUrl: null, number: null, jid: '120363000000000001@g.us', added: false },
+      { id: 'c7', name: null, kind: 'direct', initials: 'CH', number: null, added: false },
+    ] }
+    : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  const [dm, group, nameless, namelessDirect] = all(view.draw(), 'ot-picker-chat')
+  // The picture, loaded as the Channels page loads it, over the initials it falls back to.
+  const picture = one(dm, 'oc-ava-img')
+  assert.deepEqual([picture.props.src, picture.props.referrerPolicy, text(one(dm, 'oc-ava-face'))], ['https://pps.whatsapp.net/marina.jpg', 'no-referrer', 'MA'])
+  assert.deepEqual([one(group, 'oc-ava-img'), text(one(group, 'oc-ava-face'))], [undefined, 'OB'])
+  assert.deepEqual([text(one(dm, 'ot-picker-name')), text(one(dm, 'ot-picker-number')), text(one(dm, 'ot-picker-preview'))], ['Marina', '+5511988887777', 'Pode mandar o orçamento?'])
+  // An added chat says so where its time would be; the others show the time.
+  assert.deepEqual([text(one(dm, 'ot-picker-tag')), one(dm, 'ot-picker-at')], ['Added', undefined])
+  assert.equal(text(one(group, 'ot-picker-at')), ui.relativeShort(at))
+  assert.deepEqual([one(group, 'ot-picker-number'), text(one(group, 'ot-picker-preview'))], [undefined, 'You: fotos no drive'])
+  // A group with no name is called one.
+  assert.deepEqual([text(one(nameless, 'ot-picker-name')), one(nameless, 'ot-picker-preview')], ['Group', undefined])
+  assert.deepEqual([namelessDirect, nameless].map(row => text(one(row, 'ot-picker-name'))), ['Chat', 'Group'])
+  // Each button is named by its chat's name, number and state, not by the initials or preview.
+  assert.deepEqual([dm, group, nameless].map(row => row.props['aria-label']), ['Marina, +5511988887777, Added', 'Obra', 'Group'])
+})
+
+test('picking a chat adds it on the host and closes the picker; a failed mint shows a friendly message and adds no row (:187)', async (t) => {
+  linked()
+  const roster = hooked()
+  const { view } = tree(t, { roster })
+  logged.length = 0
+  const reason = 'Omni at omni.example.com cannot make chat keys; update it.'
+  let added = { ok: false, reason, reasonCode: 'chat_keys_unavailable' }
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats: [{ id: 'c2', name: 'Chat 2', jid: '2@s.whatsapp.net', added: false }] } : endpoint === 'omni-thread-add' ? added : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  let root = view.draw()
+  one(root, 'ot-picker-chat').props.onClick()
+  await settle()
+  await settle()
+  root = view.draw()
+  assert.deepEqual(calls.find(([endpoint]) => endpoint === 'omni-thread-add'), ['omni-thread-add', { channelId: CHANNEL_A.id, chatId: 'c2' }])
+  const problem = one(root, 'ot-picker-problem')
+  assert.deepEqual([problem.props.role, text(problem)], ['alert', 'Omni cannot make chat keys; update it.'])
+  assert.equal(text(root).includes(reason), false)
+  assert.deepEqual(logged, [['Could not add the chat:', reason]])
+  assert.ok(one(root, 'ot-picker'), 'the picker stays open')
+  assert.equal(all(root, 'bt-thread').length, 0)
+  assert.equal(one(root, 'ot-picker-chat').props.disabled, false)
+  // A refusal thrown by the host shows the same friendly line, with its diagnostic logged.
+  logged.length = 0
+  const failure = new Error('Could not reach Omni. Try again in a moment.')
+  answer = endpoint => (endpoint === 'omni-thread-add' ? failure : {})
+  one(root, 'ot-picker-chat').props.onClick()
+  await settle()
+  await settle()
+  assert.equal(text(one(view.draw(), 'ot-picker-problem')), 'The chat was not added.')
+  assert.equal(text(view.draw()).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not add the chat:', failure]])
+  // Added: the picker closes; the row comes with the team's next roster.
+  added = { ok: true, threadId: 't2' }
+  answer = endpoint => (endpoint === 'omni-thread-add' ? added : {})
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  await settle()
+  assert.equal(all(view.draw(), 'ot-picker').length, 0)
+})
+
+test('an Omni older than the floor is not offered the +, and says to update it (:183)', (t) => {
+  linked({ link: { origin: 'omni.example.com', version: '2.261027.2', outdated: true } })
+  const { view } = tree(t, { roster: hooked() })
+  const root = view.draw()
+  assert.equal(byLabel(root, 'Add a chat'), undefined)
+  assert.deepEqual(all(root, 'ot-empty').map(text), [ui.OMNI_OUTDATED, ui.OMNI_OUTDATED])
+  // At the floor, or with its version not known, the + is there.
+  assert.deepEqual(plain(ui.plusOf(hooked(), { link: { outdated: false } })), { offered: true, reason: null })
+  assert.deepEqual(plain(ui.plusOf(hooked(), { link: null })), { offered: true, reason: null })
+  assert.deepEqual(plain(ui.plusOf(hooked({ omniThreadsOffered: false, omniThreadsReason: NOT_LINKED }), { link: null })), { offered: false, reason: NOT_LINKED })
+})
+
+test('the linked Omni\'s floor is read once per link, and again while it is outdated', async () => {
+  const asked = []
+  let info = { linked: true, version: '2.261027.2', outdated: true }
+  const call = async (endpoint) => { asked.push(endpoint); return info }
+  await ui.loadLink(call, 'omni.example.com')
+  assert.deepEqual(plain(ui.omniStore.getSnapshot().link), { origin: 'omni.example.com', version: '2.261027.2', outdated: true })
+  info = new Error('unreachable')
+  await ui.loadLink(async () => { throw info }, 'omni.example.com')
+  assert.equal(ui.omniStore.getSnapshot().link.outdated, true, 'a failed read keeps what was known')
+  info = { linked: true, version: null }
+  await ui.loadLink(call, 'omni.example.com')
+  assert.deepEqual(plain(ui.omniStore.getSnapshot().link), { origin: 'omni.example.com', version: null, outdated: false })
+  assert.deepEqual(asked, ['omni-link-info', 'omni-link-info'])
+})
+
+test('each poll reads the linked Omni\'s floor only for a new link, or while it is outdated', async () => {
+  const asked = []
+  let info = { linked: true, version: '2.261027.3', outdated: false }
+  const call = async (endpoint) => {
+    asked.push(endpoint)
+    if (endpoint === 'omni-overview') return { configured: true, origin: 'omni.example.com', channels: [], chats: [] }
+    if (endpoint === 'omni-channel-abilities') return { changeChannels: false, send: false }
+    return endpoint === 'omni-link-info' ? info : {}
+  }
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), link: null, chatId: null })
+  const reads = () => asked.filter(endpoint => endpoint === 'omni-link-info').length
+  await ui.refreshLive(call)
+  await settle()
+  await ui.refreshLive(call)
+  await settle()
+  assert.equal(reads(), 1)
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), link: { origin: 'omni.example.com', version: '2.261027.2', outdated: true } })
+  await ui.refreshLive(call)
+  await settle()
+  assert.equal(reads(), 2)
+  assert.equal(ui.omniStore.getSnapshot().link.outdated, false, 'an updated Omni gets the + back without a reload')
+  await settle()
+  // Another Omni linked here is read again.
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), link: { origin: 'other.example.com', version: '2.261027.3', outdated: false } })
+  await ui.refreshLive(call)
+  await settle()
+  assert.equal(reads(), 3)
+  // An Omni that did not answer with its version is asked again next time.
+  info = { linked: true, version: null, reachable: false }
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), link: null })
+  await ui.refreshLive(call)
+  await settle()
+  await ui.refreshLive(call)
+  await settle()
+  assert.equal(reads(), 5)
+  // The poll and the open chat's messages do not wait for a slow link read.
+  info = new Promise(() => {})
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), link: null, chatId: 'c1' })
+  const done = await Promise.race([ui.refreshLive(call).then(() => 'done'), new Promise(resolve => setTimeout(resolve, 100, 'waited'))])
+  assert.equal(done, 'done')
+  assert.ok(asked.includes('omni-messages'))
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), chatId: null })
+})
+
+test('on a team without the hook: no +, the channels say a newer Bot team is needed, and a thread row never opens its Session (:195)', (t) => {
+  linked()
+  const opened = []
+  // An older team passes BotChildren only these (bots-dsh before 3.32.1 sidebar.js BotChildren).
+  const { view } = tree(t, { roster: oldTeam({ omniThreads: [THREAD(1, CHANNEL_A, { connected: false, reason: NEEDS_NEWER_TEAM, reasonCode: 'needs_newer_team' })] }), actions: { openSession: id => opened.push(id) } })
+  const root = view.draw()
+  assert.equal(byLabel(root, 'Add a chat'), undefined)
+  assert.deepEqual(all(root, 'ot-empty').map(text), [NEEDS_NEWER_TEAM, NEEDS_NEWER_TEAM])
+  const row = one(root, 'bt-thread')
+  assert.equal(text(one(row, 'ot-thread-reason')), NEEDS_NEWER_TEAM)
+  assert.match(row.props['aria-label'], /Adding a chat needs a newer Bot team/)
+  // Its click opens only the phone pane (omni-phone.test.js), never the Session.
+  row.props.onClick()
+  assert.deepEqual(opened, [])
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-open'), [])
+})
+
+test('a thread row has the bt-thread look: working, waiting and idle from the view, and "not connected" with its reason in place', () => {
+  const roster = hooked()
+  const props = { roster, actions: { openSession: () => {} } }
+  const rowProps = ui.rowPropsOf(props, roster.omniRowProps)
+  const draw = thread => mount(() => react.createElement(ui.ThreadRow, { thread, actions: props.actions, rowProps })).draw()
+  const working = one(draw(THREAD(1, CHANNEL_A, { status: 'working' })), 'bt-thread')
+  assert.deepEqual([working.props['data-state'], classOf(working.children[0])[0]], ['working', 'bt-thread-spin'])
+  assert.match(working.props['aria-label'], /Working/)
+  const waiting = one(draw(THREAD(1, CHANNEL_A, { status: 'waiting' })), 'bt-thread')
+  assert.deepEqual([waiting.props['data-state'], classOf(waiting.children[0])[0]], ['waiting', 'bt-thread-wait'])
+  const idleRoot = draw(THREAD(1))
+  const idle = one(idleRoot, 'bt-thread')
+  assert.deepEqual([idle.props['data-state'], classOf(idle.children[0])[0], one(idleRoot, 'ot-thread').props['data-idle']], ['idle', 'ot-thread-idle', true])
+  assert.equal(one(idle, 'ot-thread-reason'), undefined)
+  const cut = one(draw(THREAD(1, CHANNEL_A, { connected: false, reason: OTHER_OMNI, reasonCode: 'other_omni' })), 'bt-thread')
+  assert.equal(text(one(cut, 'ot-thread-reason')), OTHER_OMNI)
+  assert.equal(cut.props.title, OTHER_OMNI)
+  assert.equal(cut.props['aria-disabled'], undefined)
+})
+
+test('without the row props a thread shows and opens, with only the unread dot missing; with them it shows DSH\'s dot and "waiting" (:209)', () => {
+  const sessions = new Map([['s1', { completionUnread: true }], ['s2', { pendingInteraction: { kind: 'approval' } }], ['s3', { completionUnread: true }]])
+  const shown = new Set(['s3'])
+  const opened = []
+  const actions = { openSession: id => opened.push(id) }
+  const roster = hooked()
+  const full = {
+    bot: BOT, roster, actions, wide: true, useSessions: select => select({ byId: {} }), useUi: select => select({}),
+    useSessionStatus: select => select(sessions), useSessionRetainInfo: (id, select) => select({ retainedBy: { mainView: shown.has(id) ? 1 : 0 } }),
+    useActivity: select => select({}), useWork: select => select({}),
+  }
+  const draw = (thread, rowProps) => mount(() => react.createElement(ui.ThreadRow, { thread, actions, rowProps })).draw()
+  // Without them: an older team's BotChildren passes only bot, roster and actions.
+  const bare = ui.rowPropsOf({ bot: BOT, roster, actions }, roster.omniRowProps)
+  assert.deepEqual(Object.keys(bare).sort(), ['actions', 'bot', 'roster'])
+  const plain = draw(THREAD(1), bare)
+  assert.equal(one(plain, 'bt-unread'), undefined)
+  assert.equal(one(plain, 'bt-thread').props['data-state'], 'idle')
+  one(plain, 'bt-thread').props.onClick()
+  assert.deepEqual(opened, ['s1'])
+  // With them: the dot, DSH's own "waiting", and the row marked while its Session is shown.
+  const rowProps = ui.rowPropsOf(full, roster.omniRowProps)
+  assert.deepEqual(Object.keys(rowProps).sort(), [...TEAM_CONTRACT.rowProps].sort())
+  const unread = draw(THREAD(1), rowProps)
+  assert.ok(one(unread, 'bt-unread'))
+  assert.match(one(unread, 'bt-thread').props['aria-label'], /Unread activity/)
+  const asking = one(draw(THREAD(2, CHANNEL_A, { status: 'idle' }), rowProps), 'bt-thread')
+  assert.deepEqual([asking.props['data-state'], classOf(asking.children[0])[0]], ['waiting', 'bt-thread-wait'])
+  assert.match(asking.props['aria-label'], /Waiting for you/)
+  const open = draw(THREAD(3), rowProps)
+  assert.equal(one(open, 'bt-thread').props['aria-current'], 'page')
+  assert.equal(one(open, 'bt-unread'), undefined, 'a Session on screen is read')
+  // Drawn by the tree the team's way, the props reach each row.
+  linked()
+  const view = mount(() => react.createElement(ui.OmniTree, { ...full, roster: hooked({ omniThreads: [THREAD(1)] }), actions: { ...actions, selectPanel: () => {} } }), { effects: false })
+  assert.ok(one(view.draw(), 'bt-unread'))
+})
+
+test('removing a thread asks once more, then asks the host', async () => {
+  calls.length = 0
+  answer = () => ({ ok: true })
+  const roster = hooked()
+  const view = mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1), actions: {}, rowProps: ui.rowPropsOf({ roster }, roster.omniRowProps) }))
+  let remove = one(view.draw(), 'ot-thread-remove')
+  assert.equal(remove.props['aria-label'], 'Remove Chat 1')
+  remove.props.onClick()
+  remove = one(view.draw(), 'ot-thread-remove')
+  assert.equal(remove.props['data-confirm'], true)
+  assert.deepEqual(calls, [])
+  remove.props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['omni-thread-remove', { threadId: 't1' }]])
+  // A refusal shows a translated line; only the console gets the host diagnostic.
+  logged.length = 0
+  const failure = new Error('The thread could not be removed: busy')
+  answer = () => failure
+  one(view.draw(), 'ot-thread-remove').props.onClick()
+  one(view.draw(), 'ot-thread-remove').props.onClick()
+  await settle()
+  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'Could not remove this chat. Try again.')
+  assert.equal(text(view.draw()).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not remove the chat:', failure]])
+})
+
+test('a thread row marks, with a title, when its sends or any of its reactions go without asking, from the view; asking as by default, it has no mark', () => {
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const draw = permissions => mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1, CHANNEL_A, permissions === undefined ? {} : { permissions }), actions: {}, rowProps })).draw()
+  for (const permissions of [undefined, { sends: 'ask', reactions: 'list' }]) {
+    const root = draw(permissions)
+    assert.equal(one(root, 'ot-thread-free'), undefined)
+    assert.doesNotMatch(one(root, 'bt-thread').props['aria-label'], /without asking/)
+  }
+  for (const [permissions, title] of [
+    [{ sends: 'allow', reactions: 'list' }, 'Sends messages without asking you'],
+    [{ sends: 'ask', reactions: 'any' }, 'Reacts with any emoji without asking you'],
+    [{ sends: 'allow', reactions: 'any' }, 'Sends messages and any reaction without asking you'],
+  ]) {
+    const root = draw(permissions)
+    assert.equal(one(root, 'ot-thread-free').props.title, title)
+    assert.equal(plain(ui.freeMarkOf({ permissions })), title)
+    assert.match(one(root, 'bt-thread').props['aria-label'], new RegExp(title))
+  }
+})
+
+test('a thread row\'s menu sets the thread\'s own choice for its messages and its reactions, or clears it back to the default; a refusal shows on the row', async () => {
+  calls.length = 0
+  answer = () => ({ ok: true })
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const thread = THREAD(1, CHANNEL_A, { permissions: { sends: 'allow', reactions: 'list' }, ownPermissions: { sends: 'allow' }, defaultPermissions: { sends: 'ask', reactions: 'list' } })
+  const view = mount(() => react.createElement(ui.ThreadRow, { thread, actions: {}, rowProps }))
+  const more = () => one(view.draw(), 'ot-thread-more')
+  assert.deepEqual([more().props['aria-label'], more().props['aria-expanded']], ['Asking first in Chat 1', false])
+  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
+  more().props.onClick()
+  const menu = one(view.draw(), 'ot-thread-menu')
+  assert.equal(menu.props.role, 'menu')
+  const items = all(menu, 'ot-thread-menu-item')
+  assert.deepEqual(items.map(item => [item.props['data-field'], item.props['data-value'], item.props['aria-checked'], text(item)]), [
+    ['sends', 'default', false, 'Follow the default: Ask me each time'], ['sends', 'ask', false, 'Ask me each time'], ['sends', 'allow', true, 'Send without asking'],
+    ['reactions', 'default', true, 'Follow the default: Only the free reactions go without asking'], ['reactions', 'list', false, 'Only the free reactions go without asking'], ['reactions', 'any', false, 'Any reaction goes without asking'],
+  ])
+  // Choosing one asks the host and closes the menu; "follow the default" sends null.
+  items[0].props.onClick()
+  await settle()
+  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
+  more().props.onClick()
+  all(one(view.draw(), 'ot-thread-menu'), 'ot-thread-menu-item')[5].props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['omni-thread-permissions', { threadId: 't1', sends: null }], ['omni-thread-permissions', { threadId: 't1', reactions: 'any' }]])
+  // Escape closes it without a choice.
+  more().props.onClick()
+  let stopped = false
+  one(view.draw(), 'ot-thread-menu').props.onKeyDown({ key: 'Escape', stopPropagation: () => { stopped = true } })
+  assert.deepEqual([one(view.draw(), 'ot-thread-menu'), stopped, calls.length], [undefined, true, 2])
+  // A click inside the row keeps it open; one anywhere else closes it, choosing nothing.
+  more().props.onClick()
+  const rowNode = one(view.draw(), 'ot-thread')
+  rowNode.props.ref.current = { contains: target => target === 'inside' }
+  pointerDown('inside')
+  assert.ok(one(view.draw(), 'ot-thread-menu'))
+  pointerDown('elsewhere')
+  assert.equal(one(view.draw(), 'ot-thread-menu'), undefined)
+  view.draw()
+  assert.deepEqual([pointer.size, calls.length], [0, 2])
+  // The host's refusal stays in the console; the row offers a translated recovery message.
+  logged.length = 0
+  const failure = new Error('This window shows the team but cannot change it.')
+  answer = () => failure
+  more().props.onClick()
+  all(one(view.draw(), 'ot-thread-menu'), 'ot-thread-menu-item')[1].props.onClick()
+  await settle()
+  assert.equal(text(one(view.draw(), 'ot-thread-problem')), 'Could not change this chat\'s settings. Try again.')
+  assert.equal(text(view.draw()).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not change the chat settings:', failure]])
+  // A thread with no choices of its own follows the default for both.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(2))).map(group => group.items.filter(item => item.checked).map(item => item.value)), [[null], [null]])
+  // It names the default it follows now: sends and any reaction allowed by the owner.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(3, CHANNEL_A, { defaultPermissions: { sends: 'allow', reactions: 'any' } }))).map(group => group.items[0].label), ['Follow the default: Send without asking', 'Follow the default: Any reaction goes without asking'])
+})
+
+test('the reasons the host gives a thread or the + have Chinese copy here', () => {
+  for (const reason of [NEEDS_NEWER_TEAM, NOT_LINKED, OTHER_OMNI, BEING_CUT, WAITING, ui.OMNI_OUTDATED, 'Could not load chats. Try again.', 'Could not load messages. Retrying soon.', 'Could not remove this chat. Try again.', "Could not change this chat's settings. Try again."]) assert.ok(Object.hasOwn(STRINGS, reason), reason)
+})
+
+// Before an Omni is linked, the tree is one quiet link into the Connect wizard.
+test('an Omni Bot with no linked Omni shows one "Connect Omni →" link that opens the wizard', () => {
+  ui.omniStore.set({ ...ui.omniStore.getSnapshot(), preview: true })
+  const tree = mount(() => react.createElement(ui.OmniTree, { bot: BOT, actions: { selectPanel: () => {} } }), { effects: false }).draw()
+  assert.equal(tree.children.filter(Boolean).length, 1)
+  const [link] = tree.children
+  assert.equal(link.type, 'button')
+  assert.equal(link.props.onClick, ui.openConnectWizard)
+  assert.equal(text(link), 'Connect Omni →')
+  assert.equal(link.children[1].props['aria-hidden'], true)
+})
+
+// -------------------------------------------------------------------------
+// First probe 3: what a thread's Session gets when it opens. Not run in a live DSH (that needs
+// a running DSH and the owner's approval); instead the pinned Bot team's own client code, from
+// source, is drawn for a thread's Session id. It opens in the Bot skin (it is not a DSH Agent
+// Session, so `openSession` does not take the plain surface), every Bot dock and header control
+// keyed by a Bot or a group draws nothing there, and the one Bot control that draws for any
+// Session (voice chat) is hidden by the thread's own record (ThreadDock).
+
+async function loadTeamDocks() {
+  const dir = join(process.env.OMNI_DSH_CORE, 'src', 'client')
+  const bundle = await build({
+    stdin: {
+      contents: [
+        'export { MemberDock } from \'./member-status.js\'',
+        'export { ModelChoiceDock } from \'./model-menu.js\'',
+        'export { QuestionDock } from \'./questions.js\'',
+        'export { WidgetDock } from \'./widget-cell.js\'',
+        'export { SecretDock } from \'./secret-card.js\'',
+        'export { SuggestionDock } from \'./suggestions.js\'',
+        'export { BtwDock } from \'./btw.js\'',
+        'export { ComposerPlus, ComposerVoice } from \'./composer.js\'',
+        'export { packModelCell } from \'./composer-pack-cells.js\'',
+        'export { HeaderPill } from \'./header.js\'',
+        'export { isAgentSession } from \'./sources.js\'',
+      ].join('\n'),
+      resolveDir: dir, loader: 'js',
+    },
+    bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
+    external: ['react', 'react-dom', 'react/jsx-runtime', '@deepseek-ai/*'],
+    loader: { '.css': 'text', '.png': 'dataurl', '.svg': 'text', '.webp': 'dataurl' },
+  })
+  const module = { exports: {} }
+  const platform = { react, 'react-dom': { createPortal: node => node }, 'react/jsx-runtime': { jsx: react.createElement, jsxs: react.createElement, Fragment: react.Fragment }, '@deepseek-ai/dsh-client-ui-primitives': { MarkdownText: () => null } }
+  const window = { addEventListener: () => {}, removeEventListener: () => {}, innerWidth: 1280, matchMedia: () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }) }
+  runInNewContext(bundle.outputFiles[0].text, {
+    module, exports: module.exports, URL, URLSearchParams, setTimeout, clearTimeout, console, window, document: { ...document, addEventListener: () => {}, removeEventListener: () => {}, querySelector: () => null }, localStorage, navigator: { userAgent: 'node' },
+    require: name => platform[name] ?? (() => { throw new Error(`no module ${name}`) })(),
+  })
+  return module.exports
+}
+
+test('first probe 3: a thread opens in the Bot skin with every other Bot dock empty, and its own record hides the Bot controls left', async () => {
+  const team = await loadTeamDocks()
+  const bot = { id: 'omni-bot', kind: 'omni', name: 'Omni', model: 'deepseek/deepseek-chat' }
+  const roster = {
+    ready: true, mainBotId: 'main', eventsBotId: bot.id, byId: { [bot.id]: bot }, roomsById: {}, agentOf: {}, agentsById: {},
+    questions: {}, views: {}, secretRequests: {}, btwCards: {}, exchangeTurns: {}, models: [{ ref: 'deepseek/deepseek-chat' }], omniConsents: {},
+    ...hooked({ omniThreads: [THREAD(1)] }),
+  }
+  const props = sessionId => ({
+    sessionId, input: { draft: '' }, session: { running: false }, inputActions: undefined,
+    useRoster: select => select(roster), useWork: select => select({ bots: {}, rooms: {}, approvals: [] }), useCards: select => select({}), useHeldCards: select => select({}),
+    useSessions: select => select({ byId: {}, ids: [], projectionsBySession: {} }), useSessionStatus: select => select(new Map()), useSession: select => select?.({}),
+    useActivity: select => select({}), useMemoryNews: select => select(new Map()), useTurnClock: select => select({}), useUi: select => select({ visits: {} }),
+    useLive: select => select?.({}), useStore: select => select({}), useConversationViews: select => select([]),
+    actions: { turnFacts: () => ({ turns: 0, openTurn: null }), speech: () => undefined, canReferenceChat: () => false, beginVisit: () => {}, endVisit: () => {}, refreshModels: () => {} },
+  })
+  const draw = (Component, sessionId) => mount(() => react.createElement(Component, props(sessionId)), { effects: false }).draw()
+  // The Bot skin: the team opens any Session that is not a DSH Agent Session's on its own surface.
+  assert.equal(team.isAgentSession(roster, new Set(), 's1'), false)
+  // Every dock above the composer, and the composer's model and "+" cells, draw nothing for it.
+  const PackModelCell = team.packModelCell({})
+  const docks = { MemberDock: team.MemberDock, ModelChoiceDock: team.ModelChoiceDock, QuestionDock: team.QuestionDock, WidgetDock: team.WidgetDock, SecretDock: team.SecretDock, SuggestionDock: team.SuggestionDock, BtwDock: team.BtwDock, ComposerPlus: team.ComposerPlus, PackModelCell }
+  const drawn = Object.fromEntries(Object.entries(docks).map(([name, Component]) => [name, draw(Component, 's1')]))
+  assert.deepEqual(Object.entries(drawn).filter(([, out]) => out !== null && out !== undefined).map(([name]) => name), [])
+  // The Omni Bot's own chat, as a check that the stand-in draws them: its "+" is there.
+  assert.ok(nodes(draw(team.ComposerPlus, bot.id)).some(node => classOf(node).includes('bt-plus')))
+  // The header names no Bot: no header buttons (the automations board), no details button.
+  const head = draw(team.HeaderPill, 's1')
+  assert.equal(all(head, 'bt-head-details').length, 0)
+  assert.ok(nodes(draw(team.HeaderPill, bot.id)).some(node => classOf(node).includes('bt-head-details')))
+  // Voice chat draws for any Session: the one Bot control left. The thread's record hides it.
+  assert.ok(nodes(draw(team.ComposerVoice, 's1')).some(node => classOf(node).includes('bt-voice')))
+  const view = mount(() => react.createElement(ui.ThreadDock, { sessionId: 's1', useRoster: select => select(roster) }))
+  assert.equal(view.draw(), null)
+  assert.equal(document.body.dataset.omniThread, '')
+  assert.match(ui.OMNI_TREE_CSS, /body\[data-omni-thread\] \.bt-voice/)
+  // What never draws in a thread is not hidden there; dictation stays on purpose.
+  for (const name of ['bt-head-details', 'bt-suggest', 'bt-mic']) assert.equal(ui.OMNI_TREE_CSS.includes(`body[data-omni-thread] .${name}`), false, name)
+  // Two thread panes: closing one keeps the mark for the other.
+  const other = mount(() => react.createElement(ui.ThreadDock, { sessionId: 's1', useRoster: select => select(roster) }))
+  other.draw()
+  view.unmount()
+  assert.equal(document.body.dataset.omniThread, '')
+  other.unmount()
+  assert.equal(Object.hasOwn(document.body.dataset, 'omniThread'), false)
+  // Any other Session leaves the page as it was.
+  mount(() => react.createElement(ui.ThreadDock, { sessionId: bot.id, useRoster: select => select(roster) })).draw()
+  assert.equal(Object.hasOwn(document.body.dataset, 'omniThread'), false)
+})
+
+// Nothing but channels and their threads is drawn under the Omni Bot (the owner, 2026-10-29):
+// the Sessions list went with the hand-offs and the session workers.
+test('the Omni row draws no Sessions list, even from a view an older host still sends rows in; the threads of no listed channel stay under Other chats', (t) => {
+  linked()
+  const stale = [{ sessionId: 'r1', kind: 'handoff', title: 'Session 1', at: 1, status: 'idle' }]
+  const elsewhere = THREAD(9, { id: '99999999-9999-4999-8999-999999999999' })
+  for (const roster of [hooked({ omniThreads: [THREAD(1), elsewhere], omniRows: stale }), oldTeam({ omniRows: stale })]) {
+    const root = tree(t, { roster }).view.draw()
+    assert.equal(byLabel(root, 'Sessions'), undefined)
+    assert.deepEqual([all(root, 'ot-row'), all(root, 'bt-thread').filter(item => item.props['data-session-id'] === 'r1')], [[], []])
+  }
+  const root = tree(t, { roster: hooked({ omniThreads: [THREAD(1), elsewhere], omniRows: stale }) }).view.draw()
+  assert.deepEqual(all(byLabel(root, 'Other chats'), 'bt-thread').map(item => item.props['data-thread-id']), ['t9'])
+  assert.equal('SessionRow' in ui || 'rowsOf' in ui, false)
+})
+
+test('the board\'s notes on an automation whose worker moved to its chats\' threads have Chinese copy here; the Sessions list\'s words are gone', () => {
+  for (const key of Object.values(WORKER_MOVED)) assert.ok(Object.hasOwn(STRINGS, key), key)
+  for (const key of ['Sessions', 'Actions for {name}']) assert.equal(Object.hasOwn(STRINGS, key), false, key)
+})
+
+// The Bot team's sidebar (bots-dsh sidebar.js, the same in the pinned 3.32.1 and in 3.47.0):
+// BotChildren hands each entry the props of the Bot's own rows and `wide`. Its landing rule
+// (useLandOnMainBot) sends a main view that holds no Bot, group or DSH bot back to the Main
+// Bot while DSH lists that Session as blank (no turn yet): a thread that never ran stays open
+// only once the team counts the threads' Sessions as its own destinations, which is the
+// team's change to make. This pins the rule as the pinned team has it, so a team that changes
+// it shows here.
+const teamSidebar = readFileSync(new URL('src/client/sidebar.js', `${pathToFileURL(process.env.OMNI_DSH_CORE).href}/`), 'utf8')
+
+test('the pinned Bot team passes BotChildren entries the row props and wide; its landing rule, which a never-run thread depends on, is as documented', () => {
+  assert.match(teamSidebar, /const rowProps = \{ roster, actions: rowActions, useSessions, useUi, useSessionStatus: props\.useSessionStatus, useSessionRetainInfo: props\.useSessionRetainInfo, useActivity: props\.useActivity, useWork: props\.useWork, wide \}/)
+  assert.match(teamSidebar, /function BotChildren\(\{ wide, \.\.\.props \}\) \{[^}]*h\(entry\.Component, \{ key: entry\.id, \.\.\.props, wide \}\)/)
+  assert.match(teamSidebar, /roster\.roomsById\[id\] \|\| \(actions\.isAgentSession\?\.\(id\) \?\? roster\.agentOf\[id\] !== undefined\) \|\| blank !== '1'/)
+})
+
+test('on the props the Bot team passes, a click on a thread row opens its Session at once, through the team\'s row action', (t) => {
+  linked()
+  calls.length = 0
+  const roster = hooked({ omniThreads: [THREAD(1), THREAD(2)] })
+  const opened = []
+  const actions = { selectPanel: () => {}, openSession: id => opened.push(id) }
+  // The team's TeamSidebar rowProps, and its BotChildren's spread.
+  const rowProps = {
+    roster, actions, useSessions: select => select({ byId: { s1: { id: 's1', blank: true } } }), useUi: select => select({}),
+    useSessionStatus: select => select(new Map()), useSessionRetainInfo: (_id, select) => select(undefined),
+    useActivity: select => select({}), useWork: select => select({}), wide: true,
+  }
+  const BotChildren = ({ wide, ...props }) => [{ id: 'omni-channels', Component: ui.OmniTree }].map(entry => react.createElement(entry.Component, { key: entry.id, ...props, wide }))
+  const view = mount(() => react.createElement(BotChildren, { ...rowProps, bot: BOT }))
+  t.after(() => { view.unmount(); ui.startLive(fakeCall)?.() })
+  const row = id => nodes(view.draw()).find(node => node.props?.['data-thread-id'] === id)
+  // Every name the host lists is there, so the rows open.
+  assert.equal(ui.teamReady(roster), true)
+  assert.deepEqual(Object.keys(ui.rowPropsOf({ ...rowProps, bot: BOT }, roster.omniRowProps)).sort(), [...TEAM_CONTRACT.rowProps].sort())
+  assert.equal(row('t1').props['aria-disabled'], undefined)
+  row('t1').props.onClick()
+  row('t2').props.onClick()
+  assert.deepEqual(opened, ['s1', 's2'])
+  // Nothing is asked of the host, and nothing is posted into the thread.
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint.startsWith('omni-thread')), [])
+})
+
+test('a thread\'s row is named by its chat, never a raw id: its number or name from the host, else "Chat" or "Group"', () => {
+  const roster = hooked()
+  const draw = thread => mount(() => react.createElement(ui.ThreadRow, { thread, actions: { openSession: () => {} }, rowProps: ui.rowPropsOf({ roster }, roster.omniRowProps) })).draw()
+  const named = (thread) => {
+    const root = draw(thread)
+    return [text(one(root, 'bt-thread-title')), one(root, 'bt-thread').props.title, one(root, 'ot-thread-remove').props['aria-label']]
+  }
+  assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: '+5511988887777', kind: 'direct' })), ['+5511988887777', '+5511988887777', 'Remove +5511988887777'])
+  assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: null, kind: 'direct' })), ['Chat', 'Chat', 'Remove Chat'])
+  assert.deepEqual(named(THREAD(1, CHANNEL_A, { title: null, kind: 'group' })), ['Group', 'Group', 'Remove Group'])
+  assert.match(one(draw(THREAD(1, CHANNEL_A, { title: null, kind: 'group' })), 'bt-thread').props['aria-label'], /^Group/)
+})
+
+test('a thread row\'s menu and remove button sit after its title, never over it: the title ends in an ellipsis before them, and no phone button is left', () => {
+  const roster = hooked()
+  const root = mount(() => react.createElement(ui.ThreadRow, { thread: THREAD(1), actions: { openSession: () => {} }, rowProps: ui.rowPropsOf({ roster }, roster.omniRowProps) })).draw()
+  // In the row, after its button: the two actions, in their own box, in that order.
+  const row = one(root, 'ot-thread')
+  assert.deepEqual(row.children.filter(Boolean).map(child => classOf(child)[0]), ['bt-thread', 'ot-thread-acts'])
+  assert.deepEqual(one(row, 'ot-thread-acts').children.filter(Boolean).map(child => classOf(child)[0]), ['ot-thread-more', 'ot-thread-remove'])
+  assert.equal(one(root, 'ot-thread-phone'), undefined)
+  const css = ui.OMNI_TREE_CSS
+  const rule = selector => css.match(new RegExp(`(?:^|\\n)${selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\{([^}]*)\\}`))?.[1]
+  // Nothing of the row is laid over it (the menu, which opens below the row, aside).
+  const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selector, body]) => [selector.trim(), body])
+  const rowRules = rules.filter(([selector]) => /\.(ot-thread|bt-thread)(?!-menu)/.test(selector))
+  assert.ok(rowRules.length >= 8)
+  assert.deepEqual(rowRules.filter(([, body]) => /position:absolute/.test(body)), [])
+  assert.match(rule('.ot-thread .bt-thread'), /flex:1;min-width:0/)
+  assert.match(rule('.ot-thread .bt-thread-title'), /min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap/)
+  // The actions take room only on hover or focus, and stay focusable (never display:none).
+  assert.match(rule('.ot-thread-acts'), /flex:none;max-width:0;overflow:hidden;opacity:0/)
+  assert.equal(/\.ot-thread-acts[^{]*\{[^}]*display:none/.test(css), false)
+  assert.match(rule('.ot-thread:hover .ot-thread-acts,.ot-thread:focus-within .ot-thread-acts,.ot-thread-acts[data-on]'), /max-width:120px;padding-right:4px;opacity:1/)
+  assert.equal(css.includes('ot-thread-phone'), false)
+})
+
+for (const [label, failure] of [['Error', new Error('PRIVATE-CHAT-LIST-ERROR')], ['string', 'PRIVATE-CHAT-LIST-STRING']]) {
+  test(`a picker list ${label} failure stays in the console, with a friendly message on screen`, async (t) => {
+    logged.length = 0
+    answer = () => { throw failure }
+    const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: () => {}, onClose: () => {} }))
+    t.after(() => view.unmount())
+    view.draw()
+    await settle()
+    const root = view.draw()
+    assert.equal(text(one(root, 'ot-picker-problem')), 'Could not load chats. Try again.')
+    assert.equal(text(root).includes(failure.message ?? failure), false)
+    assert.deepEqual(logged, [['Could not load chats:', failure]])
+    assert.equal(all(root, 'ot-picker-chat').length, 0)
+  })
+
+  test(`a picker pick ${label} failure stays in the console, with a friendly message on screen`, async (t) => {
+    logged.length = 0
+    answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+    const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => { throw failure }, onClose: () => {} }))
+    t.after(() => view.unmount())
+    view.draw()
+    await settle()
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    const root = view.draw()
+    assert.equal(text(one(root, 'ot-picker-problem')), 'The chat was not added.')
+    assert.equal(text(root).includes(failure.message ?? failure), false)
+    assert.deepEqual(logged, [['Could not add the chat:', failure]])
+    assert.equal(one(root, 'ot-picker-chat').props.disabled, false, 'the chat can be tried again')
+  })
+}
+
+const ADD_REASONS = [
+  ['chat_keys_unavailable', 'Omni cannot make chat keys; update it.'],
+  ['chat_key_limit', 'This app holds as many chat keys as Omni allows.'],
+  ['omni_unreachable', 'Could not reach Omni. Try again in a moment.'],
+  ['not_linked', NOT_LINKED],
+  ['other_omni', OTHER_OMNI],
+  ['needs_newer_team', NEEDS_NEWER_TEAM],
+  ['already_thread', 'This chat is a thread already.'],
+  ['read_only', 'This host is read-only. Add the chat from the host that owns the team.'],
+]
+
+test('the picker translates known add reason codes without rendering their diagnostic text', async (t) => {
+  answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+  const reason = 'PRIVATE-HOST-REASON \u009b\u202e'
+  let result
+  const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => result, onClose: () => {} }))
+  t.after(() => view.unmount())
+  view.draw()
+  await settle()
+  for (const [reasonCode, message] of ADD_REASONS) {
+    logged.length = 0
+    result = { ok: false, reasonCode, reason }
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    const root = view.draw()
+    assert.equal(text(one(root, 'ot-picker-problem')), message, reasonCode)
+    assert.equal(text(root).includes(reason), false, reasonCode)
+    assert.deepEqual(logged, [['Could not add the chat:', reason]], reasonCode)
+    assert.ok(Object.hasOwn(STRINGS, message), `Chinese copy for ${reasonCode}`)
+  }
+})
+
+test('an unknown add reason stays generic, even if its text resembles a known message', async (t) => {
+  answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+  const reason = 'Omni cannot make chat keys; update it. PRIVATE-REMOTE-TEXT'
+  let result
+  const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => result, onClose: () => {} }))
+  t.after(() => view.unmount())
+  view.draw()
+  await settle()
+  for (const reasonCode of [undefined, 'unknown', '__proto__', 'constructor', {}, 42]) {
+    logged.length = 0
+    result = { ok: false, reasonCode, reason }
+    one(view.draw(), 'ot-picker-chat').props.onClick()
+    await settle()
+    const root = view.draw()
+    assert.equal(text(one(root, 'ot-picker-problem')), 'The chat was not added.')
+    assert.equal(text(root).includes('PRIVATE-REMOTE-TEXT'), false)
+    assert.deepEqual(logged, [['Could not add the chat:', reason]])
+  }
+})
+
+test('a read-only add error shows the fixed guidance and logs its raw diagnostic', async (t) => {
+  logged.length = 0
+  answer = () => ({ chats: [{ id: 'c1', name: 'Chat 1', added: false }] })
+  const failure = Object.assign(new Error('PRIVATE-READ-ONLY-HOST'), { code: 'bot/read-only' })
+  const view = mount(() => react.createElement(ui.ThreadPicker, { channel: CHANNEL_A, onPick: async () => { throw failure }, onClose: () => {} }))
+  t.after(() => view.unmount())
+  view.draw()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  await settle()
+  const root = view.draw()
+  assert.equal(text(one(root, 'ot-picker-problem')), ADD_REASONS.find(([code]) => code === 'read_only')[1])
+  assert.equal(text(root).includes(failure.message), false)
+  assert.deepEqual(logged, [['Could not add the chat:', failure]])
+})

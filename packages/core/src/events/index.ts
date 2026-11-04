@@ -6,6 +6,7 @@ export * from './types';
 export * from './bus';
 export * from './causality';
 export * from './envelope';
+export { createOmniEvent } from './factory';
 export * from './nats';
 export * from './dead-letter';
 export * from './schema-registry';

@@ -13,6 +13,19 @@
 export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthesize', 'context:read'] as const;
 
 /**
+ * Broader scopes that also grant a narrower one. `system:update` asks the owner to confirm
+ * an update on WhatsApp, or starts it on a loopback-only Omni set up for the app's yes
+ * (system/update.ts; device keys carry it); `system:admin` covers it too.
+ * `events:consume` runs durable consumers (create, pull, ack, stream, delete; #1461): a key
+ * holding only it touches the consumers it created (services/event-consumers.ts); one holding
+ * `events:write` keeps the wider consumer access it always had.
+ */
+export const SCOPE_IMPLIED_BY: Readonly<Record<string, readonly string[]>> = {
+  'system:update': ['system:admin'],
+  'events:consume': ['events:write'],
+};
+
+/**
  * Map of METHOD + path pattern -> required scope.
  *
  * Path patterns use Hono-style segments:
@@ -22,6 +35,12 @@ export const DEFAULT_TURN_SCOPES = ['messages:send', 'turns:close', 'tts:synthes
  * The middleware normalizes the actual request path to match these patterns.
  */
 export const SCOPE_MAP: Record<string, string> = {
+  'GET /instances/:id/self': 'instances:read',
+  'GET /instances/:id/self/chats': 'messages:selected:read',
+  'POST /instances/:id/self/messages': 'messages:self:read',
+  'POST /instances/:id/self/receipt': 'messages:self:read',
+  'POST /instances/:id/self/history': 'messages:selected:read',
+  'POST /messages/send-self': 'messages:self:send',
   // --- config audit (#1152) ---
   'GET /audit': 'audit:read',
   'GET /audit/:id': 'audit:read',
@@ -87,6 +106,21 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /automations/:id/logs': 'automations:read',
   'GET /automation-logs': 'automations:read',
   'GET /automation-metrics': 'automations:read',
+
+  // --- connectors (tenant-wide integration accounts, NOT channels) ---
+  'GET /connectors': 'connectors:read',
+  'GET /connectors/providers': 'connectors:read',
+  'GET /connectors/providers/:provider': 'connectors:read',
+  'GET /connectors/:id': 'connectors:read',
+  'POST /connectors': 'connectors:write',
+  'PATCH /connectors/:id': 'connectors:write',
+  'DELETE /connectors/:id': 'connectors:write',
+  'GET /connectors/:id/subscriptions': 'connectors:read',
+  'POST /connectors/:id/subscriptions': 'connectors:write',
+  'PATCH /connectors/:id/subscriptions/:subscriptionId': 'connectors:write',
+  'DELETE /connectors/:id/subscriptions/:subscriptionId': 'connectors:write',
+  'POST /connectors/:id/subscriptions/:subscriptionId/test': 'connectors:write',
+  'POST /connectors/:id/actions/:action': 'connectors:invoke',
 
   // --- batch-jobs ---
   'POST /batch-jobs': 'batch-jobs:write',
@@ -168,10 +202,12 @@ export const SCOPE_MAP: Record<string, string> = {
   'POST /events/schemas': 'events:write',
   'POST /events/schemas/:eventType/validate': 'events:read', // dry run, read-only (#1076)
   'GET /events/consumers/:name': 'events:read',
-  'POST /events/consumers': 'events:write',
-  'DELETE /events/consumers/:name': 'events:write',
-  'POST /events/consumers/:name/pull': 'events:write',
-  'POST /events/consumers/:name/ack': 'events:write',
+  // events:consume, which events:write implies (SCOPE_IMPLIED_BY): leases and cursors are consumer state
+  'POST /events/consumers': 'events:consume',
+  'DELETE /events/consumers/:name': 'events:consume',
+  'POST /events/consumers/:name/pull': 'events:consume',
+  'POST /events/consumers/:name/ack': 'events:consume',
+  'GET /events/consumers/:name/stream': 'events:consume', // same as pull
 
   // --- events ---
   'GET /events': 'events:read',
@@ -202,6 +238,7 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /instances': 'instances:read',
   'GET /instances/supported-channels': 'instances:read',
   'GET /channels/capabilities': 'instances:read',
+  'GET /channels/whatsapp-business/webhook-setup': 'settings:write',
   'GET /instances/:id': 'instances:read',
   'POST /instances': 'instances:write',
   'PATCH /instances/:id': 'instances:write',
@@ -272,6 +309,13 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /keys/:id': 'keys:read',
   'PATCH /keys/:id': 'keys:write',
   'POST /keys/:id/revoke': 'keys:write',
+  // Chat keys (wish: omni-chat-threads): `chats:keys` mints and revokes the
+  // caller's own cs children; it comes with `chats:*` or `*`, never `keys:*`.
+  // A child cuts itself with the `chats:read` it already holds. The exact self
+  // path stays ahead of the `:id` pattern.
+  'POST /keys/children': 'chats:keys',
+  'POST /keys/children/self/revoke': 'chats:read',
+  'POST /keys/children/:id/revoke': 'chats:keys',
   'DELETE /keys/:id': 'keys:write',
   'GET /keys/:id/audit': 'keys:read',
 
@@ -371,6 +415,16 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /providers/:id/agents': 'providers:read',
   'GET /providers/:id/teams': 'providers:read',
   'GET /providers/:id/workflows': 'providers:read',
+
+  // --- owner: the operator's way in (omni claim / approve / connect); device keys never carry auth:* ---
+  'POST /owner/claim': 'auth:admin',
+  'POST /owner/approve': 'auth:admin',
+  'POST /owner/connect': 'auth:admin',
+
+  // --- system: this Omni's version and the updates its owner confirms ---
+  'GET /system/paired-agents': 'system:read',
+  'GET /system/update': 'system:read',
+  'POST /system/update': 'system:update',
 
   // --- settings ---
   'GET /settings': 'settings:read',

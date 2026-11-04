@@ -167,32 +167,48 @@ describe('media-processor deferred plugin download (issue #897)', () => {
     }
   });
 
-  it('is a no-op (no transcription) when the plugin cannot download inbound media', async () => {
-    const tempBase = await mkdtemp(join(tmpdir(), 'omni-plugin-dl-'));
-    try {
-      const storage = new MediaStorageService(makeMockDb(), tempBase, new LocalMediaBackend(tempBase));
+  // The agent dispatcher waits on this message's completion (it selects Cloud API
+  // media by `mediaId`). A download that fails must still complete it, as a
+  // failure, or the dispatch hangs until the media-wait timeout.
+  for (const [name, overrides] of [
+    ['the plugin cannot download inbound media', { downloadInboundMedia: undefined }],
+    [
+      'the plugin download throws',
+      {
+        downloadInboundMedia: async () => {
+          throw new Error('graph 404');
+        },
+      },
+    ],
+  ] as const) {
+    it(`skips transcription and publishes a failed completion when ${name}`, async () => {
+      const tempBase = await mkdtemp(join(tmpdir(), 'omni-plugin-dl-'));
+      try {
+        const storage = new MediaStorageService(makeMockDb(), tempBase, new LocalMediaBackend(tempBase));
 
-      const capture: ProcessCapture = {};
-      const published: Array<{ type: string; payload: Record<string, unknown> }> = [];
-      const ctx = makeContext({
-        mediaStorage: storage,
-        mediaService: makeFakeMediaService(capture),
-        published,
-        // Plugin without downloadInboundMedia — the bridge must bail cleanly.
-        plugin: makeFakePlugin({ downloadInboundMedia: undefined }, []),
-      });
+        const capture: ProcessCapture = {};
+        const published: Array<{ type: string; payload: Record<string, unknown> }> = [];
+        const ctx = makeContext({
+          mediaStorage: storage,
+          mediaService: makeFakeMediaService(capture),
+          published,
+          plugin: makeFakePlugin(overrides as Partial<ChannelPlugin>, []),
+        });
 
-      await processMessageMedia(
-        ctx,
-        metaAudioPayload,
-        { instanceId: 'inst-wab-1', channelType: 'whatsapp-business' },
-        { metadata: { correlationId: 'legacy' } },
-      );
+        await processMessageMedia(
+          ctx,
+          metaAudioPayload,
+          { instanceId: 'inst-wab-1', channelType: 'whatsapp-business' },
+          { metadata: { correlationId: 'legacy' } },
+        );
 
-      expect(capture.path).toBeUndefined();
-      expect(published.find((e) => e.type === 'media.processed')).toBeUndefined();
-    } finally {
-      await rm(tempBase, { recursive: true, force: true });
-    }
-  });
+        expect(capture.path).toBeUndefined();
+        const processed = published.find((e) => e.type === 'media.processed');
+        expect(processed?.payload).toMatchObject({ mediaId: 'msg-uuid', content: '', error: 'media download failed' });
+        expect(published.find((e) => e.type === 'media.processing.failed')?.payload.mediaId).toBe('msg-uuid');
+      } finally {
+        await rm(tempBase, { recursive: true, force: true });
+      }
+    });
+  }
 });

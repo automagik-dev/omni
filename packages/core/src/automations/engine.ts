@@ -12,6 +12,7 @@
 import type { EventBus, Subscription } from '../events/bus';
 import { runWithEventCausality } from '../events/causality';
 import { classifyEnvelope } from '../events/envelope';
+import { CONNECTOR_EVENT_TYPE, isConnectorEventType } from '../events/types';
 import type { EventType, GenericEventPayload, OmniEvent } from '../events/types';
 import { generateId } from '../ids';
 import { createLogger } from '../logger';
@@ -35,6 +36,15 @@ const logger = createLogger('automations:engine');
  * engine queue (up to `maxQueueDepth`) with its NATS message unacked.
  */
 const TRIGGER_DELIVERY_WINDOW = 50;
+
+/** Connector deliveries authorize only their explicitly journaled targets (D7). */
+export function connectorTargetMatches(automationId: string, event: Pick<OmniEvent, 'type' | 'payload'>): boolean {
+  if (!isConnectorEventType(event.type)) return true;
+  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  if (event.type === CONNECTOR_EVENT_TYPE) return payload.targetAutomationId === automationId;
+  const targets = payload.targetAutomationIds;
+  return Array.isArray(targets) && targets.includes(automationId);
+}
 
 /**
  * A queue with bounded concurrency.
@@ -158,6 +168,7 @@ export class AutomationEngine {
       eventBus,
       sendMessage: deps.sendMessage,
       callAgent: deps.callAgent,
+      admitAgentEvent: deps.admitAgentEvent,
       staleIdleTimeoutGate: deps.staleIdleTimeoutGate,
       releaseIdleTimeoutClaim: deps.releaseIdleTimeoutClaim,
       claimEmittedEvent: deps.claimEmittedEvent,
@@ -166,6 +177,8 @@ export class AutomationEngine {
       // #959 gate — threaded here so engine executions validate too; without
       // this line the dep is provided by the API but silently dropped.
       validateEmitEvent: deps.validateEmitEvent,
+      // One typed action for every provider; the API resolves and runs it.
+      callConnector: deps.callConnector,
     };
     this.automations = automations.filter((a) => a.enabled);
 
@@ -482,7 +495,10 @@ export class AutomationEngine {
     // disabled; the shared durable consumer still delivers them on re-enable,
     // so drop them here instead of acting retroactively (#1147).
     const matchingAutomations = this.automations.filter(
-      (a) => a.triggerEventType === eventType && !(a.enabledAt && event.timestamp < new Date(a.enabledAt).getTime()),
+      (a) =>
+        a.triggerEventType === eventType &&
+        !(a.enabledAt && event.timestamp < new Date(a.enabledAt).getTime()) &&
+        this.matchesConnectorTarget(a, event),
     );
 
     if (matchingAutomations.length === 0) {
@@ -520,6 +536,15 @@ export class AutomationEngine {
       if (gate.claimToken) await this.releaseIdleTimeoutClaim(gate.claimToken, event);
       throw err;
     }
+  }
+
+  /**
+   * Connector binding gate (D7): a legacy delivery names one target automation;
+   * typed deliveries name a target list. Only those targets may react, and a
+   * connector event without explicit targets fires nothing.
+   */
+  private matchesConnectorTarget(automation: Automation, event: OmniEvent): boolean {
+    return connectorTargetMatches(automation.id, event);
   }
 
   /**
@@ -637,6 +662,7 @@ export class AutomationEngine {
       payload,
       eventId: event.id,
       correlationId: event.metadata.correlationId,
+      event,
     };
 
     manager.addMessage(key, message, from, instanceId, stamp);
@@ -658,20 +684,64 @@ export class AutomationEngine {
     await this.queueExecution(automation, event, context, instanceId);
   }
 
+  /** Only call_agent windows need sender admission; other batching keeps its semantics. */
+  private async admitBatchMessages(
+    automation: Automation,
+    messages: DebouncedMessage[],
+    trustedTenantId: string | null,
+  ): Promise<DebouncedMessage[]> {
+    if (!automation.actions.some((action) => action.type === 'call_agent') || !this.deps.admitAgentEvent) {
+      return messages;
+    }
+    const admitted: DebouncedMessage[] = [];
+    for (const message of messages) {
+      try {
+        if (message.event && (await this.deps.admitAgentEvent(message.event, trustedTenantId))) {
+          admitted.push(message);
+        }
+      } catch {
+        // A policy failure drops this event, never the allowed peers in its window.
+        logger.warn('Buffered agent event admission failed', { eventId: message.eventId, automationId: automation.id });
+      }
+    }
+    return admitted;
+  }
+
   /**
    * Set up debounce manager for an automation
    */
   private setupDebounceManager(automation: Automation): void {
     const callback = async (
       key: ConversationKey,
-      messages: DebouncedMessage[],
+      bufferedMessages: DebouncedMessage[],
       // From the LAST event in the window, not parsed back out of the key — a
       // custom key (#1110) carries neither a sender nor an instance.
       from: { id: string; name?: string } | undefined,
       instanceId: string,
       stamp: DebounceEnvelopeStamp | null,
     ) => {
-      // Get the last message (should always exist since callback only fires with messages)
+      const startedAt = Date.now();
+      const originalLast = bufferedMessages[bufferedMessages.length - 1];
+      const trustedTenantId = stamp?.tenantId ?? null;
+      // Filter BEFORE constructing payload, debounce text, conditions or templates.
+      // No blocked text/source may survive through promptOverride or {{payload}}.
+      const messages = await this.admitBatchMessages(automation, bufferedMessages, trustedTenantId);
+      if (originalLast && messages.length === 0) {
+        await this.logExecution(
+          {
+            automationId: automation.id,
+            automationName: automation.name,
+            eventId: originalLast.eventId ?? generateId(),
+            status: 'skipped',
+            conditionsMatched: false,
+            actionsExecuted: [],
+            error: 'no admitted messages in agent batch',
+            executionTimeMs: Date.now() - startedAt,
+          },
+          trustedTenantId,
+        );
+        return;
+      }
       const lastMessage = messages[messages.length - 1];
       if (!lastMessage) {
         logger.warn('Debounce callback fired with empty messages array', { key });
@@ -706,7 +776,7 @@ export class AutomationEngine {
             text: m.text,
             timestamp: m.timestamp,
           })),
-          from,
+          from: lastMessage.payload.from as typeof from,
           instanceId,
         },
         event: {

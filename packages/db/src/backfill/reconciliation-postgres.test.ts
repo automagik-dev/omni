@@ -15,7 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import { runBackfill } from './engine';
 import { classifyLegacyKeys } from './key-classification';
 import type { InstanceTenantMap } from './mapping-engine';
-import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { cleanupAfterFailure, connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 import { quarantineReport, reconcile } from './reconciliation';
 import { scanForSecrets } from './redaction';
 
@@ -65,6 +65,10 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
   test('the redaction probe fires on a raw secret, and never on the ledger images', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       // Prove the probe is not vacuous: it flags the raw seeded secret.
       expect(scanForSecrets({ leaked: RAW_SECRET }).length).toBeGreaterThan(0);
@@ -86,15 +90,19 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       }
       // And the raw secret literally does not appear in any stored image.
       expect(JSON.stringify(images)).not.toContain(RAW_SECRET);
-    } finally {
-      await sql.end();
-      dropDatabase(base, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('reconciliation counts, and cross-tenant FK violations are DETECTED', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runBackfill(sql, {
         mode: 'apply',
@@ -119,15 +127,19 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       await sql.unsafe(`UPDATE "chats" SET tenant_id = $1 WHERE id = $2`, [TENANT_B, CHAT_A]);
       report = await reconcile(sql, ['chats']);
       expect(report.tables.find((t) => t.table === 'chats')!.crossTenantFkViolations).toBe(1);
-    } finally {
-      await sql.end();
-      dropDatabase(base, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('the quarantine report carries identifiers only and is redaction-clean', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runBackfill(sql, { mode: 'apply', instanceTenantMap: instanceMap, tables: ['automations'] });
       const report = await quarantineReport(sql, ['automations']);
@@ -136,15 +148,19 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
       expect(entry.count).toBe(1);
       expect(entry.identifiers).toHaveLength(1);
       expect(scanForSecrets(report)).toEqual([]);
-    } finally {
-      await sql.end();
-      dropDatabase(base, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('key classification matches seeded classes with fully redacted output', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       const report = await classifyLegacyKeys(sql, instanceMap);
       expect(report.counts['tenant-key-candidate']).toBe(1);
@@ -158,9 +174,9 @@ maybe('G6 reconciliation & reporting — real PostgreSQL', () => {
 
       const god = report.keys.find((k) => k.name === 'god')!;
       expect(god.requiresOwnerAndPurpose).toBe(true);
-    } finally {
-      await sql.end();
-      dropDatabase(base, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 });

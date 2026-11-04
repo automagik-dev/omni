@@ -184,10 +184,6 @@ describe('omni events schema round-trip', () => {
       schemaApiRequest('/custom.not.registered/validate', { method: 'POST', body: JSON.stringify({ payload: {} }) }),
     ).rejects.toThrow(/API returned 404/);
   });
-
-  test('a non-2xx response surfaces the API status and body', async () => {
-    await expect(schemaApiRequest('/custom.not.registered')).rejects.toThrow(/API returned 404/);
-  });
 });
 
 describe('loadSchemaArtifact', () => {

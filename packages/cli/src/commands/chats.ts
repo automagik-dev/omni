@@ -30,6 +30,7 @@ const VALID_CHANNELS: Channel[] = [
   'asc-flow',
   'zenvia',
   'harness',
+  'webchat',
 ];
 
 /** Build a map of instanceId → instance name for display */

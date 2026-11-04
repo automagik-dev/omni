@@ -1,0 +1,23 @@
+-- Per-instance opt-in for typed inbound reply context (PR #1297).
+--
+-- The WhatsApp (Baileys) plugin can add a typed `replyTo` to message.received
+-- and a `target` ({ fromMe, participant? }) to reaction.received and
+-- reaction.removed. Existing consumers must see exactly today's events, so the
+-- fields are emitted only when the instance opts in:
+--
+--   instances.inbound_reply_context  boolean NOT NULL DEFAULT false
+--
+-- false (the default for every existing and new row) keeps every event
+-- byte-identical to the previous release. The plugin reads it at connect.
+--
+-- Numbering: first written as 0080; renumbered to 0085 for the agreed merge
+-- order #1294 (0080), #1295 (0081), #1298 (0082), #1299 (0083), #1300 (0084),
+-- #1297 (this one, 0085), per the parallel-worktree rule (file name, journal
+-- idx/tag, and a `when` above the previous entry). A migration that landed is
+-- never touched.
+--
+-- Hand-written following the 0043/0044/0052 precedent (additive, idempotent).
+-- No explicit BEGIN/COMMIT — the boot migrator executes this file on a pooled
+-- postgres-js connection, which rejects raw transaction control.
+
+ALTER TABLE "instances" ADD COLUMN IF NOT EXISTS "inbound_reply_context" boolean NOT NULL DEFAULT false;

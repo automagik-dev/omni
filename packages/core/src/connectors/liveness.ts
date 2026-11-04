@@ -26,7 +26,7 @@ import type { Logger } from '../logger';
  * Liveness state of a supervised source. Kept in sync with:
  *   - `packages/db/src/schema.ts` → `connectorLivenessStatuses` const tuple
  */
-export type ConnectorLivenessState = 'healthy' | 'stalled';
+export type ConnectorLivenessState = 'healthy' | 'stalled' | 'disabled';
 
 /** Which signal last reset the liveness window. */
 export type ConnectorSignalKind = 'event' | 'heartbeat' | 'rearmed';
@@ -173,6 +173,7 @@ async function processRow(
   const silentMs = Math.max(0, now.getTime() - signal.at.getTime());
   const overdue = silentMs > row.expectedIntervalSeconds * 1000;
   const silentForSeconds = Math.round(silentMs / 1000);
+  if (row.livenessStatus === 'disabled') return; // poll allowlist unset (#1239) — not a stall
 
   if (overdue) {
     if (row.livenessStatus === 'stalled') return; // transition already announced
@@ -187,6 +188,7 @@ async function processRow(
       silentForSeconds,
       stalledAt: now.getTime(),
     };
+    deps.logger.warn('connector stalled', { sourceName: row.name, silentForSeconds });
     await publishTransition(deps, 'system.connector.stalled', { ...payload }, row);
     stats.stalled += 1;
     return;
@@ -204,6 +206,10 @@ async function processRow(
       recoveredBy: signal.kind,
       recoveredAt: now.getTime(),
     };
+    deps.logger.info('connector recovered', {
+      sourceName: row.name,
+      stalledForSeconds: payload.stalledForSeconds,
+    });
     await publishTransition(deps, 'system.connector.recovered', { ...payload }, row);
     stats.recovered += 1;
   }

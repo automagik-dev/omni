@@ -380,12 +380,27 @@ export function createSourcesCommand(): Command {
       'Create a supervised pull connector: omni runs --command every --interval seconds and ingests each JSON stdout line (command must live inside the API host OMNI_POLL_COMMAND_DIR)',
     )
     .requiredOption('--command <path>', 'Executable to run (no shell, no arguments)')
-    .requiredOption('--interval <seconds>', 'Seconds between runs (min 10); failures back off exponentially')
+    .requiredOption(
+      '--interval <seconds>',
+      'Seconds between runs (min 10); failures back off exponentially up to --max-backoff',
+    )
+    .option('--max-backoff <seconds>', 'Backoff ceiling in seconds (default 3600)')
     .requiredOption('--emit-type <type>', 'Event type for each stdout line (custom.*)')
     .option('--dedup-key <template>', "Idempotency key template, e.g. '{payload.message_id}'")
     .option('--expected-interval <seconds>', 'Liveness window (default: 2x --interval)')
     .option('--env <KEY=VALUE...>', 'Environment variables for the command (repeatable)')
     .option('--description <desc>', 'Description')
+    .addHelpText(
+      'after',
+      `
+Exit codes:
+  exit 0            success: each JSON stdout line is ingested (empty stdout = nothing new)
+  exit != 0         failure, EVEN WITH EMPTY STDOUT, and backs off. Shell pipelines often
+                    exit 1 on "no matches" (grep, set -o pipefail): end them with "|| true"
+                    or "exit 0" when an empty result is normal.
+  Config errors (OMNI_POLL_COMMAND_DIR unset, command missing) retry every min(interval, 300s)
+  without backing off.`,
+    )
     .action(
       async (
         name: string,
@@ -397,6 +412,7 @@ export function createSourcesCommand(): Command {
           expectedInterval?: string;
           env?: string[];
           description?: string;
+          maxBackoff?: string;
         },
       ) => {
         const intervalSeconds = Number(options.interval);
@@ -419,6 +435,7 @@ export function createSourcesCommand(): Command {
                 emitType: options.emitType,
                 ...(options.dedupKey && { dedupKeyTemplate: options.dedupKey }),
                 ...(options.env && { env }),
+                ...(options.maxBackoff && { maxBackoffSeconds: Number(options.maxBackoff) }),
               },
             }),
           });

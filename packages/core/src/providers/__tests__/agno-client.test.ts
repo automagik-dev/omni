@@ -511,94 +511,42 @@ describe('AgnoClient', () => {
 
   // --- Agno-specific list methods (used internally by discover) ---
 
-  describe('listAgents', () => {
-    it('returns list of agents on success', async () => {
-      const agents = [
-        { id: 'agent-1', name: 'Test Agent' },
-        { id: 'agent-2', name: 'Another Agent' },
-      ];
+  describe('list methods', () => {
+    it.each([
+      [
+        'listAgents',
+        [
+          { id: 'agent-1', name: 'Test Agent' },
+          { id: 'agent-2', name: 'Another Agent' },
+        ],
+      ],
+      ['listTeams', [{ id: 'team-1', name: 'Test Team' }]],
+      ['listWorkflows', [{ id: 'wf-1', name: 'Test Workflow' }]],
+    ] satisfies ['listAgents' | 'listTeams' | 'listWorkflows', { id: string; name: string }[]][])(
+      '%s returns its list on success',
+      async (method, payload) => {
+        mockImpl.mockResolvedValueOnce(
+          new Response(JSON.stringify(payload), {
+            status: 200,
+            headers: { 'Content-Type': 'application/json' },
+          }),
+        );
+        const client = new AgnoClient(config);
+        expect(await client[method]()).toEqual(payload);
+        expect(mockImpl).toHaveBeenCalledTimes(1);
+      },
+    );
 
-      mockImpl.mockResolvedValueOnce(
-        new Response(JSON.stringify(agents), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-
+    it.each([
+      [401, 'AUTHENTICATION_FAILED'],
+      [404, 'NOT_FOUND'],
+      [500, 'SERVER_ERROR'],
+    ] as const)('listAgents maps HTTP %i to %s', async (status, code) => {
+      mockImpl.mockResolvedValueOnce(new Response('Error', { status }));
       const client = new AgnoClient(config);
-      const result = await client.listAgents();
-
-      expect(result).toEqual(agents);
-      expect(mockImpl).toHaveBeenCalledTimes(1);
-    });
-
-    it('throws AUTHENTICATION_FAILED on 401', async () => {
-      mockImpl.mockResolvedValueOnce(new Response('Unauthorized', { status: 401 }));
-
-      const client = new AgnoClient(config);
-
-      try {
-        await client.listAgents();
-        expect.unreachable('Should have thrown');
-      } catch (error) {
-        expect(error).toBeInstanceOf(ProviderError);
-        expect((error as ProviderError).code).toBe('AUTHENTICATION_FAILED');
-        expect((error as ProviderError).statusCode).toBe(401);
-      }
-    });
-
-    it('throws NOT_FOUND on 404', async () => {
-      mockImpl.mockResolvedValueOnce(new Response('Not Found', { status: 404 }));
-
-      const client = new AgnoClient(config);
-
-      await expect(client.listAgents()).rejects.toThrow(ProviderError);
-    });
-
-    it('throws SERVER_ERROR on 500', async () => {
-      mockImpl.mockResolvedValueOnce(new Response('Internal Error', { status: 500 }));
-
-      const client = new AgnoClient(config);
-
-      await expect(client.listAgents()).rejects.toMatchObject({
-        code: 'SERVER_ERROR',
-      });
-    });
-  });
-
-  describe('listTeams', () => {
-    it('returns list of teams on success', async () => {
-      const teams = [{ id: 'team-1', name: 'Test Team' }];
-
-      mockImpl.mockResolvedValueOnce(
-        new Response(JSON.stringify(teams), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-
-      const client = new AgnoClient(config);
-      const result = await client.listTeams();
-
-      expect(result).toEqual(teams);
-    });
-  });
-
-  describe('listWorkflows', () => {
-    it('returns list of workflows on success', async () => {
-      const workflows = [{ id: 'wf-1', name: 'Test Workflow' }];
-
-      mockImpl.mockResolvedValueOnce(
-        new Response(JSON.stringify(workflows), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      );
-
-      const client = new AgnoClient(config);
-      const result = await client.listWorkflows();
-
-      expect(result).toEqual(workflows);
+      const result = client.listAgents();
+      await expect(result).rejects.toBeInstanceOf(ProviderError);
+      await expect(result).rejects.toMatchObject({ code, statusCode: status });
     });
   });
 

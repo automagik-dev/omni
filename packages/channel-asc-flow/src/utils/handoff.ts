@@ -43,6 +43,14 @@ const FILA_PATTERN = /^[A-Za-z0-9_.-]+$/;
 const MOTIVO_MAX_LENGTH = 255;
 
 /**
+ * `u_codigoOperadora` — the operator/company code the Genesys routing appends
+ * to a fixed queue prefix when one ASC channel serves several operators.
+ * Digits only, 1-3 characters. A malformed value in a routing field is worse
+ * than an empty one, so anything else is forwarded as `""`.
+ */
+const CODIGO_OPERADORA_PATTERN = /^\d{1,3}$/;
+
+/**
  * Which of the two MUTUALLY EXCLUSIVE handoff destinations this instance uses.
  *
  * Measured live on atendimento 22286567 (flow #225, 03/09): `POST
@@ -87,6 +95,8 @@ export interface HandoffPlan {
     vinculo_vq?: string;
     plano_vq?: string;
     filial_vq?: string;
+    /** Operator code → `u_codigoOperadora`. Always present on a handoff turn, `""` when unknown. */
+    codigo_operadora_vq?: string;
   };
 }
 
@@ -251,5 +261,24 @@ function buildGenesysFields(
     fields[key] = raw.replace(/\s+/g, ' ').trim().slice(0, IDENTITY_MAX_LENGTH);
   }
 
+  fields.codigo_operadora_vq = readCodigoOperadora(read('codigo_operadora_vq'), logger);
+
   return fields;
+}
+
+/**
+ * Optional for routing (unlike `fila_vq`), so it never refuses the handoff.
+ * Forwarded even when empty for the same all-or-nothing `store` reason as the
+ * identity fields; an empty value is what the flow received before the field
+ * existed, so it changes no routing.
+ */
+function readCodigoOperadora(raw: unknown, logger: Logger): string {
+  const codigo = typeof raw === 'string' ? raw.trim() : '';
+  if (CODIGO_OPERADORA_PATTERN.test(codigo)) return codigo;
+  if (raw !== undefined && raw !== null && raw !== '') {
+    logger.warn('[asc-flow] codigo_operadora_vq forwarded empty: value does not match the accepted shape', {
+      received: raw,
+    });
+  }
+  return '';
 }

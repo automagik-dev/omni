@@ -1,0 +1,185 @@
+// Builds client.js, the browser half, from the modules in src/client, and the canvas files
+// the host reads: Omni's authoring prompt and the bundled canvas check.
+//
+//   node scripts/build-client.mjs           writes them
+//   node scripts/build-client.mjs --check   exits 1 when one differs from a fresh build
+//
+// client.js is committed, so `link:` and git installs need no build step. DSH loads it as
+// a classic script that hands a factory to its module loader; `require` resolves the
+// shell-seeded platform modules (react, react-dom, react/jsx-runtime) and the bundles this
+// package names in dsh.client.external (the Bot team's and channels' clients), so all of
+// them stay external.
+import { readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { build } from 'esbuild'
+import { createLibrary, defineComponent, markReactive } from '@openuidev/lang-core'
+import { libraryOf, PROMPT_OPTIONS } from '../src/client/omni-ui-spec.js'
+
+const PLUGIN = dirname(dirname(fileURLToPath(import.meta.url)))
+const MANIFEST = JSON.parse(readFileSync(join(PLUGIN, 'package.json'), 'utf8'))
+// DSH's client loader matches a bundle's id to the npm package that ships it.
+const PACKAGE_NAME = MANIFEST.name
+const OUTPUT = join(PLUGIN, 'client.js')
+// Omni's OpenUI authoring prompt, written from the same component definitions the client
+// renders, so the host needs no OpenUI at run time.
+const PROMPT_OUTPUT = join(PLUGIN, 'src/host/omni-ui-prompt.js')
+// The canvas check for the host's show_canvas, bundled so the host needs no OpenUI or zod
+// installed (and never runs their install scripts).
+const CHECK_OUTPUT = join(PLUGIN, 'src/host/omni-ui-check.bundle.js')
+// react/jsx-runtime is seeded by the shell too (deepseek-harness packages/client/web/src/seed.ts);
+// OpenUI's renderer imports it.
+export const PLATFORM_MODULES = ['react', 'react/jsx-runtime', 'react-dom']
+// The other plugins' bundles this one requires, as dsh.client.external names them.
+export const EXTERNAL_BUNDLES = MANIFEST.dsh.client.external
+// The Bot team's client (automagik-dev/automagik), and the name it had before it moved there:
+// a DSH that still runs @automagik/omni-dsh hands the team's client over under that name.
+// dsh.client.external names both, so whichever is installed loads first.
+export const TEAM_CLIENT = '@automagik/bots-dsh/client'
+export const FORMER_TEAM_CLIENT = '@automagik/omni-dsh/client'
+
+// OpenUI validates with zod, whose namespace re-exports a translation of its error messages
+// for every language (~330 KB). Omni's canvases only need English ones.
+const zodEnglishOnly = {
+  name: 'zod-english-only',
+  setup(build) {
+    build.onResolve({ filter: /locales\/index\.js$/ }, args => (args.importer.includes('/node_modules/zod/') ? { path: 'zod-locales', namespace: 'zod-english-only' } : undefined))
+    build.onLoad({ filter: /.*/, namespace: 'zod-english-only' }, () => ({ contents: "export { default as en } from 'zod/v4/locales/en.js'", resolveDir: PLUGIN }))
+  },
+}
+
+// OpenUI's lang-core reports its use to PostHog (at run time when OPENUI_RUNTIME_TELEMETRY_ENABLED
+// is set). Omni sends nothing to anyone, so its bundles carry none of it: the switch always
+// reads off and the endpoint is gone. Each cut must find its text, and a bundle that still
+// names the endpoint or the switch fails the build.
+const TELEMETRY_CUTS = [
+  [/(function isRuntimeTelemetryEnabled\(env\) \{)[^}]*\}/, '$1\n\treturn false;\n}'],
+  [/(function getPostHogConfig\(env\) \{)[\s\S]*?\n\}/, '$1\n\treturn { apiKey: "", captureUrl: "" };\n}'],
+]
+export const TELEMETRY_TRACES = ['phc_', 'cloudfront.net', 'OPENUI_POSTHOG', 'OPENUI_RUNTIME_TELEMETRY_ENABLED']
+const openuiNoTelemetry = {
+  name: 'openui-no-telemetry',
+  setup(build) {
+    build.onLoad({ filter: /[\\/]@openuidev[\\/]lang-core[\\/]dist[\\/][^\\/]+\.mjs$/ }, args => {
+      let text = readFileSync(args.path, 'utf8')
+      if (!/function (isRuntimeTelemetryEnabled|getPostHogConfig)\(/.test(text)) return undefined
+      for (const [pattern, replacement] of TELEMETRY_CUTS) {
+        if (!pattern.test(text)) throw new Error(`OpenUI telemetry: ${pattern} matched nothing in ${args.path}`)
+        text = text.replace(pattern, replacement)
+      }
+      return { contents: text, loader: 'js' }
+    })
+  },
+}
+const withoutTelemetry = (text, name) => {
+  const left = TELEMETRY_TRACES.filter(trace => text.includes(trace))
+  if (left.length > 0) throw new Error(`${name} still carries OpenUI telemetry: ${left.join(', ')}`)
+  return text
+}
+
+export async function bundleClient() {
+  const result = await build({
+    // Region comments name sources relative to the plugin, wherever the script runs from.
+    absWorkingDir: PLUGIN,
+    entryPoints: ['src/client/index.js'],
+    bundle: true,
+    format: 'cjs',
+    platform: 'browser',
+    target: 'es2022',
+    external: [...PLATFORM_MODULES, ...EXTERNAL_BUNDLES],
+    // Every source declaration ships, used or not, as in the hand-written bundle.
+    treeShaking: false,
+    // Readable for debugging in the browser: no minification, and Chinese text stays text.
+    charset: 'utf8',
+    write: false,
+    logLevel: 'silent',
+    plugins: [zodEnglishOnly, openuiNoTelemetry],
+  })
+  if (result.warnings.length > 0) throw new Error(`esbuild warnings:\n${result.warnings.map(warning => warning.text).join('\n')}`)
+  withoutTelemetry(result.outputFiles[0].text, 'client.js')
+  return [
+    '// Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.',
+    'window.__ModuleLoader__.load({',
+    `  id: '${PACKAGE_NAME}',`,
+    '  factory: (dshRequire) => {',
+    // The Bot team's client, else the same bundle under its former name: a DSH that still
+    // runs @automagik/omni-dsh has no @automagik/bots-dsh, and a miss would stop the whole UI.
+    `const require = (spec) => { if (spec !== '${TEAM_CLIENT}') return dshRequire(spec); try { return dshRequire(spec) } catch (error) { try { return dshRequire('${FORMER_TEAM_CLIENT}') } catch { throw error } } }`,
+    'const module = { exports: {} }',
+    result.outputFiles[0].text.trimEnd(),
+    // The loader gets a plain exports object tagged as a module, as DSH's own bundles are.
+    'return Object.defineProperty({ ...module.exports }, Symbol.toStringTag, { value: \'Module\' })',
+    '  },',
+    '})',
+    '',
+  ].join('\n')
+}
+
+// OpenUI's prompt teaches its whole language. Omni's canvases have no Mutation and no forms,
+// so those sections go, and so do the lines that point at them. Each cut must find its text:
+// an OpenUI upgrade that moves it fails the build instead of teaching what cannot render.
+const DROPPED = ['Mutation — Write Operations', 'Interactive Filters', 'Forms', 'Data Workflow']
+const REWORDED = [
+  [/\nExample — mutation \+ refresh \+ reset \(PREFERRED pattern\):\n```\n[\s\S]*?```\n/, '\n'],
+  [/- @Run\(queryOrMutationRef\) — Execute a Mutation or re-fetch a Query \(ref must be a declared Query\/Mutation\)/, '- @Run(queryRef) — Re-fetch a Query'],
+  [/- If a @Run\(mutation\) step fails, remaining steps are skipped \(halt on failure\)\n/, ''],
+  [/Use these with Query\(\) for read operations or Mutation\(\) for write operations\. The LLM decides which is appropriate based on the tool's purpose\./, 'Use these with Query() to read.'],
+  [/CRITICAL: Use ONLY the tools listed above in Query\(\) and Mutation\(\) calls\.[^\n]*/, 'CRITICAL: Use ONLY the tools listed above in Query() calls. Never invent data: read it with a Query.'],
+  [/5\. Every visible filter \$binding appears in at least one Query args object\.\n/, ''],
+]
+
+export async function bundleCheck() {
+  const result = await build({
+    absWorkingDir: PLUGIN,
+    entryPoints: ['src/client/omni-ui-check.js'],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'node22',
+    minify: true,
+    legalComments: 'none',
+    charset: 'utf8',
+    write: false,
+    logLevel: 'silent',
+    plugins: [zodEnglishOnly, openuiNoTelemetry],
+  })
+  if (result.warnings.length > 0) throw new Error(`esbuild warnings:\n${result.warnings.map(warning => warning.text).join('\n')}`)
+  withoutTelemetry(result.outputFiles[0].text, 'src/host/omni-ui-check.bundle.js')
+  return `// Generated from src/client/omni-ui-check.js by \`npm run build\` (scripts/build-client.mjs). Do not edit by hand.\n// Bundles @openuidev/lang-core and zod (MIT; see NOTICE).\n${result.outputFiles[0].text}`
+}
+
+export function omniUiPrompt() {
+  const reactive = (schema) => { markReactive(schema); return schema }
+  let text = libraryOf({ createLibrary, defineComponent, reactive }).prompt(PROMPT_OPTIONS)
+  for (const title of DROPPED) {
+    const cut = text.replace(new RegExp(`\\n## ${title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n[\\s\\S]*?(?=\\n## )`), '')
+    if (cut === text) throw new Error(`OpenUI prompt: no "## ${title}" section to drop`)
+    text = cut
+  }
+  for (const [pattern, replacement] of REWORDED) {
+    if (!pattern.test(text)) throw new Error(`OpenUI prompt: ${pattern} matched nothing`)
+    text = text.replace(pattern, replacement)
+  }
+  if (/Mutation|FormControl|SelectItem/.test(text.replace(/Mutation\(\) is not available[^\n]*/, ''))) throw new Error('OpenUI prompt still teaches Mutation or forms')
+  return [
+    '// Generated from src/client/omni-ui-spec.js by `npm run build` (scripts/build-client.mjs). Do not edit by hand.',
+    `export const OMNI_UI_PROMPT = ${JSON.stringify(text)}`,
+    '',
+  ].join('\n')
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  const outputs = [[OUTPUT, await bundleClient(), 'client.js'], [PROMPT_OUTPUT, omniUiPrompt(), 'src/host/omni-ui-prompt.js'], [CHECK_OUTPUT, await bundleCheck(), 'src/host/omni-ui-check.bundle.js']]
+  for (const [file, next, name] of outputs) {
+    if (process.argv.includes('--check')) {
+      let current = null
+      try { current = readFileSync(file, 'utf8') } catch { /* missing counts as stale */ }
+      if (current !== next) {
+        console.error(`${name} is stale: run \`npm run build\` in apps/omni-canvas-dsh and commit the result`)
+        process.exit(1)
+      }
+    } else {
+      writeFileSync(file, next)
+    }
+  }
+}

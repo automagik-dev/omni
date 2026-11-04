@@ -223,6 +223,7 @@ O nó que fala com o Omni.
 | 2200002 | `hand_off` |
 | 2250002 | `motivo_transf_vq` |
 | 2250001 | `fila_vq` |
+| *(nova)* | `codigo_operadora_vq` |
 
 🔴 **`timeout: 45` é o teto de tudo.** O `ASC_FLOW_HOLD_MS` do plugin (40s por
 padrão) fica abaixo dele de propósito: segurar mais é responder num socket que o
@@ -289,7 +290,7 @@ Ponte para o Genesys Engage. `connection.cod_flow_componente_config: "1"`,
 | 7 | `displayName` | *(vazio)* |
 | 8 | `u_NomeBeneficiario` | *(vazio)* |
 | 9 | **`u_bot_motivo_transf`** | **`{#motivo_transf_vq}`** ← o motivo |
-| 10 | `u_codigoOperadora` | *(vazio)* |
+| 10 | **`u_codigoOperadora`** | **`{#codigo_operadora_vq}`** ← o código da operadora (dígitos, 1-3) |
 | 11 | `u_carteirinha_beneficiario_atendimento` | *(vazio)* |
 | 12 | `u_PJ_RazaoSocial` | *(vazio)* |
 | 13 | **`u_central_de_atendimento`** | **`WPP_TECNICA_GENESYS`** |
@@ -444,10 +445,10 @@ onde a ASC assume a conversa.
 1. Login com **"Permanecer no painel clássico"** marcado
 2. `api_rest`: URL apontando para a instância certa, `async: 0`, `timeout: 45`
 3. `api_rest` body com os **quatro** campos (`codAtendimento`, `chatInput`, `message`, `phone`)
-4. `api_rest` store mapeando os **quatro** retornos (`resposta`, `hand_off`, `motivo_transf_vq`, `fila_vq`)
+4. `api_rest` store mapeando os **quatro** retornos (`resposta`, `hand_off`, `motivo_transf_vq`, `fila_vq`) — e `codigo_operadora_vq` **só depois** de uma release com o plugin já a enviando (o store é tudo-ou-nada: um campo mapeado ausente do body zera `{#resposta}`)
 5. `aguarda_usuario.timeout` em **minutos de conversa**, não segundos de rede (300+)
 6. `dec_handoff` comparando `{#hand_off}` com `sim`
-7. `genesys_1` com `u_cod_transf = {#fila_vq}`, `u_bot_motivo_transf = {#motivo_transf_vq}`, `u_central_de_atendimento = WPP_TECNICA_GENESYS`
+7. `genesys_1` com `u_cod_transf = {#fila_vq}`, `u_bot_motivo_transf = {#motivo_transf_vq}`, `u_codigoOperadora = {#codigo_operadora_vq}`, `u_central_de_atendimento = WPP_TECNICA_GENESYS`
 8. flow com `integrate_genesys = 1`
 9. **Salvar e reabrir em aba nova para conferir**
 

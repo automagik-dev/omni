@@ -3,7 +3,7 @@
  */
 
 import type { ChannelRegistry } from '@omni/channel-sdk';
-import type { EventBus } from '@omni/core';
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { createMiddleware } from 'hono/factory';
 import { type Services, createServices } from '../services';
@@ -30,7 +30,7 @@ export interface ContextMiddlewareResult {
  */
 export function createContextMiddleware(
   db: Database,
-  eventBus: EventBus | null,
+  eventBus: (EventBus & ConnectorEventPublisher) | null,
   channelRegistry: ChannelRegistry | null = null,
 ): ContextMiddlewareResult {
   // Create services once

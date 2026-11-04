@@ -43,6 +43,12 @@ const mockGetMessages = mock();
 const mockListChats = mock();
 const mockGetChat = mock();
 mock.module('../client.js', () => ({
+  // Bun's module mocks are process-wide: every export another test file imports must exist.
+  exitNotAuthenticated: () => {
+    throw new Error('not authenticated');
+  },
+  getOptionalClient: () => null,
+  installActorHeader: () => {},
   getClient: () => ({
     chats: {
       get: mockGetChat,

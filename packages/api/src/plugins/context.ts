@@ -62,6 +62,8 @@ function createIngressClaim(db: Database): IngressClaim {
             status: 'received',
             idempotencyKey,
             receivedAt: new Date(),
+            // Skeleton row: the persistence fill sets it true (opt-in consumer readiness gate).
+            journalReady: false,
             metadata: { correlationId: id, source: `channel:${channelType}`, idempotencyKey },
             tenantId: resolvePublishTenantId(undefined, instanceId),
           })

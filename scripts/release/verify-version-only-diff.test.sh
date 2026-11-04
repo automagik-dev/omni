@@ -13,7 +13,7 @@ paths=(
   package.json bun.lock apps/ui/package.json deploy/helm/omni/Chart.yaml
   .claude-plugin/marketplace.json plugins/omni/.claude-plugin/plugin.json
 )
-for name in api channel-a2a channel-discord channel-gupshup channel-hermes channel-internal channel-sdk channel-slack channel-telegram channel-twilio-whatsapp channel-whatsapp channel-whatsapp-business cli core db media-processing plugin-openclaw sdk voice-client; do
+for name in api channel-a2a channel-discord channel-gupshup channel-hermes channel-internal channel-sdk channel-slack channel-telegram channel-twilio-whatsapp channel-whatsapp channel-whatsapp-business cli core db media-processing sdk voice-client; do
   paths+=("packages/${name}/package.json")
 done
 for path in "${paths[@]}"; do
@@ -33,9 +33,13 @@ PY
 git -C "${repo}" commit -qam clean-version-bump
 clean="$(git -C "${repo}" rev-parse HEAD)"
 (
+  # Exercise the pipe with more output than its buffer before and after the matched line.
+  printf '%1048576s\n' ''
   cd "${repo}"
-  "${SCRIPT}" --parent "${parent}" --source "${clean}" --expected-version 2.260830.2
-) | grep -qx 'version_only_diff_verified=true' || fail "exact version-only bump was rejected"
+  # Carry the script status out of this padded subshell; the || exit "$?" must stay.
+  "${SCRIPT}" --parent "${parent}" --source "${clean}" --expected-version 2.260830.2 || exit "$?"
+  printf '%1048576s\n' ''
+) | grep -x 'version_only_diff_verified=true' >/dev/null || fail "exact version-only bump was rejected (pipeline statuses: ${PIPESTATUS[*]})"
 
 git -C "${repo}" checkout -q -b malicious "${parent}"
 python3 - "${repo}" "${paths[@]}" <<'PY'

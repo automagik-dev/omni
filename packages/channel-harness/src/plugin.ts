@@ -165,6 +165,8 @@ export class HarnessChannelPlugin extends BaseChannelPlugin {
       // send here so the harness's own message.sent is self-describing.
       rawPayload: { harness: true, outgoing: structuredClone(verbatim) },
       systemNotice: message.metadata?.systemNotice === true,
+      // As the WhatsApp plugins do: an agent's reply arms the idle follow-up (#1263).
+      senderAgentId: message.metadata?.senderAgentId as string | undefined,
     });
     return { success: true, messageId: externalId, timestamp };
   }

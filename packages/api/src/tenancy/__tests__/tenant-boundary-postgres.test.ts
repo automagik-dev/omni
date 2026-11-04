@@ -24,7 +24,8 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { sql } from 'drizzle-orm';
 import { type PlatformAuthContext, type TenantAuthContext, freezeContext } from '../auth-context';
 import { withPlatformTargetTenant } from '../platform-target-tenant';
@@ -62,16 +63,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 function tenantContext(tenantId: string): TenantAuthContext {
@@ -123,7 +114,7 @@ postgresDescribe('tenant boundary end-to-end (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -145,12 +136,16 @@ postgresDescribe('tenant boundary end-to-end (real PostgreSQL)', () => {
 
     // max: 1 — every call below provably shares ONE physical connection, which
     // is what makes the leakage assertions meaningful.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 1);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      1,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
   }, 180_000);
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   describe('withTenantTransaction', () => {

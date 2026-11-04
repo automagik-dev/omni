@@ -23,8 +23,6 @@ import {
   timePicker,
   usersSelect,
 } from '../components/blocks';
-import type { CommandPayload } from '../handlers/commands';
-import type { SlackInteractionPayload } from '../types';
 
 // ─────────────────────────────────────────────────────────────
 // Action ID prefixing
@@ -229,52 +227,5 @@ describe('Modal view builder', () => {
       blocks: [],
     });
     expect(modal.private_metadata).toBe('');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// Type interfaces validation
-// ─────────────────────────────────────────────────────────────
-
-describe('Interaction payload types', () => {
-  it('SlackInteractionPayload has required fields', () => {
-    const payload: SlackInteractionPayload = {
-      instanceId: 'inst-1',
-      type: 'button',
-      actionId: 'omni:click',
-      userId: 'U12345',
-      value: 'clicked',
-    };
-    expect(payload.instanceId).toBe('inst-1');
-    expect(payload.type).toBe('button');
-    expect(payload.actionId).toBe('omni:click');
-  });
-
-  it('SlackInteractionPayload supports modal_submit type', () => {
-    const payload: SlackInteractionPayload = {
-      instanceId: 'inst-1',
-      type: 'modal_submit',
-      actionId: 'omni:form',
-      userId: 'U12345',
-      privateMetadata: '{"key":"val"}',
-      rawPayload: { view_state: {} },
-    };
-    expect(payload.type).toBe('modal_submit');
-    expect(payload.privateMetadata).toBe('{"key":"val"}');
-  });
-
-  it('CommandPayload has required fields', () => {
-    const payload: CommandPayload = {
-      instanceId: 'inst-1',
-      command: '/omni',
-      text: 'help',
-      userId: 'U12345',
-      channelId: 'C12345',
-      triggerId: 'T12345',
-      responseUrl: 'https://hooks.slack.com/commands/resp',
-    };
-    expect(payload.command).toBe('/omni');
-    expect(payload.text).toBe('help');
-    expect(payload.triggerId).toBe('T12345');
   });
 });

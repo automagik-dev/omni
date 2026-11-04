@@ -315,6 +315,45 @@ describe('syncTemplatesToDb', () => {
   });
 });
 
+describe('syncTemplatesToDb rejection reason (#1276)', () => {
+  it('stores no rejection reason when Meta sends the "NONE" placeholder', async () => {
+    const { db, calls } = fakeDb([mkLocalRow({ id: 'row-1', name: 'welcome', language: 'pt_BR', status: 'PENDING' })]);
+
+    await syncTemplatesToDb(db, INSTANCE_ID, WABA_ID, [
+      {
+        id: 'meta-1',
+        name: 'welcome',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        status: 'APPROVED',
+        rejected_reason: 'NONE',
+      },
+      {
+        id: 'meta-2',
+        name: 'fresh',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        status: 'PENDING',
+        rejected_reason: 'NONE',
+      },
+      {
+        id: 'meta-3',
+        name: 'bad',
+        language: 'pt_BR',
+        category: 'UTILITY',
+        status: 'REJECTED',
+        rejected_reason: 'INVALID_FORMAT',
+      },
+    ]);
+
+    expect(calls.updates[0]?.setPatch.rejectionReason).toBeNull();
+    expect((calls.inserts as NewWhatsappTemplate[]).map((row) => [row.name, row.rejectionReason])).toEqual([
+      ['fresh', null],
+      ['bad', 'INVALID_FORMAT'],
+    ]);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // handleTemplateStatusUpdate — emits `template.status_changed`
 // ─────────────────────────────────────────────────────────────────────────────

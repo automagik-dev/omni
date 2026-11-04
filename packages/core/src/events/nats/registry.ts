@@ -8,7 +8,7 @@
 
 import { type ZodSchema, z } from 'zod';
 import { createLogger } from '../../logger';
-import { isCoreEvent, isCustomEvent, isSystemEvent } from '../types';
+import { isConnectorEvent, isCoreEvent, isCustomEvent, isSystemEvent } from '../types';
 import type { StreamName } from './streams';
 
 const log = createLogger('nats:registry');
@@ -120,6 +120,12 @@ export class EventRegistry {
 
       if (isSystemEvent(eventType)) {
         // System events without schema are allowed (internal use)
+        return { success: true, data: payload };
+      }
+
+      if (isConnectorEvent(eventType)) {
+        // Connector types span provider payloads; a strict shared schema cannot
+        // exist; the manifest's parseDelivery is the boundary validator (D10).
         return { success: true, data: payload };
       }
 
@@ -305,6 +311,17 @@ export const SystemEventSchemas = {
       error: z.string().optional(),
     }),
     { description: 'A fire-and-forget call_agent run settled (completed or failed)' },
+  ),
+
+  // The market took a newer Automagik plugin lane (packages/api/src/market/lane.ts).
+  pluginLaneTaken: createEventSchema(
+    'system.plugin_lane.taken',
+    z.object({
+      sequence: z.number().int().nonnegative(),
+      version: z.string(),
+      plugins: z.array(z.object({ name: z.string(), version: z.string() })),
+    }),
+    { description: 'The market serves a newer plugin lane: its sequence, release and plugins' },
   ),
 };
 

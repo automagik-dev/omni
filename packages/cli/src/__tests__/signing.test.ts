@@ -32,14 +32,20 @@ import {
 } from '../signing';
 
 let tmpHome: string;
+let savedConfigDir: string | undefined;
 
 beforeEach(() => {
   tmpHome = mkdtempSync(join(tmpdir(), 'omni-signing-test-'));
+  savedConfigDir = process.env.OMNI_CONFIG_DIR;
   process.env.OMNI_CONFIG_DIR = tmpHome;
 });
 
 afterEach(() => {
-  process.env.OMNI_CONFIG_DIR = undefined;
+  // Not `= undefined` (biome's noDelete fix): that stores the string
+  // "undefined", which later CLI subprocesses (react-context.test.ts) inherit
+  // as their config dir.
+  if (savedConfigDir === undefined) Reflect.deleteProperty(process.env, 'OMNI_CONFIG_DIR');
+  else process.env.OMNI_CONFIG_DIR = savedConfigDir;
   rmSync(tmpHome, { recursive: true, force: true });
 });
 

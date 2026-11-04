@@ -27,6 +27,7 @@ import type {
 import type { Logger } from '../../logger';
 import type { FollowUpSequenceConfig } from '../../schemas/follow-up';
 import type { ChannelType } from '../../types/channel';
+import { quietHoursDeferral } from './quiet-hours';
 import { computeNextFireAt } from './schedule';
 
 /**
@@ -91,6 +92,8 @@ export interface FollowUpStateRepo {
 
   /** Mark a row disarmed without firing (e.g. `window_expired`). */
   recordDisarmed(id: string, reason: FollowUpDisarmReason, at: Date): Promise<void>;
+
+  recordDeferred(id: string, sequenceIndex: number, nextFireAt: Date, at: Date): Promise<void>;
 }
 
 /**
@@ -126,6 +129,7 @@ export interface SweepStats {
   fired: number;
   disarmed: number;
   skipped: number;
+  deferred: number;
 }
 
 const DEFAULT_BATCH_LIMIT = 100;
@@ -193,6 +197,7 @@ export async function sweepFollowUps(deps: SweeperDeps): Promise<SweepStats> {
     fired: 0,
     disarmed: 0,
     skipped: 0,
+    deferred: 0,
   };
 
   if (due.length === 0) {
@@ -218,6 +223,7 @@ export async function sweepFollowUps(deps: SweeperDeps): Promise<SweepStats> {
     fired: stats.fired,
     disarmed: stats.disarmed,
     skipped: stats.skipped,
+    deferred: stats.deferred,
   });
 
   return stats;
@@ -232,6 +238,22 @@ async function processRow(row: FollowUpStateRow, now: Date, deps: SweeperDeps, s
       stats.disarmed += 1;
       return;
     }
+  }
+
+  const { quietHours } = row.sequenceConfig;
+  const deferredUntil = quietHours ? quietHoursDeferral(quietHours, row.chatId, now) : null;
+  if (deferredUntil) {
+    await deps.repo.recordDeferred(row.id, row.sequenceIndex, deferredUntil, now);
+    const deferredPayload: FollowUpArmedPayload = {
+      chatId: row.chatId,
+      instanceId: row.instanceId,
+      agentId: row.agentId,
+      sequenceIndex: row.sequenceIndex,
+      nextFireAt: deferredUntil.getTime(),
+    };
+    await deps.eventBus.publish('follow_up.armed', deferredPayload, rowEventMetadata(row));
+    stats.deferred += 1;
+    return;
   }
 
   const minutesSince = Math.max(0, Math.round((now.getTime() - row.lastAgentMessageAt.getTime()) * MINUTES_PER_MS));

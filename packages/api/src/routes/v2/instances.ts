@@ -4,21 +4,49 @@
 
 import { zValidator } from '@hono/zod-validator';
 import type { ChannelPlugin, ChannelRegistry, GroupParticipantUpdateResult } from '@omni/channel-sdk';
-import { AccessModeSchema, ChannelTypeSchema, NotFoundError, createLogger } from '@omni/core';
-import type { GupshupHandoffOptions } from '@omni/db';
-import { Hono } from 'hono';
+import {
+  AccessModeSchema,
+  ChannelTypeSchema,
+  ExponentialScheduleSchema,
+  FixedScheduleSchema,
+  FollowUpSequenceConfigSchema,
+  NotFoundError,
+  createLogger,
+} from '@omni/core';
+import type { Database, GupshupHandoffOptions } from '@omni/db';
+import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
-import { DEFAULT_TURN_SCOPES } from '../../constants/scopes';
-import { agentKeyName } from '../../lib/agent-key-name';
+import { agentKeyNameCandidates } from '../../lib/agent-key-name';
+import { applyInboundReplyContextOption } from '../../lib/inbound-reply-context';
+import { runOutsideProducerScope } from '../../lib/producer-scope';
+import { readSignedHostScopeContext } from '../../lib/signed-host-scope-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../../lib/whatsapp-business-connection';
 import { filterByInstanceAccess, requireInstanceAccess } from '../../middleware/auth';
 import { invalidateProviderCacheForInstance } from '../../plugins/agent-dispatcher';
 import { getQrCode } from '../../plugins/qr-store';
-import { CloseContactConfigSchema, GupshupHandoffOptionsSchema } from '../../schemas/openapi/instances';
+import {
+  CloseContactConfigSchema,
+  GupshupHandoffOptionsSchema,
+  InstanceSettingsSchema,
+  SelfChatsSchema,
+  SelfHistorySchema,
+  SelfMessagesSchema,
+  SelfReceiptSchema,
+} from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
+import { syncLockedAgentKey } from '../../services/agent-key-bindings';
 import { AgentReplayService } from '../../services/agent-replay';
+import { ApiKeyService } from '../../services/api-keys';
+import {
+  readOwnedChats,
+  readOwnedHistory,
+  readSelfMessages,
+  readSelfReceipt,
+  selfPlugin,
+  verifySelf,
+} from '../../services/whatsapp-self';
 import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
@@ -89,11 +117,29 @@ const createInstanceSchema = z.object({
     .enum(['convert', 'passthrough'])
     .default('convert')
     .describe('Format conversion: convert markdown to native channel syntax, or passthrough raw text'),
+  outboundPacing: z
+    .enum(['humanized', 'immediate'])
+    .default('humanized')
+    .describe(
+      "Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance",
+    ),
+  outboundPacingOverride: z
+    .boolean()
+    .default(false)
+    .describe(
+      "Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403",
+    ),
   isDefault: z.boolean().default(false).describe('Set as default instance for channel'),
   token: z.string().optional().describe('Bot token for Discord instances (required for Discord)'),
   ttsVoiceId: z.string().optional().nullable().describe('Default ElevenLabs voice ID for this instance'),
   ttsModelId: z.string().optional().nullable().describe('Default ElevenLabs model for this instance'),
   accessMode: AccessModeSchema.optional().describe('Access control mode: disabled, blocklist, or allowlist'),
+  audioTranscription: z
+    .enum(['auto', 'off'])
+    .default('auto')
+    .describe(
+      "Server-side transcription of inbound audio: 'auto' (default, transcribed as always) or 'off' (stored but never sent to STT; a skipped media.processed is emitted instead)",
+    ),
   agentWaitForMedia: z.boolean().default(true).describe('Wait for media processing before dispatching to agent'),
   agentSendMediaPath: z.boolean().default(true).describe('Include file path in formatted media text sent to agent'),
   agentSendMediaPathTypes: z
@@ -276,6 +322,12 @@ const createInstanceSchema = z.object({
     .boolean()
     .default(false)
     .describe('WhatsApp (Baileys): request full message history on connect (default: false)'),
+  inboundReplyContext: z
+    .boolean()
+    .default(false)
+    .describe(
+      'WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it',
+    ),
   reactionAck: z
     .enum(['on', 'off'])
     .default('off')
@@ -390,9 +442,11 @@ const updateInstanceSchema = createInstanceSchema
     // Override fields with .default() to strip the default — omitted keys must stay undefined
     // so PATCH only updates what is explicitly sent (not reset to defaults)
     readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+    audioTranscription: z.enum(['auto', 'off']).optional(),
     markOnlineOnConnect: z.boolean().optional(),
     historyIdentity: z.enum(['desktop', 'web']).optional(),
     syncFullHistory: z.boolean().optional(),
+    inboundReplyContext: z.boolean().optional(),
     groupHistorySize: z.number().int().min(0).max(200).optional(),
     reactionAck: z.enum(['on', 'off']).optional(),
     reactionAckEmoji: z.record(z.string()).nullable().optional(),
@@ -409,6 +463,22 @@ const updateInstanceSchema = createInstanceSchema
     // omits this key doesn't silently flip the stored value back to false.
     requireGenieSignature: z.boolean().optional(),
     allowFirstParty: z.boolean().optional(),
+    // Strip the .default('humanized') so a PATCH that omits it never resets the stored pacing.
+    outboundPacing: z.enum(['humanized', 'immediate']).optional(),
+    outboundPacingOverride: z.boolean().optional(),
+  })
+  .extend(InstanceSettingsSchema.shape)
+  .extend({
+    agentReplyFilter: agentReplyFilterSchema.nullable().optional(),
+    // #1403: core's rules (quiet hours included), with unknown schedule keys rejected, not stripped.
+    followUpConfig: FollowUpSequenceConfigSchema.extend({
+      schedule: z.discriminatedUnion('kind', [FixedScheduleSchema.strict(), ExponentialScheduleSchema.strict()]),
+    })
+      .nullable()
+      .optional(),
+    metaConnectedAt: InstanceSettingsSchema.shape.metaConnectedAt.transform((value) =>
+      typeof value === 'string' ? new Date(value) : value,
+    ),
   })
   // #1211: reject unknown fields (400 naming the key) instead of silently stripping them.
   .strict();
@@ -883,11 +953,13 @@ async function connectInstanceWithPlugin(
   options: Record<string, unknown>,
 ): Promise<string | undefined> {
   try {
-    await plugin.connect(instanceId, {
-      instanceId,
-      credentials: {},
-      options,
-    });
+    await runOutsideProducerScope(() =>
+      plugin.connect(instanceId, {
+        instanceId,
+        credentials: {},
+        options,
+      }),
+    );
     return undefined;
   } catch (error) {
     return error instanceof Error ? error.message : 'Unknown error';
@@ -1080,6 +1152,32 @@ async function findSlackBotModeConflict(
   return other ? { id: other.id, name: other.name } : null;
 }
 
+/**
+ * Guard: only a full-access ('*') key may turn outboundPacingOverride on —
+ * the flag lets per-request `pacing: 'immediate'` skip the humanized anti-ban
+ * pacing. Omitting it or setting false is open to any key that may write the
+ * instance. Same in-handler 403 shape as requireAdmin in turns.ts; a signed
+ * host must be full-access too, as the scope-ceiling check in keys.ts requires.
+ */
+function denyPacingOverrideForScopedKey(
+  c: Context<{ Variables: AppVariables }>,
+  outboundPacingOverride: boolean | undefined,
+): Response | null {
+  if (outboundPacingOverride !== true) return null;
+  const signedHost = readSignedHostScopeContext(c);
+  const hostAllows = signedHost.kind === 'unsigned' || (signedHost.kind === 'valid' && signedHost.scopes.includes('*'));
+  if (hostAllows && c.get('apiKey')?.scopes.includes('*')) return null;
+  return c.json(
+    {
+      error: {
+        code: 'FORBIDDEN',
+        message: 'Setting outboundPacingOverride to true requires a full-access (*) API key',
+      },
+    },
+    403,
+  );
+}
+
 function slackAppTokenConflictBody(other: { id: string; name: string }) {
   return {
     error: {
@@ -1095,6 +1193,8 @@ function slackAppTokenConflictBody(other: { id: string; name: string }) {
  */
 instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) => {
   const { force, ...data } = c.req.valid('json');
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
   const services = c.get('services');
 
   // A create carries no workspace yet (the team id is learned on first
@@ -1133,6 +1233,9 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 
   // Create the database record first
   const instance = await services.instances.create(data);
+  if (instance.agentId) {
+    await handleAgentKeyProvisioning(services, instance.id, instance.agentId, null, instance.tenantId);
+  }
 
   const connectionOptions = buildInstanceConnectionOptions({
     channel: data.channel,
@@ -1187,10 +1290,36 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     );
   }
 
+  applyInboundReplyContextOption(connectionOptions, instance);
   await triggerCreateConnection(channelRegistry, data.channel, instance.id, connectionOptions);
 
   return c.json({ data: sanitizeInstance(instance) }, 201);
 });
+
+async function denyInstanceUpdate(c: Context<{ Variables: AppVariables }>, data: z.infer<typeof updateInstanceSchema>) {
+  const pacingDenied = denyPacingOverrideForScopedKey(c, data.outboundPacingOverride);
+  if (pacingDenied) return pacingDenied;
+  if (!data.agentChainToInstanceId && (!data.chainMode || data.chainMode === 'off')) return;
+  const services = c.get('services');
+  const id = c.req.param('id') ?? '';
+  const targetId =
+    data.agentChainToInstanceId !== undefined
+      ? data.agentChainToInstanceId
+      : (await services.instances.getById(id)).agentChainToInstanceId;
+  if (!targetId) return;
+  if (targetId.toLowerCase() === id.toLowerCase()) {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'An instance cannot chain to itself' } }, 400);
+  }
+  const key = c.get('apiKey');
+  const denied = () => c.json({ error: { code: 'FORBIDDEN', message: 'Chain target is not accessible' } }, 403);
+  if (!key || !ApiKeyService.instanceAllowed(key.instanceIds, targetId)) return denied();
+  try {
+    await services.instances.getById(targetId);
+  } catch (error) {
+    if (!(error instanceof NotFoundError)) throw error;
+    return denied();
+  }
+}
 
 /**
  * PATCH /instances/:id - Update instance
@@ -1198,6 +1327,8 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
 instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceSchema), async (c) => {
   const id = c.req.param('id');
   const { force, ...data } = c.req.valid('json');
+  const denied = await denyInstanceUpdate(c, data);
+  if (denied) return denied;
   const services = c.get('services');
 
   // The conflict is keyed on the PAIR (app token, bot mode), so either field
@@ -1264,14 +1395,7 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
 
   // Auto-provision/update scoped API key on agent assignment change
   if (data.agentId !== undefined && data.agentId !== oldAgentId) {
-    const authContext = c.get('authContext');
-    await handleAgentKeyProvisioning(
-      services,
-      id,
-      data.agentId,
-      oldAgentId ?? null,
-      authContext?.credentialClass === 'tenant' ? authContext.tenantId : null,
-    );
+    await handleAgentKeyProvisioning(services, id, data.agentId, oldAgentId ?? null, instance.tenantId);
   }
 
   return c.json({ data: sanitizeInstance(await withAgentProviderId(services, instance)) });
@@ -1280,9 +1404,9 @@ instancesRoutes.patch('/:id', instanceAccess, zValidator('json', updateInstanceS
 /**
  * Auto-provision or update a scoped API key when an agent is assigned to an instance.
  * - Assign: creates or updates key `agent:<name>` with instanceIds including this instance
- * - Unassign: removes instanceId from the old agent's key
+ * - Unassign: removes instanceId, revoking the old key when its last instance leaves
  *
- * `tenantId` is the calling credential's tenant, or null for a legacy request;
+ * `tenantId` is the stored instance's tenant, or null for a legacy instance;
  * see `agentKeyName` for why it participates in the key name.
  */
 async function handleAgentKeyProvisioning(
@@ -1292,18 +1416,35 @@ async function handleAgentKeyProvisioning(
   oldAgentId: string | null,
   tenantId: string | null,
 ) {
+  const agentIds = [oldAgentId, newAgentId].filter((id): id is string => id !== null);
+  await services.apiKeys.withAgentKeyLock(agentIds, async (apiKeys, db) => {
+    const lockedServices = {
+      ...services,
+      apiKeys,
+      agents: services.agents.withDatabase(db),
+      instances: services.instances.withDatabase(db),
+      routes: services.routes.withDatabase(db),
+    };
+    await provisionLockedAgentKey(lockedServices, instanceId, newAgentId, oldAgentId, tenantId, db);
+  });
+}
+
+/** Reads and updates below share the route writer's per-agent transaction lock. */
+async function provisionLockedAgentKey(
+  services: Services,
+  instanceId: string,
+  newAgentId: string | null,
+  oldAgentId: string | null,
+  tenantId: string | null,
+  db: Database,
+) {
   // Remove instance from old agent's key
   if (oldAgentId) {
     try {
       const oldAgent = await services.agents.getById(oldAgentId);
-      const keyName = agentKeyName(oldAgent.name, tenantId);
-      const existingKey = await services.apiKeys.findByName(keyName);
-      if (existingKey?.instanceIds) {
-        const updated = existingKey.instanceIds.filter((id) => id !== instanceId);
-        await services.apiKeys.update(existingKey.id, {
-          instanceIds: updated.length > 0 ? updated : null,
-        });
-        log.info('Removed instance from agent key', { keyName, instanceId });
+      const routes = await services.routes.list(instanceId);
+      if (!routes.some((route) => route.agentId === oldAgentId)) {
+        await removeInstanceFromAgentKeys(services, instanceId, oldAgent.name, tenantId);
       }
     } catch (err) {
       log.error('Failed to remove instance from old agent key', { oldAgentId, instanceId, error: String(err) });
@@ -1313,36 +1454,34 @@ async function handleAgentKeyProvisioning(
   // Add instance to new agent's key (or create key)
   if (newAgentId) {
     try {
-      const agent = await services.agents.getById(newAgentId);
-      const keyName = agentKeyName(agent.name, tenantId);
-      const existingKey = await services.apiKeys.findByName(keyName);
-
-      if (existingKey) {
-        // Add instanceId to existing key's instanceIds
-        const currentIds = existingKey.instanceIds ?? [];
-        if (!currentIds.includes(instanceId)) {
-          await services.apiKeys.update(existingKey.id, {
-            instanceIds: [...currentIds, instanceId],
-          });
-          log.info('Added instance to existing agent key', { keyName, instanceId });
-        }
-      } else {
-        // Create new scoped API key for this agent
-        // Use agent's declared omniScopes if available, otherwise fall back to DEFAULT_TURN_SCOPES
-        const agentScopes = Array.isArray(agent.metadata?.omniScopes)
-          ? (agent.metadata.omniScopes as string[])
-          : [...DEFAULT_TURN_SCOPES];
-        const result = await services.apiKeys.create({
-          name: keyName,
-          description: `Auto-provisioned scoped key for agent ${agent.name}`,
-          scopes: agentScopes,
-          instanceIds: [instanceId],
-          createdBy: 'system:auto-provision',
-        });
-        log.info('Created scoped agent key', { keyName, instanceId, keyId: result.key.id });
-      }
+      await syncLockedAgentKey(services.apiKeys, db, instanceId, newAgentId);
     } catch (err) {
       log.error('Failed to provision agent key', { newAgentId, instanceId, error: String(err) });
+    }
+  }
+}
+
+/** Remove every matching scoped grant, including legacy names and duplicate rows. */
+async function removeInstanceFromAgentKeys(
+  services: Services,
+  instanceId: string,
+  agentName: string,
+  tenantId: string | null,
+): Promise<void> {
+  const keys = await services.apiKeys.findAgentKeysByNames(agentKeyNameCandidates(agentName, tenantId));
+  for (const key of keys) {
+    if (!key.instanceIds?.includes(instanceId)) continue;
+    try {
+      const updated = key.instanceIds.filter((id) => id !== instanceId);
+      if (updated.length === 0) {
+        await services.apiKeys.revoke(key.id, 'Agent has no assigned instances', 'system:auto-provision');
+        log.info('Revoked agent key after its last instance was removed', { keyName: key.name, instanceId });
+      } else {
+        await services.apiKeys.update(key.id, { instanceIds: updated });
+        log.info('Removed instance from agent key', { keyName: key.name, instanceId });
+      }
+    } catch (err) {
+      log.error('Failed to remove instance from agent key', { keyId: key.id, instanceId, error: String(err) });
     }
   }
 }
@@ -1386,6 +1525,52 @@ instancesRoutes.delete('/:id', instanceAccess, async (c) => {
 /**
  * GET /instances/:id/status - Get instance connection status
  */
+instancesRoutes.get('/:id/self', instanceAccess, async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json({ data: verifySelf(plugin, instance.id) });
+  } catch {
+    return c.json({ error: { code: 'SELF_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.get('/:id/self/chats', instanceAccess, zValidator('query', SelfChatsSchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json(await readOwnedChats(c.get('db'), plugin, instance.id, c.req.valid('query').cursor));
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.post('/:id/self/messages', instanceAccess, zValidator('json', SelfMessagesSchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json(await readSelfMessages(c.get('db'), plugin, instance.id, c.req.valid('json')));
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.post('/:id/self/receipt', instanceAccess, zValidator('json', SelfReceiptSchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json({ data: await readSelfReceipt(c.get('db'), plugin, instance.id, c.req.valid('json')) });
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+instancesRoutes.post('/:id/self/history', instanceAccess, zValidator('json', SelfHistorySchema), async (c) => {
+  try {
+    const instance = await c.get('services').instances.getById(c.req.param('id'));
+    const plugin = selfPlugin(c.get('channelRegistry')?.get(instance.channel));
+    return c.json(await readOwnedHistory(c.get('db'), plugin, instance.id, c.req.valid('json')));
+  } catch {
+    return c.json({ error: { code: 'SELF_READ_UNAVAILABLE' } }, 409);
+  }
+});
+
 instancesRoutes.get('/:id/status', instanceAccess, async (c) => {
   const id = c.req.param('id');
   const services = c.get('services');
@@ -1782,9 +1967,20 @@ function hydrateConnectionOptionsForInstance(
 /** Persisted Baileys socket settings; a connect body's `whatsapp` still overrides them. */
 function applyWhatsAppBaileysOptions(
   options: Record<string, unknown>,
-  instance: Pick<InstanceRecord, 'channel' | 'markOnlineOnConnect' | 'historyIdentity' | 'syncFullHistory'>,
+  instance: Pick<
+    InstanceRecord,
+    | 'channel'
+    | 'markOnlineOnConnect'
+    | 'historyIdentity'
+    | 'syncFullHistory'
+    | 'downloadMediaOnSync'
+    | 'inboundReplyContext'
+  >,
 ): void {
   if (instance.channel !== 'whatsapp-baileys') return;
+  // Decides media download for the history WhatsApp pushes after pairing (#1280).
+  options.downloadMediaOnSync = instance.downloadMediaOnSync;
+  applyInboundReplyContextOption(options, instance);
   options.whatsapp = {
     historyIdentity: instance.historyIdentity,
     syncFullHistory: instance.syncFullHistory,
@@ -2032,7 +2228,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     // Persisted WhatsApp socket settings on restart (GH #310, #1211)
     applyWhatsAppBaileysOptions(restartOptions, instance);
-    await plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions });
+    await runOutsideProducerScope(() =>
+      plugin.connect(id, { instanceId: id, credentials: {}, options: restartOptions }),
+    );
   } catch (error) {
     return c.json(
       {

@@ -11,6 +11,7 @@ import type { EventBus } from '@omni/core';
 import { NotFoundError } from '@omni/core';
 import type { Database } from '@omni/db';
 import {
+  type ChannelType,
   type DeliveryStatus,
   type EditHistoryEntry,
   type Message,
@@ -22,7 +23,7 @@ import {
   chats,
   messages,
 } from '@omni/db';
-import { and, count, desc, eq, gte, ilike, inArray, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 import { sanitizeText } from '../utils/utf8';
@@ -157,6 +158,52 @@ function buildMessagePreview(options: CreateMessageOptions): string {
   // message row, so an unsanitized preview would fail the insert just as an
   // unsanitized `textContent` would.
   return sanitizeMessageText(preview.substring(0, 500));
+}
+
+/**
+ * Channels where a user holds at most one reaction per message: a new emoji
+ * from the same user replaces the previous one (WhatsApp semantics). Every
+ * other channel lets a user stack several reactions on one message.
+ */
+const SINGLE_REACTION_PER_USER_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>([
+  'whatsapp-baileys',
+  'whatsapp-business',
+]);
+
+/**
+ * Delivery receipts only move forward: `pending < sent < delivered < read`.
+ * For each status, the statuses a message must not already hold for it to
+ * apply. `failed` is outside the order (`markDeliveryFailed` owns its guard).
+ */
+const DELIVERY_STATUS_AT_OR_PAST: Readonly<Record<DeliveryStatus, readonly DeliveryStatus[] | null>> = {
+  pending: ['pending', 'sent', 'delivered', 'read'],
+  sent: ['sent', 'delivered', 'read'],
+  delivered: ['delivered', 'read'],
+  read: ['read'],
+  failed: null,
+};
+
+/**
+ * Drop `platformUserId`'s reactions whose emoji differs from `emoji`, and
+ * decrement their counts (deleting a key that reaches zero).
+ */
+function dropOtherEmojisOfUser(
+  reactions: ReactionInfo[],
+  counts: Record<string, number>,
+  platformUserId: string,
+  emoji: string,
+): { kept: ReactionInfo[]; counts: Record<string, number>; dropped: number } {
+  const kept = reactions.filter((r) => !(r.platformUserId === platformUserId && r.emoji !== emoji));
+  const newCounts = { ...counts };
+  for (const removed of reactions.filter((r) => !kept.includes(r))) {
+    const count = (newCounts[removed.emoji] ?? 0) - 1;
+    if (count > 0) {
+      newCounts[removed.emoji] = count;
+    } else {
+      delete newCounts[removed.emoji];
+    }
+  }
+  return { kept, counts: newCounts, dropped: reactions.length - kept.length };
 }
 
 export class MessageService {
@@ -698,9 +745,19 @@ export class MessageService {
   // =========================================================================
 
   /**
-   * Add a reaction to a message
+   * Add a reaction to a message.
+   *
+   * On a WhatsApp channel (`whatsapp-baileys`, `whatsapp-business`) a user holds
+   * one reaction per message, so the user's other emojis are dropped in the same
+   * write that adds the new one. Every other channel (or no channel) keeps
+   * stacking reactions per user.
    */
-  async addReaction(id: string, reaction: Omit<ReactionInfo, 'at'>, latestEventId?: string): Promise<Message> {
+  async addReaction(
+    id: string,
+    reaction: Omit<ReactionInfo, 'at'>,
+    latestEventId?: string,
+    channel?: ChannelType,
+  ): Promise<Message> {
     const message = await this.getById(id);
 
     const reactionEntry: ReactionInfo = {
@@ -709,24 +766,36 @@ export class MessageService {
     };
 
     // Get current reactions or initialize
-    const currentReactions = (message.reactions as ReactionInfo[]) ?? [];
+    const storedReactions = (message.reactions as ReactionInfo[]) ?? [];
+    const storedCounts = (message.reactionCounts as Record<string, number>) ?? {};
+
+    // One reaction per user per message: the user's other emojis go away.
+    const replacesPrevious = channel !== undefined && SINGLE_REACTION_PER_USER_CHANNELS.has(channel);
+    const {
+      kept: currentReactions,
+      counts: currentCounts,
+      dropped,
+    } = replacesPrevious
+      ? dropOtherEmojisOfUser(storedReactions, storedCounts, reaction.platformUserId, reaction.emoji)
+      : { kept: storedReactions, counts: storedCounts, dropped: 0 };
 
     // Check if this user already has this reaction
     const existingIndex = currentReactions.findIndex(
       (r) => r.platformUserId === reaction.platformUserId && r.emoji === reaction.emoji,
     );
 
-    if (existingIndex >= 0) {
+    if (existingIndex >= 0 && dropped === 0) {
       // Already exists, no change needed
       return message;
     }
 
-    const newReactions = [...currentReactions, reactionEntry];
+    const newReactions = existingIndex >= 0 ? currentReactions : [...currentReactions, reactionEntry];
 
     // Update reaction counts
-    const currentCounts = (message.reactionCounts as Record<string, number>) ?? {};
     const newCounts = { ...currentCounts };
-    newCounts[reaction.emoji] = (newCounts[reaction.emoji] ?? 0) + 1;
+    if (existingIndex < 0) {
+      newCounts[reaction.emoji] = (newCounts[reaction.emoji] ?? 0) + 1;
+    }
 
     const [updated] = await this.db
       .update(messages)
@@ -795,9 +864,20 @@ export class MessageService {
   // =========================================================================
 
   /**
-   * Update delivery status
+   * Move a message's delivery status forward along
+   * `pending < sent < delivered < read`, in one guarded UPDATE.
+   *
+   * The guard lives in the WHERE clause, so two receipt consumers (delivered
+   * and read run on separate durables) cannot race: a late, out-of-order or
+   * redelivered receipt at or below the current status matches no row and
+   * changes nothing, including `latestEventId`. `failed` sits outside the
+   * order and keeps today's rules: `markDeliveryFailed` guards failures, and
+   * a later receipt may still replace a `failed` status.
+   *
+   * @returns the updated message, or null when it is missing or already at or past `status`
    */
-  async updateDeliveryStatus(id: string, status: DeliveryStatus, latestEventId?: string): Promise<Message> {
+  async advanceDeliveryStatus(id: string, status: DeliveryStatus, latestEventId?: string): Promise<Message | null> {
+    const atOrPast = DELIVERY_STATUS_AT_OR_PAST[status];
     const [updated] = await this.db
       .update(messages)
       .set({
@@ -805,14 +885,57 @@ export class MessageService {
         latestEventId,
         updatedAt: new Date(),
       })
-      .where(eq(messages.id, id))
+      .where(
+        atOrPast
+          ? and(
+              eq(messages.id, id),
+              or(isNull(messages.deliveryStatus), notInArray(messages.deliveryStatus, [...atOrPast])),
+            )
+          : eq(messages.id, id),
+      )
       .returning();
 
-    if (!updated) {
-      throw new NotFoundError('Message', id);
-    }
+    return updated ?? null;
+  }
 
-    return updated;
+  /**
+   * Update delivery status (PATCH /messages/:id/delivery-status).
+   *
+   * Same monotonic rule as `advanceDeliveryStatus`. When the message is
+   * already at or past `status` it is returned unchanged; that extra read
+   * runs only on this manual path, never on the receipt consumers.
+   */
+  async updateDeliveryStatus(id: string, status: DeliveryStatus, latestEventId?: string): Promise<Message> {
+    return (await this.advanceDeliveryStatus(id, status, latestEventId)) ?? this.getById(id);
+  }
+
+  /**
+   * Mark an outbound message as failed (#1277).
+   *
+   * Only a message still `pending` / `sent` (or without a status) becomes
+   * `failed`: a late or replayed failure never hides a `delivered` / `read`
+   * the platform already reported. `latestEventId` points at the
+   * `message.failed` event, which carries the error and error code.
+   *
+   * @returns the updated message, or null when its status was already past `sent`
+   */
+  async markDeliveryFailed(id: string, latestEventId?: string): Promise<Message | null> {
+    const [updated] = await this.db
+      .update(messages)
+      .set({
+        deliveryStatus: 'failed',
+        latestEventId,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(messages.id, id),
+          or(inArray(messages.deliveryStatus, ['pending', 'sent']), isNull(messages.deliveryStatus)),
+        ),
+      )
+      .returning();
+
+    return updated ?? null;
   }
 
   /**

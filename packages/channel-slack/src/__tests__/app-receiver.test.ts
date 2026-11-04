@@ -39,11 +39,13 @@ interface FakeAppRecord {
 /** Every fake App constructed since the last `resetFakes()`. */
 const constructedApps: FakeAppRecord[] = [];
 const socketReceiverOptions: Record<string, unknown>[] = [];
+const socketClients: (EventEmitter & { websocket: { active: boolean; isActive: () => boolean } })[] = [];
 const httpReceiverOptions: Record<string, unknown>[] = [];
 
 function resetFakes(): void {
   constructedApps.length = 0;
   socketReceiverOptions.length = 0;
+  socketClients.length = 0;
   httpReceiverOptions.length = 0;
 }
 
@@ -94,10 +96,11 @@ mock.module('@slack/bolt', () => {
 
   class FakeSocketModeReceiver {
     readonly client = Object.assign(new EventEmitter(), {
-      websocket: { isActive: () => true },
+      websocket: { active: true, isActive: () => this.client.websocket.active },
     });
     constructor(options: Record<string, unknown>) {
       socketReceiverOptions.push(options);
+      socketClients.push(this.client);
     }
   }
 
@@ -162,6 +165,25 @@ function makeAttachment(
     attachedAt,
     ...overrides,
   };
+}
+
+/** A one-click personal install: user mode on the person's own token, and no bot at all. */
+function botlessAttachment(
+  instanceId: string,
+  teamId: string,
+  actingUserId: string,
+  attachedAt: number,
+): SlackAttachment {
+  const userClient = new WebClient(`xoxp-${instanceId}`);
+  return makeAttachment(instanceId, teamId, 'unused', attachedAt, {
+    authMode: 'user',
+    actingClient: userClient,
+    userClient,
+    actingUserId,
+    botToken: undefined,
+    botUserId: undefined,
+    botId: undefined,
+  });
 }
 
 function makeReceiver(
@@ -350,6 +372,14 @@ describe('SlackAppReceiver', () => {
     expect(() => receiverKeyFor({ botToken: 'xoxb', mode: 'http' })).toThrow(SlackError);
   });
 
+  it.each([undefined, ''])('rejects HTTP construction without a signing secret (%p)', (signingSecret) => {
+    expect(() => new SlackAppReceiver({ mode: 'http', signingSecret }, () => undefined, noopLogger)).toThrow(
+      SlackError,
+    );
+    expect(httpReceiverOptions).toEqual([]);
+    expect(constructedApps).toEqual([]);
+  });
+
   it('authorize returns the most recently attached bot token for the team', async () => {
     const { receiver } = makeReceiver();
     const authorize = authorizeOf(lastApp());
@@ -387,6 +417,75 @@ describe('SlackAppReceiver', () => {
     }
     expect(refused).toBeInstanceOf(SlackError);
     expect((refused as SlackError).channelCode).toBe(SlackErrorCode.NOT_CONNECTED);
+  });
+
+  it('authorize answers a bot-less workspace with its team alone, and a mixed one with its bot', async () => {
+    const { receiver } = makeReceiver();
+    const authorize = authorizeOf(lastApp());
+    const clientsByToken = (receiver as unknown as { clientsByToken: Map<string, WebClient> }).clientsByToken;
+
+    // Personal installs only: no bot identity to answer with, and no person's
+    // token may back the client Bolt hands the listeners of anyone's event.
+    receiver.attach(botlessAttachment('inst-ana', 'T1', 'U_ANA', 1));
+    const botless = await authorize(source('T1'));
+    expect(botless).toEqual({ teamId: 'T1' });
+    expect(botless.userToken).toBeUndefined();
+    expect(botless.botToken).toBeUndefined();
+    expect(receiver.botClientFor('T1')).toBeUndefined();
+    expect(clientsByToken.size).toBe(0);
+
+    // A workspace that also has a bot answers with the bot, even when the
+    // bot-less attach is the newer one.
+    receiver.attach(makeAttachment('inst-bot', 'T2', 'xoxb-bot', 2));
+    receiver.attach(botlessAttachment('inst-ben', 'T2', 'U_BEN', 3));
+    await expect(authorize(source('T2'))).resolves.toEqual({
+      botToken: 'xoxb-bot',
+      botId: 'B_inst-bot',
+      botUserId: 'U_inst-bot',
+      teamId: 'T2',
+    });
+    expect(receiver.botClientFor('T2')?.token).toBe('xoxb-bot');
+
+    // Once the bot detaches, its client goes with it and the team answers alone.
+    expect(receiver.detach('inst-bot')).toBe(true);
+    await expect(authorize(source('T2'))).resolves.toEqual({ teamId: 'T2' });
+    expect(receiver.botClientFor('T2')).toBeUndefined();
+    expect(clientsByToken.size).toBe(0);
+  });
+
+  it('#941 rejects startup when the Socket Mode websocket never opens', async () => {
+    const { receiver } = makeReceiver({ ...SOCKET_OPTS, socketConnectTimeoutMs: 30 });
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+    socketClient.websocket.active = false;
+
+    await expect(receiver.start()).rejects.toThrow('Socket Mode WebSocket did not open within 30ms');
+    expect(receiver.isRunning).toBe(false);
+  });
+
+  it('#941 tracks disconnected events from the Socket Mode client', () => {
+    const { receiver } = makeReceiver();
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+
+    socketClient.emit('disconnected');
+
+    expect(receiver.socketHealth().state).toBe('disconnected');
+  });
+
+  it('#941 clears the lifecycle callback before a deliberate stop', async () => {
+    const { receiver } = makeReceiver();
+    const socketClient = socketClients.at(-1);
+    if (!socketClient) throw new Error('no fake socket client constructed');
+    const onStateChange = mock();
+    receiver.onSocketStateChange = onStateChange;
+
+    await receiver.start();
+    await receiver.stop();
+    socketClient.emit('disconnected');
+
+    expect(onStateChange).not.toHaveBeenCalled();
+    expect(receiver.isRunning).toBe(false);
   });
 
   it('detaching the last attachment stops the receiver', async () => {
@@ -501,7 +600,7 @@ describe('SlackAppReceiver', () => {
 // bolt-client helpers the receiver's callers rely on
 // ─────────────────────────────────────────────────────────────
 
-// Same post-mock import: bolt-client binds `@slack/bolt` at module load.
+// Load the connection helpers beside the receiver tests.
 const { buildActingClients, resolveWorkspaceIdentity } = await import('../connection/bolt-client');
 
 /** A `WebClient`-shaped stand-in whose `auth.test` answers with `result`. */
@@ -532,6 +631,21 @@ describe('buildActingClients', () => {
     expect(() => buildActingClients({ botToken: 'xoxb-bot', appToken: 'xapp-1', authMode: 'user' }, botClient)).toThrow(
       SlackError,
     );
+  });
+
+  it('acts as the human with no bot client at all, and refuses bot mode without one', () => {
+    const user = buildActingClients({ appToken: 'xapp-1', authMode: 'user', userToken: 'xoxp-human' });
+    expect(user.userClient?.token).toBe('xoxp-human');
+    expect(user.actingClient).toBe(user.userClient as WebClient);
+
+    let refused: unknown;
+    try {
+      buildActingClients({ appToken: 'xapp-1' });
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(SlackError);
+    expect((refused as SlackError).channelCode).toBe(SlackErrorCode.INVALID_TOKEN);
   });
 });
 
@@ -653,6 +767,17 @@ describe('SlackAppReceiver.targetsForActor', () => {
     // One attachment for the workspace owns everything that workspace sends.
     receiver.detach('inst-ben');
     await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toMatchObject([{ instanceId: 'inst-ana' }]);
+  });
+
+  it('gives a lone bot-less install only what its own human did', async () => {
+    const { receiver } = makeReceiver();
+    installAuthorizationsPages(receiver, []);
+    receiver.attach(botlessAttachment('inst-ana', 'T1', 'U_ANA', 1));
+
+    // Another member's command or click is not this person's to answer.
+    await expect(receiver.targetsForActor('T1', 'U_CARLA')).resolves.toEqual([]);
+    await expect(receiver.targetsForActor('T1', undefined)).resolves.toEqual([]);
+    await expect(receiver.targetsForActor('T1', 'U_ANA')).resolves.toMatchObject([{ instanceId: 'inst-ana' }]);
   });
 });
 

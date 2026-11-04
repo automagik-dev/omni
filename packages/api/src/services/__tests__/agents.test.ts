@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { AgentEventManifest, EventBus } from '@omni/core';
-import type { Agent, Database, NewAgent } from '@omni/db';
+import { type Agent, type Database, type NewAgent, agents } from '@omni/db';
 import { AgentService } from '../agents';
 
 function createMockAgent(overrides: Partial<Agent> = {}): Agent {
@@ -32,19 +32,17 @@ function createMockAgent(overrides: Partial<Agent> = {}): Agent {
 }
 
 function createMockDatabase(results: Agent[] = []) {
-  const selectQuery = {
-    from: mock(() => ({
-      ...selectQuery,
-      $dynamic: () => selectQuery,
-    })),
-    $dynamic: () => selectQuery,
-    // where() returns a real Promise carrying the chainable props, so the
-    // builder resolves like Drizzle's whether awaited directly (update()'s
-    // provider-cache eviction lookups) or chained through orderBy/limit.
-    where: mock((): typeof selectQuery => Object.assign(Promise.resolve(results), selectQuery)),
-    orderBy: mock(() => selectQuery),
-    limit: mock((_n: number) => Promise.resolve(results)),
-  };
+  function queryFor(rows: Agent[]) {
+    const query = {
+      $dynamic: () => query,
+      where: mock((): typeof query => Object.assign(Promise.resolve(rows), query)),
+      orderBy: mock((): typeof query => Object.assign(Promise.resolve(rows), query)),
+      limit: mock((_n: number) => Promise.resolve(rows)),
+    };
+    return Object.assign(Promise.resolve(rows), query);
+  }
+  // Keep each builder tied to its own table, including key lookups during rename.
+  const selectQuery = { from: mock((table: unknown) => queryFor(table === agents ? results : [])) };
 
   const db = {
     select: mock(() => selectQuery),
@@ -57,12 +55,20 @@ function createMockDatabase(results: Agent[] = []) {
       })),
     })),
     update: mock((_table: unknown) => ({
-      set: mock((_data: unknown) => ({
+      set: mock((data: Partial<Agent>) => ({
         where: mock(() => ({
-          returning: mock(() => Promise.resolve(results.length > 0 ? [results[0]] : [])),
+          returning: mock(() => {
+            if (!results[0]) return Promise.resolve([]);
+            results[0] = { ...results[0], ...data };
+            return Promise.resolve([results[0]]);
+          }),
         })),
       })),
     })),
+    execute: mock(async () => []),
+    async transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+      return fn(db);
+    },
     _selectQuery: selectQuery,
   };
 
@@ -196,7 +202,8 @@ describe('AgentService', () => {
       const result = await service.update('u-1', { name: 'renamed' });
 
       expect(mockDb.update).toHaveBeenCalled();
-      expect(result).toBeDefined();
+      expect(result.name).toBe('renamed');
+      expect(result.updatedAt.getTime()).toBeGreaterThanOrEqual(agent.updatedAt.getTime());
     });
 
     test('throws NotFoundError when empty returning', async () => {

@@ -1,3 +1,4 @@
+import type { ConnectorEventPublisher } from '@omni/core';
 /**
  * Manifest compilation + reconciliation over real PostgreSQL (issue #986,
  * RFC #925 G4b).
@@ -40,7 +41,7 @@ import type {
 import { ConflictError, createAutomationEngine } from '@omni/core';
 import { type Database, agentProviders, automations, createDbHandle } from '@omni/db';
 import { agents as agentsTable } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { AgentService } from '../agents';
@@ -52,25 +53,33 @@ const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
 
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 interface PublishedEvent {
   type: string;
   payload: Record<string, unknown>;
 }
 
 /** An EventBus fake that records publishes for assertions. */
-function recordingBus(events: PublishedEvent[]): EventBus {
+function recordingBus(events: PublishedEvent[]): EventBus & ConnectorEventPublisher {
   return {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishConnector: async () => {
+      throw new Error('unexpected connector publish');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+
     publishGeneric: async (type: string, payload: Record<string, unknown>) => {
       events.push({ type, payload });
-      return { id: crypto.randomUUID(), ok: true };
+      return { id: crypto.randomUUID(), sequence: 0, stream: 'memory' };
     },
-  } as unknown as EventBus;
+  };
 }
 
 const manifest: AgentEventManifest = {
@@ -91,7 +100,7 @@ postgresDescribe('manifest compilation + reconciliation (real PostgreSQL)', () =
 
   beforeAll(() => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));
     db = handle.db;
 

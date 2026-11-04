@@ -51,13 +51,15 @@ describe('splitHtmlMessage', () => {
     }
   });
 
-  test('re-wraps huge <blockquote> blocks', () => {
-    const text = 'q'.repeat(8000);
-    const html = `<blockquote>${text}</blockquote>`;
+  test.each([
+    ['<blockquote>', '<blockquote>'],
+    ['<blockquote expandable>', '<blockquote'],
+  ])('re-wraps huge %s blocks', (openTag, expectedOpen) => {
+    const html = `${openTag}${'q'.repeat(8000)}</blockquote>`;
     const chunks = splitHtmlMessage(html, 4096);
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
-      expect(chunk).toContain('<blockquote>');
+      expect(chunk).toContain(expectedOpen);
       expect(chunk).toContain('</blockquote>');
     }
   });
@@ -123,17 +125,6 @@ describe('splitHtmlMessage', () => {
     }
   });
 
-  test('handles expandable blockquote', () => {
-    const text = 'q'.repeat(8000);
-    const html = `<blockquote expandable>${text}</blockquote>`;
-    const chunks = splitHtmlMessage(html, 4096);
-    expect(chunks.length).toBeGreaterThan(1);
-    for (const chunk of chunks) {
-      expect(chunk).toContain('<blockquote');
-      expect(chunk).toContain('</blockquote>');
-    }
-  });
-
   test('handles empty chunks gracefully', () => {
     const chunks = splitHtmlMessage('', 4096);
     expect(chunks).toEqual(['']);
@@ -178,9 +169,9 @@ describe('splitTelegramMessage', () => {
     expect(splitTelegramMessage('hello')).toEqual(['hello']);
   });
 
-  test('uses plain text splitter for non-HTML', () => {
-    const text = 'a'.repeat(5000);
-    const chunks = splitTelegramMessage(text, 4096);
+  test('uses plain text splitter with 4096 default limit', () => {
+    const text = 'a'.repeat(10000);
+    const chunks = splitTelegramMessage(text);
     expect(chunks.length).toBeGreaterThan(1);
     for (const chunk of chunks) {
       expect(chunk.length).toBeLessThanOrEqual(4096);
@@ -194,14 +185,6 @@ describe('splitTelegramMessage', () => {
     for (const chunk of chunks) {
       expect(chunk).toContain('<b>');
       expect(chunk).toContain('</b>');
-    }
-  });
-
-  test('respects 4096 default limit', () => {
-    const text = 'a'.repeat(10000);
-    const chunks = splitTelegramMessage(text);
-    for (const chunk of chunks) {
-      expect(chunk.length).toBeLessThanOrEqual(4096);
     }
   });
 });

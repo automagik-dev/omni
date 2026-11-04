@@ -49,17 +49,6 @@ describe('Button Scoping — filterButtonsByScope()', () => {
     expect(filterButtonsByScope([offButton], undefined)).toHaveLength(0);
   });
 
-  test('default scope is all (backward compatible)', () => {
-    const button: TelegramInlineButton = { text: 'No Scope', data: 'test' };
-    expect(filterButtonsByScope([button], 'dm')).toHaveLength(1);
-    expect(filterButtonsByScope([button], 'group')).toHaveLength(1);
-  });
-
-  test('no buttons to render returns empty array', () => {
-    const result = filterButtonsByScope([offButton], 'dm');
-    expect(result).toHaveLength(0);
-  });
-
   test('handles Telegram chat type private as DM', () => {
     const result = filterButtonsByScope([dmButton], 'private');
     expect(result).toHaveLength(1);

@@ -131,8 +131,8 @@ function isInternalWhatsAppJid(chatId: string): boolean {
  * Resolve the effective chat name for a message based on chat type and direction.
  *
  * For DMs:
- * - Inbound (!isFromMe): chatName > pushName (sender's display name)
- * - Outbound (isFromMe): chatName > recipientName > verifiedBizName
+ * - Inbound: chatName > pushName (sender's display name)
+ * - Outbound (isFromMe, or rawPayload.key.fromMe): chatName > recipientName > verifiedBizName
  *   (pushName is the bot's own name, not the contact's — so we skip it for outbound)
  *
  * For groups/channels: always chatName (group subject)
@@ -150,7 +150,11 @@ export function resolveEffectiveChatName(params: {
   const { chatType, isFromMe, chatName, pushName, rawPayload } = params;
 
   if (chatType === 'dm') {
-    if (!isFromMe) {
+    // History-sync events carry no `isFromMe`: their only direction marker is the
+    // WhatsApp key. Trusting the flag alone named the contact's chat after the
+    // owner, whose pushName the history messages we sent carry.
+    const fromMe = isFromMe || (rawPayload?.key as { fromMe?: unknown } | undefined)?.fromMe === true;
+    if (!fromMe) {
       // Inbound: chatName > pushName (sender's display name)
       return chatName || pushName;
     }
@@ -575,7 +579,7 @@ async function persistLidMappings(
 async function postProcessChat(
   services: Services,
   chat: { id: string; canonicalId?: string | null; name?: string | null },
-  _chatCreated: boolean,
+  chatCreated: boolean,
   chatExternalId: string,
   chatType: ChatType,
   pushName: string | undefined,
@@ -607,10 +611,49 @@ async function postProcessChat(
       pushName,
       rawPayload,
     });
-    if (effectiveNameLocal && shouldUpdateChatName(chat.name, effectiveNameLocal)) {
-      await services.chats.update(chat.id, { name: effectiveNameLocal });
-      chat.name = effectiveNameLocal;
+    if (effectiveNameLocal) {
+      await applyChatName(services, chat, chatCreated, instanceId, chatType, effectiveNameLocal);
     }
+  }
+}
+
+/**
+ * Write a resolved chat name when it is missing, stale, or changed. A DM is never
+ * named after the account itself (the instance's profileName): the write is skipped,
+ * and a chat just created with that name is cleared. Exported for unit testing.
+ */
+export async function applyChatName(
+  services: Services,
+  chat: { id: string; name?: string | null },
+  chatCreated: boolean,
+  instanceId: string,
+  chatType: ChatType,
+  name: string,
+): Promise<void> {
+  const writesName = chatCreated || shouldUpdateChatName(chat.name, name);
+  if (writesName && chatType === 'dm' && (await isOwnProfileName(services, instanceId, name))) {
+    if (chatCreated && chat.name === name) {
+      await services.chats.update(chat.id, { name: null });
+      chat.name = null;
+    }
+    return;
+  }
+  if (shouldUpdateChatName(chat.name, name)) {
+    await services.chats.update(chat.id, { name });
+    chat.name = name;
+  }
+}
+
+/**
+ * True when `name` is the instance's own profile name — the owner's pushName, or a
+ * verifiedBizName that is the owner's. Read only when a DM name is about to be written.
+ */
+async function isOwnProfileName(services: Services, instanceId: string, name: string): Promise<boolean> {
+  try {
+    const instance = await services.instances.getById(instanceId);
+    return !!instance.profileName && instance.profileName === name;
+  } catch {
+    return false;
   }
 }
 
@@ -1114,6 +1157,54 @@ async function handleMessagePinState(
 }
 
 /**
+ * Handle message.failed — the channel reported that an outbound message did
+ * not reach the recipient (#1277). Marks it `failed` unless the platform has
+ * already reported it delivered/read, and points `latestEventId` at this
+ * event, whose payload keeps the error and error code.
+ *
+ * A failure without `externalId` (the send never got a platform id) has no
+ * stored message to update. Non-critical like delivered/read: errors are
+ * logged, not re-thrown.
+ */
+export async function handleMessageFailed(services: Services, event: TypedOmniEvent<'message.failed'>): Promise<void> {
+  const payload = event.payload;
+  const metadata = event.metadata;
+  if (!metadata.instanceId || !payload.externalId) return;
+  if (isInternalWhatsAppJid(payload.chatId)) return;
+  const instanceId = metadata.instanceId;
+  const externalId = payload.externalId;
+
+  try {
+    // Lookup + status update are one work item: one worker transaction.
+    await runConsumerInTenantContext(services.db, event, async () => {
+      const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
+      if (!chat) {
+        log.debug('Chat not found for message.failed', { chatId: payload.chatId });
+        return;
+      }
+
+      const message = await services.messages.getByExternalId(chat.id, externalId);
+      if (!message) {
+        log.debug('Message not found for message.failed', { externalId });
+        return;
+      }
+
+      const updated = await services.messages.markDeliveryFailed(
+        message.id,
+        isValidUuid(event.id) ? event.id : undefined,
+      );
+      log.debug('Updated message delivery status', {
+        messageId: message.id,
+        status: updated ? 'failed' : `kept ${message.deliveryStatus}`,
+        errorCode: payload.errorCode,
+      });
+    });
+  } catch (error) {
+    log.error('Failed to mark message as failed', { externalId, error: String(error) });
+  }
+}
+
+/**
  * Handle reaction.received / reaction.removed — attach the reaction to the
  * target message's `reactions` column (#1033). Reactions are NOT messages and
  * never arrive as message.received; this is the only persistence path for them.
@@ -1132,12 +1223,14 @@ export async function handleReactionState(
     await runConsumerInTenantContext(services.db, event, async () => {
       const chat = await services.chats.findByExternalIdSmart(instanceId, payload.chatId);
       const message = chat ? await services.messages.getByExternalId(chat.id, payload.messageId) : null;
-      if (!message) {
+      if (!chat || !message) {
         log.debug('Target message not found for reaction', { chatId: payload.chatId, messageId: payload.messageId });
         return;
       }
 
       if (added) {
+        // The chat's channel decides the semantics: on WhatsApp a new emoji
+        // replaces the user's previous reaction on the message.
         await services.messages.addReaction(
           message.id,
           {
@@ -1147,6 +1240,7 @@ export async function handleReactionState(
             customEmojiId: payload.isCustomEmoji ? payload.emoji : undefined,
           },
           event.id,
+          chat.channel,
         );
       } else {
         await services.messages.removeReaction(message.id, payload.from, payload.emoji, event.id);
@@ -1405,9 +1499,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               return;
             }
 
-            // Update delivery status
-            await services.messages.updateDeliveryStatus(message.id, 'delivered');
-            log.debug('Updated message delivery status', { messageId: message.id, status: 'delivered' });
+            // Forward-only: a late or redelivered `delivered` never overwrites `read`.
+            const advanced = await services.messages.advanceDeliveryStatus(message.id, 'delivered');
+            log.debug(advanced ? 'Updated message delivery status' : 'Delivery status already at or past target', {
+              messageId: message.id,
+              status: 'delivered',
+            });
           });
         } catch (error) {
           log.error('Failed to update delivery status', {
@@ -1458,9 +1555,12 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               return;
             }
 
-            // Update delivery status to read
-            await services.messages.updateDeliveryStatus(message.id, 'read');
-            log.debug('Updated message delivery status', { messageId: message.id, status: 'read' });
+            // Forward-only: a redelivered `read` is a no-op.
+            const advanced = await services.messages.advanceDeliveryStatus(message.id, 'read');
+            log.debug(advanced ? 'Updated message delivery status' : 'Delivery status already at or past target', {
+              messageId: message.id,
+              status: 'read',
+            });
           });
         } catch (error) {
           log.error('Failed to update read status', {
@@ -1479,6 +1579,16 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
         concurrency: 1, // serial (#1200): read must land after sent/delivered for the same message
       },
     );
+
+    // Subscribe to message.failed - mark the outbound message as failed (#1277)
+    await eventBus.subscribe('message.failed', (event) => handleMessageFailed(services, event), {
+      durable: 'message-persistence-failed',
+      queue: 'message-persistence',
+      maxRetries: 2,
+      retryDelayMs: 500,
+      startFrom: 'first',
+      concurrency: 1, // serial (#1200), like delivered/read
+    });
 
     // Subscribe to message.pinned / message.unpinned — per-message pin state (#889)
     await eventBus.subscribe('message.pinned', (event) => handleMessagePinState(services, event, true), {

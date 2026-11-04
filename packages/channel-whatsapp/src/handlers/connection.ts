@@ -71,6 +71,13 @@ const passkeyInstances = new Set<string>();
 const newLoginInstances = new Set<string>();
 
 /**
+ * Instances with an 8-digit pairing code waiting to be typed on the phone (#1281).
+ * The code is bound to the current socket and credentials: while it is pending,
+ * QR expiry is not counted, so the cycle never clears auth under it.
+ */
+const pendingPairingCodes = new Set<string>();
+
+/**
  * Track connection timeouts per instance
  * If QR is scanned but connection hangs, we detect it
  */
@@ -100,6 +107,14 @@ export function seedAuthenticated(instanceId: string): void {
 }
 
 /**
+ * Mark that a pairing code was issued on the instance's current socket.
+ * Cleared when the connection opens, closes or is reset.
+ */
+export function markPairingCodePending(instanceId: string): void {
+  pendingPairingCodes.add(instanceId);
+}
+
+/**
  * Calculate exponential backoff delay
  */
 function getBackoffDelay(attempt: number, config: ReconnectConfig): number {
@@ -121,7 +136,10 @@ async function handleQrCode(
 ): Promise<boolean> {
   // Check if previous QR expired (new QR received = previous one expired or wasn't scanned)
   const previousQr = activeQrCodes.get(instanceId);
-  if (previousQr) {
+  if (previousQr && pendingPairingCodes.has(instanceId)) {
+    // Baileys keeps rotating QRs; clearing auth now would invalidate the code (#1281)
+    log.info('QR code rotated while a pairing code is pending', { instanceId });
+  } else if (previousQr) {
     // Previous QR existed and now we got a new one = it expired/failed
     const attempts = (qrCodeAttempts.get(instanceId) || 0) + 1;
     qrCodeAttempts.set(instanceId, attempts);
@@ -254,6 +272,7 @@ async function handleConnectionClose(
   lastDisconnect: { error?: Error } | undefined,
   config: ReconnectConfig,
   onReconnect: () => Promise<void>,
+  clearAuthAndReconnect: () => Promise<void>,
 ): Promise<void> {
   const error = lastDisconnect?.error as Boom | undefined;
   const statusCode = error?.output?.statusCode;
@@ -271,6 +290,7 @@ async function handleConnectionClose(
 
   // Clear active QR - connection error is NOT a QR expiry
   activeQrCodes.delete(instanceId);
+  const hadPendingPairingCode = pendingPairingCodes.delete(instanceId);
 
   // If logged out, clear everything
   if (wasLoggedOut) {
@@ -292,6 +312,26 @@ async function handleConnectionClose(
     log.info('Connection replaced by another session, not reconnecting', { instanceId });
     reconnectAttempts.delete(instanceId);
     cancelPendingReconnect(instanceId);
+    return;
+  }
+
+  // The socket closed before the pairing code was entered (Baileys ends it when its
+  // QR refs run out). The code dies with it, and the credentials now carry the
+  // unregistered `me` it set, so a plain reconnect would try to log in. Start fresh.
+  if (hadPendingPairingCode && !newLoginInstances.has(instanceId)) {
+    log.warn('Socket closed before the pairing code was entered, starting fresh', { instanceId, reason });
+    reconnectAttempts.delete(instanceId);
+    qrCodeAttempts.delete(instanceId);
+    cancelPendingReconnect(instanceId);
+    try {
+      await clearAuthAndReconnect();
+    } catch (reconnectError) {
+      plugin.handleConnectionError(
+        instanceId,
+        reconnectError instanceof Error ? reconnectError.message : 'Reconnection after pairing code expiry failed',
+        false,
+      );
+    }
     return;
   }
 
@@ -363,6 +403,7 @@ async function handleConnectionOpen(plugin: WhatsAppPlugin, instanceId: string, 
   qrCycleAttempts.delete(instanceId);
   activeQrCodes.delete(instanceId);
   passkeyInstances.delete(instanceId);
+  pendingPairingCodes.delete(instanceId);
   clearConnectionTimeout(instanceId);
 
   // Mark as authenticated - now we CAN auto-reconnect if disconnected later
@@ -416,7 +457,7 @@ export function setupConnectionHandlers(
 
     if (connection === 'close') {
       clearConnectionTimeout(instanceId);
-      await handleConnectionClose(plugin, instanceId, lastDisconnect, config, onReconnect);
+      await handleConnectionClose(plugin, instanceId, lastDisconnect, config, onReconnect, clearAuthAndReconnect);
     }
 
     if (connection === 'open') {
@@ -457,6 +498,7 @@ export function resetConnectionState(instanceId: string): void {
   activeQrCodes.delete(instanceId);
   passkeyInstances.delete(instanceId);
   newLoginInstances.delete(instanceId);
+  pendingPairingCodes.delete(instanceId);
   authenticatedInstances.delete(instanceId);
   clearConnectionTimeout(instanceId);
   cancelPendingReconnect(instanceId);

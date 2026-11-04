@@ -17,7 +17,7 @@ import { runBackfill } from './engine';
 import { findBySource } from './ledger';
 import type { InstanceTenantMap } from './mapping-engine';
 import { personCloneId, runPersonCloning } from './person-clone';
-import { connect, dropDatabase, provisionDatabase, superUrl } from './pg-testing';
+import { cleanupAfterFailure, connect, dropDatabaseOrThrow, provisionDatabase, psqlBin, superUrl } from './pg-testing';
 import { assertTenantUniquesPresent, replacePreservedGlobalUniques } from './rehearsal';
 
 const base = superUrl();
@@ -89,6 +89,10 @@ maybe('G6 person cloning — real PostgreSQL', () => {
   test('spanning person is cloned per tenant; references rewired; identifiers never merge', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       // Root phase assigns instances; cloning derives person tenants from them.
       await runBackfill(sql, { mode: 'apply', instanceTenantMap: instanceMap, tables: ['instances'] });
@@ -153,15 +157,19 @@ maybe('G6 person cloning — real PostgreSQL', () => {
       // One ledger entry PER CREATED CLONE, keyed by the clone's own identity.
       expect((await findBySource(sql, 'persons', { id: cloneA }))?.targetTenantId).toBe(TENANT_A);
       expect((await findBySource(sql, 'persons', { id: cloneB }))?.targetTenantId).toBe(TENANT_B);
-    } finally {
-      await sql.end();
-      dropDatabase(base, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 
   test('cloning is idempotent and its compensation restores the original graph', async () => {
     const { database, url } = provisionDatabase(base, FIXTURE);
     const sql = connect(url);
+    const cleanup = async () => {
+      await sql.end();
+      dropDatabaseOrThrow({ superUrl: base, psqlBin: psqlBin() }, database);
+    };
     try {
       await runBackfill(sql, { mode: 'apply', instanceTenantMap: instanceMap, tables: ['instances'] });
       await replacePreservedGlobalUniques(sql);
@@ -206,9 +214,9 @@ maybe('G6 person cloning — real PostgreSQL', () => {
       expect(await personIdOf(sql, 'messages', 'sender_person_id', 'd1000000-0000-4000-8000-000000000001')).toBe(
         PERSON_SPAN,
       );
-    } finally {
-      await sql.end();
-      dropDatabase(base, database);
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   });
 });

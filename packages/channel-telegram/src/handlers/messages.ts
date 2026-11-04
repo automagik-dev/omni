@@ -188,6 +188,7 @@ async function processInboundMessage(
         chatType: msg.chat.type,
         username: from.username,
         isMention,
+        isMentioningInstance: isMention,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
         mediaLocalPath: local?.localPath,
@@ -360,6 +361,7 @@ export function setupMessageHandlers(
         chatType: msg.chat.type,
         username: from.username,
         isMention,
+        isMentioningInstance: isMention,
         mediaFileId: content.mediaFileId,
         filename: content.filename,
         mediaLocalPath: undefined, // Populated in processAlbumResult

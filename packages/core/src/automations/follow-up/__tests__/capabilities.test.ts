@@ -54,6 +54,7 @@ describe('channelHasMessagingWindow', () => {
     expect(channelHasMessagingWindow('asc')).toBe(true);
     expect(channelHasMessagingWindow('zenvia')).toBe(true);
     expect(channelHasMessagingWindow('twilio-whatsapp')).toBe(true);
+    expect(channelHasMessagingWindow('gupshup')).toBe(true);
     expect(channelHasMessagingWindow('whatsapp-baileys')).toBe(false);
     expect(channelHasMessagingWindow('discord')).toBe(false);
     expect(channelHasMessagingWindow('telegram')).toBe(false);
@@ -137,13 +138,24 @@ describe('createMessagingWindowProbe', () => {
     expect(probe(r, now)).toBe('expired');
   });
 
-  test('honours custom windowMs override (test-only)', () => {
-    const probe = createMessagingWindowProbe({ windowMs: 60_000 });
+  // The rows above derive their inputs from MESSAGING_WINDOW_MS, so they stay
+  // green if the constant drifts. These pin Meta's 24h window in literal time.
+  test('the messaging window is exactly 24 hours', () => {
+    expect(MESSAGING_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
+  });
+
+  const HOUR_MS = 60 * 60 * 1000;
+  test.each([
+    ['23h59m ago → within', 23 * HOUR_MS + 59 * 60_000, 'within'],
+    ['24h ago → within', 24 * HOUR_MS, 'within'],
+    ['24h + 1ms ago → expired', 24 * HOUR_MS + 1, 'expired'],
+  ] as const)('whatsapp-business inbound %s', (_label, ageMs, verdict) => {
+    const probe = createMessagingWindowProbe();
     const r = row({
       channelType: 'whatsapp-business',
-      lastInboundCustomerMessageAt: new Date(now.getTime() - 61_000),
+      lastInboundCustomerMessageAt: new Date(now.getTime() - ageMs),
     });
-    expect(probe(r, now)).toBe('expired');
+    expect(probe(r, now)).toBe(verdict);
   });
 });
 

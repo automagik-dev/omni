@@ -9,8 +9,10 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertPgTestTarget } from './pg-migrated-template';
 
 const postgresUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
+if (postgresUrl) assertPgTestTarget(postgresUrl);
 const postgresDescribe = postgresUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
 const here = dirname(fileURLToPath(import.meta.url));

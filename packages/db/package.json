@@ -1,6 +1,6 @@
 {
   "name": "@omni/db",
-  "version": "2.260922.11",
+  "version": "2.261104.15",
   "type": "module",
   "exports": {
     ".": {
@@ -18,11 +18,16 @@
     "./pg-migrated-template": {
       "types": "./src/pg-migrated-template.ts",
       "default": "./src/pg-migrated-template.ts"
+    },
+    "./pg-testing": {
+      "types": "./src/backfill/pg-testing.ts",
+      "default": "./src/backfill/pg-testing.ts"
     }
   },
   "scripts": {
     "typecheck": "tsc --noEmit && bun run scripts/check-tz-naive.ts",
-    "test": "bun test",
+    "test": "bun test --path-ignore-patterns='**/tenancy-db-access-guard.test.ts' --path-ignore-patterns='**/tenancy-writer-coverage.test.ts'",
+    "test:guards": "bun test src/tenancy-db-access-guard.test.ts src/tenancy-writer-coverage.test.ts",
     "lint:tz": "bun run scripts/check-tz-naive.ts",
     "db:push": "drizzle-kit push",
     "db:generate": "drizzle-kit generate",
@@ -36,7 +41,7 @@
     "postgres": "^3.4.5"
   },
   "devDependencies": {
-    "@types/bun": "1.3.14",
+    "@types/bun": "1.4.4",
     "drizzle-kit": "^0.30.1",
     "typescript": "^5.7.3"
   }

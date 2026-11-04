@@ -30,7 +30,8 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { AUTH_PLANE_URL_ENV_VAR, resolveAuthPlaneConnection } from '../auth-plane-connection';
 import { MembershipSelectionService } from '../request-auth';
 
@@ -63,16 +64,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('auth-plane wiring (real PostgreSQL)', () => {
   const dbName = `omni_g4_authplane_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -89,7 +80,7 @@ postgresDescribe('auth-plane wiring (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -107,14 +98,15 @@ postgresDescribe('auth-plane wiring (real PostgreSQL)', () => {
     await applyTenantRlsEnforcement(provisioner);
     await applyTenancyRoles(provisioner, passwords, DEFAULT_ROLE_NAMES, dbName);
 
-    runtimeUrl = urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
-    authPlaneUrl = urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
+    runtimeUrl = pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime });
+    authPlaneUrl = pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane });
     runtimeDb = openDb(runtimeUrl, 2);
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
   }, 180_000);
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('MISWIRED to the runtime role, the confirming-hint membership read fails closed', async () => {

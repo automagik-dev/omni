@@ -31,7 +31,8 @@ import {
   mediaContent,
   messages,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
@@ -96,16 +97,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () => {
   const dbName = `omni_g5_media_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -141,7 +132,7 @@ postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () 
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -180,13 +171,17 @@ postgresDescribe('two-tenant media-processor containment (real PostgreSQL)', () 
     await applyTenancyRoles(provisioner, passwords, DEFAULT_ROLE_NAMES, dbName);
 
     // ONE physical connection shared by both tenants' workers: any bleed shows here.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 1);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      1,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
     ctx = { db: runtimeDb } as Parameters<typeof mediaProcessorTest.persistProcessingResult>[0];
   }, 180_000);
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('A worker persists media only under A; B cannot see it', async () => {

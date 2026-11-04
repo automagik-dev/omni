@@ -44,6 +44,8 @@ export interface WhatsAppStreamSenderOptions {
   editMode?: boolean;
   /** Throttle interval for edits in ms (default 2500). Only applies when editMode is true. */
   throttleMs?: number;
+  /** Called with each new message id, so the plugin can drop the fromMe echo (#1248). */
+  onSent?: (messageId: string) => void;
 }
 
 export class WhatsAppStreamSender implements StreamSender {
@@ -66,6 +68,7 @@ export class WhatsAppStreamSender implements StreamSender {
   private lastRenderedText = '';
   private editFailed = false;
   private readonly throttleMs: number;
+  private readonly onSent?: (messageId: string) => void;
 
   constructor(
     /** Lazy socket getter — called at send time to always use the current live socket */
@@ -78,6 +81,7 @@ export class WhatsAppStreamSender implements StreamSender {
     this.formatMode = options?.formatMode ?? 'convert';
     this.editMode = options?.editMode ?? false;
     this.throttleMs = options?.throttleMs ?? DEFAULT_THROTTLE_MS;
+    this.onSent = options?.onSent;
   }
 
   async onThinkingDelta(_delta: StreamDelta & { phase: 'thinking' }): Promise<void> {
@@ -245,7 +249,8 @@ export class WhatsAppStreamSender implements StreamSender {
             },
           }
         : undefined;
-      await this.getSock().sendMessage(this.jid, { text }, quoted);
+      const result = await this.getSock().sendMessage(this.jid, { text }, quoted);
+      if (result?.key?.id) this.onSent?.(result.key.id);
       this.firstMessageSent = true;
     } catch (err) {
       log.error('Failed to send message during stream', {
@@ -294,6 +299,7 @@ export class WhatsAppStreamSender implements StreamSender {
           : undefined;
         const result = await this.getSock().sendMessage(this.jid, { text }, quoted);
         this.messageId = result?.key?.id ?? null;
+        if (this.messageId) this.onSent?.(this.messageId);
         this.firstMessageSent = true;
       } else {
         const sock = this.getSock();

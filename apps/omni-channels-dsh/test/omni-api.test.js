@@ -1,0 +1,205 @@
+import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { KEY_ROUTE_REFUSAL, fitted, isKeyRoute, operationsOf, search, shapeOf } from '../src/host/omni-api.js'
+import { applyBoth, fakeContext } from './team.js'
+
+test('omni operations come from its OpenAPI description, found by words, with readable shapes', () => {
+  const ops = operationsOf({ paths: {
+    '/instances/{id}/qr': { get: { summary: 'Get QR code', tags: ['Instances'], parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string', format: 'uuid' } }] } },
+    '/messages/send': { post: { summary: 'Send a message', requestBody: { content: { 'application/json': { schema: { type: 'object', required: ['to'], properties: { to: { type: 'string' }, text: { type: 'string' }, kind: { enum: ['text', 'image'] }, tags: { type: 'array', items: { type: 'string' } } } } } } } } },
+  } })
+  assert.equal(ops.length, 2)
+  assert.equal(ops[0].pattern.test('/instances/5f0c/qr'), true)
+  assert.equal(ops[0].pattern.test('/instances/5f0c/qr/x'), false)
+  assert.equal(ops[1].body, '{to: string, text?: string, kind?: "text" | "image", tags?: string[]}')
+  assert.equal(shapeOf({ anyOf: [{ type: 'string' }, { type: 'null' }] }), 'string | null')
+  assert.deepEqual(search(ops, 'send message').map(op => op.path), ['/messages/send'])
+  assert.deepEqual(search(ops, 'qr').map(op => op.path), ['/instances/{id}/qr'])
+})
+
+test('a large answer keeps its shape: its lists are shortened until it fits', () => {
+  const items = Array.from({ length: 500 }, (_, index) => ({ id: index, name: `chat ${index}`, note: 'x'.repeat(50) }))
+  const text = fitted({ status: 200, data: { items, meta: { total: 500 } } }, 4000)
+  assert.ok(text.length <= 4000)
+  const value = JSON.parse(text)
+  assert.equal(value.status, 200)
+  assert.equal(value.data.meta.total, 500)
+  assert.ok(value.data.items.length > 0 && value.data.items.length < 500)
+  assert.match(value._cut, /shortened/)
+  assert.equal(fitted({ status: 200, data: { ok: true } }), '{"status":200,"data":{"ok":true}}')
+})
+
+test('routes omni declares but leaves out of its API description are found and callable too', async () => {
+  const { withSourceRoutes, search, findOperation } = await import('../src/host/omni-api.js')
+  const { SOURCE_ROUTES } = await import('../src/host/omni-routes.js')
+  // The committed index is this repository's API: chats and sending are in it.
+  const sent = SOURCE_ROUTES.find(route => route.method === 'POST' && route.path === '/messages/send')
+  assert.match(sent.body, /instanceId: z\.string\(\)\.uuid\(\)/)
+  assert.match(SOURCE_ROUTES.find(route => route.method === 'GET' && route.path === '/chats').query, /unreadOnly/)
+  assert.ok(!SOURCE_ROUTES.some(route => route.path === '/' || /^\/\{\w+\}(\/|$)/.test(route.path)), 'no root catch-alls')
+  const documented = [{ method: 'GET', path: '/chats/{id}', pattern: /^\/chats\/[^/]+$/, summary: 'Get chat (documented)', params: [], body: null }]
+  const ops = withSourceRoutes(documented, [
+    { method: 'GET', path: '/chats/{id}', summary: 'Get chat by ID', tag: 'chats' },
+    { method: 'GET', path: '/chats', summary: 'List chats', tag: 'chats', query: 'z.object({ unreadOnly: z.coerce.boolean().optional() })' },
+    { method: 'POST', path: '/messages/send', summary: '', tag: 'messages' },
+  ])
+  assert.deepEqual(ops.map(op => [op.method, op.path, op.summary, op.undocumented === true]), [
+    ['GET', '/chats/{id}', 'Get chat (documented)', false],
+    ['GET', '/chats', 'List chats', true],
+    ['POST', '/messages/send', 'messages · send', true],
+  ])
+  assert.equal(findOperation(ops, 'POST', '/messages/send').summary, 'messages · send')
+  assert.equal(search(ops, 'unread chats')[0].path, '/chats')
+})
+
+test('source route descriptions retain multiline PATCH extensions', async () => {
+  const { sourceRoutes } = await import('../scripts/omni-routes.mjs')
+  const home = mkdtempSync(join(tmpdir(), 'omni-routes-'))
+  const { mkdirSync } = await import('node:fs')
+  mkdirSync(join(home, 'src/routes/v2'), { recursive: true })
+  writeFileSync(join(home, 'src/routes/v2/index.ts'), "import { instancesRoutes } from './instances';\nv2Routes.route('/instances', instancesRoutes)")
+  writeFileSync(join(home, 'src/routes/v2/instances.ts'), "const updateInstanceSchema = createInstanceSchema\n.partial()\n.extend(InstanceSettingsSchema.shape)\n.strict();\ninstancesRoutes.patch('/:id', zValidator('json', updateInstanceSchema), () => {})")
+  try { assert.match(sourceRoutes(home)[0].body, /InstanceSettingsSchema\.shape.*strict/) }
+  finally { rmSync(home, { recursive: true, force: true }) }
+})
+
+test('routes of a router mounted at the root keep their own full path', async () => {
+  const { SOURCE_ROUTES } = await import('../src/host/omni-routes.js')
+  assert.ok(SOURCE_ROUTES.some(route => route.method === 'GET' && route.path === '/events/consumers'))
+  assert.ok(!SOURCE_ROUTES.some(route => route.path.startsWith('//')))
+})
+
+// Chat keys (wish: omni-chat-threads, criterion :196): their answers carry key text, so no
+// Bot reaches them. A fake omni that documents them, and answers them with a key.
+const OMNI = 'https://omni.test'
+const HOST_KEY = 'omni_sk_host_test'
+const CHILD_KEY = 'omni_sk_child_test'
+const KEY_PATHS = {
+  '/keys/children': { post: { summary: 'Mint a chat key', tags: ['Keys'], requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { chatId: { type: 'string' } } } } } } } },
+  '/keys/children/self/revoke': { post: { summary: 'A chat key revokes itself', tags: ['Keys'] } },
+  '/keys/children/{id}/revoke': { post: { summary: 'Revoke one of your chat keys', tags: ['Keys'] } },
+}
+
+function keyBench(t) {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-keys-'))
+  writeFileSync(join(home, 'state.json'), JSON.stringify({
+    version: 1, mainBotIds: ['m1'], revision: 1,
+    bots: { m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1 } },
+    rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
+  }))
+  const realFetch = globalThis.fetch
+  const requests = []
+  const answers = {
+    '/openapi.json': { paths: { '/instances': { get: { summary: 'List instances', tags: ['Instances'] } }, ...KEY_PATHS } },
+    '/instances': { items: [] },
+    '/keys/children': { data: { id: 'c1', plainTextKey: CHILD_KEY } },
+  }
+  globalThis.fetch = async (address, init = {}) => {
+    const path = String(address).replace(`${OMNI}/api/v2`, '')
+    requests.push({ method: init.method ?? 'GET', path })
+    const answer = answers[path.split('?')[0]]
+    return new Response(JSON.stringify(answer ?? {}), { status: answer ? 200 : 404 })
+  }
+  const ctx = fakeContext({ services: { credentials: { resolve: async ref => (ref === 'OMNI_API_KEY' ? { value: HOST_KEY } : undefined) } } })
+  applyBoth(ctx, { home, omni: { url: OMNI } })
+  t.after(async () => {
+    globalThis.fetch = realFetch
+    await ctx.dispose()
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+  })
+  const tool = name => args => ctx.registeredTools.get(name).execute(args, { agent: { id: 'm1' } })
+  return { tool, requests }
+}
+
+const noKeyText = (text) => {
+  for (const key of [HOST_KEY, CHILD_KEY]) assert.ok(!String(text).includes(key), 'no key text in a tool result')
+}
+
+test('omni_call refuses each chat-key route before any request, however the path is written', async (t) => {
+  const { tool, requests } = keyBench(t)
+  for (const path of [
+    '/keys/children',
+    '/keys/children/self/revoke',
+    '/keys/children/c1/revoke',
+    '/api/v2/keys/children',
+    '/keys//children',
+    '/keys/%63hildren/self/revoke',
+    '/keys/./children',
+    '/instances/../keys/children',
+    '/keys/%2e/children/self/revoke',
+  ]) {
+    const answer = await tool('omni_call')({ method: 'POST', path, body: JSON.stringify({ chatId: 'c1' }) })
+    assert.deepEqual(JSON.parse(answer), { status: 0, error: KEY_ROUTE_REFUSAL }, path)
+    noKeyText(answer)
+  }
+  // Refused before omni_call reads the API description, and before any key route: the only
+  // request so far is the host's own start-up housekeeping, if any.
+  assert.deepEqual(requests.filter(request => isKeyRoute(request.path) || request.path === '/openapi.json'), [])
+  // Other routes still go through, and /keys/childrenX is not a chat-key route.
+  assert.equal(JSON.parse(await tool('omni_call')({ method: 'GET', path: '/instances' })).status, 200)
+  assert.equal(isKeyRoute('/keys/childrenX'), false)
+  assert.equal(isKeyRoute('/keys/c1/revoke'), false)
+})
+
+test('omni_endpoints never lists a chat-key route, whatever it is asked', async (t) => {
+  const { tool } = keyBench(t)
+  for (const words of ['keys children', 'mint chat key', 'revoke chat key self', 'keys']) {
+    const found = await tool('omni_endpoints')({ search: words })
+    assert.ok(!/\/keys\/children/.test(found), words)
+    noKeyText(found)
+  }
+  assert.match(await tool('omni_endpoints')({ search: 'list instances' }), /GET \/instances/)
+})
+
+test('the committed route index has the chat-key routes, and the tools still leave them out', async () => {
+  const { SOURCE_ROUTES } = await import('../src/host/omni-routes.js')
+  const keyRoutes = SOURCE_ROUTES.filter(route => isKeyRoute(route.path)).map(route => `${route.method} ${route.path}`).sort()
+  assert.deepEqual(keyRoutes, ['POST /keys/children', 'POST /keys/children/self/revoke', 'POST /keys/children/{id}/revoke'])
+})
+
+// The chat threads' tools (wish omni-chat-threads, criterion :197) belong to a thread's own
+// Session: the Omni Bot's Sessions never list them, an Omni named or not, and each is denied
+// on its own, so a name DSH's restrict() refuses is skipped and the rest still go.
+test('the Omni Bot\'s Session has the thread tools trimmed one name at a time, with the computer tools and the team\'s start_task when an Omni is named', async (t) => {
+  const { THREAD_TOOLS } = await import('../src/host/threads.js')
+  const { COMPUTER_TOOLS } = await import('../src/host/omni-api.js')
+  for (const named of [false, true]) {
+    const home = mkdtempSync(join(tmpdir(), 'ds-bot-trim-'))
+    writeFileSync(join(home, 'state.json'), JSON.stringify({
+      version: 1, mainBotIds: ['m1'], revision: 1,
+      bots: { m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1, sessionId: 'omni-chat' }, w1: { id: 'w1', name: 'Dev', role: '', instructions: '', createdAt: 2, sessionId: 'dev-chat' } },
+      rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
+    }))
+    const ctx = fakeContext()
+    applyBoth(ctx, { home }, named ? { omni: { url: OMNI } } : {})
+    t.after(async () => {
+      await ctx.dispose()
+      rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+    })
+    // Every tool is served here; DSH's restrict() refuses thread_picture, as it does a name it
+    // does not know.
+    ctx.tools.schemas = () => [...THREAD_TOOLS, ...COMPUTER_TOOLS, 'start_task', 'web_search'].map(name => ({ name }))
+    const agentFor = (sessionId) => {
+      const denied = []
+      const agent = { id: sessionId, session: { id: sessionId }, denied, ctx: { effect: () => {}, tools: { restrict: ({ deny }) => {
+        if (deny?.includes('thread_picture')) throw new Error('tools.restrict() names unknown global tool "thread_picture"')
+        denied.push(deny)
+        return () => {}
+      } } } }
+      return agent
+    }
+    const omniBot = agentFor('omni-chat')
+    const worker = agentFor('dev-chat')
+    for (const agent of [omniBot, worker]) for (const listener of ctx.listeners.get('agent/created') ?? []) await listener({ agent })
+    const ours = list => list.filter(([name]) => THREAD_TOOLS.includes(name) || COMPUTER_TOOLS.includes(name) || name === 'start_task')
+    assert.deepEqual(ours(omniBot.denied), [...(named ? [...COMPUTER_TOOLS, 'start_task'] : []), ...THREAD_TOOLS.filter(name => name !== 'thread_picture')].map(name => [name]), `named: ${named}`)
+    // Another Bot's Session lists them, and each refuses there.
+    assert.deepEqual(ours(worker.denied), [])
+    // A second agent/created of the same agent denies nothing again.
+    for (const listener of ctx.listeners.get('agent/created') ?? []) await listener({ agent: omniBot })
+    assert.equal(ours(omniBot.denied).length, (named ? COMPUTER_TOOLS.length + 1 : 0) + THREAD_TOOLS.length - 1)
+  }
+})

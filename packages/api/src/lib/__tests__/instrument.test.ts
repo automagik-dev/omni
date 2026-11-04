@@ -36,7 +36,7 @@ describe('Sentry instrument', () => {
 
     // Restore
     if (savedDsn) process.env.SENTRY_DSN = savedDsn;
-    else process.env.SENTRY_DSN = undefined;
+    else Reflect.deleteProperty(process.env, 'SENTRY_DSN');
   });
 
   test('initialises client with correct options when DSN is provided', async () => {

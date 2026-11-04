@@ -155,6 +155,69 @@ jobs:
       expected_digest: ${{ inputs.expected_digest }}
       orchestrator_run_id: ${{ inputs.orchestrator_run_id }}
       orchestrated: true
+    # Only the omni-release dispatch PAT, never secrets: inherit.
+    secrets:
+      AUTOMAGIK_DISPATCH_TOKEN: ${{ secrets.AUTOMAGIK_DISPATCH_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Plugin lane — after a stable publish, Omni's channels and canvases go on the
+  # signed lane the Automagik desktop app updates them from (scripts/plugin-lane.ts,
+  # plugin-lane/README.md). The tarballs live on the rolling `plugin-lane`
+  # release, one per plugin version and never replaced, so the versioned
+  # release keeps exactly its signed binaries. Its key is the PLUGIN_LANE_KEY
+  # secret alone.
+  # ---------------------------------------------------------------------------
+  plugin-lane:
+    needs: [sign-attest, publish]
+    if: ${{ (inputs.channel || 'stable') == 'stable' }}
+    name: Sign and post the plugin lane
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write       # the rolling plugin-lane release only
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Pack, sign and post
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED_VERSION: ${{ needs.sign-attest.outputs.version }}
+          PLUGIN_LANE_KEY: ${{ secrets.PLUGIN_LANE_KEY }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version package.json)
+          [[ "${version}" == "${PUBLISHED_VERSION}" ]] || {
+            echo "::error::the checkout is ${version}, the published release is ${PUBLISHED_VERSION}"
+            exit 1
+          }
+          bun scripts/plugin-lane.ts pack lane/pack
+          if ! gh release view plugin-lane --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release create plugin-lane --repo "${GITHUB_REPOSITORY}" --target dev --prerelease --latest=false \
+              --title "Omni plugin lane" \
+              --notes "lane.json lists Omni's newest DSH plugins (channels, canvases) and the tarball of each, kept here one per version; lane.json.sig is its ed25519 signature, checked against plugin-lane/keys.json. See scripts/plugin-lane.ts."
+          fi
+          # A plugin version the lane already carries keeps its tarball, byte for byte.
+          mkdir -p lane/kept
+          for file in lane/pack/*.tgz; do
+            name=$(basename "${file}")
+            gh release download plugin-lane --repo "${GITHUB_REPOSITORY}" --pattern "${name}" --dir lane/kept 2>/dev/null || true
+          done
+          bun scripts/plugin-lane.ts manifest lane/pack "$(date -u +%Y-%m-%dT%H:%M:%SZ)" lane/kept > lane/lane.json
+          bun scripts/plugin-lane.ts sign lane/lane.json > lane/lane.json.sig
+          bun scripts/plugin-lane.ts verify lane/lane.json lane/lane.json.sig
+          for file in lane/pack/*.tgz; do
+            [[ -f "lane/kept/$(basename "${file}")" ]] || gh release upload plugin-lane "${file}" --repo "${GITHUB_REPOSITORY}"
+          done
+          gh release upload plugin-lane lane/lane.json lane/lane.json.sig --clobber --repo "${GITHUB_REPOSITORY}"
 
   # ---------------------------------------------------------------------------
   # Release notes — runs after publish so the GH release exists. Renders the
@@ -237,7 +300,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.4
 
       - name: Install dependencies
         run: bun install
@@ -263,15 +326,25 @@ jobs:
           bun scripts/release/generate-release-notes.ts "${args[@]}"
 
       - name: Update release body with changelog
+        # The notes must never turn the release red: if GitHub rejects the body
+        # (for example HTTP 422 "body is too long"), warn and keep the placeholder.
+        # The generator already caps the body under GitHub's 125000-character limit.
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.pkg.outputs.tag }}
+          NOTES_FILE: /tmp/release-notes.md
         run: |
           set -euo pipefail
           TAG="${RELEASE_TAG}"
-          if [[ -s /tmp/release-notes.md ]]; then
-            gh release edit "${TAG}" --notes-file /tmp/release-notes.md
-            echo "Updated release body for ${TAG}"
+          if [[ -s "${NOTES_FILE}" ]]; then
+            if edit_output=$(gh release edit "${TAG}" --notes-file "${NOTES_FILE}" 2>&1); then
+              echo "Updated release body for ${TAG}"
+            else
+              edit_status=$?
+              reason="${edit_output//$'\r'/}"
+              reason="${reason//$'\n'/ }"
+              echo "::warning::gh release edit failed for ${TAG} (exit ${edit_status}); leaving the placeholder release body in place: ${reason}"
+            fi
           else
             echo "::warning::the notes generator produced empty notes; leaving the placeholder body in place"
           fi

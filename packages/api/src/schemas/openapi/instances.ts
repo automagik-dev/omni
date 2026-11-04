@@ -104,48 +104,179 @@ export const CloseContactConfigSchema = z
   })
   .strict();
 
+// Outbound pacing (mirrors createInstanceSchema in routes/v2/instances.ts)
+const OUTBOUND_PACING_DESCRIPTION =
+  "Outbound pacing (WhatsApp Baileys): 'humanized' keeps the anti-ban delay and typing simulation before each send; 'immediate' skips both. Send requests may ask for 'humanized' with `pacing`; asking for 'immediate' needs outboundPacingOverride on a humanized instance";
+const OUTBOUND_PACING_OVERRIDE_DESCRIPTION =
+  "Let send requests choose `pacing: 'immediate'` on a humanized instance. Default false: such requests are refused with 403. Setting it to true needs a full-access ('*') key; any other key gets 403";
+
+const PacingOverrideForbiddenResponse = {
+  description: "Setting outboundPacingOverride to true requires a full-access ('*') API key",
+  content: { 'application/json': { schema: ErrorSchema } },
+};
+
+// No defaults: omitted PATCH settings must never reset stored overrides.
+const sessionResetRule = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('none') }).strict(),
+  z.object({ mode: z.literal('daily'), hour: z.number().int().min(0).max(23).optional() }).strict(),
+  z.object({ mode: z.literal('idle'), minutes: z.number().int().positive().optional() }).strict(),
+]);
+const metaIdentifier = z.string().min(1).max(64).nullable().optional();
+export const InstanceSettingsSchema = z
+  .object({
+    agentId: z.string().uuid().nullable().optional(),
+    agentReplyFilter: z
+      .object({
+        mode: z.enum(['all', 'filtered']),
+        conditions: z
+          .object({
+            onDm: z.boolean().optional(),
+            onMention: z.boolean().optional(),
+            onReply: z.boolean().optional(),
+            onNameMatch: z.boolean().optional(),
+            namePatterns: z.array(z.string()).optional(),
+          })
+          .optional(),
+      })
+      .nullable()
+      .optional(),
+    agentSessionStrategy: z.enum(['per_user', 'per_chat', 'per_thread']).optional(),
+    agentPrefixSenderName: z.boolean().optional(),
+    agentGateEnabled: z.boolean().optional(),
+    agentGateModel: z.string().max(120).nullable().optional(),
+    agentGatePrompt: z.string().nullable().optional(),
+    agentWaitForMedia: z.boolean().optional(),
+    agentSendMediaPath: z.boolean().optional(),
+    agentSendMediaPathTypes: z.array(z.string()).nullable().optional(),
+    agentStalledTimeoutMs: z.number().int().nonnegative().optional(),
+    messageSupersedeMode: z.enum(['off', 'discard']).optional(),
+    enableAutoSplit: z.boolean().optional(),
+    messageFormatMode: z.enum(['convert', 'passthrough']).optional(),
+    disableUsernamePrefix: z.boolean().optional(),
+    triggerEvents: z.array(z.string()).nullable().optional(),
+    triggerReactions: z.array(z.string()).nullable().optional(),
+    triggerMentionPatterns: z.array(z.string()).nullable().optional(),
+    triggerMode: z.enum(['round-trip', 'fire-and-forget']).optional(),
+    agentChainToInstanceId: z.string().uuid().nullable().optional(),
+    chainMode: z.enum(['off', 'forward', 'bidirectional']).optional(),
+    sessionReset: z
+      .object({
+        default: sessionResetRule.optional(),
+        dm: sessionResetRule.optional(),
+        group: sessionResetRule.optional(),
+        thread: sessionResetRule.optional(),
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    // Postgres integer column: larger values would fail the write instead of a 400.
+    inboundMaxAgeMinutes: z.number().int().nonnegative().max(2_147_483_647).optional(),
+    replayEnabled: z.boolean().optional(),
+    inboundReplyContext: z.boolean().optional(),
+    messageDebounceMode: z.enum(['disabled', 'fixed', 'randomized', 'presence']).optional(),
+    messageDebounceMinMs: z.number().int().nonnegative().optional(),
+    messageDebounceGroupMs: z.number().int().nonnegative().nullable().optional(),
+    messageDebounceMaxMs: z.number().int().nonnegative().optional(),
+    messageDebounceRestartOnTyping: z.boolean().optional(),
+    messageDebounceMaxWaitMs: z.number().int().nonnegative().nullable().optional(),
+    messageSplitDelayMode: z.enum(['disabled', 'fixed', 'randomized']).optional(),
+    messageSplitDelayFixedMs: z.number().int().nonnegative().optional(),
+    messageSplitDelayMinMs: z.number().int().nonnegative().optional(),
+    messageSplitDelayMaxMs: z.number().int().nonnegative().optional(),
+    reactionAck: z.enum(['on', 'off']).optional(),
+    reactionAckEmoji: z.record(z.string()).nullable().optional(),
+    ackTimeoutMs: z.number().int().min(0).max(120000).optional(),
+    agentAckMessage: z.string().nullable().optional(),
+    readReceipts: z.enum(['on', 'off', 'exclude-self']).optional(),
+    markOnlineOnConnect: z.boolean().optional(),
+    processAudio: z.boolean().optional(),
+    processImages: z.boolean().optional(),
+    processVideo: z.boolean().optional(),
+    processDocuments: z.boolean().optional(),
+    processMediaOnBlocked: z.boolean().optional(),
+    downloadMediaOnSync: z.boolean().optional(),
+    audioTranscription: z.enum(['auto', 'off']).optional(),
+    accessMode: z.enum(['disabled', 'blocklist', 'allowlist']).optional(),
+    groupHistorySize: z.number().int().min(0).max(200).optional(),
+    historyIdentity: z.enum(['desktop', 'web']).optional(),
+    syncFullHistory: z.boolean().optional(),
+    ttsVoiceId: z.string().nullable().optional(),
+    ttsModelId: z.string().nullable().optional(),
+    followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable().optional(),
+    closeContactConfig: CloseContactConfigSchema.nullable().optional(),
+    outboundPacing: z.enum(['humanized', 'immediate']).optional(),
+    outboundPacingOverride: z.boolean().optional(),
+    metaPhoneNumberId: metaIdentifier,
+    metaWabaId: metaIdentifier,
+    metaAppId: metaIdentifier,
+    metaBusinessId: metaIdentifier,
+    metaApiVersion: z
+      .string()
+      .regex(/^v\d+\.\d+$/)
+      .max(16)
+      .optional()
+      .describe('Provisioning snapshot; runtime environment version takes precedence'),
+    metaConnectionMethod: z.enum(['manual', 'embedded_signup']).nullable().optional(),
+    metaConnectedAt: z.string().datetime({ offset: true }).nullable().optional(),
+    metaDisplayPhoneNumber: z.string().max(32).nullable().optional(),
+  })
+  .strict();
+
 /**
- * Instance response schema
+ * Instance response schema. Existing required fields win over optional PATCH leaves.
  */
-export const InstanceSchema = z.object({
-  id: z.string().uuid().openapi({ description: 'Instance UUID' }),
-  name: z.string().openapi({ description: 'Instance name' }),
-  channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
-  isActive: z.boolean().openapi({ description: 'Whether instance is active' }),
-  isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
-  profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
-  profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
-  historyIdentity: z.enum(['desktop', 'web']).openapi({
-    description:
-      "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
-  }),
-  syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
-  ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
-  agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
-  agentProviderId: z
-    .string()
-    .uuid()
-    .nullable()
-    .optional()
-    .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
-  agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
-  agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
-    description:
-      'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
-  }),
-  agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
-  gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
-    .optional()
-    .openapi({ description: 'Gupshup HANDOFF routing options' }),
-  closeContactConfig: CloseContactConfigSchema.nullable()
-    .optional()
-    .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
-  followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable()
-    .optional()
-    .openapi({ description: 'Instance-scope follow-up sequence config' }),
-  createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
-  updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
-});
+export const InstanceSchema = z
+  .object({
+    ...InstanceSettingsSchema.shape,
+    id: z.string().uuid().openapi({ description: 'Instance UUID' }),
+    name: z.string().openapi({ description: 'Instance name' }),
+    channel: ChannelTypeSchema.openapi({ description: 'Channel type' }),
+    isActive: z.boolean().openapi({ description: 'Whether instance is active' }),
+    isDefault: z.boolean().openapi({ description: 'Whether this is the default instance for channel' }),
+    profileName: z.string().nullable().openapi({ description: 'Connected profile name' }),
+    profilePicUrl: z.string().nullable().openapi({ description: 'Profile picture URL' }),
+    historyIdentity: z.enum(['desktop', 'web']).openapi({
+      description:
+        "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
+    }),
+    syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
+    outboundPacing: z.enum(['humanized', 'immediate']).optional().openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+    outboundPacingOverride: z.boolean().optional().openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
+    audioTranscription: z.enum(['auto', 'off']).openapi({
+      description:
+        "Server-side transcription of inbound audio: 'auto' (transcribed as always) or 'off' (stored but never sent to STT)",
+    }),
+    inboundReplyContext: z.boolean().openapi({
+      description:
+        'WhatsApp (Baileys): typed replyTo on message.received and target on reaction.received/removed (false = events unchanged)',
+    }),
+    ownerIdentifier: z.string().nullable().openapi({ description: 'Owner identifier' }),
+    agentId: z.string().uuid().nullable().optional().openapi({ description: 'Agent UUID (agents table)' }),
+    agentProviderId: z
+      .string()
+      .uuid()
+      .nullable()
+      .optional()
+      .openapi({ description: 'Provider ID of the assigned agent (read-only; set via the agent)' }),
+    agentTimeout: z.number().openapi({ description: 'Agent timeout in seconds' }),
+    agentErrorMessages: z.array(z.string()).nullable().optional().openapi({
+      description:
+        'Customer-facing replies sent when agent dispatch fails; one is picked at random per failure (null/empty = env/default fallback)',
+    }),
+    agentStreamMode: z.boolean().openapi({ description: 'Whether streaming is enabled' }),
+    gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
+      .optional()
+      .openapi({ description: 'Gupshup HANDOFF routing options' }),
+    closeContactConfig: CloseContactConfigSchema.nullable()
+      .optional()
+      .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
+    followUpConfig: FollowUpSequenceConfigOpenApiSchema.nullable()
+      .optional()
+      .openapi({ description: 'Instance-scope follow-up sequence config' }),
+    createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
+    updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
+  })
+  .openapi('Instance');
 
 /**
  * Create instance request schema
@@ -170,6 +301,19 @@ export const CreateInstanceSchema = z.object({
     .boolean()
     .default(false)
     .openapi({ description: 'WhatsApp (Baileys): request full message history on connect (default: false)' }),
+  outboundPacing: z
+    .enum(['humanized', 'immediate'])
+    .default('humanized')
+    .openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
+  outboundPacingOverride: z.boolean().default(false).openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
+  audioTranscription: z.enum(['auto', 'off']).default('auto').openapi({
+    description:
+      "Server-side transcription of inbound audio (default: auto). 'auto' = transcribed as always; 'off' = stored but never sent to STT, and a skipped media.processed is emitted instead",
+  }),
+  inboundReplyContext: z.boolean().default(false).openapi({
+    description:
+      'WhatsApp (Baileys): add the typed replyTo to message.received and target to reaction.received/removed (default: false = events unchanged). Read at connect: restart the instance after changing it',
+  }),
   gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
     .optional()
     .openapi({
@@ -304,7 +448,83 @@ export const SupportedChannelSchema = z.object({
 /**
  * Register instance schemas and paths with the given registry
  */
+const ownJid = z.string().regex(/^\d{5,20}@s\.whatsapp\.net$/);
+export const SelfIdentitySchema = z
+  .object({
+    ownerIdentifier: ownJid,
+    generation: z.string().uuid(),
+    selfJid: ownJid,
+    connectedAt: z.string().datetime(),
+  })
+  .strict();
+const selfWindow = {
+  expectedOwner: ownJid,
+  expectedGeneration: z.string().uuid(),
+  after: z.string().datetime(),
+  before: z.string().datetime(),
+};
+const validWindow = (v: { after: string; before: string }) =>
+  Date.parse(v.before) >= Date.parse(v.after) && Date.parse(v.before) - Date.parse(v.after) <= 7 * 86400000;
+export const SelfMessagesSchema = z
+  .object({
+    ...selfWindow,
+    connectionStartedAt: z.string().datetime(),
+    excludeExternalIds: z
+      .array(z.string().min(1).max(255))
+      .max(1000)
+      .refine((v) => new Set(v).size === v.length),
+  })
+  .strict()
+  .refine(validWindow, 'At most seven days')
+  .refine(
+    (v) =>
+      Date.parse(v.connectionStartedAt) <= Date.parse(v.after) &&
+      Date.parse(v.after) === Math.max(Date.parse(v.connectionStartedAt), Date.parse(v.before) - 7 * 86400000),
+    'Anchored self inbox window',
+  );
+export const SelfHistorySchema = z
+  .object({ ...selfWindow, chatId: z.string().uuid() })
+  .strict()
+  .refine(validWindow, 'At most seven days');
+export const SelfChatsSchema = z.object({ cursor: z.string().uuid().optional() }).strict();
+export const SelfReceiptSchema = z
+  .object({ expectedOwner: ownJid, expectedGeneration: z.string().uuid(), externalId: z.string().min(1).max(255) })
+  .strict();
+export const SendSelfSchema = z
+  .object({
+    instanceId: z.string().uuid(),
+    expectedOwner: ownJid,
+    expectedGeneration: z.string().uuid(),
+    operationKey: z.string().regex(/^[A-Za-z0-9_-]{1,100}$/),
+    text: z.string().min(1).max(8000),
+  })
+  .strict();
+
 export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
+  const pathId = z.object({ id: z.string().uuid() });
+  for (const [method, path, schema] of [
+    ['get', '/instances/{id}/self', SelfIdentitySchema],
+    ['post', '/instances/{id}/self/messages', SelfMessagesSchema],
+    ['post', '/instances/{id}/self/history', SelfHistorySchema],
+    ['post', '/instances/{id}/self/receipt', SelfReceiptSchema],
+    ['get', '/instances/{id}/self/chats', SelfChatsSchema],
+    ['post', '/messages/send-self', SendSelfSchema],
+  ] as const)
+    registry.registerPath({
+      method,
+      path,
+      tags: ['WhatsApp self'],
+      request: {
+        ...(path.includes('{id}') ? { params: pathId } : {}),
+        ...(method === 'get' && path === '/instances/{id}/self/chats' ? { query: SelfChatsSchema } : {}),
+        ...(method === 'post' ? { body: { content: { 'application/json': { schema } } } } : {}),
+      },
+      responses: {
+        200: { description: 'Verified bounded self capability' },
+        201: { description: 'Native self send accepted' },
+        409: { description: 'Identity changed or unverified' },
+      },
+    });
   registry.register('Instance', InstanceSchema);
   registry.register('CreateInstanceRequest', CreateInstanceSchema);
   registry.register('InstanceStatus', InstanceStatusSchema);
@@ -423,6 +643,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
           },
         },
       },
+      403: PacingOverrideForbiddenResponse,
       400: {
         description: 'Validation error',
         content: {
@@ -445,7 +666,7 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
       }),
       body: {
         content: {
-          'application/json': { schema: CreateInstanceSchema.partial() },
+          'application/json': { schema: CreateInstanceSchema.partial().extend(InstanceSettingsSchema.shape).strict() },
         },
       },
     },
@@ -457,6 +678,12 @@ export function registerInstanceSchemas(registry: OpenAPIRegistry): void {
             schema: z.object({ data: InstanceSchema }),
           },
         },
+      },
+      400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
+      403: {
+        description:
+          "Setting outboundPacingOverride to true requires a full-access ('*') API key, or the chain target is not accessible",
+        content: { 'application/json': { schema: ErrorSchema } },
       },
       404: {
         description: 'Instance not found',

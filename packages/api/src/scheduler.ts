@@ -22,6 +22,7 @@ import {
 import * as Sentry from '@sentry/bun';
 import { sentryEnabled } from './lib/sentry-scrub';
 import type { Services } from './services';
+import { cleanupDeadLettersForTenants } from './services/dead-letter-maintenance';
 import { ScheduledMessageService, createPluginResolver } from './services/scheduled-messages';
 import { runForEachActiveTenantRow } from './tenancy/periodic-tenant-work';
 
@@ -257,7 +258,7 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
       await withCronMonitor('dead-letter-cleanup', '0 3 * * *', 10, 15, async () => {
         const startTime = Date.now();
         try {
-          const deleted = await services.deadLetters.cleanupExpired();
+          const deleted = await cleanupDeadLettersForTenants(services.db, services.authPlane.db, services.deadLetters);
           const durationSec = (Date.now() - startTime) / 1000;
           recordScheduledJob('dead-letter-cleanup', 'success', durationSec);
 
@@ -341,6 +342,11 @@ export function setupScheduler(services: Services, channelRegistry?: ChannelRegi
         }
       });
     },
+  });
+
+  // Once per boot: flag poll sources as disabled without an allowlist, or re-arm them (#1239/#1240).
+  services.webhooks.reconcilePollAllowlist().catch((err) => {
+    log.error('Poll allowlist reconciliation failed', { error: err instanceof Error ? err.message : String(err) });
   });
 
   // Poll connectors — every 30 seconds (#1186). Each source keeps its own

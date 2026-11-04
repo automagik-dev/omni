@@ -318,6 +318,48 @@ export async function createStorageAuthState(
 }
 
 /**
+ * Auth state for a short-lived socket that must leave storage untouched.
+ *
+ * Reads the stored creds and signal keys, but keeps every key write in
+ * memory: the session is about to be logged out and its auth cleared, and a
+ * background persist landing after the clear would leave orphan keys behind.
+ *
+ * @returns null when the instance was never paired (nothing to log out)
+ */
+export async function createReadOnlyAuthState(
+  storage: PluginStorage,
+  instanceId: string,
+): Promise<AuthenticationState | null> {
+  if (!(await storage.has(`auth:${instanceId}:creds`))) return null;
+
+  const { state } = await createStorageAuthState(storage, instanceId);
+  if (!state.creds.me?.id) return null;
+
+  const writes = new Map<string, unknown>();
+  return {
+    creds: state.creds,
+    keys: {
+      get: async (type, ids) => {
+        const data = await state.keys.get(
+          type,
+          ids.filter((id) => !writes.has(`${type}:${id}`)),
+        );
+        for (const id of ids) {
+          const value = writes.get(`${type}:${id}`);
+          if (value !== null && value !== undefined) data[id] = value as (typeof data)[string];
+        }
+        return data;
+      },
+      set: async (data) => {
+        for (const [type, entries] of Object.entries(data)) {
+          for (const [id, value] of Object.entries(entries ?? {})) writes.set(`${type}:${id}`, value ?? null);
+        }
+      },
+    },
+  };
+}
+
+/**
  * Clear sender keys for an instance — forces fresh key generation + redistribution.
  *
  * Use this to recover from sender key desync caused by previous hung sessions

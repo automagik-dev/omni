@@ -92,3 +92,7 @@ export * from './egress';
 // WhatsApp text formatting — compartilhado pelos DOIS canais WhatsApp
 // (baileys e cloud), que precisam converter markdown igual.
 export { markdownToWhatsApp } from './markdown-to-whatsapp';
+
+// WhatsApp id (nono dígito brasileiro) — também compartilhado pelos dois canais,
+// que precisam chavear o mesmo número igual (#1279).
+export { computeWaid } from './whatsapp-waid';

@@ -17,6 +17,7 @@ export const CHANNEL_TYPES = [
   'zenvia',
   'internal',
   'harness',
+  'webchat',
 ] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
 

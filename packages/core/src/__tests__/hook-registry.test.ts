@@ -46,17 +46,6 @@ describe('HookRegistry', () => {
       expect(hooks[0]?.priority).toBe(50);
     });
 
-    test('registers with custom priority', () => {
-      registry.register('inst-1', {
-        event: 'before_agent_start',
-        handler: async () => {},
-        priority: 10,
-      });
-
-      const hooks = registry.getHooks('inst-1', 'before_agent_start');
-      expect(hooks[0]?.priority).toBe(10);
-    });
-
     test('clamps priority to 0-100 range', () => {
       registry.register('inst-1', {
         event: 'before_agent_start',

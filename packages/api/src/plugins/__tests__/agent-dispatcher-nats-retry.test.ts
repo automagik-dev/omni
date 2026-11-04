@@ -124,14 +124,18 @@ function createFakeInstance(overrides: Record<string, unknown> = {}) {
 // ---------------------------------------------------------------------------
 
 describe('createNatsGenieProviderInstance — NATS retry with exponential backoff (#345)', () => {
-  // Capture all scheduled timeouts so we can fire them synchronously.
+  // Capture the retry timeouts so we can fire them synchronously.
   let pendingTimeouts: Array<{ fn: () => void; delay: number }> = [];
   const origSetTimeout = globalThis.setTimeout;
+  // Only the backoff's own delays are retries. Other timers (another suite's 30s timeout in
+  // the single-process sweep, say) run as usual instead of being read as a retry.
+  const RETRY_DELAYS = new Set([2000, 4000, 8000, 16000, 32000, 60000]);
 
   beforeEach(() => {
     pendingTimeouts = [];
     // Intercept setTimeout to capture callbacks and delays without waiting.
-    (globalThis as any).setTimeout = (fn: () => void, delay: number) => {
+    (globalThis as any).setTimeout = (fn: () => void, delay: number, ...args: unknown[]) => {
+      if (!RETRY_DELAYS.has(delay)) return origSetTimeout(fn, delay, ...args);
       pendingTimeouts.push({ fn, delay });
       return 0 as unknown as ReturnType<typeof setTimeout>;
     };

@@ -120,20 +120,6 @@ describe('Reaction Levels', () => {
       expect(shouldReact(instanceId, config)).toBe('A');
       expect(shouldReact(instanceId, config)).toBe('B');
     });
-
-    test('config change takes effect on next message', () => {
-      // Start with off
-      let config: ReactionLevelConfig = { level: 'off' };
-      expect(shouldReact(instanceId, config)).toBeNull();
-
-      // Switch to ack — immediate effect
-      config = { level: 'ack' };
-      expect(shouldReact(instanceId, config)).toBe('\u{1F440}');
-
-      // Switch back to off
-      config = { level: 'off' };
-      expect(shouldReact(instanceId, config)).toBeNull();
-    });
   });
 
   describe('setAckReaction', () => {

@@ -46,6 +46,17 @@ export const CORE_EVENT_TYPES = [
   'access.denied',
   'access.pairing_requested',
   'access.pairing_approved',
+  // Human login: the owner claimed the Omni; a device (desktop app, DSH plugin, CLI) was authorized
+  'access.owner_claimed',
+  'access.owner_whatsapp_linked',
+  'access.device_code_approved',
+  'access.device_authorized',
+  // The owner asked for a connect link in their self chat (texting "connect")
+  'access.connect_link_issued',
+  // Chat keys: a child key minted from a parent for one chat, revoked, or clamped to its parent
+  'access.key_minted',
+  'access.key_revoked',
+  'access.key_updated',
   // Presence
   'presence.typing',
   'presence.online',
@@ -139,10 +150,20 @@ export type CustomEventType = `custom.${string}`;
  */
 export type SystemEventType = `system.${string}`;
 
+/** Connector namespace; only connector ingress and proven retries may publish. */
+export type ConnectorEventType = `connector.${string}`;
+
+/** The legacy per-subscription trigger remains a literal. */
+export const CONNECTOR_EVENT_TYPE = 'connector.event' as const;
+
+export function isConnectorEventType(type: string): type is ConnectorEventType {
+  return type.startsWith('connector.');
+}
+
 /**
- * All event types: core + custom + system
+ * All event types: core + custom + system + connector
  */
-export type EventType = CoreEventType | CustomEventType | SystemEventType;
+export type EventType = CoreEventType | CustomEventType | SystemEventType | ConnectorEventType;
 
 /**
  * Check if an event type is a core event
@@ -165,6 +186,13 @@ export function isSystemEvent(type: string): type is SystemEventType {
   return type.startsWith('system.');
 }
 
+/** Legacy envelope or a typed provider event accepted by the connector registry. */
+export function isConnectorEvent(type: string): type is ConnectorEventType {
+  return (
+    type === CONNECTOR_EVENT_TYPE || /^connector\.[a-z][a-z0-9-]*\.[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(type)
+  );
+}
+
 /**
  * Base event structure
  */
@@ -178,6 +206,8 @@ export interface OmniEvent<T extends EventType = EventType, P = unknown> {
 
 export interface EventMetadata {
   correlationId: string;
+  /** Set only by the factory from the trusted ambient producer resolver. */
+  producingKeyId?: string;
   /**
    * Id of the IMMEDIATE parent event — the event whose consumption caused
    * this publish (#957, RFC #925 G3). `correlationId` groups a flow;
@@ -206,6 +236,8 @@ export interface EventMetadata {
   platformIdentityId?: string;
   traceId?: string;
   source?: string;
+  /** Set on a connector "send test delivery" publish; never set by a real provider delivery. */
+  test?: boolean;
   /**
    * How the message entered the system.
    * - 'realtime': a live message received from the platform
@@ -276,6 +308,21 @@ export interface MessageReceivedPayload {
     isVoiceNote?: boolean;
   };
   replyToId?: string;
+  /**
+   * Typed quote of the replied-to message (additive to `replyToId`; absent when
+   * the message is not a reply, and unless the instance opted in with
+   * `inboundReplyContext` — WhatsApp Baileys only). `fromMe` is true only when the
+   * quoted sender is proven to be this instance's own account.
+   */
+  replyTo?: {
+    externalId: string;
+    chatId: string;
+    participant?: string;
+    fromMe: boolean;
+    type: string;
+    isVoiceNote?: boolean;
+    text?: string;
+  };
   /**
    * Observer-independent authorship (#1148): the id of the Omni instance in
    * the SAME tenant whose own account sent this message, or absent when the
@@ -401,6 +448,13 @@ export interface MediaProcessedPayload {
   tokensUsed?: number;
   /** Set when processing failed — content will be empty string */
   error?: string;
+  /**
+   * Set when processing was deliberately not run (not a failure) — content will
+   * be empty string and `error` absent. Additive: absent on every other event.
+   */
+  skipped?: boolean;
+  /** Why processing was skipped, e.g. 'transcription_off'. Only set with `skipped`. */
+  reason?: string;
 }
 
 export interface MediaProcessingFailedPayload {
@@ -521,6 +575,100 @@ export interface AccessPairingApprovedPayload {
   platformUserId: string;
   requestId: string;
   ruleId: string;
+}
+
+/** The first verified human claimed this Omni; they are its owner from now on. */
+export interface AccessOwnerClaimedPayload {
+  userId: string;
+  /** The connected WhatsApp account whose number they verified; absent when they claimed without WhatsApp. */
+  instanceId?: string;
+  /** How they proved they run this Omni: a verified WhatsApp number, the boot claim token, or an admin key. */
+  via?: 'whatsapp' | 'claim-token' | 'operator';
+  /** The admin key that claimed it, when `via` is 'operator'. */
+  apiKeyId?: string;
+}
+
+/** An owner who claimed without WhatsApp linked one, so approvals can come from their phone. */
+export interface AccessOwnerWhatsappLinkedPayload {
+  userId: string;
+  instanceId: string;
+}
+
+/** The owner approved a waiting device's code from the server (`omni approve`). Never carries the code. */
+export interface AccessDeviceCodeApprovedPayload {
+  userId: string;
+  /** The device-flow client, when the request named one. */
+  clientId: string | null;
+  via: 'operator';
+  apiKeyId: string;
+}
+
+/** A device got its Omni key after its owner approved it. Never carries the key. */
+export interface AccessDeviceAuthorizedPayload {
+  userId: string;
+  /** The device-flow client: omni-desktop, omni-dsh, omni-cli or unfold. */
+  clientId: string;
+  deviceName: string;
+  apiKeyId: string;
+  /** The companion keys minted with it, when its client declares any. */
+  companionKeyIds?: string[];
+  /** How the owner let it in: a device code they approved, or a connect link they asked for. */
+  via?: 'device-code' | 'connect-link';
+}
+
+/** The owner texted "connect" to themselves and got a one-time link that connects one device. Never carries the link. */
+export interface AccessConnectLinkIssuedPayload {
+  userId: string;
+  /** The connected WhatsApp account whose self chat asked; absent when the operator asked (`omni connect`). */
+  instanceId?: string;
+  expiresAt: string;
+  via?: 'self-chat' | 'operator';
+}
+
+/** Why a chat key (a child of another key) was revoked. */
+export type AccessKeyRevokeReason =
+  | 'remint' // a new key was minted for the same chat
+  | 'parent_revoked'
+  | 'parent_deleted'
+  | 'parent_narrowed' // the parent no longer covers a scope or instance the child holds
+  | 'own_child' // its parent revoked it
+  | 'self' // it revoked itself
+  | 'operator'; // POST /keys/:id/revoke or DELETE /keys/:id named the chat key itself
+
+/** A chat key was minted from a parent key, locked to one chat. Never carries the key. */
+export interface AccessKeyMintedPayload {
+  keyId: string;
+  parentKeyId: string;
+  /** The chat row's id. */
+  chatId: string;
+  /** The chat's id on its channel (a WhatsApp JID). */
+  chatExternalId: string;
+  instanceId: string;
+  scopes: string[];
+  /** Epoch ms; the parent's expiry, null when the parent never expires. */
+  expiresAt: number | null;
+  /** The previous key for this chat, revoked by this mint. */
+  replacedKeyId: string | null;
+}
+
+/** A chat key was revoked. */
+export interface AccessKeyRevokedPayload {
+  keyId: string;
+  parentKeyId: string;
+  chatId: string;
+  instanceId: string;
+  reason: AccessKeyRevokeReason;
+  revokedBy: string | null;
+}
+
+/** A chat key's expiry was clamped to its parent's shortened or newly set expiry. */
+export interface AccessKeyUpdatedPayload {
+  keyId: string;
+  parentKeyId: string;
+  chatId: string;
+  instanceId: string;
+  /** Epoch ms. */
+  expiresAt: number;
 }
 
 /**
@@ -695,6 +843,8 @@ export interface ReactionReceivedPayload {
   isCustomEmoji?: boolean;
   /** Raw platform payload for channel-specific data */
   rawPayload?: Record<string, unknown>;
+  /** The reacted-to message, relative to the receiving instance (opt-in: instance `inboundReplyContext`) */
+  target?: { fromMe: boolean; participant?: string };
 }
 
 export interface ReactionRemovedPayload {
@@ -712,6 +862,8 @@ export interface ReactionRemovedPayload {
   isCustomEmoji?: boolean;
   /** Raw platform payload (carries the reaction's own external id where the platform has one) */
   rawPayload?: Record<string, unknown>;
+  /** The message the reaction was removed from, relative to the receiving instance (opt-in: `inboundReplyContext`) */
+  target?: { fromMe: boolean; participant?: string };
 }
 
 /**
@@ -1141,6 +1293,14 @@ export interface EventPayloadMap {
   'access.denied': AccessDeniedPayload;
   'access.pairing_requested': AccessPairingRequestedPayload;
   'access.pairing_approved': AccessPairingApprovedPayload;
+  'access.owner_claimed': AccessOwnerClaimedPayload;
+  'access.owner_whatsapp_linked': AccessOwnerWhatsappLinkedPayload;
+  'access.device_code_approved': AccessDeviceCodeApprovedPayload;
+  'access.device_authorized': AccessDeviceAuthorizedPayload;
+  'access.connect_link_issued': AccessConnectLinkIssuedPayload;
+  'access.key_minted': AccessKeyMintedPayload;
+  'access.key_revoked': AccessKeyRevokedPayload;
+  'access.key_updated': AccessKeyUpdatedPayload;
   'sync.started': SyncStartedPayload;
   'sync.progress': SyncProgressPayload;
   'sync.completed': SyncCompletedPayload;

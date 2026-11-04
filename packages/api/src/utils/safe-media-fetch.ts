@@ -162,7 +162,7 @@ export interface MediaFetchOptions extends RequestInit {
 
 const MAX_MEDIA_REDIRECTS = 5;
 
-function hostMatchesSuffix(hostname: string, suffix: string): boolean {
+export function hostMatchesSuffix(hostname: string, suffix: string): boolean {
   const normalizedHost = hostname.toLowerCase();
   const normalizedSuffix = suffix.toLowerCase();
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);

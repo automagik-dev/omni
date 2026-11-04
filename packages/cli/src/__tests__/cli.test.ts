@@ -21,46 +21,13 @@ import {
   startMockApiInstance,
   stopMockApi,
 } from './mock-api';
-
-/**
- * Pre-suite guard (#413): fail fast if a prior test run leaked a PM2 god
- * daemon attached to a `.omni-test` PM2_HOME. Leaving these around pollutes
- * the host and can confuse a subsequent suite that rebinds the same PM2
- * socket path.
- */
-function assertNoLeakedTestDaemons(): void {
-  const ps = spawnSync({ cmd: ['ps', '-eo', 'pid,args'], stdout: 'pipe', stderr: 'pipe' });
-  if (ps.exitCode !== 0) return; // non-fatal — if ps is unavailable, skip the guard
-  const output = new TextDecoder().decode(ps.stdout);
-  // Anchored to args start to avoid matching processes that merely mention
-  // the string (e.g. this source file itself, grep commands, transcripts).
-  const pattern = /^PM2\s+[^:]*:\s*God Daemon\s+\([^)]*\.omni-test[^)]*\)/;
-  const leaked: string[] = [];
-  for (const line of output.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const pidMatch = trimmed.match(/^\d+\s+(.*)$/);
-    const args = pidMatch?.[1] ?? '';
-    if (!pattern.test(args)) continue;
-    leaked.push(trimmed);
-  }
-  if (leaked.length > 0) {
-    const pids = leaked
-      .map((l) => l.match(/^(\d+)\s/)?.[1])
-      .filter((p): p is string => p !== undefined)
-      .join(' ');
-    const hint = pids ? `  # or: kill ${pids}\n` : '';
-    throw new Error(
-      `Pre-suite leak guard (#413): ${leaked.length} stale PM2 god daemon(s) detected:\n${leaked.join('\n')}\n\nKill them before re-running this suite:\n  make kill-stale-test-daemons\n${hint}`,
-    );
-  }
-}
+import { assertNoLeakedTestDaemons } from './pm2-leak-guard';
 
 // Use source entry point directly — avoids stale dist/index.js issues
 const CLI_PATH = join(import.meta.dir, '../index.ts');
 
 // Temp config dir for tests
-const TEST_CONFIG_DIR = join(tmpdir(), `.omni-test-${Date.now()}`);
+const TEST_CONFIG_DIR = mkdtempSync(join(tmpdir(), '.omni-test-'));
 // Explicit PM2_HOME under the test config dir. Without this, pm2 derives its
 // home from `HOME/.pm2`, and any CLI command that talks to pm2 (e.g. `omni
 // status` → `pm2 jlist`) will fork a god daemon there. The teardown then
@@ -70,16 +37,29 @@ const TEST_PM2_HOME = join(TEST_CONFIG_DIR, '.pm2');
 
 /**
  * Stop the test-mode PM2 god daemon (if any) before its home gets removed.
- * Synchronous so it can run from non-async afterAll hooks.
+ * PM2 acknowledges kill just before exiting, so await the actual process-table condition.
  */
-function killTestPm2Daemon(): void {
-  if (!existsSync(TEST_PM2_HOME)) return;
-  spawnSync({
-    cmd: ['pm2', 'kill'],
-    env: { ...process.env, HOME: TEST_CONFIG_DIR, PM2_HOME: TEST_PM2_HOME },
-    stdout: 'ignore',
-    stderr: 'ignore',
-  });
+async function killTestPm2Daemon(home = TEST_CONFIG_DIR): Promise<void> {
+  const pm2Home = join(home, '.pm2');
+  if (existsSync(pm2Home)) {
+    spawnSync({
+      cmd: ['pm2', 'kill'],
+      env: { ...process.env, HOME: home, PM2_HOME: pm2Home },
+      stdout: 'ignore',
+      stderr: 'ignore',
+    });
+  }
+  // A failed kill (or an already-removed directory) must not hide our own leaked daemon.
+  const deadline = performance.now() + 2000;
+  for (;;) {
+    try {
+      assertNoLeakedTestDaemons(pm2Home);
+      return;
+    } catch (error) {
+      if (performance.now() >= deadline) throw error;
+      await Bun.sleep(25);
+    }
+  }
 }
 
 /** Mock API URL — set in beforeAll */
@@ -94,7 +74,7 @@ interface CliResult {
 /**
  * Run the CLI with given arguments
  */
-async function runCli(args: string[], env: Record<string, string> = {}): Promise<CliResult> {
+async function runCli(args: string[], env: Record<string, string> = {}, stdin?: string): Promise<CliResult> {
   const proc = spawn({
     cmd: ['bun', CLI_PATH, ...args],
     env: {
@@ -103,6 +83,7 @@ async function runCli(args: string[], env: Record<string, string> = {}): Promise
       PM2_HOME: TEST_PM2_HOME, // Isolate pm2 daemon from the host (issue #413)
       ...env,
     },
+    stdin: stdin === undefined ? 'ignore' : new Blob([stdin]),
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -140,9 +121,8 @@ function assertSuccess(result: CliResult, context: string): void {
 
 describe('CLI Basic Tests', () => {
   beforeAll(() => {
-    // Fail fast if a prior run left a god daemon around (#413). Runs before
-    // any other setup so the error surfaces cleanly at suite startup.
-    assertNoLeakedTestDaemons();
+    // Other seats may be running CLI fixtures too; only this exact home belongs to us.
+    assertNoLeakedTestDaemons(TEST_PM2_HOME);
     // Create test config directory
     if (!existsSync(TEST_CONFIG_DIR)) {
       mkdirSync(TEST_CONFIG_DIR, { recursive: true });
@@ -154,10 +134,10 @@ describe('CLI Basic Tests', () => {
     }
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     // Stop the test-mode pm2 god daemon BEFORE removing its home, otherwise
     // the daemon survives and re-parents to init with a deleted PM2_HOME.
-    killTestPm2Daemon();
+    await killTestPm2Daemon();
     // Cleanup test config directory
     if (existsSync(TEST_CONFIG_DIR)) {
       rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
@@ -174,6 +154,8 @@ describe('CLI Basic Tests', () => {
       expect(result.stdout).toContain('auth');
       expect(result.stdout).toContain('config');
       expect(result.stdout).toContain('instances');
+      expect(result.stdout).toContain('Bootstrap Omni server (non-interactive, reinstall-safe)');
+      expect(result.stdout).not.toContain('Interactive setup wizard');
     });
 
     test('shows help for auth command', async () => {
@@ -360,10 +342,10 @@ describe('CLI Integration Tests', () => {
     writeFileSync(join(omniDir, 'config.json'), JSON.stringify(config, null, 2));
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     stopMockApi();
     // Stop the test-mode pm2 god daemon BEFORE removing its home (issue #413).
-    killTestPm2Daemon();
+    await killTestPm2Daemon();
     if (existsSync(TEST_CONFIG_DIR)) {
       rmSync(TEST_CONFIG_DIR, { recursive: true, force: true });
     }
@@ -375,6 +357,32 @@ describe('CLI Integration Tests', () => {
 
       assertSuccess(result, 'auth login');
       expect(result.stdout).toContain('Logged in');
+    });
+
+    for (const source of ['stdin', 'env'] as const) {
+      test(`auth login accepts ${source} through the root CLI without echoing the key`, async () => {
+        const result = await runCli(
+          ['auth', 'login', '--api-url', MOCK_URL, ...(source === 'stdin' ? ['--api-key-stdin'] : [])],
+          { OMNI_CLI_API_KEY: source === 'env' ? MOCK_API_KEY : '', OMNI_API_KEY: 'test-primary-key' },
+          source === 'stdin' ? `${MOCK_API_KEY}\n` : undefined,
+        );
+        assertSuccess(result, `auth login ${source}`);
+        expect(result.stdout).toContain('Logged in');
+        expect(result.stdout + result.stderr).not.toContain(MOCK_API_KEY);
+        expect(result.stdout).toContain(`"keySource": "${source}"`);
+      });
+    }
+
+    test('auth login refuses a server-only OMNI_API_KEY before any validation request', async () => {
+      clearRecordedRequests();
+      const result = await runCli(['auth', 'login', '--api-url', MOCK_URL], {
+        OMNI_CLI_API_KEY: '',
+        OMNI_API_KEY: MOCK_API_KEY,
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain('OMNI_CLI_API_KEY');
+      expect(result.stdout + result.stderr).not.toContain(MOCK_API_KEY);
+      expect(getRecordedRequests().filter((request) => request.path === '/api/v2/auth/validate')).toHaveLength(0);
     });
 
     test('auth status shows authenticated', async () => {
@@ -1172,9 +1180,10 @@ describe('CLI Multi-Server Tests', () => {
     );
   });
 
-  afterAll(() => {
+  afterAll(async () => {
     serverA?.close();
     serverB?.close();
+    if (MS_HOME) await killTestPm2Daemon(MS_HOME);
     if (MS_HOME && existsSync(MS_HOME)) {
       rmSync(MS_HOME, { recursive: true, force: true });
     }
@@ -1368,7 +1377,7 @@ describe('CLI Multi-Server Tests', () => {
 
   describe('auth scoping', () => {
     test('a keyless entry errors with the --server-scoped login hint', async () => {
-      await ms(['server', 'add', 'keyless', serverB.url]);
+      await ms(['server', 'add', 'keyless', serverB.url, '--skip-verify']);
 
       const result = await ms(['instances', 'list', '--server', 'keyless']);
       expect(result.exitCode).not.toBe(0);

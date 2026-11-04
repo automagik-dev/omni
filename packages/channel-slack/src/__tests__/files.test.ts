@@ -9,7 +9,6 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { SLACK_CAPABILITIES } from '../capabilities';
 import { downloadSlackFile, extractFileInfo, getContentTypeFromMime } from '../handlers/files';
 import { extractMessageMeta } from '../handlers/messages';
-import type { SlackFileInfo } from '../types';
 
 const noop = () => undefined;
 const noopLogger = { debug: noop, info: noop, warn: noop, error: noop };
@@ -218,6 +217,26 @@ describe('downloadSlackFile', () => {
     expect(result.mimeType).toBe('text/plain; charset=utf-8');
     expect(result.buffer.toString('utf8')).toContain('<html>');
   });
+
+  it('never sends the token to a host outside slack.com, not even on the first request', async () => {
+    const calls: Array<{ url: string; authorization: string | null }> = [];
+    globalThis.fetch = mock(async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization') });
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { 'content-type': 'image/png', 'content-length': '4' },
+      });
+    }) as unknown as typeof fetch;
+
+    await downloadSlackFile(
+      'https://slack.com.evil.test/photo.png',
+      'xoxp-test-token',
+      noopLogger as never,
+      'image/png',
+    );
+
+    expect(calls).toEqual([{ url: 'https://slack.com.evil.test/photo.png', authorization: null }]);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -316,39 +335,5 @@ describe('Message meta edge cases', () => {
     expect(meta.teamId).toBeUndefined();
     expect(meta.channelType).toBeUndefined();
     expect(meta.isThreadReply).toBe(false);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
-// Type validation
-// ─────────────────────────────────────────────────────────────
-
-describe('SlackFileInfo type', () => {
-  it('contains expected fields', () => {
-    const file: SlackFileInfo = {
-      id: 'F123',
-      name: 'test.txt',
-      mimeType: 'text/plain',
-      size: 256,
-    };
-    expect(file.id).toBe('F123');
-    expect(file.name).toBe('test.txt');
-    expect(file.mimeType).toBe('text/plain');
-    expect(file.size).toBe(256);
-  });
-
-  it('supports optional URL fields', () => {
-    const file: SlackFileInfo = {
-      id: 'F456',
-      name: 'image.png',
-      mimeType: 'image/png',
-      size: 1024,
-      urlPrivateDownload: 'https://files.slack.com/dl',
-      urlPrivate: 'https://files.slack.com/view',
-      thumbnailUrl: 'https://files.slack.com/thumb',
-    };
-    expect(file.urlPrivateDownload).toBeDefined();
-    expect(file.urlPrivate).toBeDefined();
-    expect(file.thumbnailUrl).toBeDefined();
   });
 });

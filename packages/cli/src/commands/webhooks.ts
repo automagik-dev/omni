@@ -324,6 +324,29 @@ function buildLifecycleUpdates(options: {
   return updates;
 }
 
+/** Names of stalled and poll-disabled sources (#1239/#1241), surfaced by `omni status` and `omni webhooks list`. */
+export function sourceHealthAlerts(sources: Array<{ name: string; livenessStatus?: string | null }>): {
+  stalled: string[];
+  pollDisabled: string[];
+} {
+  return {
+    stalled: sources.filter((s) => s.livenessStatus === 'stalled').map((s) => s.name),
+    pollDisabled: sources.filter((s) => s.livenessStatus === 'disabled').map((s) => s.name),
+  };
+}
+
+/** One-line banner for the alerts above; null when every source is fine. */
+export function formatSourceHealthAlerts(alerts: { stalled: string[]; pollDisabled: string[] }): string | null {
+  const parts: string[] = [];
+  if (alerts.stalled.length > 0) parts.push(`${alerts.stalled.length} stalled (${alerts.stalled.join(', ')})`);
+  if (alerts.pollDisabled.length > 0) {
+    parts.push(
+      `${alerts.pollDisabled.length} poll disabled, no OMNI_POLL_COMMAND_DIR (${alerts.pollDisabled.join(', ')})`,
+    );
+  }
+  return parts.length > 0 ? `Sources: ${parts.join('; ')}` : null;
+}
+
 export function createWebhooksCommand(): Command {
   const webhooks = new Command('webhooks').description('Manage webhook sources');
 
@@ -350,12 +373,14 @@ export function createWebhooksCommand(): Command {
           name: w.name,
           enabled: w.enabled ? 'yes' : 'no',
           // Liveness (#961): '-' = unsupervised (no declared cadence).
-          health: w.livenessStatus ?? '-',
+          health: w.livenessStatus === 'disabled' ? 'poll disabled' : (w.livenessStatus ?? '-'),
           cadence: w.expectedIntervalSeconds != null ? `${w.expectedIntervalSeconds}s` : '-',
           url: ingressUrl(w.name),
           createdAt: w.createdAt,
         }));
 
+        const banner = formatSourceHealthAlerts(sourceHealthAlerts(result));
+        if (banner) output.warn(banner);
         output.list(items, { emptyMessage: 'No webhook sources found.' });
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error';

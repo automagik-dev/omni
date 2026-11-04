@@ -86,10 +86,25 @@ const TIER_BY_VERB: Readonly<Record<string, ScopeTier>> = Object.freeze({
   /** `auth:validate` — a credential describing itself. Strictly observation. */
   validate: 'read',
   write: 'write',
+  /** `connectors:invoke` — an external side effect, a write-tier power. */
+  invoke: 'write',
   send: 'write',
   close: 'write',
   synthesize: 'write',
+  /**
+   * `system:update` — asks the owner to confirm an update, or, on a loopback-only Omni whose
+   * operator set OMNI_UPDATE_CONFIRM=app, starts it (system/update.ts).
+   */
+  update: 'write',
+  /** `events:consume` — creates, pulls, acks and deletes durable consumers: cursor and lease state. */
+  consume: 'write',
   admin: 'admin',
+  /**
+   * `chats:keys` — mints and revokes a legacy key's own chat keys. Key
+   * machinery, so never `write`; its routes are control-plane, so it is not
+   * in `TENANT_ADDRESSABLE_SCOPES` and no tenant scope projects to it.
+   */
+  keys: 'admin',
 });
 
 const TIER_ORDER: readonly ScopeTier[] = ['read', 'write', 'admin'];
@@ -118,6 +133,8 @@ export const LEGACY_SCOPE_UNIVERSE: readonly string[] = Object.freeze([...new Se
  * `null` is a build failure via the test, not a runtime fallback.
  */
 export function classifyLegacyScope(scope: string): ScopeTier | null {
+  if (scope === 'messages:self:read' || scope === 'messages:selected:read') return 'read';
+  if (scope === 'messages:self:send') return 'write';
   const verb = scope.split(':')[1];
   if (verb === undefined) return null;
   return TIER_BY_VERB[verb] ?? null;

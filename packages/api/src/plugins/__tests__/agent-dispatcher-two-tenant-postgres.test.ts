@@ -37,7 +37,8 @@ import {
   createDbHandle,
   handoffLogs,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { RouteResolver } from '../../services/route-resolver';
 import { scopedHandle } from '../../tenancy/tenant-scope';
@@ -80,16 +81,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('two-tenant agent-dispatcher containment (real PostgreSQL)', () => {
   const dbName = `omni_g5_dispatcher_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -120,7 +111,7 @@ postgresDescribe('two-tenant agent-dispatcher containment (real PostgreSQL)', ()
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -160,12 +151,16 @@ postgresDescribe('two-tenant agent-dispatcher containment (real PostgreSQL)', ()
     await applyTenancyRoles(provisioner, passwords, DEFAULT_ROLE_NAMES, dbName);
 
     // ONE physical connection shared by both tenants' workers: any bleed shows here.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 1);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      1,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
   }, 180_000);
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('per-thread init marker lands under A and is invisible to B', async () => {
@@ -203,15 +198,29 @@ postgresDescribe('two-tenant agent-dispatcher containment (real PostgreSQL)', ()
   test('the self-send-guard enumeration and its cache are tenant-keyed', async () => {
     dispatcherTest.resetActiveOwnerIdentifiersCache();
 
+    // The list is "OTHER active instances on the same channel" (#1267), so
+    // probe from a third, unrelated instance id on the same channel.
+    const probe = {
+      id: '55555555-5555-4555-8555-5555555555ac',
+      channel: 'whatsapp-baileys' as const,
+      slackTeamId: null,
+    };
     // A sees only its own owner identifiers…
-    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, TENANT_A)).toEqual(['owner-a']);
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, probe, TENANT_A)).toEqual(['owner-a']);
     // …and B, asking IMMEDIATELY afterwards (inside any cache TTL), must not be
     // served A's cached list — the cache key includes the tenant. With the old
     // global cache this returns ['owner-a'] and the guard would treat A's
     // instance as B's own (cross-tenant identifier leak + wrong gating).
-    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, TENANT_B)).toEqual(['owner-b']);
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, probe, TENANT_B)).toEqual(['owner-b']);
     // Repeat A from cache: still A's list.
-    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, TENANT_A)).toEqual(['owner-a']);
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, probe, TENANT_A)).toEqual(['owner-a']);
+    // Same channel, but the instance itself is excluded; another channel sees nothing.
+    expect(await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, { ...probe, id: INSTANCE_A }, TENANT_A)).toEqual(
+      [],
+    );
+    expect(
+      await dispatcherTest.listActiveOwnerIdentifiers(runtimeDb, { ...probe, channel: 'slack' as const }, TENANT_A),
+    ).toEqual([]);
   });
 
   test('route resolution is tenant-scoped and its negative cache is tenant-keyed', async () => {

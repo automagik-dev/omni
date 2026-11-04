@@ -183,7 +183,7 @@ describe('call_agent — chatless dispatch (#1010)', () => {
 });
 
 describe('call_agent — chat-ful path unchanged by the chatless fallback', () => {
-  test('a chat event produces the exact pre-#1010 context (no chatless fields)', async () => {
+  test('a chat event retains chat context alongside the original ingress identity', async () => {
     const context: TemplateContext = {
       payload: {
         instanceId: 'wa-001',
@@ -213,7 +213,17 @@ describe('call_agent — chat-ful path unchanged by the chatless fallback', () =
     expect(ctx.senderId).toBe('user-1');
     expect(ctx.senderName).toBe('Alice');
     expect(ctx.messages).toEqual(['hello there']);
-    expect(ctx.event).toEqual({ id: 'evt-500', type: 'message.received', correlationId: 'corr-chat' });
+    expect(ctx.event).toEqual({
+      id: 'evt-500',
+      type: 'message.received',
+      correlationId: 'corr-chat',
+      source: {
+        instanceId: undefined,
+        channelType: undefined,
+        from: { id: 'user-1', name: 'Alice' },
+        rawPayload: undefined,
+      },
+    });
   });
 
   test('a chat event with no text content still fails (never silently falls back to chatless)', async () => {

@@ -1,6 +1,6 @@
 {
   "name": "@automagik/omni",
-  "version": "2.260922.11",
+  "version": "2.261104.15",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/automagik-dev/omni.git",
@@ -45,7 +45,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun && bun run build:types",
+    "build": "bun run build:sdk-subpath && bun build ./src/index.ts --outdir ./dist --target bun --external @anthropic-ai/claude-agent-sdk && bun run build:types",
     "build:sdk-subpath": "cd ../sdk && bun run build && cd ../cli && mkdir -p ./dist/sdk && cp -r ../sdk/dist/. ./dist/sdk/",
     "build:types": "tsc --emitDeclarationOnly --declaration --outDir dist",
     "dev": "echo 'CLI package - no dev server (use: bun run ./src/index.ts <command>)'",
@@ -56,10 +56,10 @@
     "clean": "rm -rf dist db",
     "build:server": "bun build src/bundled-server-entry.ts --outdir dist/server --entry-naming 'index.[ext]' --asset-naming '[name].[ext]' --target bun --external @anthropic-ai/claude-agent-sdk --external @snazzah/davey --external libsodium-wrappers --external opusscript --external pdf-parse --external mammoth --external exceljs --external sharp",
     "build:migrations": "rm -rf db/drizzle && mkdir -p db && cp -r ../db/drizzle db/drizzle",
-    "prepack": "bun run build && bun run build:server && bun run build:migrations"
+    "build:market": "bun ../../scripts/pack-market.ts dist/market",
+    "prepack": "bun run build && bun run build:server && bun run build:migrations && bun run build:market"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.62",
     "@sentry/bun": "^10.43.0",
     "@snazzah/davey": "^0.1.11",
     "chalk": "^5.4.0",
@@ -72,6 +72,7 @@
     "pdf-parse": "^1.1.1",
     "postgres": "^3.4.5",
     "qrcode-terminal": "^0.12.0",
+    "reflect-metadata": "0.2.2",
     "sharp": "^0.35.4",
     "zod": "^3.24.1"
   },
@@ -95,5 +96,8 @@
     "@types/node": "^22.10.3",
     "@types/qrcode-terminal": "^0.12.2",
     "typescript": "^5.7.3"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.2.62"
   }
 }

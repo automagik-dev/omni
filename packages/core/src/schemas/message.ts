@@ -96,6 +96,17 @@ export const IncomingMessageSchema = z.object({
     duration: z.number().int().optional(),
   }),
   replyToId: z.string().optional(),
+  replyTo: z
+    .object({
+      externalId: z.string(),
+      chatId: z.string(),
+      participant: z.string().optional(),
+      fromMe: z.boolean(),
+      type: z.string(),
+      isVoiceNote: z.boolean().optional(),
+      text: z.string().optional(),
+    })
+    .optional(),
   timestamp: z.number().int(),
   rawPayload: MetadataSchema.optional(),
 });

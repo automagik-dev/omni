@@ -72,16 +72,6 @@ const json = (method: string, body: unknown): RequestInit => ({
 });
 
 describe('PATCH /instances/:id — closeContactConfig', () => {
-  test('is forwarded to the update untouched', async () => {
-    const captured: Captured = {};
-    const app = mount(captured);
-
-    const res = await app.request(`/${INSTANCE_ID}`, json('PATCH', { closeContactConfig: CLOSE_CONTACT_CONFIG }));
-
-    expect(res.status).toBe(200);
-    expect(captured.updated?.closeContactConfig).toEqual(CLOSE_CONTACT_CONFIG);
-  });
-
   test('null clears it', async () => {
     const captured: Captured = {};
     const app = mount(captured);

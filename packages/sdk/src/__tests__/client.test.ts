@@ -169,19 +169,12 @@ describe('SDK Integration', () => {
     }
   });
 
-  test('providers.list returns array', async () => {
-    const result = await client.providers.list();
-    expect(result).toBeInstanceOf(Array);
-  });
-
-  test('settings.list returns array', async () => {
-    const result = await client.settings.list();
-    expect(result).toBeInstanceOf(Array);
-  });
-
-  test('access.listRules returns array', async () => {
-    const result = await client.access.listRules();
-    expect(result).toBeInstanceOf(Array);
+  test.each([
+    ['providers.list', () => client.providers.list()],
+    ['settings.list', () => client.settings.list()],
+    ['access.listRules', () => client.access.listRules()],
+  ] as const)('%s returns array', async (_name, call) => {
+    expect(await call()).toBeInstanceOf(Array);
   });
 
   test('logs.recent returns entries with optional data field preserved', async () => {

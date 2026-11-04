@@ -5,8 +5,8 @@
  * WHY THIS FILE EXISTS SEPARATELY
  * ------------------------------
  * These assertions first shipped inside `follow-up-lifecycle.test.ts`, behind
- * `describeWithDb` → `ENABLE_DB_TESTS`, which nothing in this repository ever
- * sets. They therefore never executed anywhere, and the arm-epoch bug below
+ * the former database opt-in harness, which the repository did not enable.
+ * They therefore never executed anywhere, and the arm-epoch bug below
  * (a re-arm resets `sequenceIndex` to 0, colliding with the previous cycle's
  * claims and silently dropping a legitimate follow-up) shipped uncaught.
  *
@@ -17,43 +17,21 @@
  */
 
 import { afterAll, beforeAll, beforeEach, describe, expect, mock, test } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import type { EventBus, FollowUpSequenceConfig } from '@omni/core';
 import { type Database, chatFollowUpState, chats, createDbHandle, instances } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { and, eq } from 'drizzle-orm';
 import {
   FollowUpLifecycleService,
   releaseIdleTimeoutClaim,
   resetIdleTimeoutClaims,
 } from '../services/follow-up-lifecycle';
+import { FollowUpSweeperService } from '../services/follow-up-sweeper';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
-
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-followup-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 const config = (overrides: Partial<FollowUpSequenceConfig> = {}): FollowUpSequenceConfig => ({
   enabled: true,
@@ -87,7 +65,7 @@ postgresDescribe('evaluateIdleTimeoutFreshness (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     db = handle.db;
@@ -118,7 +96,7 @@ postgresDescribe('evaluateIdleTimeoutFreshness (real PostgreSQL)', () => {
 
   afterAll(async () => {
     if (closeDb) await closeDb();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   beforeEach(async () => {
@@ -219,5 +197,71 @@ postgresDescribe('evaluateIdleTimeoutFreshness (real PostgreSQL)', () => {
 
     const redelivery = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 0);
     expect(redelivery.skip).toBe(false);
+  });
+
+  async function disarmAtIndex(
+    sequenceIndex: number,
+    disarmReason: 'sequence_complete' | 'customer_replied' | 'handoff',
+  ) {
+    await armAtIndex(sequenceIndex);
+    await db
+      .update(chatFollowUpState)
+      .set({ disarmReason, disarmedAt: new Date(), nextFireAt: null })
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)));
+  }
+
+  test('the last step of a sequence runs although the sweeper already marked it complete', async () => {
+    await armAtIndex(2);
+    await db
+      .update(chatFollowUpState)
+      .set({ nextFireAt: new Date(Date.now() - 60_000) })
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)));
+    const published: Array<{ type: string; payload: { sequenceIndex?: number } }> = [];
+    const sweeperBus = {
+      ...eventBus,
+      publish: async (type: string, payload: { sequenceIndex?: number }) => {
+        published.push({ type, payload });
+        return { id: 'evt', sequence: published.length };
+      },
+    } as unknown as EventBus;
+
+    await new FollowUpSweeperService(db, sweeperBus).sweep();
+
+    const lastStep = published.find((event) => event.type === 'chat.idle_timeout');
+    expect(lastStep?.payload.sequenceIndex).toBe(2);
+    const [row] = await db
+      .select({ disarmReason: chatFollowUpState.disarmReason, sequenceIndex: chatFollowUpState.sequenceIndex })
+      .from(chatFollowUpState)
+      .where(and(eq(chatFollowUpState.chatId, chatId), eq(chatFollowUpState.instanceId, instanceId)));
+    expect(row).toEqual({ disarmReason: 'sequence_complete', sequenceIndex: 3 });
+
+    const verdict = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 2);
+    expect(verdict.skip).toBe(false);
+    expect(verdict.claimToken).toBeString();
+
+    const redelivery = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 2);
+    expect(redelivery.skip).toBe(true);
+    expect(redelivery.reason).toBe('duplicate_delivery_event_2');
+  });
+
+  test('an earlier step of a completed sequence is still dropped', async () => {
+    await disarmAtIndex(3, 'sequence_complete');
+
+    const verdict = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 1);
+
+    expect(verdict.skip).toBe(true);
+    expect(verdict.reason).toBe('disarmed_sequence_complete');
+  });
+
+  test('any other disarm reason still drops the step right behind the row', async () => {
+    for (const reason of ['customer_replied', 'handoff'] as const) {
+      resetIdleTimeoutClaims();
+      await disarmAtIndex(3, reason);
+
+      const verdict = await service.evaluateIdleTimeoutFreshness(chatId, instanceId, 2);
+
+      expect(verdict.skip).toBe(true);
+      expect(verdict.reason).toBe(`disarmed_${reason}`);
+    }
   });
 });

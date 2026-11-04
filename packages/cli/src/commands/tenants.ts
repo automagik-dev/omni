@@ -30,7 +30,9 @@ import {
 } from '@omni/sdk';
 import { Command } from 'commander';
 import { getClient } from '../client.js';
+import { getTargetServerName } from '../config.js';
 import * as output from '../output.js';
+import { quoteShellArg } from '../utils/shell.js';
 
 // ============================================================================
 // TYPES
@@ -96,8 +98,7 @@ const CONTROL_PLANE_UNAVAILABLE =
 const CREDENTIAL_REJECTED_401 =
   'the server rejected the credential (401). ' +
   'The platform control plane accepts only PLATFORM-class credentials — legacy admin/god keys and ' +
-  'tenant data-plane keys are denied by design. Authenticate with a platform key: ' +
-  'omni auth login --api-key <platform-key>.';
+  'tenant data-plane keys are denied by design. Authenticate with a platform key from stdin: ';
 
 const CREDENTIAL_FORBIDDEN_403 =
   'the credential authenticated but is not allowed (403). ' +
@@ -197,7 +198,13 @@ function renderPlatformError(err: unknown, action: string): never {
       output.error(`Failed to ${action}: ${CONTROL_PLANE_UNAVAILABLE}`, undefined, 1);
     }
     if (err.status === 401) {
-      output.error(`Failed to ${action}: ${CREDENTIAL_REJECTED_401}`, undefined, 1);
+      const serverName = getTargetServerName();
+      output.error(
+        `Failed to ${action}: ${CREDENTIAL_REJECTED_401}` +
+          `omni auth login --server ${quoteShellArg(serverName)} --api-key-stdin < /secure/path/omni-api-key`,
+        undefined,
+        1,
+      );
     }
     if (err.status === 403) {
       output.error(`Failed to ${action}: ${CREDENTIAL_FORBIDDEN_403}`, undefined, 1);

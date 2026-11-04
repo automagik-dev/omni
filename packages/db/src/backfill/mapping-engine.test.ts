@@ -178,6 +178,17 @@ describe('unowned tables', () => {
     expect(noMatch.reason).toContain('no owning omni_events row');
   });
 
+  test('refusal ids never prove dead-letter ownership, even when an event matches', () => {
+    const rule = getUnownedRule('dead_letter_events')!;
+    for (const reason of ['schema_validation_failed', 'schema_not_registered', 'publish_not_declared']) {
+      const result = classifyDeriveFromEvent(rule, TENANT_A, { error: `${reason}: original refusal` });
+      expect(result.disposition).toBe('quarantine');
+      expect(result.tenantId).toBeNull();
+      expect(result.reason).toContain('no provable owning event');
+    }
+    expect(classifyDeriveFromEvent(rule, TENANT_A, { error: 'handler failed' }).disposition).toBe('assign');
+  });
+
   test('processed_events carries a named PK-rewrite deferral', () => {
     expect(getUnownedRule('processed_events')!.deferral).toContain('PRIMARY KEY');
   });

@@ -52,6 +52,7 @@ export const channelTypes = [
   'zenvia', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
   'internal',
   'harness', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
+  'webchat', // no-migration-needed: same varchar(50) column — prototype channel
 ] as const;
 export type ChannelType = (typeof channelTypes)[number];
 
@@ -182,7 +183,7 @@ export const eventTypes = CORE_EVENT_TYPES;
  * emit_event hops) are journaled into omni_events since #957 so
  * `omni events trace` can walk a chain back to its root.
  */
-export type EventType = CoreEventType | `custom.${string}` | `system.${string}`;
+export type EventType = CoreEventType | `custom.${string}` | `system.${string}` | `connector.${string}`; // no-migration-needed: type-only widening of the eventType union for typed connector rows
 
 // Derived from core CONTENT_TYPES (same no-drift rule as eventTypes above) —
 // this local tuple had fallen behind by ten content types.
@@ -323,17 +324,18 @@ export type JobStatus = (typeof jobStatuses)[number];
 export const providerSchemas = [
   'agno',
   'webhook',
-  'openclaw',
   'ag-ui',
   'claude-code',
   'a2a',
   'nats-genie',
 ] as const satisfies readonly CoreProviderSchema[];
-export type ProviderSchema = (typeof providerSchemas)[number];
+// no-migration-needed: Types only; schema remains varchar(20), with retained rows and no DDL change.
+// Read-only compatibility for retained rows; new provider inputs use the supported schema list.
+export type ProviderSchema = (typeof providerSchemas)[number] | 'openclaw';
 
 /**
  * Reusable agent provider configurations.
- * Supports multiple API schemas: Agno, Webhook, OpenClaw, AG-UI, Claude Code.
+ * Supports multiple API schemas: Agno, Webhook, AG-UI, Claude Code.
  *
  * @see v1: omni_agent_providers table
  * @see docs/architecture/provider-system.md
@@ -353,7 +355,6 @@ export const agentProviders = pgTable(
 
     // Schema-specific configuration (JSON)
     // For Agno: { agentId, teamId, timeout }
-    // For OpenClaw: { defaultAgentId, agentTimeoutMs, origin }
     schemaConfig: jsonb('schema_config').$type<Record<string, unknown>>(),
 
     // Default settings
@@ -646,6 +647,13 @@ export const apiKeys = pgTable(
     // Instance restrictions (null = all instances)
     instanceIds: uuid('instance_ids').array(),
 
+    // Lineage (wish: omni-chat-threads): the key this one was minted from, or null for
+    // a root key. A child is never wider or longer-lived than its parent: the parent's
+    // revoke, delete and PATCH revoke or clamp it in the same transaction
+    // (ApiKeyService). The cascade removes a deleted parent's children rows; the
+    // service revokes them first, so each leaves an event.
+    parentKeyId: uuid('parent_key_id').references((): AnyPgColumn => apiKeys.id, { onDelete: 'cascade' }),
+
     // Status
     status: varchar('status', { length: 20 }).notNull().default('active').$type<ApiKeyStatus>(),
 
@@ -682,11 +690,134 @@ export const apiKeys = pgTable(
     keyHashIdx: uniqueIndex('api_keys_key_hash_idx').on(table.keyHash),
     statusIdx: index('api_keys_status_idx').on(table.status),
     expiresAtIdx: index('api_keys_expires_at_idx').on(table.expiresAt),
+    parentKeyIdIdx: index('api_keys_parent_key_id_idx').on(table.parentKeyId),
+    parentKeyLiveIdx: index('api_keys_parent_key_live_idx')
+      .on(table.parentKeyId)
+      .where(sql`${table.status} = 'active'`),
   }),
 );
 
 export type ApiKey = typeof apiKeys.$inferSelect;
 export type NewApiKey = typeof apiKeys.$inferInsert;
+
+// ============================================================================
+// HUMAN LOGIN (Better Auth)
+// ============================================================================
+//
+// The tables Better Auth 1.7 keeps for Omni's human login (packages/api/src/login):
+// one owner, verified by a phone number connected to this Omni's WhatsApp, with
+// passkeys and device-flow codes. Columns follow Better Auth's field names exactly
+// (its adapter reads them by name); no tenant_id: login is off with multitenancy on.
+
+export const loginUsers = pgTable(
+  'login_users',
+  {
+    id: text('id').primaryKey(),
+    name: text('name').notNull(),
+    email: text('email').notNull().unique(),
+    emailVerified: boolean('email_verified').notNull().default(false),
+    image: text('image'),
+    phoneNumber: text('phone_number').unique(),
+    phoneNumberVerified: boolean('phone_number_verified'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // One owner per Omni: at most one row, enforced by the database too.
+  () => ({ oneOwner: uniqueIndex('login_users_one_owner').on(sql`(true)`) }),
+);
+
+export const loginSessions = pgTable(
+  'login_sessions',
+  {
+    id: text('id').primaryKey(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    token: text('token').notNull().unique(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    userId: text('user_id')
+      .notNull()
+      .references(() => loginUsers.id, { onDelete: 'cascade' }),
+    /** Set only on the session the device flow hands a device (the device-key exchange accepts nothing else). */
+    deviceClientId: text('device_client_id'),
+  },
+  (table) => ({ userIdx: index('login_sessions_user_id_idx').on(table.userId) }),
+);
+
+export const loginAccounts = pgTable(
+  'login_accounts',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id').notNull(),
+    providerId: text('provider_id').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => loginUsers.id, { onDelete: 'cascade' }),
+    accessToken: text('access_token'),
+    refreshToken: text('refresh_token'),
+    idToken: text('id_token'),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true }),
+    refreshTokenExpiresAt: timestamp('refresh_token_expires_at', { withTimezone: true }),
+    scope: text('scope'),
+    password: text('password'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull(),
+  },
+  (table) => ({ userIdx: index('login_accounts_user_id_idx').on(table.userId) }),
+);
+
+export const loginVerifications = pgTable(
+  'login_verifications',
+  {
+    id: text('id').primaryKey(),
+    identifier: text('identifier').notNull(),
+    value: text('value').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({ identifierIdx: index('login_verifications_identifier_idx').on(table.identifier) }),
+);
+
+export const loginPasskeys = pgTable(
+  'login_passkeys',
+  {
+    id: text('id').primaryKey(),
+    name: text('name'),
+    publicKey: text('public_key').notNull(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => loginUsers.id, { onDelete: 'cascade' }),
+    credentialID: text('credential_id').notNull(),
+    counter: integer('counter').notNull(),
+    deviceType: text('device_type').notNull(),
+    backedUp: boolean('backed_up').notNull(),
+    transports: text('transports'),
+    createdAt: timestamp('created_at', { withTimezone: true }),
+    aaguid: text('aaguid'),
+  },
+  (table) => ({
+    userIdx: index('login_passkeys_user_id_idx').on(table.userId),
+    credentialIdx: index('login_passkeys_credential_id_idx').on(table.credentialID),
+  }),
+);
+
+export const loginDeviceCodes = pgTable('login_device_codes', {
+  id: text('id').primaryKey(),
+  deviceCode: text('device_code').notNull().unique(),
+  userCode: text('user_code').notNull().unique(),
+  userId: text('user_id'),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  status: text('status').notNull(),
+  lastPolledAt: timestamp('last_polled_at', { withTimezone: true }),
+  pollingInterval: integer('polling_interval'),
+  clientId: text('client_id'),
+  scope: text('scope'),
+});
+
+export type LoginUser = typeof loginUsers.$inferSelect;
+export type LoginDeviceCode = typeof loginDeviceCodes.$inferSelect;
 
 // ============================================================================
 // API KEY AUDIT LOGS
@@ -949,6 +1080,22 @@ export const instances = pgTable(
       .notNull()
       .default('convert')
       .$type<'convert' | 'passthrough'>(),
+    /**
+     * Outbound pacing (WhatsApp Baileys): 'humanized' = anti-ban delay + typing
+     * simulation before each send (default, today's behaviour), 'immediate' =
+     * skip both. A send request's `pacing` field overrides this per message.
+     */
+    outboundPacing: varchar('outbound_pacing', { length: 20 })
+      .notNull()
+      .default('humanized')
+      .$type<'humanized' | 'immediate'>(),
+    /**
+     * Operator consent for per-request pacing: when false (default) a send
+     * request may still ask for 'humanized', but 'immediate' is refused (403)
+     * unless outboundPacing itself is 'immediate'. Only a full-access ('*')
+     * API key may set it to true (POST/PATCH /instances answer 403 otherwise).
+     */
+    outboundPacingOverride: boolean('outbound_pacing_override').notNull().default(false),
     disableUsernamePrefix: boolean('disable_username_prefix').notNull().default(false),
     processMediaOnBlocked: boolean('process_media_on_blocked').notNull().default(true),
     accessMode: varchar('access_mode', { length: 20 }).notNull().default('blocklist').$type<AccessMode>(),
@@ -1020,6 +1167,17 @@ export const instances = pgTable(
     processVideo: boolean('process_video').notNull().default(true),
     processDocuments: boolean('process_documents').notNull().default(true),
 
+    // ---- Audio Transcription ----
+    /**
+     * Opt-in switch for server-side transcription of inbound audio: 'auto'
+     * (default, today's behaviour) or 'off' (audio is stored but never sent to
+     * STT). Read by the media processor; process_audio above stays unread.
+     */
+    audioTranscription: varchar('audio_transcription', { length: 10 })
+      .notNull()
+      .default('auto')
+      .$type<'auto' | 'off'>(),
+
     // ---- Agent Media Preprocessing ----
     /** Wait for media processing (transcription/vision) before dispatching to agent */
     agentWaitForMedia: boolean('agent_wait_for_media').notNull().default(true),
@@ -1047,6 +1205,13 @@ export const instances = pgTable(
       .$type<'desktop' | 'web'>(),
     /** Ask WhatsApp for full history on connect (default: false, see #70) */
     syncFullHistory: boolean('sync_full_history').notNull().default(false),
+
+    // ---- WhatsApp Inbound Reply Context (#1297) ----
+    /**
+     * Opt-in: WhatsApp (Baileys) adds the typed `replyTo` to message.received and
+     * `target` to reaction.received/removed. Off = events exactly as before. Read at connect.
+     */
+    inboundReplyContext: boolean('inbound_reply_context').notNull().default(false),
 
     // ---- Group History Context ----
     /** Number of recent messages to fetch for group context (0 = disabled, max 200) */
@@ -1152,6 +1317,15 @@ export const instances = pgTable(
     agentIdIdx: index('instances_agent_id_idx').on(table.agentId),
     metaPhoneNumberIdx: index('instances_meta_phone_number_idx').on(table.metaPhoneNumberId),
     slackIdentityIdx: index('instances_slack_identity_idx').on(table.slackTeamId, table.slackUserId),
+    // #1235: one OAuth instance per Slack identity — (team, user) in user mode,
+    // team alone in bot mode. Manual pasted-token rows are excluded: the
+    // connect listener fills their identity columns, and they may repeat.
+    slackOAuthUserUq: uniqueIndex('instances_slack_oauth_user_uq')
+      .on(table.slackTeamId, table.slackUserId)
+      .where(sql`${table.slackConnectionMethod} = 'oauth' AND ${table.slackUserId} IS NOT NULL`),
+    slackOAuthBotUq: uniqueIndex('instances_slack_oauth_bot_uq')
+      .on(table.slackTeamId)
+      .where(sql`${table.slackConnectionMethod} = 'oauth' AND ${table.slackUserId} IS NULL`),
     chainModeCheck: check('instances_chain_mode_check', sql`${table.chainMode} IN ('off', 'forward', 'bidirectional')`),
   }),
 );
@@ -1816,6 +1990,10 @@ export const messages = pgTable(
  *
  * @see v1: message_traces (enhanced to full events)
  */
+/** Ingest-time access verdict journaled on omni_events.access_decision (opt-in). */
+export type EventAccessDecision = 'disabled' | 'allowed' | 'denied';
+export type EventSourceKind = 'connector' | 'connector_subscription' | 'webhook_source';
+
 export const omniEvents = pgTable(
   'omni_events',
   {
@@ -1854,6 +2032,11 @@ export const omniEvents = pgTable(
     chatUuid: uuid('chat_uuid').references(() => chats.id, { onDelete: 'set null' }),
     agentId: uuid('agent_id').references(() => agents.id, { onDelete: 'set null' }),
     conversationId: uuid('conversation_id').references(() => conversations.id, { onDelete: 'set null' }),
+
+    // ---- Trusted provenance (paired-agents slice 2; forward-only) ----
+    producingKeyId: uuid('producing_key_id'),
+    sourceKind: varchar('source_kind', { length: 32 }).$type<EventSourceKind>(),
+    sourceId: uuid('source_id'),
 
     // ---- Processing Status ----
     status: varchar('status', { length: 20 }).notNull().default('received'), // 'received' | 'processing' | 'completed' | 'failed'
@@ -1901,6 +2084,15 @@ export const omniEvents = pgTable(
      */
     causationId: uuid('causation_id'),
     /**
+     * Access verdict frozen at ingest: 'disabled' | 'allowed' | 'denied'.
+     * Written only when OMNI_JOURNAL_ACCESS_DECISION=true, and only for
+     * inbound (not-from-me) message.received / reaction.* rows. NULL for every
+     * other row and for every row journaled with the flag off — opt-in,
+     * additive, no backfill (0083). Durable consumers created with
+     * `access: 'allowed' | 'denied'` filter on it.
+     */
+    accessDecision: varchar('access_decision', { length: 10 }).$type<EventAccessDecision>(),
+    /**
      * Monotonic journal position (#989, RFC #925 G7). Assigned by a sequence
      * at insert; the durable-consumer cursor is "last acked journal_seq" and
      * delivery resumes strictly after it. This is the journal's total order —
@@ -1909,11 +2101,36 @@ export const omniEvents = pgTable(
      * in physical order when the column landed (they predate every consumer).
      */
     journalSeq: bigserial('journal_seq', { mode: 'number' }),
+    /**
+     * False while an ingress claim's skeleton row awaits its persistence fill
+     * (the claim commits the row, and its journal_seq, before the payload
+     * lands). The fill sets it true. Default true: every other insert, and
+     * every row that predates the column, is complete. Read only by durable
+     * consumers created with wait_for_ready (opt-in journal readiness gate).
+     */
+    journalReady: boolean('journal_ready').notNull().default(true),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     /** G2 additive tenant ownership. Nullable through the additive phase. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
+    sourceRefCheck: check(
+      'omni_events_source_ref_ck',
+      sql`(${table.sourceKind} IS NULL) = (${table.sourceId} IS NULL)
+        AND (${table.sourceKind} IS NULL OR ${table.sourceKind} IN ('connector','connector_subscription','webhook_source'))`,
+    ),
+    instanceTypeSeqIdx: index('omni_events_instance_type_seq_idx')
+      .on(table.instanceId, table.eventType, table.journalSeq)
+      .where(sql`${table.instanceId} IS NOT NULL`),
+    sourceTypeSeqIdx: index('omni_events_source_type_seq_idx')
+      .on(table.sourceKind, table.sourceId, table.eventType, table.journalSeq)
+      .where(sql`${table.sourceKind} IS NOT NULL`),
+    agentTypeSeqIdx: index('omni_events_agent_type_seq_idx')
+      .on(table.agentId, table.eventType, table.journalSeq)
+      .where(sql`${table.agentId} IS NOT NULL`),
+    producingKeyIdx: index('omni_events_producing_key_idx')
+      .on(table.producingKeyId)
+      .where(sql`${table.producingKeyId} IS NOT NULL`),
     /** Children lookup for `omni events trace` (descendants = causation_id = :id). */
     causationIdx: index('omni_events_causation_idx').on(table.causationId),
     /** Cursor paging for durable consumers (#989): WHERE journal_seq > :cursor ORDER BY journal_seq. */
@@ -2704,7 +2921,7 @@ export const deadLetterEvents = pgTable(
     lastRetryAt: timestamp('last_retry_at', { withTimezone: true }),
     resolvedAt: timestamp('resolved_at', { withTimezone: true }),
     resolvedBy: varchar('resolved_by', { length: 100 }), // manual resolution note
-    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    /** Derived by the INSERT trigger from authenticated scope or persisted source event; never payload metadata. */
     tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
   },
   (table) => ({
@@ -2843,6 +3060,8 @@ export interface WebhookPollConfig {
   emitType: string;
   dedupKeyTemplate: string;
   env?: Record<string, string>;
+  /** Backoff ceiling in seconds (default 1h, #1240). */
+  maxBackoffSeconds?: number; // no-migration-needed: jsonb field, type-only
   nextRunAt?: string;
   consecutiveFailures?: number;
   lastRun?: { at: string; exitCode: number | null; stdoutTail: string; eventsEmitted: number; error?: string };
@@ -2855,7 +3074,8 @@ export interface WebhookPollConfig {
  * (`WHERE liveness_status = <previous>`) make each transition — and therefore
  * each `system.connector.stalled`/`recovered` event — happen exactly once.
  */
-export const connectorLivenessStatuses = ['healthy', 'stalled'] as const;
+// `disabled` (#1239): a poll source while OMNI_POLL_COMMAND_DIR is unset — set/cleared on API startup.
+export const connectorLivenessStatuses = ['healthy', 'stalled', 'disabled'] as const; // no-migration-needed: varchar column
 export type ConnectorLivenessStatus = (typeof connectorLivenessStatuses)[number];
 
 /**
@@ -3088,7 +3308,7 @@ export type ConditionOperator = (typeof conditionOperators)[number];
 /**
  * Action types for automations.
  */
-export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent'] as const;
+export const actionTypes = ['webhook', 'send_message', 'emit_event', 'log', 'call_agent', 'connector.call'] as const;
 export type ActionType = (typeof actionTypes)[number];
 
 /**
@@ -3169,6 +3389,17 @@ export interface CallAgentActionConfig {
 }
 
 /**
+ * Connector call action configuration (one action type for every provider).
+ */
+export interface ConnectorCallActionConfig {
+  connectorId: string;
+  action: string;
+  input: Record<string, unknown>;
+  timeoutMs?: number;
+  responseAs?: string;
+}
+
+/**
  * Union type for action configurations.
  */
 export type AutomationAction =
@@ -3176,7 +3407,8 @@ export type AutomationAction =
   | { type: 'send_message'; config: SendMessageActionConfig }
   | { type: 'emit_event'; config: EmitEventActionConfig }
   | { type: 'log'; config: LogActionConfig }
-  | { type: 'call_agent'; config: CallAgentActionConfig };
+  | { type: 'call_agent'; config: CallAgentActionConfig }
+  | { type: 'connector.call'; config: ConnectorCallActionConfig };
 
 /**
  * Debounce configuration for message grouping.
@@ -3297,6 +3529,137 @@ export const automations = pgTable(
 
 export type Automation = typeof automations.$inferSelect;
 export type NewAutomation = Omit<typeof automations.$inferInsert, 'tenantId'>;
+
+// ============================================================================
+// CONNECTORS
+// ============================================================================
+
+/**
+ * One connected external account.
+ *
+ * A connector is a tenant-owned integration account, NOT a channel and NOT an
+ * `instances` row: it has no chats, no messages, no agent routing and no reply
+ * path. `credentials` is a sealed JSON blob (the codec in
+ * `packages/api/src/tenancy/sealed-credentials.ts`); `config` is non-secret and
+ * validated against the provider manifest's `configSchema`.
+ *
+ * `provider` is the manifest id (`clickup`), not a closed enum — adding a
+ * provider is a code manifest, never a migration.
+ */
+export const connectors = pgTable(
+  'connectors',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    /** Manifest id (`clickup`, `github`). */
+    provider: varchar('provider', { length: 64 }).notNull(),
+    /** Display name, unique per tenant. */
+    name: varchar('name', { length: 255 }).notNull(),
+    /** Sealed JSON object of credential values. Never selected into a response. */
+    credentials: text('credentials').notNull(),
+    /** Sealed per-connector delivery secret. Never selected into a response. */
+    hookSecret: text('hook_secret'),
+    totalUnmatched: integer('total_unmatched').notNull().default(0),
+    lastUnmatchedAt: timestamp('last_unmatched_at', { withTimezone: true }),
+    lastUnmatchedEventType: varchar('last_unmatched_event_type', { length: 200 }),
+    /** Non-secret manifest config. */
+    config: jsonb('config').$type<Record<string, unknown>>().notNull().default({}),
+    /** connected | error | revoked */
+    status: varchar('status', { length: 20 }).notNull(),
+    lastValidatedAt: timestamp('last_validated_at', { withTimezone: true }),
+    lastError: text('last_error'),
+    lastErrorCode: varchar('last_error_code', { length: 64 }),
+    /** API key name or X-Omni-Actor at creation, as the config audit records it. */
+    createdBy: varchar('created_by', { length: 255 }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
+  },
+  (t) => ({
+    tenantIdx: index('connectors_tenant_idx').on(t.tenantId),
+    // Composite-FK target for `connector_event_subscriptions (tenant_id, connector_id)`.
+    tenantIdUq: uniqueIndex('connectors_tenant_id_uq').on(t.tenantId, t.id),
+    tenantProviderIdx: index('connectors_tenant_provider_idx').on(t.tenantId, t.provider),
+    tenantNameUq: uniqueIndex('connectors_tenant_name_uq').on(t.tenantId, t.name),
+  }),
+);
+
+export type Connector = typeof connectors.$inferSelect;
+export type NewConnector = Omit<typeof connectors.$inferInsert, 'tenantId'>;
+
+/**
+ * The inbound binding: connector → provider event key → target automation.
+ *
+ * The journal (`omni_events`) is the delivery log; there is no third table for
+ * deliveries. `verification_secret` is sealed. `status` is `active | paused |
+ * error`; `error` is advisory (the next delivery still processes and a success
+ * resets it), only `paused` stops publication.
+ */
+export const connectorEventSubscriptions = pgTable(
+  'connector_event_subscriptions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    connectorId: uuid('connector_id')
+      .notNull()
+      .references(() => connectors.id, { onDelete: 'cascade' }),
+    /** Manifest event key (`taskStatusUpdated`). */
+    providerEventKey: varchar('provider_event_key', { length: 100 }).notNull(),
+    /** Immutable route discriminator; existing bindings use the subscription route. */
+    ingress: varchar('ingress', { length: 20, enum: ['subscription', 'connector'] })
+      .notNull()
+      .default('subscription'),
+    /** Exact-match filters over the parsed provider data, evaluated before the automation. */
+    filters: jsonb('filters').$type<Record<string, unknown>>().notNull().default({}),
+    /** Authoritative binding: this delivery runs only this automation. */
+    targetAutomationId: uuid('target_automation_id').references(() => automations.id, { onDelete: 'cascade' }),
+    /** Sealed HMAC secret the provider holds. Never returned. */
+    verificationSecret: text('verification_secret'),
+    /** active | paused | error */
+    status: varchar('status', { length: 20 }).notNull().default('active'),
+    lastDeliveryAt: timestamp('last_delivery_at', { withTimezone: true }),
+    lastFailureAt: timestamp('last_failure_at', { withTimezone: true }),
+    consecutiveFailures: integer('consecutive_failures').notNull().default(0),
+    totalDeliveries: integer('total_deliveries').notNull().default(0),
+    totalDuplicates: integer('total_duplicates').notNull().default(0),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+    /** G2 additive tenant ownership. Nullable through the additive phase. */
+    tenantId: uuid('tenant_id').references((): AnyPgColumn => tenants.id, { onDelete: 'restrict' }),
+  },
+  (t) => ({
+    // Both FKs are deliberate: the single-column FK above owns ON DELETE CASCADE
+    // (a NULL tenant_id disables a composite FK), while this composite FK
+    // enforces same-tenant references once ownership is stamped.
+    connectorTenantFk: foreignKey({
+      columns: [t.tenantId, t.connectorId],
+      foreignColumns: [connectors.tenantId, connectors.id],
+      name: 'connector_event_subscriptions_connector_tenant_fk',
+    }),
+    connectorIdx: index('connector_event_subscriptions_connector_idx').on(t.connectorId),
+    automationIdx: index('connector_event_subscriptions_automation_idx').on(t.targetAutomationId),
+    tenantIdx: index('connector_event_subscriptions_tenant_idx').on(t.tenantId),
+    tenantIdUq: uniqueIndex('connector_event_subscriptions_tenant_id_uq').on(t.tenantId, t.id),
+    // One binding per (connector, event key, automation): a duplicate would
+    // silently double-run an automation that touches an external system.
+    bindingUq: uniqueIndex('connector_event_subscriptions_binding_uq').on(
+      t.connectorId,
+      t.providerEventKey,
+      t.targetAutomationId,
+    ),
+    untargetedUq: uniqueIndex('connector_event_subscriptions_untargeted_uq')
+      .on(t.connectorId, t.providerEventKey)
+      .where(sql`${t.targetAutomationId} IS NULL`),
+    ingressSecretCheck: check(
+      'connector_event_subscriptions_ingress_secret_check',
+      sql`(${t.ingress} = 'subscription' AND ${t.verificationSecret} IS NOT NULL)
+        OR (${t.ingress} = 'connector' AND ${t.verificationSecret} IS NULL)`,
+    ),
+  }),
+);
+
+export type ConnectorEventSubscription = typeof connectorEventSubscriptions.$inferSelect;
+export type NewConnectorEventSubscription = Omit<typeof connectorEventSubscriptions.$inferInsert, 'tenantId'>;
 
 /**
  * Automation execution status.
@@ -3419,10 +3782,15 @@ export interface SharedLeaseState {
   leases: ConsumerLease[];
 }
 
+/** Which journal rows a durable consumer sees by their ingest access verdict. */
+export type ConsumerAccessFilter = 'all' | 'allowed' | 'denied';
+
 export const durableConsumers = pgTable(
   'durable_consumers',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /** Authenticated creator tenant. Unstamped pre-0091 rows are hidden from tenant credentials. */
+    tenantId: uuid('tenant_id'),
     /** User-facing handle (`omni events follow --consumer <name>`). */
     name: varchar('name', { length: 100 }).notNull(),
     /** Type filter: exact event type, or trailing-* prefix glob (#966 contract). */
@@ -3442,18 +3810,80 @@ export const durableConsumers = pgTable(
      * leased pages (`lease_state`), each page handed to one puller at a time.
      */
     shared: boolean('shared').notNull().default(false),
+    /**
+     * Opt-in journal readiness gate: when true, pull and shared claims stop
+     * each page just before the first claimed-but-unfilled row
+     * (omni_events.journal_ready = false) younger than the settle window, so
+     * the cursor never moves past it. Default false = today's behaviour.
+     */
+    waitForReady: boolean('wait_for_ready').notNull().default(false),
     /** Shared consumers only: claimed watermark + outstanding page leases. */
     leaseState: jsonb('lease_state').$type<SharedLeaseState>(),
+    /**
+     * Opt-in instance scoping (0082), within the mandatory tenant boundary
+     * for tenant credentials (0091). Restricted keys always create scoped
+     * consumers. false pages every instance within the tenant boundary and
+     * permits only instance-unrestricted keys to pull, stream, ack or delete.
+     * true limits pull to `instance_ids` and access to the owner key or an
+     * instance-unrestricted key. Legacy keys retain cross-tenant access
+     * subject to these instance access rules.
+     */
+    scoped: boolean('scoped').notNull().default(false),
+    /** Scoped consumers only: instance UUIDs this consumer may page. Null when unscoped. */
+    instanceIds: jsonb('instance_ids').$type<string[]>(),
+    /** No FK: deleted agents leave ownership intact (admin-only recovery). */
+    agentId: uuid('agent_id'),
+    /** Scoped consumers only: the api_keys.id that registered it. Null when unscoped. No FK (see 0082). */
+    ownerKeyId: uuid('owner_key_id'),
+    /**
+     * Access filter over omni_events.access_decision (0083): 'all' (default,
+     * no predicate — every existing consumer) | 'allowed' | 'denied'.
+     */
+    accessFilter: varchar('access_filter', { length: 10 }).notNull().default('all').$type<ConsumerAccessFilter>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => ({
     nameUq: uniqueIndex('durable_consumers_name_uq').on(table.name),
+    agentIdx: index('durable_consumers_agent_idx').on(table.agentId).where(sql`${table.agentId} IS NOT NULL`),
   }),
 );
 
 export type DurableConsumer = typeof durableConsumers.$inferSelect;
 export type NewDurableConsumer = typeof durableConsumers.$inferInsert;
+
+export const agentGrantSourceKinds = ['connector', 'connector_subscription', 'webhook_source', 'agent'] as const;
+export type AgentGrantSourceKind = (typeof agentGrantSourceKinds)[number];
+
+/** Slice 6 owns the only runtime grant writer; slice 2 supplies the schema. */
+export const agentSourceGrants = pgTable(
+  'agent_source_grants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    sourceKind: varchar('source_kind', { length: 32 }).notNull().$type<AgentGrantSourceKind>(),
+    sourceId: uuid('source_id').notNull(),
+    approvedByKeyId: uuid('approved_by_key_id').notNull(),
+    approvedAt: timestamp('approved_at', { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    tenantId: uuid('tenant_id'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => ({
+    kindCheck: check(
+      'agent_source_grants_kind_ck',
+      sql`${table.sourceKind} IN ('connector','connector_subscription','webhook_source','agent')`,
+    ),
+    activeUq: uniqueIndex('agent_source_grants_active_uq')
+      .on(table.agentId, table.sourceKind, table.sourceId)
+      .where(sql`${table.revokedAt} IS NULL`),
+  }),
+);
+
+export type AgentSourceGrant = typeof agentSourceGrants.$inferSelect;
+export type NewAgentSourceGrant = typeof agentSourceGrants.$inferInsert;
 
 // Relations for webhook sources and automations
 export const automationsRelations = relations(automations, ({ many }) => ({

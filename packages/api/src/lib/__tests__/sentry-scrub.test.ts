@@ -12,7 +12,6 @@ import {
   scrubPii,
   scrubSpan,
   scrubTransaction,
-  sentryEnabled,
 } from '../sentry-scrub';
 
 // ---------------------------------------------------------------------------
@@ -20,40 +19,27 @@ import {
 // ---------------------------------------------------------------------------
 
 describe('scrubPii', () => {
-  test('replaces Brazilian phone with country code', () => {
-    expect(scrubPii('Call +5511999998888 now')).toBe('Call [phone] now');
+  test.each([
+    ['replaces Brazilian phone with country code', 'Call +5511999998888 now', 'Call [phone] now'],
+    ['replaces phone without + prefix', '5511999998888', '[phone]'],
+    ['replaces international phone with +', '+14155551234', '[phone]'],
+    ['replaces 15-digit phone', '+551199999888877', '[phone]'],
+    ['replaces WhatsApp JID @s.whatsapp.net', '123456789@s.whatsapp.net', '[jid]'],
+    ['replaces WhatsApp JID @c.whatsapp.net', '5511999998888@c.whatsapp.net', '[jid]'],
+    ['replaces email address', 'contact user@example.com please', 'contact [email] please'],
+    ['replaces complex email', 'john.doe+tag@sub.domain.co.uk', '[email]'],
+  ])('%s', (_name, input, expected) => {
+    expect(scrubPii(input)).toBe(expected);
   });
 
-  test('replaces phone without + prefix', () => {
-    expect(scrubPii('5511999998888')).toBe('[phone]');
-  });
-
-  test('replaces international phone with +', () => {
-    expect(scrubPii('+14155551234')).toBe('[phone]');
-  });
-
-  test('replaces 15-digit phone', () => {
-    expect(scrubPii('+551199999888877')).toBe('[phone]');
-  });
-
-  test('does NOT replace short numbers (< 10 digits)', () => {
-    expect(scrubPii('error code 12345')).toBe('error code 12345');
-  });
-
-  test('replaces WhatsApp JID @s.whatsapp.net', () => {
-    expect(scrubPii('123456789@s.whatsapp.net')).toBe('[jid]');
-  });
-
-  test('replaces WhatsApp JID @c.whatsapp.net', () => {
-    expect(scrubPii('5511999998888@c.whatsapp.net')).toBe('[jid]');
-  });
-
-  test('replaces email address', () => {
-    expect(scrubPii('contact user@example.com please')).toBe('contact [email] please');
-  });
-
-  test('replaces complex email', () => {
-    expect(scrubPii('john.doe+tag@sub.domain.co.uk')).toBe('[email]');
+  test.each([
+    ['does NOT replace short numbers (< 10 digits)', 'error code 12345'],
+    ['clean strings pass through unchanged', 'Instance created successfully at 2024-01-15'],
+    // UUID contains hex chars so the digit-only phone regex won't fully match it.
+    ['UUIDs pass through (not treated as phone)', 'id: a1b2c3d4-e5f6-7890-abcd-ef1234567890'],
+    ['normal text with numbers below threshold', 'port 8080 and code 404'],
+  ])('%s', (_name, input) => {
+    expect(scrubPii(input)).toBe(input);
   });
 
   test('handles error message with embedded JID', () => {
@@ -65,21 +51,6 @@ describe('scrubPii', () => {
     const input = 'from 5511999998888@s.whatsapp.net to user@example.com via +5511999998888';
     const result = scrubPii(input);
     expect(result).toBe('from [jid] to [email] via [phone]');
-  });
-
-  test('clean strings pass through unchanged', () => {
-    const clean = 'Instance created successfully at 2024-01-15';
-    expect(scrubPii(clean)).toBe(clean);
-  });
-
-  test('UUIDs pass through (not treated as phone)', () => {
-    const uuid = 'id: a1b2c3d4-e5f6-7890-abcd-ef1234567890';
-    // UUID contains hex chars so the digit-only phone regex won't fully match it
-    expect(scrubPii(uuid)).toBe(uuid);
-  });
-
-  test('normal text with numbers below threshold', () => {
-    expect(scrubPii('port 8080 and code 404')).toBe('port 8080 and code 404');
   });
 });
 
@@ -354,20 +325,6 @@ describe('scrubSpan', () => {
     scrubSpan(span);
     expect(span.description).toBe('+5511999998888');
     expect(span.data?.['db.statement']).toBe('+5511999998888');
-  });
-});
-
-// ---------------------------------------------------------------------------
-// sentryEnabled
-// ---------------------------------------------------------------------------
-
-describe('sentryEnabled', () => {
-  test('returns boolean based on Sentry client state', () => {
-    // @sentry/bun is installed — sentryEnabled() returns true if a client
-    // is configured (which depends on whether Sentry.init was called).
-    // It should always return a boolean, never throw.
-    const result = sentryEnabled();
-    expect(typeof result).toBe('boolean');
   });
 });
 

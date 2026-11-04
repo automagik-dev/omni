@@ -1,0 +1,516 @@
+/**
+ * Integration tests for unified messages (chats, participants, messages)
+ *
+ * @see unified-messages wish
+ */
+
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import type { Database } from '@omni/db';
+import { instances } from '@omni/db';
+import { ChatService } from '../services/chats';
+import { MessageService } from '../services/messages';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
+
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Unified Messages', () => {
+  let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  afterAll(() => clone.teardown());
+  let chatService: ChatService;
+  let messageService: MessageService;
+  let testInstanceId: string;
+
+  beforeAll(async () => {
+    db = clone.setup();
+    chatService = new ChatService(db, null);
+    messageService = new MessageService(db, null);
+
+    // Create a test instance
+    const [instance] = await db
+      .insert(instances)
+      .values({
+        name: `test-unified-messages-${Date.now()}`,
+        channel: 'whatsapp-baileys' as const,
+      })
+      .returning();
+    if (!instance) {
+      throw new Error('Failed to create test instance');
+    }
+    testInstanceId = instance.id;
+  });
+
+  describe('ChatService', () => {
+    test('should create a chat', async () => {
+      const chat = await chatService.create({
+        instanceId: testInstanceId,
+        externalId: 'test-chat-001@g.us',
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+        name: 'Test Group',
+      });
+
+      expect(chat.id).toBeDefined();
+      expect(chat.externalId).toBe('test-chat-001@g.us');
+      expect(chat.chatType).toBe('group');
+      expect(chat.name).toBe('Test Group');
+    });
+
+    test('should find or create a chat (create path)', async () => {
+      const { chat, created } = await chatService.findOrCreate(testInstanceId, 'test-chat-002@s.whatsapp.net', {
+        chatType: 'dm',
+        channel: 'whatsapp-baileys',
+      });
+
+      expect(created).toBe(true);
+      expect(chat.externalId).toBe('test-chat-002@s.whatsapp.net');
+      expect(chat.chatType).toBe('dm');
+    });
+
+    test('should find or create a chat (find path)', async () => {
+      const { chat: first } = await chatService.findOrCreate(testInstanceId, 'test-chat-003@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const { chat: second, created } = await chatService.findOrCreate(testInstanceId, 'test-chat-003@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      expect(created).toBe(false);
+      expect(second.id).toBe(first.id);
+    });
+
+    test('should add a participant', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-chat-participants@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const participant = await chatService.addParticipant({
+        chatId: chat.id,
+        platformUserId: '5511999990001@s.whatsapp.net',
+        displayName: 'Test User',
+        role: 'member',
+      });
+
+      expect(participant.id).toBeDefined();
+      expect(participant.platformUserId).toBe('5511999990001@s.whatsapp.net');
+      expect(participant.displayName).toBe('Test User');
+      expect(participant.isActive).toBe(true);
+    });
+
+    test('should get participants', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-chat-get-participants@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      await chatService.addParticipant({
+        chatId: chat.id,
+        platformUserId: 'user1@s.whatsapp.net',
+        displayName: 'User 1',
+      });
+
+      await chatService.addParticipant({
+        chatId: chat.id,
+        platformUserId: 'user2@s.whatsapp.net',
+        displayName: 'User 2',
+      });
+
+      const participants = await chatService.getParticipants(chat.id);
+      expect(participants.length).toBe(2);
+    });
+
+    test('should archive and unarchive a chat', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-chat-archive@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const archived = await chatService.archive(chat.id);
+      expect(archived.archivedAt).toBeDefined();
+
+      const unarchived = await chatService.unarchive(chat.id);
+      expect(unarchived.archivedAt).toBeNull();
+    });
+  });
+
+  describe('MessageService', () => {
+    test('should create a message', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-chat@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5ABC123',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Hello, world!',
+        platformTimestamp: new Date(),
+        senderPlatformUserId: 'sender@s.whatsapp.net',
+        senderDisplayName: 'Sender',
+        isFromMe: false,
+      });
+
+      expect(message.id).toBeDefined();
+      expect(message.externalId).toBe('BAE5ABC123');
+      expect(message.textContent).toBe('Hello, world!');
+      expect(message.source).toBe('realtime');
+    });
+
+    test('should strip NUL bytes from textContent on create and update', async () => {
+      // Postgres rejects 0x00 in text columns with
+      // `invalid byte sequence for encoding "UTF8": 0x00` — a0800e2f covered
+      // the media-text columns but left textContent (POST /messages and
+      // PATCH /messages/:id) raw.
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-nulbyte@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5NUL789',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'contrato\u0000assinado',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+      });
+
+      expect(message.textContent).toBe('contratoassinado');
+
+      const updated = await messageService.update(message.id, { textContent: 'revis\u0000ado' });
+      expect(updated.textContent).toBe('revisado');
+    });
+
+    test('should find or create a message', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-findorcreate@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const { message: first, created: firstCreated } = await messageService.findOrCreate(chat.id, 'BAE5DEF456', {
+        source: 'sync',
+        messageType: 'text',
+        textContent: 'Synced message',
+        platformTimestamp: new Date(),
+      });
+
+      expect(firstCreated).toBe(true);
+      expect(first.source).toBe('sync');
+
+      const { message: second, created: secondCreated } = await messageService.findOrCreate(chat.id, 'BAE5DEF456', {
+        source: 'sync',
+        messageType: 'text',
+        textContent: 'Different text',
+        platformTimestamp: new Date(),
+      });
+
+      expect(secondCreated).toBe(false);
+      expect(second.id).toBe(first.id);
+      expect(second.textContent).toBe('Synced message'); // Original text preserved
+    });
+
+    test('should record message edits', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-edit@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5EDIT001',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Original',
+        platformTimestamp: new Date(),
+      });
+
+      // First edit
+      const edited1 = await messageService.recordEdit(message.id, 'Edited once', new Date());
+      expect(edited1.textContent).toBe('Edited once');
+      expect(edited1.editCount).toBe(1);
+      expect(edited1.originalText).toBe('Original');
+      expect(edited1.status).toBe('edited');
+
+      // Second edit
+      const edited2 = await messageService.recordEdit(message.id, 'Edited twice', new Date());
+      expect(edited2.textContent).toBe('Edited twice');
+      expect(edited2.editCount).toBe(2);
+      expect(edited2.originalText).toBe('Original'); // Still the original
+    });
+
+    test('should add and remove reactions', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-reactions@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5REACT001',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'React to me!',
+        platformTimestamp: new Date(),
+      });
+
+      // Add reaction
+      const withReaction = await messageService.addReaction(message.id, {
+        emoji: '👍',
+        platformUserId: 'reactor@s.whatsapp.net',
+        displayName: 'Reactor',
+      });
+
+      expect(withReaction.reactions).toHaveLength(1);
+      expect(withReaction.reactionCounts).toEqual({ '👍': 1 });
+
+      // Add another reaction
+      const withTwoReactions = await messageService.addReaction(message.id, {
+        emoji: '❤️',
+        platformUserId: 'another@s.whatsapp.net',
+      });
+
+      expect(withTwoReactions.reactions).toHaveLength(2);
+      expect(withTwoReactions.reactionCounts).toEqual({ '👍': 1, '❤️': 1 });
+
+      // Remove reaction
+      const afterRemoval = await messageService.removeReaction(message.id, 'reactor@s.whatsapp.net', '👍');
+      expect(afterRemoval.reactions).toHaveLength(1);
+      expect(afterRemoval.reactionCounts).toEqual({ '❤️': 1 });
+    });
+
+    test('should update delivery status', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-delivery@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5DELIVER001',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Track my delivery',
+        platformTimestamp: new Date(),
+        isFromMe: true,
+      });
+
+      const delivered = await messageService.updateDeliveryStatus(message.id, 'delivered');
+      expect(delivered.deliveryStatus).toBe('delivered');
+
+      const read = await messageService.updateDeliveryStatus(message.id, 'read');
+      expect(read.deliveryStatus).toBe('read');
+    });
+
+    test('marks a sent message failed, but never downgrades delivered/read (#1277)', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-failed@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+      const create = (externalId: string) =>
+        messageService.create({
+          chatId: chat.id,
+          externalId,
+          source: 'realtime',
+          messageType: 'text',
+          textContent: 'Will it arrive?',
+          platformTimestamp: new Date(),
+          isFromMe: true,
+        });
+
+      const sent = await create('BAE5FAILED001');
+      const failed = await messageService.markDeliveryFailed(sent.id);
+      expect(failed?.deliveryStatus).toBe('failed');
+
+      const delivered = await create('BAE5FAILED002');
+      await messageService.updateDeliveryStatus(delivered.id, 'delivered');
+      expect(await messageService.markDeliveryFailed(delivered.id)).toBeNull();
+      expect((await messageService.getById(delivered.id)).deliveryStatus).toBe('delivered');
+
+      const read = await create('BAE5FAILED003');
+      await messageService.updateDeliveryStatus(read.id, 'read');
+      expect(await messageService.markDeliveryFailed(read.id)).toBeNull();
+      expect((await messageService.getById(read.id)).deliveryStatus).toBe('read');
+    });
+
+    test('should get chat messages', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-list@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      // Create several messages
+      const now = new Date();
+      for (let i = 0; i < 5; i++) {
+        await messageService.create({
+          chatId: chat.id,
+          externalId: `BAE5LIST${i.toString().padStart(3, '0')}`,
+          source: 'realtime',
+          messageType: 'text',
+          textContent: `Message ${i}`,
+          platformTimestamp: new Date(now.getTime() + i * 1000),
+        });
+      }
+
+      const messages = await messageService.getChatMessages(chat.id, { limit: 10 });
+      expect(messages.length).toBe(5);
+    });
+
+    test('findRecentOutboundBefore allows Gupshup second-precision reply timestamp grace', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, `test-msg-gupshup-grace-${Date.now()}@g.us`, {
+        chatType: 'dm',
+        channel: 'gupshup',
+      });
+      const inboundSecond = new Date('2026-06-09T17:51:55.000Z');
+
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `old-plan-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Opção antiga Nosso Médico SP Leste R$ 160,00/mês',
+        platformTimestamp: new Date('2026-06-08T22:16:45.000Z'),
+        isFromMe: true,
+      });
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `new-plan-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'QUOTE-CANARY — Opção 2 Nosso Plano Completo Enfermaria R$ 182,47/mês',
+        platformTimestamp: new Date('2026-06-09T17:51:55.211Z'),
+        isFromMe: true,
+      });
+
+      const result = await messageService.findRecentOutboundBefore(chat.id, inboundSecond, 'quero esse');
+
+      expect(result?.textContent).toContain('QUOTE-CANARY');
+      expect(result?.textContent).toContain('R$ 182,47');
+    });
+
+    test('findRecentOutboundBefore returns null when two option cards from the same burst tie', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, `test-msg-gupshup-tie-${Date.now()}@g.us`, {
+        chatType: 'dm',
+        channel: 'gupshup',
+      });
+
+      // Two option cards delivered ~1s apart in the same burst: equal scores,
+      // no reliable way to tell which one the customer quoted.
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `card-a-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Opção 1 — Plano Essencial R$ 150,00/mês com coparticipação',
+        platformTimestamp: new Date('2026-06-09T17:51:50.319Z'),
+        isFromMe: true,
+      });
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `card-b-${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Opção 2 — Plano Completo R$ 260,00/mês com coparticipação',
+        platformTimestamp: new Date('2026-06-09T17:51:51.646Z'),
+        isFromMe: true,
+      });
+
+      const result = await messageService.findRecentOutboundBefore(
+        chat.id,
+        new Date('2026-06-09T17:56:00.000Z'),
+        'quero esse',
+      );
+
+      // A guessed quote would corrupt the reply context; null lets the agent ask.
+      expect(result).toBeNull();
+    });
+
+    test('should filter list by exact externalId only', async () => {
+      const externalId = `BAE5EXACT${Date.now()}`;
+      const { chat } = await chatService.findOrCreate(testInstanceId, `test-msg-external-${Date.now()}@g.us`, {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      await messageService.create({
+        chatId: chat.id,
+        externalId,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Target message',
+        platformTimestamp: new Date(),
+      });
+      await messageService.create({
+        chatId: chat.id,
+        externalId: `${externalId}-other`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: `Debug log mentions ${externalId}`,
+        platformTimestamp: new Date(Date.now() + 1000),
+      });
+
+      const result = await messageService.list({ externalId });
+      const total = await messageService.count({ externalId });
+
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]?.externalId).toBe(externalId);
+      expect(result.items[0]?.textContent).toBe('Target message');
+      expect(total).toBe(1);
+    });
+
+    test('should mark message as deleted', async () => {
+      const { chat } = await chatService.findOrCreate(testInstanceId, 'test-msg-delete@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      const message = await messageService.create({
+        chatId: chat.id,
+        externalId: 'BAE5DELETE001',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Delete me',
+        platformTimestamp: new Date(),
+      });
+
+      const deleted = await messageService.markDeleted(message.id);
+      expect(deleted.status).toBe('deleted');
+      expect(deleted.deletedAt).toBeDefined();
+    });
+  });
+
+  describe('Integration: Chat updates with messages', () => {
+    test('should update chat lastMessageAt when message is created', async () => {
+      const { chat: initialChat } = await chatService.findOrCreate(testInstanceId, 'test-chat-update@g.us', {
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+      });
+
+      expect(initialChat.lastMessageAt).toBeNull();
+      expect(initialChat.messageCount).toBe(0);
+
+      const timestamp = new Date();
+      await messageService.create({
+        chatId: initialChat.id,
+        externalId: 'BAE5CHATUPDATE001',
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'This should update the chat',
+        platformTimestamp: timestamp,
+      });
+
+      const updatedChat = await chatService.getById(initialChat.id);
+      expect(updatedChat.lastMessageAt).toBeDefined();
+      expect(updatedChat.messageCount).toBe(1);
+      expect(updatedChat.lastMessagePreview).toBe('This should update the chat');
+    });
+  });
+});

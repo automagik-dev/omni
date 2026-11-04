@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { A2AClient, createA2AClient } from '../a2a-client';
+import { A2AClient } from '../a2a-client';
 import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from '../execution-context';
 import { ProviderError, type StreamChunk } from '../types';
 
@@ -57,11 +57,6 @@ describe('A2AClient', () => {
       const client = new A2AClient({ ...CONFIG, baseUrl: 'http://a2a.example.com/' });
       expect(client).toBeDefined();
     });
-
-    it('uses default timeout when not specified', () => {
-      const client = new A2AClient({ baseUrl: 'http://a2a.example.com' });
-      expect(client).toBeDefined();
-    });
   });
 
   // ─── run() ────────────────────────────────────────────────────
@@ -94,6 +89,35 @@ describe('A2AClient', () => {
       expect(result.content).toBe('Hello from A2A!');
       expect(result.runId).toBe('task-123');
       expect(result.sessionId).toBe('ctx-456');
+      expect(result.status).toBe('completed');
+    });
+
+    it('polls GetTask (flat result, no .task wrapper) until terminal state', async () => {
+      const submitted = {
+        jsonrpc: '2.0',
+        id: 'omni-1',
+        result: { task: { id: 'task-9', contextId: 'ctx-9', status: { state: 'TASK_STATE_SUBMITTED' } } },
+      };
+      const getTask = {
+        jsonrpc: '2.0',
+        id: 'omni-2',
+        result: {
+          id: 'task-9',
+          contextId: 'ctx-9',
+          status: { state: 'TASK_STATE_COMPLETED' },
+          artifacts: [{ artifactId: 'a1', parts: [{ text: 'Polled answer' }] }],
+        },
+      };
+      const json = (body: unknown) =>
+        new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      mockImpl.mockResolvedValueOnce(json(submitted)).mockResolvedValueOnce(json(getTask));
+
+      const client = new A2AClient(CONFIG);
+      const result = await client.run({ message: 'Hi', userId: 'u-1', agentId: 'test-agent' });
+
+      expect(mockImpl).toHaveBeenCalledTimes(2);
+      expect(result.content).toBe('Polled answer');
+      expect(result.runId).toBe('task-9');
       expect(result.status).toBe('completed');
     });
 
@@ -418,12 +442,5 @@ describe('A2AClient', () => {
       expect(result.healthy).toBe(false);
       expect(result.error).toContain('DNS lookup failed');
     });
-  });
-});
-
-describe('createA2AClient', () => {
-  it('returns an A2AClient instance', () => {
-    const client = createA2AClient({ baseUrl: 'http://example.com' });
-    expect(client).toBeInstanceOf(A2AClient);
   });
 });

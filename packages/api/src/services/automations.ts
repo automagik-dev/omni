@@ -14,6 +14,7 @@ import {
   type Automation as CoreAutomation,
   type EventMetadata,
   NotFoundError,
+  type OmniEvent,
   ValidationError,
   buildConditionContext,
   createAutomationEngine,
@@ -33,7 +34,8 @@ import {
   automations,
 } from '@omni/db';
 import { and, desc, eq, gte, sql } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { runOutsideProducerScope } from '../lib/producer-scope';
+import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 
 /**
  * An event to test/execute an automation against. Either hand-written (the
@@ -97,6 +99,7 @@ export class AutomationService {
   async startEngine(deps?: {
     sendMessage?: (instanceId: string, to: string, content: string) => Promise<void>;
     callAgent?: (context: AgentCallContext, config: CallAgentActionConfig) => Promise<AgentRunResult>;
+    admitAgentEvent?: (event: OmniEvent, trustedTenantId?: string | null) => Promise<boolean>;
     staleIdleTimeoutGate?: (
       chatId: string,
       instanceId: string,
@@ -130,6 +133,11 @@ export class AutomationService {
       trustedTenantId?: string | null,
       emitterAgentId?: string | null,
     ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
+    /** One typed action for every provider (connector.call). */
+    callConnector?: (
+      request: { connectorId: string; action: string; input: Record<string, unknown>; timeoutMs?: number },
+      trustedTenantId?: string | null,
+    ) => Promise<unknown>;
   }): Promise<void> {
     if (!this.eventBus) {
       return;
@@ -159,7 +167,9 @@ export class AutomationService {
     });
 
     // Start with automations
-    await this.engine.start(this.eventBus, enabledAutomations as CoreAutomation[], deps ?? {});
+    const engine = this.engine;
+    const eventBus = this.eventBus;
+    await runOutsideProducerScope(() => engine.start(eventBus, enabledAutomations as CoreAutomation[], deps ?? {}));
   }
 
   /**
@@ -176,10 +186,12 @@ export class AutomationService {
    * Reload the automation engine (after CRUD changes)
    */
   async reloadEngine(): Promise<void> {
-    if (this.engine && this.eventBus) {
-      const enabledAutomations = await this.list({ enabled: true });
-      await this.engine.reload(enabledAutomations as CoreAutomation[]);
-    }
+    await runOutsideProducerScope(async () => {
+      if (this.engine && this.eventBus) {
+        const enabledAutomations = await this.list({ enabled: true });
+        await this.engine.reload(enabledAutomations as CoreAutomation[]);
+      }
+    });
   }
 
   /**
@@ -444,7 +456,10 @@ export class AutomationService {
       automation.actions as AutomationAction[],
       context,
       actionDeps,
-      undefined,
+      // Manual execute runs inside the caller's request scope; thread its
+      // tenant so connector.call resolves a tenant-owned connector (the
+      // engine threads the envelope tenant the same way).
+      currentTenantScope()?.tenantId,
       undefined,
       {
         transactionalEmissions: automation.transactionalEmissions,

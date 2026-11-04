@@ -178,8 +178,8 @@ describe('db-access guard', () => {
       // #989: durable consumers. The `omni_events` pull/head reads run through
       // the service's `scopedHandle` getter — request transaction when scoped
       // (RLS-policed pages), ambient for a legacy credential (the accepted
-      // dual world). The registry table itself (`durable_consumers`) is
-      // global, following the event_schemas precedent.
+      // dual world). The mixed legacy/tenant registry (`durable_consumers`)
+      // enforces tenant ownership in its service predicates (0091).
       'packages/api/src/services/event-consumers.ts',
       'packages/api/src/services/agent-tasks.ts',
       'packages/api/src/services/agents.ts',
@@ -307,7 +307,8 @@ describe('db-access guard', () => {
       // G5 run15: `access.ts` appears here for its `instances` access ONLY — the
       // `approvePairingRequest` channel lookup, whose single caller is
       // `routes/v2/instances.ts` inside the request transaction. Its sibling
-      // `access_rules` site keeps its own pending entry (held by `trpc/router.ts`).
+      // `access_rules` site retains its pending entry for separate boundary verification
+      // after #1498 removed the router that formerly held it.
       'packages/api/src/services/access.ts',
       // #889: scheduled messages. Route paths run inside the request
       // transaction; the 15s sweeper enumerates active tenants via
@@ -332,6 +333,17 @@ describe('db-access guard', () => {
       // (`runDispatchDb` / `runTenantWorkDb`), the message-persistence
       // back-link shape. Consumer-only callers.
       'packages/api/src/services/agent-usage.ts',
+      'packages/api/src/services/whatsapp-self.ts',
+      // Connectors: every query/claim in the service goes through `scopedHandle`
+      // (the request transaction when scoped, ambient for a legacy credential or
+      // the auth-exempt public ingress). The delivery claim is the journal row.
+      'packages/api/src/services/connectors.ts',
+      // Key-to-agent provenance reads instances/agents through the active scope.
+      'packages/api/src/lib/key-agent.ts',
+      // Paired-agent grant writer: reads the grant source's tenant through the
+      // caller's handle (`scopedHandle` in the API); cross-tenant sources are
+      // invisible under enforcement (agent-source-grants-postgres.test.ts).
+      'packages/db/src/agent-source-grants.ts',
     ]);
     for (const entry of boundary) {
       expect(entry.file.startsWith('packages/api/src/tenancy/') || converted.has(entry.file)).toBe(true);

@@ -6,7 +6,7 @@
  * -----------
  * When an agent is assigned to an instance the API auto-provisions a scoped key
  * addressed by NAME — historically `agent:<agentName>` — and finds it again with
- * `ApiKeyService.findByName`, a name-only predicate over `api_keys`.
+ * `ApiKeyService.findAgentKeyByName`, an active system-key predicate over `api_keys`.
  *
  * `api_keys` is a legacy deployment-wide table: no `tenant_id` column and no
  * RLS. So that name is a single global namespace, and under multitenancy it is
@@ -19,8 +19,8 @@
  * THE NAMING RULE
  * ---------------
  * A tenant's keys are qualified with the tenant id, so two tenants' agents of
- * the same name resolve to different rows. A legacy request — no tenant context
- * — keeps the bare `agent:<name>` byte-for-byte, which is required rather than
+ * the same name resolve to different rows. An instance with no tenant
+ * keeps the bare `agent:<name>` byte-for-byte, which is required rather than
  * merely tidy: that name is the lookup key for every key already provisioned on
  * every existing deployment, and changing it would orphan them all.
  */

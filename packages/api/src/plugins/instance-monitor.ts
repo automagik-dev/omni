@@ -42,6 +42,7 @@ import type { Database, GupshupHandoffOptions } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
+import { applyInboundReplyContextOption } from '../lib/inbound-reply-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../lib/whatsapp-business-connection';
 import { lookupInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
@@ -239,8 +240,12 @@ export function buildInstanceConnectOptions(instance: {
   ascFlowChave?: string | null;
   ascFlowHandoffMode?: string | null;
   ascFlowHandoffServico?: number | null;
+  downloadMediaOnSync?: boolean | null;
+  inboundReplyContext?: boolean | null;
 }): Record<string, unknown> {
   const options: Record<string, unknown> = {};
+  // A reconnect can receive more pushed history; same media rule as connect (#1280).
+  if (instance.channel === 'whatsapp-baileys') options.downloadMediaOnSync = instance.downloadMediaOnSync === true;
   if (instance.telegramBotToken) options.token = instance.telegramBotToken;
   if (instance.channel === 'telegram') options.telegramReactionLevel = instance.telegramReactionLevel;
   if (instance.discordBotToken) options.token = instance.discordBotToken;
@@ -269,6 +274,7 @@ export function buildInstanceConnectOptions(instance: {
   if (instance.channel === 'harness') {
     applyHarnessMetadata(options, instance.profileMetadata);
   }
+  applyInboundReplyContextOption(options, instance);
   return options;
 }
 
@@ -452,6 +458,7 @@ async function connectInstance(
     twilioStatusCallbackUrl?: string | null;
     twilioWebhookUrl?: string | null;
     twilioValidateSignature?: boolean | null;
+    inboundReplyContext?: boolean | null;
   },
   registry: ChannelRegistry,
 ): Promise<void> {
@@ -902,6 +909,7 @@ export class InstanceMonitor {
     twilioStatusCallbackUrl?: string | null;
     twilioWebhookUrl?: string | null;
     twilioValidateSignature?: boolean | null;
+    inboundReplyContext?: boolean | null;
   } | null> {
     // Discrete DB block in the INSTANCE's own world: its tenant comes from the
     // ownership registry, not from the queue entry that asked for it.

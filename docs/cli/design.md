@@ -45,7 +45,7 @@ export OMNI_FORMAT=json
 Valid config keys: `apiUrl`, `apiKey`, `defaultInstance`, `format` (`human`|`json`),
 `showCommands`, `telemetry`, `updateChannel` (`latest`|`next`), and the local-runtime
 namespace `server.port`, `server.databaseUrl`, `server.dataDir`, `server.logLevel`,
-`server.nodeEnv`. There is no `baseUrl` key and no `OMNI_BASE_URL` variable.
+`server.nodeEnv`, `server.natsHost` (managed NATS bind address, default `127.0.0.1`). There is no `baseUrl` key and no `OMNI_BASE_URL` variable.
 
 ### JSON output envelope
 
@@ -148,7 +148,7 @@ except `debug` commands; `omni --all` reveals those too.
 | `settings` | Server settings |
 | `batch` | Batch operations |
 | `start` / `stop` / `restart` | Manage local Omni services (API + NATS) |
-| `install` | Interactive setup wizard (bootstrap an Omni server) |
+| `install` | Non-interactive, reinstall-safe Omni server bootstrap |
 | `update` | Update the CLI to the latest version |
 | `doctor` | Diagnose and repair the embedded omni runtime |
 | `requirements` | Show declared peer-version requirements (pgserve, genie) |
@@ -496,7 +496,6 @@ omni providers create ...                 # Create provider
 omni providers update <id> ...            # Update
 omni providers delete <id>               # Delete
 omni providers test <id>                 # Connectivity/health test
-omni providers setup openclaw ...        # Guided OpenClaw setup wizard (the only wizard today)
 omni providers agents <id>               # List provider agents
 omni providers teams <id>                # List provider teams
 omni providers workflows <id>            # List provider workflows

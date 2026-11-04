@@ -1,5 +1,7 @@
 // Sentry must be initialised before all other imports for auto-instrumentation
 import './instrument';
+// Before anything that could load human login's passkey plugin (tsyringe needs it).
+import 'reflect-metadata';
 
 // OpenTelemetry SDK — backend-neutral tracing. No-op when
 // OTEL_EXPORTER_OTLP_ENDPOINT is unset. Imported here (right after Sentry)
@@ -23,11 +25,13 @@ import './tracing';
 
 import { type ChannelRegistry, isVoiceCapable } from '@omni/channel-sdk';
 import {
+  type ConnectorEventPublisher,
   type EventBus,
   configureLogging,
   connectEventBus,
   createLogger,
   enableDefaultMetrics,
+  setEnvelopeProducerResolver,
   setEnvelopeTenantResolver,
 } from '@omni/core';
 import type { Database, DbEnforcementMode, EnforcedBootIdentities } from '@omni/db';
@@ -47,6 +51,7 @@ import {
   verifyCriticalColumns,
 } from '@omni/db';
 import * as Sentry from '@sentry/bun';
+import type { WebSocketHandler } from 'bun';
 import { sql } from 'drizzle-orm';
 
 // Configure logging at startup
@@ -61,7 +66,11 @@ const natsLog = createLogger('api:nats');
 const pluginLog = createLogger('api:plugins');
 const shutdownLog = createLogger('api:shutdown');
 import packageJson from '../package.json';
+import { runStartupAgentKeyRepair } from './agent-key-repair-state';
 import { type App, createApp } from './app';
+import { currentProducingKeyId } from './lib/producer-scope';
+import { type Login, announceClaim } from './login';
+import { resolveLoginDefaults } from './login/secret';
 import { markPluginsDegraded } from './plugin-state';
 import {
   InstanceMonitor,
@@ -83,13 +92,18 @@ import {
   setupSyncWorker,
 } from './plugins';
 import { buildAutomationEngineDeps } from './plugins/automation-actions';
+import { setupDeviceLogin } from './plugins/device-login';
 import { setupScheduler, stopScheduler } from './scheduler';
 import { closeAgentHeartbeat, initAgentHeartbeat } from './services/agent-heartbeat';
+import { findAgentsWithoutKeys, reconcileAgentKeys } from './services/agent-key-reconciliation';
 import { ApiKeyService } from './services/api-keys';
+import { closeAllConsumerStreams } from './services/event-consumer-stream';
 import { closeTurnEvents, getTurnEventsConnection, initTurnEvents } from './services/turn-events';
 import { TurnMonitor } from './services/turn-monitor';
+import type { SystemUpdater } from './system/update';
 import { resolveAuthPlaneConnection } from './tenancy/auth-plane-connection';
 import { warnOnMixedTenancyState } from './tenancy/enforcement-posture';
+import { pairedAgentFlagState } from './tenancy/feature-flag';
 import { installInstanceOwnerResolver } from './tenancy/instance-owner-registry';
 import { currentTenantScope } from './tenancy/tenant-scope';
 import { startStreamRevocationSweeper } from './tenancy/tenant-stream-subscriptions';
@@ -142,7 +156,7 @@ export function getInstanceMonitor(): InstanceMonitor | null {
 /**
  * Connect to NATS event bus and set up listeners
  */
-async function connectToNats(db: Database): Promise<EventBus | null> {
+async function connectToNats(db: Database): Promise<(EventBus & ConnectorEventPublisher) | null> {
   try {
     natsLog.info('Connecting to NATS', { url: NATS_URL });
     const eventBus = await connectEventBus({
@@ -159,6 +173,7 @@ async function connectToNats(db: Database): Promise<EventBus | null> {
     // republish must pass an explicit `metadata.tenantId` — this resolver never
     // lends an ambient tenant across the request→worker boundary.
     setEnvelopeTenantResolver(() => currentTenantScope()?.tenantId ?? null);
+    setEnvelopeProducerResolver(() => (pairedAgentFlagState('consumers').enabled ? currentProducingKeyId() : null));
 
     // ...and the PRODUCER-side derivation for publishes that have no request at
     // all — every channel-plugin emit (`message.received`, `instance.connected`,
@@ -271,13 +286,67 @@ async function initializeChannelPlugins(db: Database, eventBus: EventBus): Promi
 }
 
 /**
+ * Webchat voice socket (PROTOTYPE, packages/channel-webchat/src/voice.ts).
+ * A plugin's handleWebhook cannot upgrade to a WebSocket, so the browser socket
+ * is upgraded here and every frame is handed to the webchat plugin.
+ */
+const WEBCHAT_VOICE_PATH = /^\/api\/v2\/channels\/webchat\/([0-9a-f-]{36})\/voice$/;
+
+interface WebchatVoiceSocketPlugin {
+  voiceSocketOpen(
+    socket: { send(data: string | Uint8Array): unknown; close(code?: number, reason?: string): void },
+    instanceId: string,
+    visitorId: string | null,
+  ): Promise<string | null>;
+  voiceSocketMessage(sessionId: string, data: string | Uint8Array): void;
+  voiceSocketClose(sessionId: string): Promise<void>;
+}
+
+function webchatVoicePlugin(): WebchatVoiceSocketPlugin | null {
+  const plugin = globalChannelRegistry?.get('webchat');
+  return plugin && 'voiceSocketOpen' in plugin ? (plugin as unknown as WebchatVoiceSocketPlugin) : null;
+}
+
+interface WsData {
+  params: ReturnType<typeof parseVoiceStreamParams>;
+  webchat?: { instanceId: string; visitorId: string | null; sessionId?: string };
+}
+
+/** Route webchat voice sockets to the plugin; everything else to the voice stream handler. */
+function withWebchatVoice(handler: WebSocketHandler<WsData>): WebSocketHandler<WsData> {
+  return {
+    ...handler,
+    async open(ws) {
+      const webchat = ws.data.webchat;
+      if (!webchat) return handler.open?.(ws);
+      const plugin = webchatVoicePlugin();
+      if (!plugin) {
+        ws.close(4004, 'Webchat plugin not loaded');
+        return;
+      }
+      webchat.sessionId = (await plugin.voiceSocketOpen(ws, webchat.instanceId, webchat.visitorId)) ?? undefined;
+    },
+    message(ws, message) {
+      const webchat = ws.data.webchat;
+      if (!webchat) return handler.message?.(ws, message);
+      if (webchat.sessionId) webchatVoicePlugin()?.voiceSocketMessage(webchat.sessionId, message);
+    },
+    close(ws, code, reason) {
+      const webchat = ws.data.webchat;
+      if (!webchat) return handler.close?.(ws, code, reason);
+      if (webchat.sessionId) void webchatVoicePlugin()?.voiceSocketClose(webchat.sessionId);
+    },
+  };
+}
+
+/**
  * Start the HTTP server using Bun.serve with WebSocket support.
  *
  * Voice stream WebSocket: ws://host/api/v2/voice/stream/{sessionId}?api_key=<key>&format=opus|pcm
  * Auth is validated on upgrade. Binary frames carry tagged audio per user.
  */
 function startBunServer(app: App) {
-  return Bun.serve<{ params: ReturnType<typeof parseVoiceStreamParams> }>({
+  return Bun.serve<WsData>({
     port: PORT,
     hostname: HOST,
     // Bun's default idleTimeout is 10s, which cut the socket under an idle
@@ -286,6 +355,16 @@ function startBunServer(app: App) {
     idleTimeout: 60,
     fetch(req, server) {
       const url = new URL(req.url);
+
+      const webchatVoice = WEBCHAT_VOICE_PATH.exec(url.pathname);
+      if (webchatVoice?.[1]) {
+        const data: WsData = {
+          params: null,
+          webchat: { instanceId: webchatVoice[1], visitorId: url.searchParams.get('visitorId') },
+        };
+        if (server.upgrade(req, { data })) return undefined as unknown as Response;
+        return new Response('WebSocket upgrade failed', { status: 500 });
+      }
 
       // Voice stream WebSocket upgrade
       if (url.pathname.startsWith('/api/v2/voice/stream/')) {
@@ -306,7 +385,7 @@ function startBunServer(app: App) {
       // All other requests handled by Hono
       return app.fetch(req, server);
     },
-    websocket: {
+    websocket: withWebchatVoice({
       async open(ws) {
         const params = ws.data.params;
         if (!params) {
@@ -419,7 +498,7 @@ function startBunServer(app: App) {
           if (!stillLive) voiceStreamRegistry.unbindSession(sessionId);
         }
       },
-    },
+    }),
   });
 }
 
@@ -504,6 +583,11 @@ function setupShutdownHandlers(server: ReturnType<typeof Bun.serve>, earlyShutdo
         globalStreamSweeper = null;
       }
 
+      // Open consumer SSE streams scan the DB: end them (each sends `reconnect`)
+      // before the pool closes. A no-op when none are open.
+      shutdownLog.info('Closing event consumer streams');
+      await closeAllConsumerStreams();
+
       if (globalDispatcherCleanup) {
         shutdownLog.info('Stopping agent dispatcher');
         await globalDispatcherCleanup();
@@ -565,6 +649,8 @@ async function setupEventBusServices(
   eventBus: EventBus | null,
   services: ReturnType<typeof createApp>['services'],
   db: Database,
+  login: Login | null,
+  updater: SystemUpdater,
 ): Promise<void> {
   if (!eventBus) {
     log.warn('Skipping event bus services (no event bus)');
@@ -609,6 +695,17 @@ async function setupEventBusServices(
   } catch (error) {
     log.error('Failed to set up session cleaner', { error: String(error) });
   }
+
+  // Human login: devices approved by the owner over WhatsApp, and the claim link for an
+  // unclaimed Omni (on by default; OMNI_LOGIN_ENABLED=false turns it off). The same self chat confirms updates.
+  try {
+    await setupDeviceLogin(eventBus, login, updater);
+    if (login) await announceClaim(login);
+  } catch (error) {
+    log.error('Failed to set up human login', { error: String(error) });
+  }
+  // An update recorded before a restart: tell the owner how it went, without holding up boot.
+  void updater.reconcile().catch((error) => log.warn('Could not reconcile the last update', { error: String(error) }));
 
   // Follow-up lifecycle hooks (arm on outbound agent msg, disarm on reply/handoff/archive)
   try {
@@ -756,11 +853,22 @@ async function verifyEnforcedRuntimeIdentity(db: Database, mode: DbEnforcementMo
   }
 }
 
+function warnPairedAgentConsumerFlag(): void {
+  const pairedConsumers = pairedAgentFlagState('consumers');
+  if (pairedConsumers.reason === 'multitenancy_enabled') {
+    log.warn(`${pairedConsumers.flag} is OFF because OMNI_MULTITENANCY_ENABLED=true`, {
+      reason: pairedConsumers.reason,
+    });
+  }
+}
+
 /**
  * Main entry point
  */
 async function main() {
   log.info('Starting Omni API v2');
+
+  warnPairedAgentConsumerFlag();
 
   // Enable default Node.js metrics (CPU, memory, event loop)
   enableDefaultMetrics();
@@ -898,8 +1006,18 @@ async function main() {
     pluginLog.warn('Skipping channel plugin loading (no event bus)');
   }
 
+  // Human login needs a secret and, optionally, a public URL: resolved from the database
+  // when the environment leaves them unset, so pairing works with nothing configured.
+  const loginDefaults = await resolveLoginDefaults(db);
+
   // Create app and get services
-  const { app, services } = createApp(db, eventBus, globalChannelRegistry);
+  const { app, services, login, updater, pluginLane } = createApp(
+    db,
+    eventBus,
+    globalChannelRegistry,
+    undefined,
+    loginDefaults,
+  );
   globalServicesRef = services;
 
   // G5 (ADR-0008): opt the instance monitor into the tenant fan-out now that the
@@ -940,8 +1058,15 @@ async function main() {
     log.error('Failed to initialize primary API key', { error: String(error) });
   }
 
+  // Repair pre-upgrade agent bindings before any turn-based dispatch can run.
+  // A failed repair degrades health but must not prevent Omni from starting.
+  // The next boot retries the same idempotent repair.
+  await runStartupAgentKeyRepair(() => reconcileAgentKeys(db, services.authPlane.db, enforcementMode), {
+    inspectMissingAgents: () => findAgentsWithoutKeys(db, services.authPlane.db, enforcementMode),
+  });
+
   // Set up event bus related services (persistence, agent responder, sync worker)
-  await setupEventBusServices(eventBus, services, db);
+  await setupEventBusServices(eventBus, services, db, login, updater);
 
   // Setup scheduler with services and channel registry (for unread count refresh)
   log.info('Starting scheduler');
@@ -949,6 +1074,9 @@ async function main() {
 
   // Start HTTP server
   const server = startBunServer(app);
+
+  // Automagik's plugin lane: a look a minute from now, then hourly (OMNI_PLUGIN_LANE=off: none).
+  pluginLane?.start();
 
   // Print startup banner
   printStartupBanner({
