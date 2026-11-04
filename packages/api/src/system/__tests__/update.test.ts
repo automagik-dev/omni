@@ -23,6 +23,7 @@ import {
   createSystemUpdater,
   readUpdateConfig,
 } from '../update';
+import { updateFailureReason } from '../update-log';
 
 const OWNER: OwnAccount = {
   instanceId: '11111111-1111-4111-8111-111111111111',
@@ -545,6 +546,40 @@ describe('why an update did not complete, from the sandbox update log', () => {
     await failAfterGrace(null);
     expect(existsSync(updateLog())).toBe(false);
     expect(sent).toEqual([NOT_COMPLETED]);
+  });
+
+  test('a log cut shorter than it was when the update started proves nothing new: no reason', async () => {
+    const base = 'Sandbox install requires Bun 1.4.4; /b runs 1.3.9. ';
+    const pad = (error: string, bytes: number) =>
+      `${JSON.stringify({ ok: false, error: error.padEnd(bytes - 24, 'x') })}\n`;
+    const old = pad(base, 97);
+    expect(Buffer.byteLength(old)).toBe(97);
+    writeFileSync(updateLog(), `${old}${'p'.repeat(1397 - 97 - 1)}\n`);
+    const clock = { at: Date.now() };
+    await setup(env(), { clock }).updater.request(LATEST, 'key-1');
+    expect(JSON.parse(readFileSync(stateFile(), 'utf8')).logFrom).toBe(1397);
+    writeFileSync(updateLog(), old);
+    clock.at += UPDATE_GRACE_MS + 1;
+    expect(await setup(env(), { clock }).updater.reconcile()).toBe('not-completed');
+    expect(sent).toEqual([NOT_COMPLETED]);
+    expect(finished().map((event) => event.payload.reason)).toEqual(['still on the old version']);
+  });
+
+  test('a Bun version too long for one short line falls back to the generic line', async () => {
+    const generic = `The install failed; see ${updateLog()} on the server.`;
+    const long = `1.${'9'.repeat(19)}.0`;
+    await failAfterGrace(
+      `${JSON.stringify({ ok: false, error: `Sandbox install requires Bun ${long}; /b runs 1.3.9. Retry.` })}\n`,
+    );
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${generic}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([generic]);
+    const huge = `Sandbox install requires Bun 1.4.4; /b runs ${'9'.repeat(30_000)}.1.2. Retry.`;
+    expect(updateFailureReason(huge, '/s/logs/update.log')).toBe(
+      'The install failed; see /s/logs/update.log on the server.',
+    );
+    expect(updateFailureReason(`Sandbox install requires Bun ${'1'.repeat(20)}.0.0; /b runs 1.3.9.`, '/l')).toBe(
+      'The install failed; see /l on the server.',
+    );
   });
 });
 

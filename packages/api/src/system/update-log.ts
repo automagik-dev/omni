@@ -35,8 +35,10 @@ export async function lastUpdateError(path: string, from: number): Promise<strin
   if (!handle) return null;
   try {
     const { size } = await handle.stat();
-    // Shorter than when the update started: the log was replaced since, so all of it is newer.
-    const start = Math.max(size < from ? 0 : from, size - TAIL_BYTES);
+    // Shorter than when the update started: the log was cut or replaced, and what is left may be
+    // older than this update. Nothing in it can be shown to be this update's result.
+    if (size < from) return null;
+    const start = Math.max(from, size - TAIL_BYTES);
     const buffer = Buffer.alloc(size - start);
     await handle.read(buffer, 0, buffer.length, start);
     const lines = buffer.toString('utf8').split('\n').reverse();
@@ -50,9 +52,16 @@ export async function lastUpdateError(path: string, from: number): Promise<strin
   }
 }
 
+/** A Bun version longer than this is not one, and a mapped line longer than this is not short. */
+const MAX_VERSION_LENGTH = 20;
+const MAX_REASON_LENGTH = 80;
+
 /** One short line for the owner: a known error in fixed words, anything else only where to look. */
 export function updateFailureReason(error: string, logPath: string): string {
+  const generic = `The install failed; see ${logPath} on the server.`;
   const bun = BUN_MISMATCH.exec(error);
-  if (bun) return `It needs Bun ${bun[1]}; this computer has ${bun[2]}.`;
-  return `The install failed; see ${logPath} on the server.`;
+  const [needs, has] = [bun?.[1] ?? '', bun?.[2] ?? ''];
+  if (!bun || needs.length > MAX_VERSION_LENGTH || has.length > MAX_VERSION_LENGTH) return generic;
+  const reason = `It needs Bun ${needs}; this computer has ${has}.`;
+  return reason.length <= MAX_REASON_LENGTH ? reason : generic;
 }
