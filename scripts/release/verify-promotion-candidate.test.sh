@@ -46,6 +46,8 @@ candidate="$(git -C "${repo}" rev-parse HEAD)"
 final="$(git -C "${repo}" rev-parse HEAD)"
 
 (
+  # Pad both sides beyond pipe capacity so an early-exiting consumer reliably breaks the producer.
+  printf '%1048576s\n' ''
   # GitHub Actions exports this for every step. This assertion reads the
   # verifier's stdout contract, so do not let the runner redirect it.
   unset GITHUB_OUTPUT
@@ -54,9 +56,10 @@ final="$(git -C "${repo}" rev-parse HEAD)"
     --candidate-sha "${candidate}" \
     --final-sha "${final}" \
     --version 2.260830.2 \
-    --digest sha256:dba9b81cead5efacf9303ab75487a762fa100992dc2bb52741524a7a036b2da8
-) | grep -qx 'promotion_candidate_verified=true' || \
-  fail "control-only final tree was not accepted"
+    --digest sha256:dba9b81cead5efacf9303ab75487a762fa100992dc2bb52741524a7a036b2da8 || exit "$?"
+  printf '%1048576s\n' ''
+) | grep -x 'promotion_candidate_verified=true' >/dev/null || \
+  fail "control-only final tree was not accepted (pipeline statuses: ${PIPESTATUS[*]})"
 
 (
   cd "${repo}"

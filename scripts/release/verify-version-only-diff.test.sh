@@ -33,9 +33,12 @@ PY
 git -C "${repo}" commit -qam clean-version-bump
 clean="$(git -C "${repo}" rev-parse HEAD)"
 (
+  # Exercise the pipe with more output than its buffer before and after the matched line.
+  printf '%1048576s\n' ''
   cd "${repo}"
-  "${SCRIPT}" --parent "${parent}" --source "${clean}" --expected-version 2.260830.2
-) | grep -qx 'version_only_diff_verified=true' || fail "exact version-only bump was rejected"
+  "${SCRIPT}" --parent "${parent}" --source "${clean}" --expected-version 2.260830.2 || exit "$?"
+  printf '%1048576s\n' ''
+) | grep -x 'version_only_diff_verified=true' >/dev/null || fail "exact version-only bump was rejected (pipeline statuses: ${PIPESTATUS[*]})"
 
 git -C "${repo}" checkout -q -b malicious "${parent}"
 python3 - "${repo}" "${paths[@]}" <<'PY'
