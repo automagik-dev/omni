@@ -5,6 +5,18 @@ import { call, t } from './core.js'
 import { refreshLive } from './omni-store.js'
 import { MetaWebhookSetup } from './meta-webhook-setup.js'
 
+const VALIDATION_PROBLEMS = Object.freeze({
+  'field/json': 'Enter valid JSON for {field}.',
+  'field/number': 'Enter a nonnegative integer for {field}.',
+  'field/boolean': 'Choose true or false for {field}.',
+  'field/enum': 'Choose an available value for {field}.',
+})
+function validationProblem(error, fallback) {
+  return typeof error?.code === 'string' && Object.hasOwn(VALIDATION_PROBLEMS, error.code)
+    && typeof error.field === 'string' && Object.hasOwn(FIELDS, error.field)
+    ? t(VALIDATION_PROBLEMS[error.code], { field: FIELDS[error.field].key }) : t(fallback)
+}
+
 // Keyed by channel id by the parent: a late response can never edit a different channel.
 export function ChannelSettings({ channel, writable, request = call, refresh = () => refreshLive(call) }) {
   const [record, setRecord] = useState(null)
@@ -68,7 +80,7 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
       void run('omni-channel-settings-save', { id: channel.id, patch })
     } catch (failure) {
       console.warn('Invalid channel settings:', failure)
-      setError(t('Check the settings values and try again.'))
+      setError(validationProblem(failure, 'Check the settings values and try again.'))
     }
   }
   const control = key => {
@@ -103,7 +115,7 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
       void run('omni-wab-repair', { id: channel.id, ...credentials })
     } catch (failure) {
       console.warn('Invalid Meta identifiers:', failure)
-      setToken(''); setError(t('Check the Meta identifiers and try again.'))
+      setToken(''); setError(validationProblem(failure, 'Check the Meta identifiers and try again.'))
     }
   }
   return h('section', { 'aria-label': t('Channel settings') },

@@ -80,7 +80,10 @@ export function UpdateBar({ origin }) {
     } catch (error) {
       if (!alive.current) return
       if (error.stale) redraw(error.status)
-      else setProblem(error.message)
+      else {
+        console.warn('Could not request the update:', error)
+        setProblem(t('Could not request the update. Check your connection and access, then try again.'))
+      }
     } finally {
       if (alive.current) setBusy(false)
     }

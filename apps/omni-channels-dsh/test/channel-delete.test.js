@@ -88,7 +88,7 @@ test('failed delete keeps details and chats, shows actionable error and supports
   click(button(page.draw(), 'Permanently delete instance'))
   await settle()
   const root = page.draw()
-  assert.match(text(root), /Could not delete instance: Connection lost. Check your access or connection, then try again/)
+  assert.match(text(root), /Could not delete this instance. Check your access or connection, then try again/)
   assert.equal(ui.omniStore.getSnapshot().chats.length, 1)
   assert.equal(ui.omniStore.getSnapshot().messages.chat.length, 1)
   assert.ok(text(root).includes(channel.name))

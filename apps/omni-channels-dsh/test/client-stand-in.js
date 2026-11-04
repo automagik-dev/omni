@@ -160,17 +160,18 @@ export function column() {
 // This plugin's client modules (`lines`: export lines, read from src/client/) bundled as DSH
 // bundles the client, run with `globals` and the stand-in React; `team` is what
 // '@automagik/bots-dsh/client' hands over. Nothing leaves the test.
-export async function bundleClient(lines, { globals = {}, team }) {
+export async function bundleClient(lines, { globals = {}, team, modules = {} }) {
   const bundle = await build({
     stdin: { contents: lines.join('\n'), resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
-    external: ['react', 'react-dom', '@automagik/bots-dsh/client'],
+    external: ['react', 'react-dom', '@automagik/bots-dsh/client', ...Object.keys(modules)],
     loader: { '.css': 'text' },
+    supported: Object.keys(modules).length ? { 'dynamic-import': false } : undefined,
   })
   const module = { exports: {} }
   runInNewContext(bundle.outputFiles[0].text, {
     module, exports: module.exports, console, ...globals,
-    require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': team })[name],
+    require: name => ({ react, 'react-dom': { createPortal: node => node }, '@automagik/bots-dsh/client': team, ...modules })[name],
   })
   return module.exports
 }

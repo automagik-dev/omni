@@ -43,6 +43,7 @@ function sample(now) {
     { id: 'slack-namastex', type: 'slack', name: 'Namastex', detail: '#support · #sales', status: 'connected', answeredBy: 'Omni',
       health: { lastEventAt: ago(6 * MIN), messagesToday: 57, replyMedianSec: 95, uptime: 1, week: [33, 40, 51, 38, 44, 21, 57] } },
     { id: 'tg-helper', type: 'telegram', name: 'Omni helper', detail: '@omni_helper_bot', status: 'attention', answeredBy: 'Omni',
+      problemCode: 'token_revoked',
       problem: 'The bot token was revoked in BotFather. Paste a new token to reconnect.',
       health: { lastEventAt: ago(19 * HOUR), messagesToday: 0, replyMedianSec: null, uptime: 0.62, week: [18, 22, 25, 19, 7, 0, 0] } },
   ]
@@ -173,7 +174,10 @@ export function omniActions(select, call) {
     patchChannel(channelId, { busy: action, actionError: undefined })
     call('omni-channel-act', { id: channelId, action, ...(token ? { token } : {}) })
       .then(() => refreshLive(call))
-      .then(() => patchChannel(channelId, { busy: undefined }), error => patchChannel(channelId, { busy: undefined, actionError: error.message }))
+      .then(() => patchChannel(channelId, { busy: undefined }), error => {
+        console.warn('Could not change the channel:', error)
+        patchChannel(channelId, { busy: undefined, actionError: t('Could not change this channel. Try again.') })
+      })
   }
   return {
     setFilter: filter => set({ filter }),
@@ -216,11 +220,12 @@ export function omniActions(select, call) {
           void loadMessages(call, chatId)
         },
         error => {
+          console.warn('Could not send the message:', error)
           if (!stillExists()) return
           set(state => ({
             messages: { ...state.messages, [chatId]: (state.messages[chatId] ?? []).filter(message => message.id !== localId) },
             chats: state.chats.map(chat => (chat.id === chatId ? chatOf(before, chatId) ?? chat : chat)),
-            sendError: { chatId, text: body, message: error.message },
+            sendError: { chatId, text: body, message: t('Could not send this message. Check your connection and access, then try again.') },
           }))
         },
       )
@@ -263,7 +268,8 @@ export function omniActions(select, call) {
       try {
         await call('omni-channel-act', { id: channelId, action: 'delete' })
       } catch (error) {
-        patchChannel(channelId, { busy: undefined, deleteError: error.message })
+        console.warn('Could not delete the instance:', error)
+        patchChannel(channelId, { busy: undefined, deleteError: t('Could not delete this instance. Check your access or connection, then try again.') })
         return
       } finally {
         deleting.delete(channelId)
@@ -273,7 +279,8 @@ export function omniActions(select, call) {
       try {
         await refreshLive(call)
       } catch (error) {
-        set(state => ({ source: { ...state.source, error: t('Instance deleted, but refresh failed: {reason}. Refresh or wait for the next update.', { reason: error.message }) } }))
+        console.warn('Could not refresh after deleting the instance:', error)
+        set(state => ({ source: { ...state.source, error: t('Instance deleted, but the overview could not refresh. Refresh or wait for the next update.') } }))
       }
     },
   }
@@ -294,8 +301,9 @@ export async function loadMessages(call, chatId) {
     if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return
     set(state => ({ messages: { ...state.messages, [chatId]: messages } }))
   } catch (error) {
+    console.warn('Could not load messages:', error)
     if (generation !== dataGeneration || deleting.size || !chatOf(omniStore.getSnapshot(), chatId)) return
-    set(state => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: error.message } }))
+    set(state => ({ messages: { ...state.messages, [chatId]: state.messages[chatId] ?? [] }, source: { ...state.source, error: t('Could not load messages. Retrying soon.') } }))
   }
 }
 
@@ -347,7 +355,8 @@ export function startLive(call, every = POLL_MS) {
       try {
         await refreshLive(call)
       } catch (error) {
-        set(state => ({ source: { ...state.source, error: error.message } }))
+        console.warn('Could not refresh channels:', error)
+        set(state => ({ source: { ...state.source, error: t('Could not refresh channels. Retrying soon.') } }))
       }
     }
     if (!stopped) timer = setTimeout(tick, every)

@@ -61,7 +61,7 @@ test('a refused reply is taken back and says why, keeping the text to put back',
   const state = omniStore.getSnapshot()
   assert.deepEqual(state.messages['chat-1'], [])
   assert.equal(state.chats[0].preview, 'Oi')
-  assert.deepEqual(state.sendError, { chatId: 'chat-1', text: 'Oi!', message: 'This device\'s key can\'t send messages; ask your Omni\'s owner.' })
+  assert.deepEqual(state.sendError, { chatId: 'chat-1', text: 'Oi!', message: 'Could not send this message. Check your connection and access, then try again.' })
 })
 
 test('a key that cannot send sends nothing', () => {
@@ -104,7 +104,7 @@ test('a refused change shows on the channel', async () => {
   for (let round = 0; round < 3; round += 1) await settle()
   const channel = omniStore.getSnapshot().channels[0]
   assert.equal(channel.status, 'connected')
-  assert.equal(channel.actionError, 'This device\'s key can\'t change channels; ask your Omni\'s owner.')
+  assert.equal(channel.actionError, 'Could not change this channel. Try again.')
 })
 
 test('delete waits for success, deduplicates across action objects and polls, then cleans only matching data', async () => {
@@ -145,7 +145,7 @@ test('delete failure retains details, chats and caches and allows retry', async 
   })
   await omni.deleteInstance(CHANNEL.id)
   const after = omniStore.getSnapshot()
-  assert.equal(after.channels[0].deleteError, 'Offline')
+  assert.equal(after.channels[0].deleteError, 'Could not delete this instance. Check your access or connection, then try again.')
   assert.equal(after.channels[0].busy, undefined)
   for (const key of ['chats', 'messages', 'seen', 'filter', 'chatId', 'page']) assert.deepEqual(after[key], before[key])
   fail = false
@@ -186,7 +186,7 @@ test('successful delete preserves navigation elsewhere and reports refresh failu
   assert.equal(state.chatId, 'other-chat')
   assert.equal(state.filter, 'other')
   assert.equal(state.channels.length, 0)
-  assert.match(state.source.error, /Instance deleted, but refresh failed: Overview unavailable/)
+  assert.match(state.source.error, /Instance deleted, but the overview could not refresh/)
 })
 
 test('successful delete refresh preserves another channel detail, chat, filter and caches', async () => {
@@ -277,7 +277,7 @@ for (const outcome of ['success', 'failure']) {
       assert.equal(state.sendError, null)
     } else {
       assert.deepEqual(state.messages[otherChat.id], [])
-      assert.deepEqual(state.sendError, { chatId: otherChat.id, text: 'Unrelated reply', message: 'Unrelated send failure' })
+      assert.deepEqual(state.sendError, { chatId: otherChat.id, text: 'Unrelated reply', message: 'Could not send this message. Check your connection and access, then try again.' })
     }
   })
 }

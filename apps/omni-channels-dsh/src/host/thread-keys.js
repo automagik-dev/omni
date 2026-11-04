@@ -47,7 +47,7 @@ export const UNREADABLE = 'The thread keys file could not be read, so the chat k
 
 const text = z.string().min(1).max(2000)
 const Entry = z.object({ childId: text, key: text, chatId: text, origin: text, parentKeyId: text.nullable(), pending: z.object({ since: z.number() }).nullable() })
-const Waiting = z.object({ chatId: text, origin: text, reason: z.string().max(1000) })
+const Waiting = z.object({ chatId: text, origin: text, reason: z.string().max(1000), reasonCode: z.enum(['omni_unreachable', 'chat_keys_unavailable', 'chat_key_limit']).optional() })
 const KeysFile = z.object({
   version: z.literal(1),
   threads: z.record(z.string(), Entry),
@@ -350,8 +350,10 @@ export function install(rt) {
       const minted = await mintIn(file, threadId, waiting.chatId, link)
       if (minted.status === 0) down.add(cleanOmniUrl(link.url))
       if (minted.ok) got.push(threadId)
-      else if (waiting.reason !== `Not connected: ${minted.reason}`) {
+      else if (waiting.reason !== `Not connected: ${minted.reason}` || waiting.reasonCode !== minted.reasonCode) {
         waiting.reason = `Not connected: ${minted.reason}`
+        if (minted.reasonCode === undefined) delete waiting.reasonCode
+        else waiting.reasonCode = minted.reasonCode
         reasons = true
       }
     }
@@ -412,6 +414,15 @@ export function install(rt) {
       const file = read()
       const link = rt.omniLink?.() ?? null
       return new Map([...threadIds].map(threadId => [threadId, reasonIn(file, link, threadId)]))
+    },
+    reasonCodesOf: (threadIds) => {
+      const file = read()
+      const link = rt.omniLink?.() ?? null
+      const known = new Map([[NOT_LINKED, 'not_linked'], [OTHER_OMNI, 'other_omni'], [BEING_CUT, 'being_cut'], [WAITING, 'waiting'], [NO_KEY, 'no_key']])
+      return new Map([...threadIds].map(id => {
+        const reason = reasonIn(file, link, id)
+        return [id, reason === null ? undefined : known.get(reason) ?? file.waiting[id]?.reasonCode]
+      }))
     },
     // The thread is gone: its key is cut, or kept pending until a drain cuts it.
     revoke: threadId => serial(async () => {

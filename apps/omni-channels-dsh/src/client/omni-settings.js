@@ -145,7 +145,8 @@ export function ThreadDefaultsCard() {
         setNote({ ok: true, text: t('Saved.') })
       }
     } catch (error) {
-      if (alive.current) setNote({ ok: false, text: error.message })
+      console.warn('Could not save Omni settings:', error)
+      if (alive.current) setNote({ ok: false, text: t('Could not save these defaults. Try again.') })
     } finally {
       if (alive.current) setBusy(false)
     }
@@ -191,7 +192,8 @@ export function FreeReactionsCard() {
       show(await saveFreeReactions(text, { reset, defaults: list?.defaults }))
       if (alive.current) setNote({ ok: true, text: t('Saved.') })
     } catch (error) {
-      if (alive.current) setNote({ ok: false, text: error.message })
+      console.warn('Could not save Omni settings:', error)
+      if (alive.current) setNote({ ok: false, text: t('Could not save these reactions. Try again.') })
     } finally {
       if (alive.current) setBusy(false)
     }
@@ -228,7 +230,8 @@ export function OmniSettingsSection({ close }) {
       setInfo(next.info)
       setConfirming(next.confirming)
     } catch (error) {
-      if (alive.current) setProblem(error.message)
+      console.warn('Could not disconnect Omni:', error)
+      if (alive.current) setProblem(t('Could not disconnect this Omni. Try again.'))
     } finally {
       if (alive.current) setBusy(false)
     }

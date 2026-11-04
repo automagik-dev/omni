@@ -1,3 +1,4 @@
+import { channelProblem } from './problem-words.js'
 import { createElement as h, Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { ConnectPrompt, openConnectWizard } from './wizard.js'
 import { UpdateBar } from './omni-update.js'
@@ -305,7 +306,7 @@ function Overview({ state, omni }) {
       h(Tile, { type: channel.type, size: 36 }),
       h('span', { className: 'oc-callout-text' },
         h('strong', null, t('{name} needs attention', { name: `${typeOf(channel.type).label} · ${channel.name}` })),
-        h('span', null, channel.problem ?? t(STATUS[channel.status].label))),
+        h('span', null, channelProblem(channel))),
       h('span', { className: 'oc-callout-go' }, t('Fix now'), h(ChevronRightIcon)))),
     h('div', { className: 'oc-stats' },
       h(Stat, { value: `${summary.connected}/${summary.total}`, label: t('connected') }),
@@ -365,7 +366,7 @@ function ChannelDetail({ channel, state, omni }) {
       ? h('div', { className: 'oc-callout oc-callout-static', 'data-tone': STATUS[channel.status].tone },
         h('span', { className: 'oc-callout-text' },
           h('strong', null, channel.status === 'connecting' ? t('Reconnecting…') : t('This channel stopped working')),
-          h('span', null, channel.status === 'connecting' ? t('Omni is bringing {name} back. Messages sent meanwhile are delivered after.', { name: channel.name }) : channel.problem)),
+          h('span', null, channel.status === 'connecting' ? t('Omni is bringing {name} back. Messages sent meanwhile are delivered after.', { name: channel.name }) : channelProblem(channel))),
         writable && channel.status === 'attention' && type.pairing !== 'token' ? h('button', { type: 'button', className: 'oc-primary', disabled: Boolean(channel.busy), onClick: () => omni.reconnect(channel.id) }, channel.busy === 'reconnect' ? t('Reconnecting…') : t('Reconnect')) : null,
         channel.status === 'connecting' || channel.busy ? h('span', { className: 'oc-spinner', 'aria-hidden': true }) : null)
       : null,
@@ -415,7 +416,7 @@ function ChannelDetail({ channel, state, omni }) {
           h('strong', null, confirming ? t('Delete instance {name} ({id})?', { name: channel.name, id: channel.id }) : t('Delete instance')),
           h('span', null, t('Permanently deletes this instance configuration and its local chats and messages.')),
           h('span', null, t('Disconnect, logout and session cleanup are best effort. External token revocation or account unlinking is not guaranteed. Events are not all erased.')),
-          channel.deleteError ? h('p', { className: 'oc-problem', role: 'alert' }, t('Could not delete instance: {reason}. Check your access or connection, then try again.', { reason: channel.deleteError })) : null),
+          channel.deleteError ? h('p', { className: 'oc-problem', role: 'alert' }, channel.deleteError) : null),
         confirming ? h(Fragment, null,
           h('button', { type: 'button', className: 'oc-secondary', disabled: channel.busy === 'delete', onClick: () => setConfirming(false) }, t('Cancel')),
           h('button', { type: 'button', className: 'oc-danger-go oc-danger-armed', disabled: !writable || Boolean(channel.busy), onClick: () => { if (writable && !channel.busy) void omni.deleteInstance(channel.id) } }, channel.busy === 'delete' ? t('Deleting instance…') : t('Permanently delete instance')))

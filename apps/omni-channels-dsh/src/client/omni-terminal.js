@@ -41,7 +41,10 @@ export function footFor({ state, step, entered, exitCode, error }) {
   if (state === 'linking') return t('Finished. Connecting…')
   if (state === 'done') return t('Finished. Closing the terminal…')
   if (state === 'cancelled') return t('Nothing ran. Open it again when you are ready.')
-  if (error) return error
+  if (error) {
+    console.warn('Terminal command failed:', error)
+    return t('Could not run this command. Read the terminal output, then try again.')
+  }
   return t('It stopped with exit code {code}. Read what it printed above, then try again.', { code: exitCode ?? '?' })
 }
 
@@ -81,8 +84,9 @@ export function InlineTerminal({ kind, id, title, onEnded, onClose }) {
           return
         }
       } catch (error) {
+        console.warn('Could not read the terminal:', error)
         if (!alive) return
-        setStatus({ state: 'failed', error: error.message, entered })
+        setStatus({ state: 'failed', error: true, entered })
         return
       }
       timer = setTimeout(read, READ_MS)
@@ -116,7 +120,8 @@ export function InlineTerminal({ kind, id, title, onEnded, onClose }) {
       void read()
     }
     start().catch((error) => {
-      if (alive) setStatus({ state: 'failed', error: error.message, entered: false })
+      console.warn('Could not open the terminal:', error)
+      if (alive) setStatus({ state: 'failed', error: true, entered: false })
     })
 
     return () => {

@@ -282,3 +282,10 @@ test('a download still waiting its turn when the link changes asks no Omni anyth
   assert.equal(typeof done[4].reason, 'string')
   assert.deepEqual(asked.filter(call => call.address.endsWith(`/messages/${ids[4]}`)), [], 'the queued file reached no Omni')
 })
+
+test('an attention channel carries a known code independently of the remote diagnostic', () => {
+  const diagnostic = '<img>\u009bREMOTE\u202e'
+  const channel = channelOf({ id: 'i1', channel: 'telegram', name: 'Sales', isActive: true }, { state: 'error', message: diagnostic })
+  assert.equal(channel.problemCode, 'not_connected')
+  assert.equal(channel.problem, diagnostic, 'keep the diagnostic separately for logging')
+})

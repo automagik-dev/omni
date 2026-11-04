@@ -316,7 +316,10 @@ export function install(rt) {
     const url = parsed.data.id ? foundOmni(parsed.data.id)?.url : cleanOmniUrl(parsed.data.url)
     if (!url) throw parsed.data.id ? refused('That Omni is not there any more. Look again.') : invalid('Give the address of the Omni, like omni.example.com')
     const linked = await linkWithKey(rt, url, parsed.data.apiKey)
-    if (linked.status !== 'paired') throw refused(linked.message ? `Omni did not accept that key: ${linked.message}` : 'Omni did not accept that key.')
+    if (linked.status !== 'paired') {
+      if (linked.message) rt.warn?.('omni-channels: pasted key refused: %s', linked.message)
+      throw refused('Omni did not accept that key.')
+    }
     return linked
   }
 
