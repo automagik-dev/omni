@@ -3,7 +3,7 @@
  * Omni CLI - LLM-optimized command-line interface
  *
  * @example
- * omni auth login --api-key sk_xxx
+ * omni auth login --api-key-stdin < /secure/path/omni-api-key
  * omni instances list
  * omni send --instance abc --to +1234567890 --text "Hello"
  */
@@ -25,7 +25,9 @@ import { createCloseCommand } from './commands/close.js';
 import { createCompletionsCommand } from './commands/completions.js';
 import { createConfigCommand } from './commands/config.js';
 import { createConnectCommand } from './commands/connect.js';
+import { createConnectorsCommand } from './commands/connectors.js';
 import { createDeadLettersCommand } from './commands/dead-letters.js';
+import { createDesktopCommand } from './commands/desktop.js';
 import { createDoctorCommand } from './commands/doctor.js';
 import { createDoneCommand } from './commands/done.js';
 import { createEventsCommand } from './commands/events.js';
@@ -44,6 +46,7 @@ import { createMessagesCommand } from './commands/messages.js';
 import { createMultitenancyCommand } from './commands/multitenancy.js';
 import { createMusicCommand } from './commands/music.js';
 import { createOpenCommand } from './commands/open.js';
+import { createApproveCommand, createClaimCommand } from './commands/owner.js';
 import { createPayloadsCommand } from './commands/payloads.js';
 import { createPersonsCommand } from './commands/persons.js';
 import { createPromptsCommand } from './commands/prompts.js';
@@ -53,6 +56,7 @@ import { createReplayCommand } from './commands/replay.js';
 import { createRequirementsCommand } from './commands/requirements.js';
 import { createRestartCommand } from './commands/restart.js';
 import { createResyncCommand } from './commands/resync.js';
+import { createSandboxCommand } from './commands/sandbox.js';
 import { createSayCommand } from './commands/say.js';
 import { createScheduleCommand } from './commands/schedule.js';
 import { createSeeCommand } from './commands/see.js';
@@ -309,6 +313,12 @@ const COMMANDS: CommandDef[] = [
     helpDescription: 'Event-driven workflows',
   },
   {
+    create: createConnectorsCommand,
+    category: 'advanced',
+    helpGroup: 'Management',
+    helpDescription: 'Integration accounts, event subscriptions, typed actions',
+  },
+  {
     create: createFollowUpCommand,
     category: 'advanced',
     helpGroup: 'Management',
@@ -342,7 +352,19 @@ const COMMANDS: CommandDef[] = [
     create: createConnectCommand,
     category: 'core',
     helpGroup: 'Management',
-    helpDescription: 'Connect instance to genie agent via NATS',
+    helpDescription: 'A link that connects a device; or wire an instance to a Genie agent',
+  },
+  {
+    create: createApproveCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Let a device in by the code it shows',
+  },
+  {
+    create: createClaimCommand,
+    category: 'core',
+    helpGroup: 'Management',
+    helpDescription: 'Make this Omni yours (no WhatsApp needed)',
   },
   {
     create: createTopLevelSetupCommand,
@@ -462,7 +484,19 @@ const COMMANDS: CommandDef[] = [
     create: createInstallCommand,
     category: 'standard',
     helpGroup: 'System',
-    helpDescription: 'Interactive setup wizard (bootstrap Omni server)',
+    helpDescription: 'Bootstrap Omni server (non-interactive, reinstall-safe)',
+  },
+  {
+    create: createSandboxCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Manage the sandboxed local Omni (omni install --sandbox)',
+  },
+  {
+    create: createDesktopCommand,
+    category: 'standard',
+    helpGroup: 'System',
+    helpDescription: 'Open the Omni desktop app (downloads it for this machine)',
   },
   {
     create: createDoctorCommand,

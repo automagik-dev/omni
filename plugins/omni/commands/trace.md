@@ -8,18 +8,19 @@ arguments:
 
 # /omni:trace — Message Journey
 
-Use to debug delivery and latency — per-message stage timeline plus aggregated metrics.
+Use `journey` for channel-message delivery/latency; use `events trace` for custom-event, connector and automation causality.
 
 ## Usage
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
-omni journey show <correlationId>
+omni journey show <message-correlation-id>
 omni journey summary --since 24h
+omni events trace <event-id>
 omni events timeline <personId>
 ```
 
-Correlation IDs come from `omni events list` / `omni events search`. Replay and analytics: omni-ops skill § Events.
+Choose the event ID for `events trace`; use the message journey's correlation ID for `journey show`. An arbitrary custom-event correlation string is not a channel-message journey. Inspect `omni events trace --help` / `omni journey --help`. Replay and analytics: omni-ops skill § Events.

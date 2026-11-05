@@ -35,7 +35,7 @@ bun init -y
     "clean": "turbo clean && rm -rf node_modules",
     "prepare": "husky"
   },
-  "packageManager": "bun@1.1.42",
+  "packageManager": "bun@1.4.4",
   "engines": { "node": ">=20" }
 }
 ```
@@ -429,7 +429,6 @@ Biome and TypeScript analyze one file or one project at a time. Knip traces the 
     },
     "packages/db": { "project": ["src/**/*.ts"] },
     "packages/media-processing": { "project": ["src/**/*.ts"] },
-    "packages/plugin-openclaw": { "project": ["src/**/*.ts"] },
     "apps/ui": {
       "entry": [
         "src/pages/*.tsx",
@@ -526,6 +525,17 @@ any test skipped, when zero tests passed, or when the number of files that ran
 differs from the number of `*-postgres.test.ts` files discovered. Adding a new
 suite without wiring it fails the gate rather than silently skipping.
 
+The connection preflight is a static URL/driver-options check; it does not prove
+that a server belongs to the test run. The gate replaces inherited
+`OMNI_G*_POSTGRES_URL` values with its acquired disposable target. Direct suite
+runs retain import-time validation: a manual TCP run also needs
+`OMNI_PG_TEST_TARGET=127.0.0.1:<port>` matching its disposable cluster. Socket runs
+use `PGHOST` under a temporary directory and an explicit `PGPORT`.
+
+Raw whitespace, control characters, fragments, and raw `@` outside the authority
+are refused before connecting. This includes `@` in query values: percent-encode
+it as `%40` (for example, `?application_name=a%40b`) and encode spaces as `%20`.
+
 **Smoke Test steps:**
 1. Same setup as quality gate
 2. Build all packages
@@ -586,7 +596,10 @@ Version format: `2.YYYYMMDD.N` (date-based, N = build number for the day).
 Steps:
 1. Derive version from git tags
 2. Run `generate-version.ts` → `version.json`
-3. Run `sync-versions.ts` → updates all `package.json` versions
+3. Run `sync-versions.ts` → updates all `package.json` versions, except Omni's DSH
+   plugins (`apps/*-dsh`), which move only when their folder changed since the
+   release their version names: each carries the Omni version of its last change
+   (`scripts/lib/plugin-versions.ts`; `verify-versions.ts` holds the repository to it)
 4. Format JSON with biome
 5. Commit `[skip ci]` + tag + push to dev
 

@@ -13,11 +13,15 @@ import {
   ProviderError,
   type ProviderFile,
   type ProviderMetrics,
+  type ProviderOriginIdentity,
   type ProviderSchema,
   type SessionStorage,
   type StreamChunk,
+  WebhookAgentClient,
+  assertProviderAvailable,
   createProviderClient,
   isProviderSchemaSupported,
+  webhookProviderConfig,
 } from '@omni/core';
 import { createLogger } from '@omni/core';
 import type { AgentReplyFilter, AgentSessionStrategy, ChannelType, Instance } from '@omni/db';
@@ -77,6 +81,14 @@ export interface AgentRunContext {
   messages: string[];
   /** Optional file attachments (images, audio, documents) */
   files?: ProviderFile[];
+
+  /**
+   * Identity of the inbound message this run answers, when the caller has one
+   * (#1408). The legacy fallback dispatch sets it so the webhook payload keeps
+   * the same source-message identity as the native attempt that failed; runs
+   * with no inbound message (automations, chatless calls) leave it unset.
+   */
+  origin?: ProviderOriginIdentity;
 }
 
 /**
@@ -383,7 +395,7 @@ export class AgentRunnerService {
    *
    * `openedForTenantId` is the tenant the provider's credential is opened (and
    * the client cached) under, when the caller threads one — the same
-   * threaded-over-ambient rule the dispatcher's `openclawPoolKey` applies.
+   * threaded-over-ambient rule used to open provider credentials.
    * run()/stream() thread the instance's persisted `tenantId` because the
    * `call_agent` automation path deliberately runs the agent call OUTSIDE every
    * tenant scope (see `plugins/automation-actions.ts`): with only the ambient
@@ -408,6 +420,7 @@ export class AgentRunnerService {
       throw new ProviderError(`Provider not found: ${providerId}`, 'NOT_FOUND', 404);
     }
 
+    assertProviderAvailable(provider.schema);
     if (!isProviderSchemaSupported(provider.schema)) {
       throw new ProviderError(`Provider schema not supported: ${provider.schema}`, 'NOT_FOUND', 501, {
         schema: provider.schema,
@@ -455,6 +468,17 @@ export class AgentRunnerService {
           defaultTimeoutMs: (provider.defaultTimeout ?? 600) * 1000,
           schemaConfig: (provider.schemaConfig ?? {}) as Record<string, unknown>,
         }),
+        schema: provider.schema,
+      };
+      this.clientCache.set(cacheKey, resolved);
+      return resolved;
+    }
+
+    // Webhook providers speak their own protocol and may have no key: built as
+    // the dispatcher builds them, so `call_agent` reaches them too (#1262).
+    if (provider.schema === 'webhook') {
+      const resolved: ResolvedProviderClient = {
+        client: new WebhookAgentClient(webhookProviderConfig({ ...provider, apiKey })),
         schema: provider.schema,
       };
       this.clientCache.set(cacheKey, resolved);
@@ -617,6 +641,7 @@ export class AgentRunnerService {
       participantCount,
       messages,
       files,
+      origin,
     } = context;
 
     if (!instance.agentProviderId) {
@@ -680,6 +705,10 @@ export class AgentRunnerService {
       },
       timeoutMs: (instance.agentTimeout ?? 600) * 1000,
       files,
+      // #1408 — preserve the inbound message identity on the fallback path, so
+      // a webhook receiver can collapse this run with the native POST it
+      // already answered instead of treating it as a second message.
+      ...(origin ? { origin } : {}),
       // Parity with the dispatcher's claude-code path: HTTP MCP servers get the
       // conversation identifier appended to their URL.
       ...(sessionStore && chatId ? { mcpUrlParams: { chat_id: chatId } } : {}),

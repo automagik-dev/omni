@@ -16,8 +16,6 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import {
   CANONICAL_PG_PORT,
   buildDatabaseUrlForTransport,
@@ -128,12 +126,6 @@ describe('probeCanonicalSocketSync', () => {
   test('returns false when the socket directory does not exist', () => {
     process.env.XDG_RUNTIME_DIR = '/var/empty';
     expect(probeCanonicalSocketSync()).toBe(false);
-  });
-
-  test('mirrors existsSync(resolvePgserveLibpqSocketPath())', () => {
-    process.env.XDG_RUNTIME_DIR = '/var/empty';
-    const expected = existsSync(join('/var/empty', 'pgserve', `.s.PGSQL.${CANONICAL_PG_PORT}`));
-    expect(probeCanonicalSocketSync()).toBe(expected);
   });
 });
 

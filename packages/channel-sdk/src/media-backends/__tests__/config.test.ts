@@ -22,19 +22,16 @@ describe('resolveMediaBackendConfig', () => {
     expect(resolveMediaBackendConfig({})).toEqual({ mode: 'local' });
   });
 
-  it('accepts an explicit local mode', () => {
+  it('normalizes mode case and whitespace', () => {
     expect(resolveMediaBackendConfig({ OMNI_MEDIA_MODE: 'local' })).toEqual({ mode: 'local' });
     expect(resolveMediaBackendConfig({ OMNI_MEDIA_MODE: ' LOCAL ' })).toEqual({ mode: 'local' });
+    expect(resolveMediaBackendConfig({ ...REMOTE_ENV, OMNI_MEDIA_MODE: 'REMOTE' }).mode).toBe('remote');
   });
 
   it('throws loudly on an unknown OMNI_MEDIA_MODE instead of falling back to local', () => {
     expect(() => resolveMediaBackendConfig({ OMNI_MEDIA_MODE: 's3' })).toThrow(/Invalid OMNI_MEDIA_MODE="s3"/);
     expect(() => resolveMediaBackendConfig({ OMNI_MEDIA_MODE: 'minio' })).toThrow(/expected "local" or "remote"/);
     expect(() => resolveMediaBackendConfig({ OMNI_MEDIA_MODE: 'nonsense' })).toThrow(/Invalid OMNI_MEDIA_MODE/);
-  });
-
-  it('is case-insensitive for the mode value', () => {
-    expect(resolveMediaBackendConfig({ ...REMOTE_ENV, OMNI_MEDIA_MODE: 'REMOTE' }).mode).toBe('remote');
   });
 
   it('parses remote config with sensible defaults', () => {

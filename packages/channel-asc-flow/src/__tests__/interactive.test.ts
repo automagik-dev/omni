@@ -12,7 +12,7 @@ import { describe, expect, it } from 'bun:test';
 import type { InteractiveButton } from '@omni/channel-sdk';
 
 import { encodeAscEmoji, nonLatin1Left } from '../utils/emoji';
-import { buildInteractive, foldTitle, splitBubbles } from '../utils/interactive';
+import { buildFlowInteractive, buildInteractive, foldTitle, splitBubbles, textFallbackOf } from '../utils/interactive';
 
 const options = (n: number, label = (i: number) => `Opção ${i}`): InteractiveButton[] =>
   Array.from({ length: n }, (_, i) => ({ text: label(i + 1), data: String(i + 1) }));
@@ -124,11 +124,68 @@ describe('buildInteractive', () => {
     ).toBeNull();
   });
 
-  it('degrades with no options, no body, or only URL buttons', () => {
+  it('degrades with no options, no body, or more than one URL button', () => {
     expect(params('Escolha:', [])).toBeNull();
     expect(params('Escolha:', undefined)).toBeNull();
     expect(params('   ', options(3))).toBeNull();
-    expect(params('Escolha:', [{ text: 'Abrir', url: 'https://example.test' }])).toBeNull();
+    expect(
+      params('Escolha:', [
+        { text: 'Abrir', url: 'https://example.test' },
+        { text: 'Outro', url: 'https://example.test/2' },
+      ]),
+    ).toBeNull();
+  });
+
+  it('keeps the reply buttons and drops a URL button that comes with them', () => {
+    expect(params('Escolha:', [...options(2), { text: 'Abrir', url: 'https://example.test' }])).toMatchObject({
+      tipo: 2,
+      button: ['Opção 1', 'Opção 2'],
+    });
+  });
+});
+
+describe('buildInteractive with a sole URL button (tipo 3)', () => {
+  const url = 'https://www2.hapvida.com.br/portal-da-privacidade/politica-privacidade';
+  const link = (text = 'Ver Política') => [{ text, url }];
+
+  it('maps it onto url_button and cuts the line that carries the URL', () => {
+    const body = `Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.\nVer Política: ${url}`;
+    expect(buildInteractive(body, link())).toEqual({
+      tipo: 3,
+      mensagem: 'Ao continuar, você declara estar ciente da nossa *Política de Privacidade*.',
+      url_button: { texto_botao: 'Ver Política', url },
+    });
+  });
+
+  it('keeps a body that does not carry the URL as it is', () => {
+    expect(buildInteractive('Leia a Política.', link())).toMatchObject({ tipo: 3, mensagem: 'Leia a Política.' });
+  });
+
+  it('cuts the label where the other channels cut it, and encodes it for the latin-1 platform', () => {
+    const p = buildInteractive('Corpo', link('Ver Política de Privacidade 👋'));
+    expect((p?.url_button as { texto_botao: string }).texto_botao.startsWith('Ver Política de Pri')).toBe(true);
+    expect((buildInteractive('Corpo', link('Abrir 👋'))?.url_button as { texto_botao: string }).texto_botao).toBe(
+      'Abrir ##1f44b##',
+    );
+  });
+
+  it('cuts a line with the URL alone too', () => {
+    expect(buildInteractive(`Leia a Política.\n${url}`, link())).toMatchObject({ mensagem: 'Leia a Política.' });
+  });
+
+  it('keeps whole a line of prose that carries the URL', () => {
+    const body = `Ao continuar, você aceita a política: ${url}\nOutro parágrafo.`;
+    expect(buildInteractive(body, link())).toMatchObject({ tipo: 3, mensagem: body });
+  });
+
+  it('keeps whole a line that opens with the label but says more', () => {
+    const body = `Leia antes.\nVer política é obrigatório antes de continuar: ${url}`;
+    expect(buildInteractive(body, link())).toMatchObject({ tipo: 3, mensagem: body });
+  });
+
+  it('degrades to text when nothing but the URL is left to show', () => {
+    expect(buildInteractive(`Ver Política: ${url}`, link())).toBeNull();
+    expect(buildInteractive(url, link())).toBeNull();
   });
 });
 
@@ -157,5 +214,67 @@ describe('o que a plataforma latin-1 não carrega', () => {
     expect(nonLatin1Left('tudo certo')).toEqual([]);
     expect(nonLatin1Left('café')).toEqual([]);
     expect(nonLatin1Left('≥ 5 e ≥ 6')).toEqual(['≥']);
+  });
+});
+
+describe('buildFlowInteractive', () => {
+  const flow = { flowId: '1', cta: 'Escolher 3 horários', data: { opcoes: [{ id: 's1', title: 'ter 04/11 08:00' }] } };
+
+  it('maps the descriptor onto tipo 5 with fluxo_id, texto_botao and payload', () => {
+    expect(buildFlowInteractive('Escolha 3 horários:', flow)).toEqual({
+      tipo: 5,
+      mensagem: 'Escolha 3 horários:',
+      fluxo: { texto_botao: 'Escolher 3 horários', fluxo_id: '1', payload: flow.data },
+    });
+  });
+
+  it('carries the header and footer when given', () => {
+    const p = buildFlowInteractive('Corpo', { ...flow, headerText: 'Agenda', footerText: 'Hapvida' });
+    expect(p).toMatchObject({ cabecalho_tipo: 'text', cabecalho_texto: 'Agenda', rodape: 'Hapvida' });
+  });
+
+  it('encodes the CTA, header and footer for the latin-1 platform, as it does the body', () => {
+    const p = buildFlowInteractive('Corpo', {
+      flowId: '1',
+      cta: 'Abrir 👋',
+      headerText: 'Agenda — hoje',
+      footerText: '✅ Hapvida',
+    });
+    expect(p).toMatchObject({
+      cabecalho_texto: 'Agenda - hoje',
+      rodape: '##2705## Hapvida',
+      fluxo: { texto_botao: 'Abrir ##1f44b##' },
+    });
+  });
+
+  it('sends an empty payload when the flow has no data', () => {
+    expect(buildFlowInteractive('Corpo', { flowId: '1', cta: 'Abrir' })?.fluxo).toEqual({
+      texto_botao: 'Abrir',
+      fluxo_id: '1',
+      payload: {},
+    });
+  });
+
+  it('degrades to text without a flowId, without a CTA, or past the limits', () => {
+    expect(buildFlowInteractive('Corpo', undefined)).toBeNull();
+    expect(buildFlowInteractive('Corpo', { cta: 'Abrir' })).toBeNull();
+    expect(buildFlowInteractive('Corpo', { flowId: '1' })).toBeNull();
+    expect(buildFlowInteractive('Corpo', { flowId: '1', cta: 'x'.repeat(31) })).toBeNull();
+    expect(buildFlowInteractive('x'.repeat(1025), flow)).toBeNull();
+    expect(buildFlowInteractive('   ', flow)).toBeNull();
+  });
+});
+
+describe('textFallbackOf', () => {
+  const url = 'https://example.test/politica';
+  const params = { tipo: 3, mensagem: 'Leia a Política.', url_button: { texto_botao: 'Ver Política', url } };
+
+  it('adds the URL of a refused URL button to a bubble that does not write it', () => {
+    expect(textFallbackOf('Leia a Política.', params)).toBe(`Leia a Política.\n\nVer Política: ${url}`);
+  });
+
+  it('leaves the bubble alone when it already has the URL, or for any other component', () => {
+    expect(textFallbackOf(`Leia: ${url}`, params)).toBe(`Leia: ${url}`);
+    expect(textFallbackOf('Escolha:', { tipo: 2, mensagem: 'Escolha:', button: ['a'] })).toBe('Escolha:');
   });
 });

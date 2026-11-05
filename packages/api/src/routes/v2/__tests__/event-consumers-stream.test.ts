@@ -12,6 +12,7 @@ import type { DurableConsumer, OmniEvent } from '@omni/db';
 import { Hono } from 'hono';
 import { SCOPE_MAP } from '../../../constants/scopes';
 import { errorHandler } from '../../../middleware/error';
+import { ApiKeyService } from '../../../services/api-keys';
 import type { ConsumerCaller, StreamAccess, StreamScanResult } from '../../../services/event-consumers';
 import type { AppVariables } from '../../../types';
 import { eventConsumersRoutes } from '../event-consumers';
@@ -57,6 +58,13 @@ function buildApp(
     throw new Error(`${method} must not be called by the stream`);
   };
   const services = {
+    db: {
+      select: () => ({
+        from: () => ({
+          where: () => ({ limit: async () => [{ name: 'stream-test', createdBy: 'test', status: 'active' }] }),
+        }),
+      }),
+    },
     eventConsumers: {
       getStreamable: options.getStreamable ?? (async () => CONSUMER),
       scanForStream: async (_name: string, after: number, access: StreamAccess): Promise<StreamScanResult> => {
@@ -78,7 +86,12 @@ function buildApp(
   app.use('*', async (c, next) => {
     c.set('services', services);
     if (options.instanceIds !== undefined) {
-      c.set('apiKey', { id: options.keyId, instanceIds: options.instanceIds } as unknown as AppVariables['apiKey']);
+      c.set('apiKey', {
+        id: options.keyId,
+        name: 'stream-test',
+        scopes: ['events:*'],
+        instanceIds: options.instanceIds,
+      } as unknown as AppVariables['apiKey']);
     }
     await next();
   });
@@ -200,13 +213,19 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     const journal = [row(11, 'inst-a'), row(12, 'inst-b'), row(13, 'inst-a')];
     const restricted = buildApp({ journal, instanceIds: ['inst-a'] });
     const mine = await readUntil(await restricted.app.request('/api/v2/events/consumers/vox/stream'), /id: 13\n/);
-    expect(restricted.accesses[0]).toEqual({ tenantId: null, caller: { keyId: null, instanceIds: ['inst-a'] } });
+    expect(restricted.accesses[0]).toEqual({
+      tenantId: null,
+      caller: { keyId: null, instanceIds: ['inst-a'], tenantId: null, principal: { kind: 'none' }, admin: false },
+    });
     expect(mine).toContain('id: 11\n');
     expect(mine).not.toContain('id: 12\n');
 
     const full = buildApp({ journal, instanceIds: null });
     const all = await readUntil(await full.app.request('/api/v2/events/consumers/vox/stream'), /id: 13\n/);
-    expect(full.accesses[0]).toEqual({ tenantId: null, caller: { keyId: null, instanceIds: null } });
+    expect(full.accesses[0]).toEqual({
+      tenantId: null,
+      caller: { keyId: null, instanceIds: null, tenantId: null, principal: { kind: 'none' }, admin: false },
+    });
     expect(all).toContain('id: 12\n');
   });
 
@@ -254,9 +273,13 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     await again.body?.cancel();
   });
 
-  test('requires events:write, the same scope as pull (an events:read key cannot stream)', () => {
-    expect(SCOPE_MAP['GET /events/consumers/:name/stream']).toBe('events:write');
+  test('requires events:consume, the same scope as pull', () => {
+    expect(SCOPE_MAP['GET /events/consumers/:name/stream']).toBe('events:consume');
     expect(SCOPE_MAP['GET /events/consumers/:name/stream']).toBe(SCOPE_MAP['POST /events/consumers/:name/pull']);
+    // Every key that could stream before still can: events:write, events:* and * all imply it.
+    expect(ApiKeyService.scopeAllows(['events:write'], 'events:consume')).toBe(true);
+    expect(ApiKeyService.scopeAllows(['events:*'], 'events:consume')).toBe(true);
+    expect(ApiKeyService.scopeAllows(['*'], 'events:consume')).toBe(true);
   });
 
   test('the route resolves the consumer with the pull caller (scoped and not visible -> 404, nothing streamed)', async () => {
@@ -272,7 +295,9 @@ describe('GET /api/v2/events/consumers/:name/stream', () => {
     const res = await app.request('/api/v2/events/consumers/vox/stream');
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain('connected');
-    expect(seen).toEqual([{ keyId: 'key-other', instanceIds: ['inst-z'] }]);
+    expect(seen).toEqual([
+      { keyId: 'key-other', instanceIds: ['inst-z'], tenantId: null, principal: { kind: 'none' }, admin: false },
+    ]);
     expect(scans).toEqual([]);
   });
 

@@ -21,6 +21,7 @@
 
 import type {
   EventBus,
+  EventMetadata,
   MessageReceivedPayload,
   MessageSentPayload,
   OmniEvent,
@@ -38,14 +39,28 @@ import {
   omniEvents,
   persons,
 } from '@omni/db';
-import { and, eq } from 'drizzle-orm';
+import { type SQL, and, eq, isNull, sql } from 'drizzle-orm';
+import { resolveKeyAgent } from '../lib/key-agent';
 import { AccessService, accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import { ChatService } from '../services/chats';
+import { DEAD_LETTER_RETRY_SOURCES } from '../services/dead-letter-sources';
+import { isMultitenancyEnabled, pairedAgentFlagState } from '../tenancy/feature-flag';
 import { scopedHandle } from '../tenancy/tenant-scope';
 import { runConsumerInTenantContext, runTenantWorkDb, trustedEnvelopeTenant } from '../tenancy/worker-tenant-context';
 import { deepSanitize, sanitizeText } from '../utils/utf8';
 
 const log = createLogger('event-persistence');
+
+/** The factory's envelope carries the authenticated key across the consumer boundary. */
+export async function journalProducerColumns(
+  db: Database,
+  metadata: EventMetadata,
+): Promise<{ producingKeyId: string | null; agentId: string | null }> {
+  if (!pairedAgentFlagState('consumers').enabled) return { producingKeyId: null, agentId: metadata.agentId ?? null };
+  const producingKeyId = isValidUuid(metadata.producingKeyId ?? '') ? (metadata.producingKeyId ?? null) : null;
+  const principal = await resolveKeyAgent(db, producingKeyId);
+  return { producingKeyId, agentId: principal.kind === 'agent' ? principal.agentId : null };
+}
 
 /**
  * Safely map channel type - defaults to 'discord' if unknown
@@ -72,6 +87,33 @@ function mapContentType(contentType: string | undefined): ContentType | null {
 
 function eventIdInsert(eventId: string | undefined): Partial<Pick<NewOmniEvent, 'id'>> {
   return eventId && isValidUuid(eventId) ? { id: eventId } : {};
+}
+
+/**
+ * The rows a delivered/read receipt may update: same instance and externalId,
+ * like the message.failed flip. A receipt without an instance only matches
+ * rows without one, so it can never reach another instance's message.
+ */
+function receiptRowMatch(instanceId: string | undefined | null, externalId: string): SQL | undefined {
+  return and(
+    instanceId ? eq(omniEvents.instanceId, instanceId) : isNull(omniEvents.instanceId),
+    eq(omniEvents.externalId, externalId),
+  );
+}
+
+/**
+ * Whether a receipt that matched no row must not be inserted (#1552 N1). A
+ * receipt REPUBLISHED by dead-letter retry without an instance names a message
+ * whose original row we can no longer find; inserting it would file a stray
+ * NULL-instance row beside that row, so it is dropped. A live receipt without an
+ * instance still inserts: it is the only record of that receipt. message.failed
+ * also still inserts: its row is the failure's own record, not an update to
+ * another row, and the synchronous-failure path depends on it.
+ */
+function isOrphanedReceiptReplay(metadata: EventMetadata): boolean {
+  return (
+    !metadata.instanceId && (DEAD_LETTER_RETRY_SOURCES as readonly (string | undefined)[]).includes(metadata.source)
+  );
 }
 
 type ChatLink = { chatUuid: string | null; canonicalChatId: string | null };
@@ -273,7 +315,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 correlationId: metadata.correlationId,
                 from: payload.from,
               },
-              agentId: metadata.agentId ?? null,
+              ...(await journalProducerColumns(db, metadata)),
               causationId: metadata.causationId ?? null,
               conversationId: null,
               // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
@@ -349,7 +391,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 filename: payload.content.filename,
                 voiceNote: payload.content.isVoiceNote,
               },
-              agentId: metadata.agentId ?? null,
+              ...(await journalProducerColumns(db, metadata)),
               causationId: metadata.causationId ?? null,
               conversationId: null,
               // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
@@ -387,16 +429,27 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
-            // Try to update existing event, or create new record
+            // Try to update existing event, or create new record. One guarded
+            // statement: the first deliveredAt wins, and a row that is already
+            // failed or read keeps its status. The row still matches, so a late
+            // receipt never falls through to the insert below.
+            const deliveredAt = new Date(payload.deliveredAt);
             const updated = await sdb
               .update(omniEvents)
               .set({
-                deliveredAt: new Date(payload.deliveredAt),
-                status: 'completed',
+                deliveredAt: sql`coalesce(${omniEvents.deliveredAt}, ${deliveredAt.toISOString()}::timestamptz)`,
+                status: sql`case when ${omniEvents.status} = 'failed' or ${omniEvents.readAt} is not null then ${omniEvents.status} else 'completed' end`,
               })
-              .where(eq(omniEvents.externalId, payload.externalId))
+              .where(receiptRowMatch(metadata.instanceId, payload.externalId))
               .returning();
 
+            // Option 1 (#1552): a dead-letter replay with no instance matched nothing and must
+            // not file a NULL-instance row. Live receipts and message.failed still insert; see
+            // isOrphanedReceiptReplay for why.
+            if (updated.length === 0 && isOrphanedReceiptReplay(metadata)) {
+              log.debug('Dropped dead-letter receipt replay without an instance', { externalId: payload.externalId });
+              return;
+            }
             if (updated.length === 0) {
               // No existing event found, create a new record
               const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
@@ -411,7 +464,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 status: 'completed',
                 receivedAt: new Date(event.timestamp),
                 deliveredAt: new Date(payload.deliveredAt),
-                agentId: metadata.agentId ?? null,
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 ...chatLink,
@@ -443,14 +496,23 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
         try {
           await runConsumerInTenantContext(db, event, async () => {
             const sdb = scopedHandle(db);
+            // First readAt wins: a redelivered read receipt does not move it.
+            const readAt = new Date(payload.readAt);
             const updated = await sdb
               .update(omniEvents)
               .set({
-                readAt: new Date(payload.readAt),
+                readAt: sql`coalesce(${omniEvents.readAt}, ${readAt.toISOString()}::timestamptz)`,
               })
-              .where(eq(omniEvents.externalId, payload.externalId))
+              .where(receiptRowMatch(metadata.instanceId, payload.externalId))
               .returning();
 
+            // Option 1 (#1552): a dead-letter replay with no instance matched nothing and must
+            // not file a NULL-instance row. Live receipts and message.failed still insert; see
+            // isOrphanedReceiptReplay for why.
+            if (updated.length === 0 && isOrphanedReceiptReplay(metadata)) {
+              log.debug('Dropped dead-letter receipt replay without an instance', { externalId: payload.externalId });
+              return;
+            }
             if (updated.length === 0) {
               // No existing event found, create a new record
               const chatLink = await resolveChatLink(sdb, metadata.instanceId, payload.chatId);
@@ -465,7 +527,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 status: 'completed',
                 receivedAt: new Date(event.timestamp),
                 readAt: new Date(payload.readAt),
-                agentId: metadata.agentId ?? null,
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 ...chatLink,
@@ -551,7 +613,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                   correlationId: metadata.correlationId,
                   retryable: payload.retryable,
                 },
-                agentId: metadata.agentId ?? null,
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 ...chatLink,
@@ -612,6 +674,7 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
                 receivedAt: new Date(event.timestamp),
                 rawPayload: deepSanitize({ ...payload, rawPayload: payload.rawPayload ?? null }),
                 metadata: { correlationId: metadata.correlationId, from: payload.from, emoji: payload.emoji },
+                ...(await journalProducerColumns(db, metadata)),
                 causationId: metadata.causationId ?? null,
                 conversationId: null,
                 // The fill completes a claimed skeleton row (opt-in consumer readiness gate).
@@ -669,6 +732,14 @@ export async function setupEventPersistence(eventBus: EventBus, db: Database): P
       durable: 'event-persistence-connector',
       startFrom: 'new',
     });
+    // Only connector ingress and retries/replays with journal provenance may
+    // publish connector events. Ingress already claimed this event id; this
+    // insert no-ops on that id, preserving one journal row and identity (D9).
+    await eventBus.subscribePattern('connector.>', (event) => journalInternalEvent(db, event), {
+      ...CONSUMER_OPTIONS,
+      durable: 'event-persistence-connector-events',
+      startFrom: 'new',
+    });
     // #1163: dead-letter announcements were published but never journaled, so
     // `omni events list --type system.dead_letter` stayed empty while the DLQ grew.
     await eventBus.subscribePattern('system.dead_letter', (event) => journalInternalEvent(db, event), {
@@ -701,6 +772,18 @@ async function journalInternalEvent(db: Database, event: OmniEvent): Promise<voi
   try {
     await runConsumerInTenantContext(db, event, async () => {
       const sdb = scopedHandle(db);
+      // A direct claim already persisted the trusted columns before publishing.
+      // Avoid a second INSERT: RLS checks ownership before ON CONFLICT can discard it,
+      // and the consumer envelope need not repeat the claim's source-parent metadata.
+      // Keep legacy flag-off delivery on its existing single-write path.
+      if ((isMultitenancyEnabled() || pairedAgentFlagState('consumers').enabled) && event.id && isValidUuid(event.id)) {
+        const [claimed] = await sdb
+          .select({ id: omniEvents.id })
+          .from(omniEvents)
+          .where(eq(omniEvents.id, event.id))
+          .limit(1);
+        if (claimed) return;
+      }
       const payload =
         typeof event.payload === 'object' && event.payload !== null ? (event.payload as Record<string, unknown>) : {};
       const instanceId = metadata.instanceId && isValidUuid(metadata.instanceId) ? metadata.instanceId : null;
@@ -735,6 +818,7 @@ async function journalInternalEvent(db: Database, event: OmniEvent): Promise<voi
           source: metadata.source,
           fullEventType: event.type,
         },
+        ...(await journalProducerColumns(db, metadata)),
         causationId: metadata.causationId ?? null,
         conversationId: null,
         chatId: payloadChatId,

@@ -14,12 +14,23 @@ Use for first-run setup, credential problems, or changing CLI defaults.
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
-omni auth login --api-key <key> --api-url http://localhost:8882
+omni auth login --api-url http://localhost:8882 --api-key-stdin < /secure/path/omni-api-key
 omni config set defaultInstance <id>
 omni status
 ```
 
-API keys, server settings, logs, dead letters, auth recovery: omni-ops skill § Config.
+For multiple servers, inspect `omni server list --json`, register with `omni server add <name> <url>`, select with `omni server use <name>` or global `--server <name>`, and save a supplied key with `omni auth login --server <name> --api-key-stdin < /secure/path/omni-api-key`. Login/logout apply to that targeted entry. `server add` without a key only registers the URL; the CLI cannot obtain a device key itself. Operator `claim`/`approve`/bare `connect` require an existing `auth:admin` credential and are not agent self-service. Current device keys also lack the `auth:validate` scope needed by CLI login/status; refer credential problems to the operator rather than widening access.
+
+`omni config list --json` includes `updateChannel`, local `server.*`, and read-only `servers.active`. Remote registry changes use `omni server`, not `config set servers.*`. A failed `auth status` can be credentials/scopes rather than runtime downtime.
+
+Read the key from a protected file as above, or pipe it from your secret manager. If `OMNI_CLI_API_KEY` is already supplied securely in the environment, omit the key flags. Explicit `--api-key-stdin` or legacy `--api-key` overrides the env var; do not combine those flags. Never ask for a key in chat or paste its value into a command.
+
+`OMNI_API_KEY` is the API server's primary key and is ignored by login. Only
+`OMNI_CLI_API_KEY` is used as the CLI environment fallback. Stdin is limited to
+8 KB including the optional trailing LF/CRLF. A successful login reports
+`keySource` as `flag`, `stdin`, or `env`, without printing the key.
+
+API keys, server settings, logs, dead letters, auth recovery: omni-ops skill § Config. Inspect `omni server --help` and `omni config --help` for installed options.

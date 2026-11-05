@@ -1,9 +1,9 @@
 # Omni v2 Makefile
 # Universal Event-Driven Omnichannel Platform
 
-.PHONY: help install dev dev-api dev-ui dev-services dev-stop build build-ui clean version \
+.PHONY: help install dev dev-api dev-services dev-stop build clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck typecheck-ui lint lint-fix lint-ui format check check-all dead-code verify-migrations verify-versions \
+        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions marketplace-check skill-cli-check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -23,7 +23,6 @@ help:
 	@echo "  make install       Install deps + .env + init database"
 	@echo "  make dev           Start services + API in watch mode"
 	@echo "  make dev-api       Start just the API (services must be running)"
-	@echo "  make dev-ui        Start UI dev server (Vite on :5173)"
 	@echo "  make dev-services  Start infrastructure (pgserve + NATS) via PM2"
 	@echo "  make dev-stop      Stop PM2 dev services"
 	@echo ""
@@ -31,6 +30,7 @@ help:
 	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
 	@echo "  make check-all     Run check AND the pg-gate concurrently (fastest full validation)"
 	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
+	@echo "  make marketplace-check  Automagik marketplace index gate"
 	@echo "  make verify-versions    Version sync gate (BASE=<ref> exempts files absent on ref)"
 	@echo "  make typecheck     TypeScript type checking"
 	@echo "  make lint          Run Biome linter"
@@ -61,7 +61,6 @@ help:
 	@echo ""
 	@echo "Building:"
 	@echo "  make build         Build all packages"
-	@echo "  make build-ui      Build UI for production"
 	@echo "  make clean         Clean build artifacts"
 	@echo ""
 	@echo "Production:"
@@ -185,10 +184,6 @@ dev-stop:
 	-pm2 delete ecosystem.config.cjs 2>/dev/null || true
 	@echo "Dev services stopped"
 
-# Start UI dev server (Vite)
-dev-ui:
-	cd apps/ui && bun run dev
-
 # ============================================================================
 # Quality Checks
 # ============================================================================
@@ -209,12 +204,6 @@ lint-api:
 lint-db:
 	bunx biome check packages/db
 
-lint-ui:
-	cd apps/ui && bun run lint
-
-typecheck-ui:
-	cd apps/ui && bun run typecheck
-
 lint-core:
 	bunx biome check packages/core
 
@@ -224,11 +213,10 @@ format:
 # Per-package tests via turbo (#967): unchanged packages replay their cached
 # green run instead of re-executing, so an incremental `make check` pays only
 # for the packages the change touched. The turbo `test` task hashes
-# DATABASE_URL / TEST_DATABASE_URL / ENABLE_DB_TESTS / OMNI_* on top of each
+# DATABASE_URL / OMNI_* on top of each
 # package's files, so pointing at a different database invalidates the cache.
 # Env is loaded into the environment here because per-package `bun test` runs
-# have no --env-file. Workspaces only — apps/khal-ui stays out (private
-# @khal-os deps, own test run).
+# have no --env-file.
 # LOG_LEVEL is forced to 'silent' AFTER .env loads (which sets debug): suites
 # intentionally exercise thousands of warn/error paths and the JSON flood is
 # pure I/O + noise (#967). Override: make test TEST_LOG_LEVEL=debug
@@ -239,7 +227,7 @@ test: _build-dist _sync-db
 # cross-file state leaks (e.g. globalThis.fetch pollution) that only reproduce
 # when every suite shares one process.
 test-sweep: _build-dist _sync-db
-	bun test --env-file=.env packages apps/ui
+	bun test --env-file=.env packages
 
 test-watch: _build-dist
 	bun test --env-file=.env --watch
@@ -270,6 +258,7 @@ test-db:
 # about tenant isolation. No .env is loaded: the gate never touches an ambient
 # DATABASE_URL or a shared cluster.
 test-pg-gate:
+	bun test scripts/pg-gate-report.test.ts scripts/pg-gate-inventory.test.ts
 	bun scripts/pg-gate.ts
 
 # Keep-warm variant (#967): first run creates the disposable cluster and
@@ -277,6 +266,7 @@ test-pg-gate:
 # the ~15-20s initdb + role setup per iteration. Same gate, same zero-skip
 # contract. `make pg-gate-warm-stop` destroys the kept cluster.
 test-pg-gate-warm:
+	bun test scripts/pg-gate-report.test.ts scripts/pg-gate-inventory.test.ts
 	bun scripts/pg-gate-warm.ts run
 
 pg-gate-warm-stop:
@@ -300,11 +290,26 @@ verify-migrations:
 # Version sync gate: every tracked version field matches root package.json.
 # Pass BASE=<ref> to exempt files absent on that ref (what CI does on PRs, #1020).
 verify-versions:
-	bun test scripts/verify-versions.test.ts
+	bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
+# Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its
+# package) and the packer that bundles apps/*-dsh into each Omni's own market (bun pm pack), and
+# which package manager installs each plugin folder and each DSH profile, and that each plugin
+# works with the oldest Omni it declares (engines.omni, against that release's API), and the signed
+# plugin lane the desktop app updates Omni's plugins from (scripts/plugin-lane.ts).
+marketplace-check:
+	bun test scripts/marketplace.test.ts scripts/pack-market.test.ts scripts/plugin-lane.test.ts scripts/admin-ui-image.test.ts scripts/package-managers.test.ts scripts/plugin-compat.test.ts scripts/disposable-pg-cluster.test.ts
+	bun scripts/marketplace.ts check
+	bun scripts/plugin-compat.ts
+
+# Static plugin command/flag drift gate. SDK dist is needed only to load CLI command metadata.
+skill-cli-check: _build-dist
+	bun test scripts/check-skill-cli.test.ts
+	bun scripts/check-skill-cli.ts
+
 # Run all quality checks
-check: typecheck lint dead-code verify-migrations verify-versions test
+check: typecheck lint dead-code verify-migrations verify-versions marketplace-check skill-cli-check test
 	@echo ""
 	@echo "All checks passed!"
 
@@ -373,9 +378,6 @@ sync-versions: version
 
 build: version
 	bun run build
-
-build-ui:
-	cd apps/ui && bun run build
 
 clean:
 	rm -rf node_modules/.cache
@@ -463,8 +465,8 @@ cli:
 cli-build:
 	bun run --cwd packages/cli build
 
-cli-build-full: ## Build CLI client + server bundles
-	cd packages/cli && bun run build && bun run build:server
+cli-build-full: ## Build CLI client + server bundles + the packed DSH plugins
+	cd packages/cli && bun run build && bun run build:server && bun run build:market
 
 cli-link: cli-build
 	cd packages/cli && bun link

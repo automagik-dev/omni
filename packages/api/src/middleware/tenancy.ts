@@ -131,7 +131,7 @@ function projectTenantApiKey(context: TenantAuthContext): ApiKeyData {
  * arity exactly as the enumerator does it (`(c, next)` vs `(c)`). The FIRST
  * terminal handler is the one that responds.
  */
-function servedRouteKey(c: Context<{ Variables: AppVariables }>): string | null {
+export function servedRouteKey(c: Context<{ Variables: AppVariables }>): string | null {
   for (const route of matchedRoutes(c)) {
     if (route.handler.length >= 2) continue;
     return `${route.method} ${route.path}`;

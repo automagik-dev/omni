@@ -5,7 +5,7 @@
  * They are injected into routes via middleware.
  */
 
-import type { EventBus } from '@omni/core';
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { accessCache } from '../cache/cache-keys';
 import { DeepSeekVisionProvider } from '../providers/deepseek/vision';
@@ -35,6 +35,8 @@ import { AuthBootstrapService } from './auth-bootstrap';
 import { AutomationService } from './automations';
 import { BatchJobService } from './batch-jobs';
 import { ChatService } from './chats';
+import { connectorRegistry } from './connector-registry';
+import { ConnectorService } from './connectors';
 import { ConsumerOffsetService } from './consumer-offsets';
 import { ConversationService } from './conversations';
 import { DeadLetterService } from './dead-letters';
@@ -94,6 +96,8 @@ export interface Services {
    */
   eventConsumers: EventConsumerService;
   webhooks: WebhookService;
+  /** Integration accounts (connectors), never channels and never agent tools. */
+  connectors: ConnectorService;
   automations: AutomationService;
   /**
    * G4b manifest compiler (RFC #925, #986): compiles `agents.event_manifest`
@@ -160,8 +164,10 @@ export interface Services {
 /**
  * Create all services
  */
-export function createServices(db: Database, eventBus: EventBus | null): Services {
-  const apiKeys = new ApiKeyService(db);
+export function createServices(db: Database, eventBus: (EventBus & ConnectorEventPublisher) | null): Services {
+  // Publishes the chat-key events itself: `update` is also called from the
+  // agent dispatcher and the instances route, whose child clamps must be events too.
+  const apiKeys = new ApiKeyService(db, { eventBus });
   const deadLetters = new DeadLetterService(db, eventBus);
   const payloadStore = new PayloadStoreService(db);
   const eventSchemas = new EventSchemaService(db);
@@ -201,6 +207,7 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
   // identities.
   const authPlane = resolveAuthPlaneConnection(db);
   const authBootstrap = new AuthBootstrapService(authPlane.db);
+  deadLetters.setAuthPlane(authPlane.db);
 
   const followUpLifecycle = new FollowUpLifecycleService(db, eventBus);
   const followUpSweeper = new FollowUpSweeperService(db, eventBus);
@@ -254,14 +261,15 @@ export function createServices(db: Database, eventBus: EventBus | null): Service
     settings,
     access: new AccessService(db, eventBus, accessCache),
     providers,
-    routes: new RouteService(db, routeResolver),
+    routes: new RouteService(db, routeResolver, eventBus),
     routeResolver,
     deadLetters,
     payloadStore,
     eventOps,
     eventSchemas,
     eventConsumers: new EventConsumerService(db, eventBus),
-    webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters),
+    webhooks: new WebhookService(db, eventBus, eventSchemas, deadLetters, authPlane.db),
+    connectors: new ConnectorService(db, eventBus, connectorRegistry),
     automations: automationsService,
     manifestCompiler,
     chats: new ChatService(db, eventBus),

@@ -41,7 +41,8 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { SyncJobService } from '../sync-jobs';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -75,16 +76,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 /** Records what a publish was told, so the envelope tenant can be asserted. */
 interface CapturedPublish {
   type: string;
@@ -107,7 +98,7 @@ postgresDescribe('two-tenant sync-job containment (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -130,7 +121,11 @@ postgresDescribe('two-tenant sync-job containment (real PostgreSQL)', () => {
     // maxConnections=2 — see the sibling suites: a worker transaction holds one,
     // so an unscoped ambient read takes the other and fails LOUDLY under RLS
     // rather than deadlocking.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 2);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      2,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
 
     const eventBus = {
       publish: async (type: string, _payload: unknown, metadata?: Record<string, unknown>) => {
@@ -143,7 +138,7 @@ postgresDescribe('two-tenant sync-job containment (real PostgreSQL)', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('a threaded tenant lands the job under that tenant, and stamps the published envelope', async () => {

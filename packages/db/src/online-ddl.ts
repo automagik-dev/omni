@@ -1,5 +1,5 @@
 /**
- * Online DDL phase for the G2 additive ownership schema
+ * Online DDL phase for G2 ownership and paired-agents slice 2 journal indexes
  * (wish: omni-full-multitenancy, Group G2).
  *
  * WHY THIS EXISTS
@@ -13,13 +13,13 @@
  *
  * WHAT IT DOES
  * ------------
- * Exactly the statements migration 0041 also contains, in their CONCURRENTLY
+ * The index statements migrations 0041 and paired-agents slice 2 contain, in their CONCURRENTLY
  * form, plus the `ADD COLUMN` statements they depend on:
  *
- *   1. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS "tenant_id" uuid` — nullable,
+ *   1. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for tenant and provenance columns — nullable,
  *      no default, so PostgreSQL 11+ records a catalog change and never
  *      rewrites the table. Milliseconds even on the largest table.
- *   2. every G2 index, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS`.
+ *   2. every ownership and journal index, with `CREATE INDEX CONCURRENTLY IF NOT EXISTS`.
  *
  * It adds NO constraint and NO trigger: those are metadata-only in 0041 and
  * belong in the transactional migration where they can be rolled back together.
@@ -41,12 +41,23 @@
  *     finds every column and index present and only adds `NOT VALID`
  *     constraints and triggers, taking no long lock.
  *
+ * BOOT GUARD
+ * ----------
+ * The preflight uses pg_class.reltuples planner estimates and blocks pending
+ * high-volume indexes at DEFAULT_LARGE_TABLE_ROWS (1,000,000) rows or above.
+ * Never-analyzed tables (reltuples < 0) get a bounded probe; no exact count is
+ * taken. A stale low estimate can pass and allow an in-band blocking build.
+ * OMNI_ALLOW_BLOCKING_INDEX_BUILD=on skips the guard and accepts the downtime;
+ * this override is operator-only. Prepare before upgrading even with the
+ * paired-agent flag unset: docs/deployment/paired-agent-journal-indexes.md.
+ *
  * This is a repository-local, non-production mechanism. It reads no ambient
  * `DATABASE_URL`; the caller passes the target explicitly.
  */
 
 import { sql } from 'drizzle-orm';
 import type { Database } from './client';
+import { pairedAgentColumnStatements, pairedAgentIndexStatements } from './paired-agent-online-ddl';
 import { addColumnStatements, allIndexStatements } from './tenancy-ownership';
 
 /** Operator entry point named in the 0041 header and in the preflight error. */
@@ -67,15 +78,17 @@ export interface OnlineDdlReport {
 
 /** Indexes this phase owns, in dependency-free order. */
 export function onlineIndexStatements(): { name: string; table: string; statement: string }[] {
-  return allIndexStatements().map(({ statement }) => ({
-    name: statement.name,
-    table: statement.table,
-    statement: statement.concurrent,
-  }));
+  return [...allIndexStatements().map(({ statement }) => statement), ...pairedAgentIndexStatements].map(
+    (statement) => ({
+      name: statement.name,
+      table: statement.table,
+      statement: statement.concurrent,
+    }),
+  );
 }
 
 /**
- * Names of G2 indexes that exist but are INVALID or not ready — the residue of
+ * Names of owned indexes that exist but are INVALID or not ready — the residue of
  * an interrupted concurrent build. They must be dropped before a rebuild.
  */
 export async function findBrokenIndexes(db: Database, names: readonly string[]): Promise<string[]> {
@@ -118,7 +131,7 @@ export async function applyOnlineTenantDdl(
   };
 
   // 1. Nullable columns. Catalog-only; no table rewrite.
-  for (const statement of addColumnStatements()) {
+  for (const statement of [...addColumnStatements(), ...pairedAgentColumnStatements]) {
     await db.execute(sql.raw(statement));
     record({ kind: 'column', name: statement, statement, skipped: false });
   }
@@ -177,10 +190,13 @@ export interface OnlineDdlPreflight {
   readonly blockers: OnlineDdlBlocker[];
 }
 
-/** High-volume tables and the G2 indexes they need, from the single spec source. */
+/** High-volume tables and the ownership/journal indexes they need, from the single spec source. */
 function highVolumeIndexPlan(): Map<string, string[]> {
   const plan = new Map<string, string[]>();
-  for (const { statement, volume } of allIndexStatements()) {
+  for (const { statement, volume } of [
+    ...allIndexStatements(),
+    ...pairedAgentIndexStatements.map((statement) => ({ statement, volume: statement.volume })),
+  ]) {
     if (volume !== 'high') continue;
     const list = plan.get(statement.table) ?? [];
     list.push(statement.name);
@@ -242,12 +258,12 @@ async function probeRowCount(db: Database, table: string, limit: number): Promis
 }
 
 /**
- * Would running the transactional 0041 index builds right now block a large
+ * Would running the pending transactional index builds right now block a large
  * table for longer than the boot budget?
  *
  * A NO-OP on every install that is small, fresh, or already migrated: it reads
  * two catalog views and returns `blocked: false`. It only reports a blocker when
- * a high-volume table both (a) is missing at least one G2 index and (b) holds at
+ * a high-volume table both (a) is missing at least one owned index and (b) holds at
  * least `threshold` rows.
  */
 export async function checkOnlineDdlPreflight(
@@ -289,10 +305,12 @@ export function onlineDdlPreflightMessage(preflight: OnlineDdlPreflight): string
     .map((b) => `  - ${b.table}: ~${Math.round(b.estimatedRows)} rows, missing ${b.missingIndexes.join(', ')}`)
     .join('\n');
   return [
-    `Refusing to run migration 0041 in-band: it builds indexes with a blocking CREATE INDEX on table(s) holding at least ${preflight.threshold} rows, which will exceed the boot migration timeout and crash-loop this process.`,
+    `Refusing to run the pending migrations in-band: they build indexes with a blocking CREATE INDEX on table(s) holding at least ${preflight.threshold} rows, which can exceed the boot migration timeout and crash-loop this process.`,
+    'Row figures are planner estimates (pg_class.reltuples); never-analyzed tables use a bounded probe.',
     detail,
-    'Run the online phase first (no long lock, resumable):',
+    'Follow docs/deployment/paired-agent-journal-indexes.md before upgrading, even with the paired-agent flag unset.',
+    'Run the online phase first from the exact candidate checkout’s packages/db (resumable):',
     `  ${ONLINE_DDL_COMMAND}`,
-    'then start again — the migration will find every index present and take no long lock. Set OMNI_ALLOW_BLOCKING_INDEX_BUILD=on to override (accepts the downtime).',
+    'then start again — the migration will find every index present and take no long lock. Operator-only: set OMNI_ALLOW_BLOCKING_INDEX_BUILD=on to override (accepts the downtime).',
   ].join('\n');
 }

@@ -136,32 +136,6 @@ export function evaluateRouteOwnership(
  */
 const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
   {
-    route: 'GET /favicon.svg',
-    class: 'public-by-contract',
-    justification:
-      'Static browser icon from the built UI bundle (registered only when apps/ui/dist exists, or under the ' +
-      'enumeration-only OMNI_FORCE_UI_ROUTES override). Serves a fixed asset file byte-for-byte. Exposes NO ' +
-      'tenant data, inventory, identifiers, or connection state — the response is identical for every caller.',
-  },
-  {
-    route: 'GET /favicon.ico',
-    class: 'public-by-contract',
-    justification:
-      'Static browser icon from the built UI bundle (registered only when apps/ui/dist exists, or under the ' +
-      'enumeration-only OMNI_FORCE_UI_ROUTES override). Serves a fixed asset file byte-for-byte. Exposes NO ' +
-      'tenant data, inventory, identifiers, or connection state — the response is identical for every caller.',
-  },
-  {
-    route: 'GET /*',
-    class: 'public-by-contract',
-    justification:
-      'SPA fallback for the built UI: serves the static index.html for any non-/api path so client-side ' +
-      'routing works, and returns a plain 404 JSON for unmatched /api paths. Registered only when apps/ui/dist ' +
-      'exists (or under the enumeration-only OMNI_FORCE_UI_ROUTES override). The HTML is the same fixed bundle ' +
-      'for every caller; it embeds NO tenant data, counts, identifiers, connection state, or existence oracle — ' +
-      'all data the UI shows is fetched later through the authenticated /api surface.',
-  },
-  {
     route: 'GET /health',
     class: 'public-by-contract',
     justification:
@@ -284,6 +258,201 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'connection state; the outcome is read through the authenticated GET /api/v2/slack/oauth/result/:nonce.',
   },
   {
+    route: 'ALL /api/auth/*',
+    class: 'public-by-contract',
+    justification:
+      'Better Auth (human login, wish: omni-labs-distribution). Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only an allowlist of Better Auth paths ' +
+      'answers (PUBLIC_AUTH_PATHS: the RFC 8628 device flow, passkey ceremonies, get-session, sign-out); ' +
+      'every other path is 404. A device code exposes nothing until the signed-in owner approves it; ' +
+      "passkey and session endpoints act only on the caller's own session. No tenant data, no other user, " +
+      'no instance data.',
+  },
+  {
+    route: 'POST /api/auth/device/code',
+    class: 'public-by-contract',
+    justification:
+      'Better Auth RFC 8628 device authorization request (human login), routed on its own for a stricter ' +
+      'per-IP limit. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only the ' +
+      'known client ids are accepted; it returns a device code and user code that grant nothing until the ' +
+      'signed-in owner approves them, and reads no tenant data.',
+  },
+  {
+    route: 'GET /api/login/whatsapp',
+    class: 'public-by-contract',
+    justification:
+      "What a device's QR opens (human login): a redirect to the owner's own WhatsApp chat with the device's " +
+      'code typed. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false) and a live, pending device request carries that ' +
+      "user code; that is the only place the owner's number is given out, and only to someone holding a code " +
+      'a device on this Omni just asked for. Rate-limited per IP.',
+  },
+  {
+    route: 'GET /api/login/claim',
+    class: 'public-by-contract',
+    justification:
+      'Static claim page for an unclaimed Omni (human login). Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Fixed HTML and script; it reads nothing ' +
+      'server-side. What it can do is gated by the claim token on the endpoints it calls.',
+  },
+  {
+    route: 'GET /api/login/app',
+    class: 'public-by-contract',
+    justification:
+      'Static "open Automagik" page (human login). Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Fixed HTML and script; its only link is ' +
+      "omni://connect with this Omni's own address, which grants nothing: the app then signs in through " +
+      "the device page, which needs the owner's own session. With ?grant= (a connect link the owner got in " +
+      'their own self chat) it looks the grant up without spending it and puts it in that link, or says the ' +
+      'link expired; it reveals only whether that exact grant is live.',
+  },
+  {
+    route: 'GET /api/login/device',
+    class: 'public-by-contract',
+    justification:
+      'Static device-approval page (human login). Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Fixed HTML and script naming the known ' +
+      "device clients; approving requires the owner's own Better Auth session.",
+  },
+  {
+    route: 'GET /api/market',
+    class: 'public-by-contract',
+    justification: 'A fixed 301 to /market, where the Automagik marketplace page moved. Reads nothing.',
+  },
+  {
+    route: 'GET /market',
+    class: 'public-by-contract',
+    justification:
+      'The Automagik marketplace page: the catalog of DSH plugins this release carries and the Automagik ' +
+      'plugins it was tested with, with the index URL to add to a DSH. Built only from the build-time bundled market ' +
+      '(dist/market/market.json) and marketplace/automagik.json, identical for every caller; reads no database, ' +
+      'no tenant, instance, user or connection state, and its only input is the request origin when no public ' +
+      'URL is configured. Text is inserted with textContent.',
+  },
+  {
+    route: 'GET /api/market/index.json',
+    class: 'public-by-contract',
+    justification:
+      'The Automagik marketplace as a DSH plugin market index (format 1). Lists the plugin names, versions, ' +
+      'descriptions and labels fixed at build time (the bundled market and marketplace/automagik.json), the same ' +
+      'for every caller; reads no database, and exposes no tenant, instance, user, count of anything live, or ' +
+      'configuration beyond the public URL the index points installers at.',
+  },
+  {
+    route: 'GET /api/market/npm/*',
+    class: 'public-by-contract',
+    justification:
+      "The Automagik marketplace's npm registry: the packument and the tarball of each DSH plugin this release " +
+      'carries, read only from the build-time bundled market. A tarball is served only when its file name is the ' +
+      'one market.json lists for that package, never from a path built from the request; any other package name ' +
+      'answers a 302 to the public npm registry. Reads no database and exposes no tenant, instance or user data.',
+  },
+  {
+    route: 'GET /api/v2/login/status',
+    class: 'public-by-contract',
+    justification:
+      'Human login status. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with ' +
+      "multitenancy on. Returns only whether the Omni has an owner, the owner's own WhatsApp number while " +
+      "it is connected (so a device can show a QR that opens the owner's self chat, which is the point of " +
+      'the feature), and the device-approval URL. No tenant data, counts or other instances.',
+  },
+  {
+    route: 'GET /api/v2/login/claim/accounts',
+    class: 'public-by-contract',
+    justification:
+      'Claim: the connected WhatsApp accounts a person may claim the Omni with. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only while unclaimed (or the owner has no WhatsApp yet, to link one) and only ' +
+      'with the claim token (an HMAC of the server secret printed in the boot log); otherwise the same 404. ' +
+      'Numbers are masked (+55 12 •••• 8888).',
+  },
+  {
+    route: 'POST /api/v2/login/claim/whatsapp',
+    class: 'public-by-contract',
+    justification:
+      'Claim: link a first WhatsApp account to an unclaimed Omni. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only while unclaimed and with the claim ' +
+      'token; creates one instance named owner-whatsapp and starts its QR link. Returns only that ' +
+      "instance's id.",
+  },
+  {
+    route: 'GET /api/v2/login/claim/whatsapp/:id',
+    class: 'public-by-contract',
+    justification:
+      'Claim: the linking QR (as SVG) and connected state of that instance. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only while unclaimed and with the ' +
+      'claim token; the number is masked once connected.',
+  },
+  {
+    route: 'POST /api/v2/login/claim/send-code',
+    class: 'public-by-contract',
+    justification:
+      'Claim: send a 6-digit code to the self chat of one connected WhatsApp account. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only while unclaimed, ' +
+      'with the claim token, and only to an account connected to this Omni; rate-limited per IP. Returns ' +
+      'the masked number.',
+  },
+  {
+    route: 'POST /api/v2/login/claim/token',
+    class: 'public-by-contract',
+    justification:
+      'Claim with the claim token alone: whoever has the token from the boot log runs the server and becomes ' +
+      'the only owner, with no WhatsApp. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false, always with ' +
+      'multitenancy on), with a wrong token, or once the Omni has an owner. Rate limited per IP; a second owner ' +
+      'can never be created (one row in login_users).',
+  },
+  {
+    route: 'POST /api/v2/login/claim/verify',
+    class: 'public-by-contract',
+    justification:
+      'Claim: verify that code; its sender becomes the only owner and gets a session cookie. Answers 404 ' +
+      'when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Only while ' +
+      'unclaimed and with the claim token; Better Auth limits attempts; a second owner can never be created ' +
+      '(sign-up closes).',
+  },
+  {
+    route: 'POST /api/v2/login/send-code',
+    class: 'public-by-contract',
+    justification:
+      "Owner sign-in: send a 6-digit code to the owner's own WhatsApp self chat. Answers 404 when login " +
+      "is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. The number is the owner's and " +
+      'is never taken from the request; rate-limited per IP. Returns the masked number.',
+  },
+  {
+    route: 'POST /api/v2/login/verify',
+    class: 'public-by-contract',
+    justification:
+      "Owner sign-in: verify that code and set the owner's session cookie. Answers 404 when login is " +
+      'off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Better Auth limits attempts; ' +
+      'rate-limited per IP; returns nothing but success.',
+  },
+  {
+    route: 'POST /api/v2/login/device-key',
+    class: 'public-by-contract',
+    justification:
+      'Device sign-in: a device trades the one-time token the RFC 8628 device flow gave it (after the owner ' +
+      'approved it) for an Omni API key. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and ' +
+      "always with multitenancy on. Only a Bearer token of the owner's session counts, never a cookie; the " +
+      'session ends with the exchange, so one approval mints one key. Scopes come from server config and ' +
+      'can never include *, keys:* or platform:*.',
+  },
+  {
+    route: 'POST /api/v2/login/connect',
+    class: 'public-by-contract',
+    justification:
+      'Device sign-in from a connect link: a device trades the one-time grant the owner got by texting ' +
+      '"connect" in their own WhatsApp self chat for an Omni API key. Answers 404 when login is off (OMNI_LOGIN_ENABLED=false), and always with multitenancy on. Rate-limited per IP; a grant is 144 random ' +
+      'bits stored only as a hash, lives ten minutes and is spent before the key exists, so one link mints ' +
+      'one key. Any failure is the same 410. Scopes come from server config and can never include *, keys:* ' +
+      'or platform:*.',
+  },
+  {
+    route: 'GET /',
+    class: 'public-by-contract',
+    justification:
+      "What a browser sees at this Omni's address: a fixed page saying this is an Omni, with links to get " +
+      'the app and, when human login is on, to open it (omni://connect with the configured public URL, which ' +
+      'grants nothing). Reads no database, tenant, instance, user or connection state. Any request not asking ' +
+      'for HTML gets the plain JSON 404 it got before.',
+  },
+  {
+    route: 'GET /api',
+    class: 'public-by-contract',
+    justification:
+      "The same fixed page as GET /, for a browser that opens this Omni's /api address. Reads no database, " +
+      'tenant, instance, user or connection state; anything not asking for HTML gets the plain JSON 404.',
+  },
+  {
     route: 'POST /api/v2/channels/twilio-whatsapp/:instanceId/webhook',
     class: 'public-by-contract',
     justification:
@@ -302,6 +471,25 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'server-side on that instance — a mismatch is dropped with a warn log. The tenant comes from the ' +
       'server-side instance record addressed by the path, never from a body or header claim. Responses are ' +
       'fixed 200 acks with no row data.',
+  },
+  {
+    route: 'GET /api/v2/channels/webchat/:instanceId/:action',
+    class: 'public-by-contract',
+    justification:
+      'Webchat (prototype) widget page and Server-Sent Events stream. Auth-exempt because the caller is an ' +
+      'anonymous site visitor with no API key. The plugin answers only for a connected webchat instance addressed ' +
+      'by its UUID path, and the event stream returns only the replies Omni sent to the visitorId the browser ' +
+      'itself generated; that visitorId is a bearer secret with no server-side signature, origin allowlist or ' +
+      'rate limit yet. It withholds every other chat, contact and instance setting.',
+  },
+  {
+    route: 'POST /api/v2/channels/webchat/:instanceId/:action',
+    class: 'public-by-contract',
+    justification:
+      'Webchat (prototype) visitor message ingress. Auth-exempt because the caller is an anonymous site visitor ' +
+      'with no API key. The body is Zod-validated (visitorId, optional name, text) and becomes message.received ' +
+      'on the instance addressed by the UUID path; the tenant comes from that server-side instance record, never ' +
+      'from the body. The response is a fixed 202 ack with the new message id and no row data.',
   },
   {
     route: 'POST /api/v2/channels/asc/:instanceId/webhook',
@@ -338,6 +526,24 @@ const PUBLIC_PRIVACY_CONTRACTS: readonly RouteOwnershipDeclaration[] = [
       'ACCEPTED LIMITATION: the signature covers the body only — no timestamp tolerance or delivery-id dedupe — ' +
       'so a captured signed request can be replayed within the rate limit; consumers of custom.webhook.* events ' +
       'must treat deliveries as at-least-once, exactly as they already must for provider-side webhook retries.',
+  },
+  {
+    route: 'POST /api/v2/connectors/hooks/:connectorId',
+    class: 'public-by-contract',
+    justification:
+      'Provider hook authenticated by the sealed connector hook secret; persisted owner resolves tenant scope.',
+  },
+  {
+    route: 'POST /api/v2/connectors/events/:subscriptionId',
+    class: 'public-by-contract',
+    justification:
+      'Connector event ingress (connectors-first-slice-clickup, D8). Auth-exempt because the provider holds no Omni ' +
+      'credential; authenticity is the per-subscription HMAC secret (ClickUp: X-Signature over the raw body) sealed ' +
+      'server-side and verified BEFORE anything is journaled or published. Unknown subscription, an unopenable secret ' +
+      'and a bad signature all collapse into one 401 so the endpoint is not a subscription-existence oracle, and the ' +
+      'surface is IP-rate-limited with a bounded body. The tenant comes from the resolved subscription row, never from ' +
+      'a request claim. Responses carry only receipt flags and the generated event id — no tenant data, no resource ' +
+      'listing. Paused subscriptions verify first, then ack 202 ignored and publish nothing.',
   },
   {
     route: 'GET /api/v2/channels/whatsapp-business/webhook',
@@ -522,6 +728,19 @@ const TENANT_SCOPED_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/chats/:id/participants',
   'GET /api/v2/chats/by-external',
   'GET /api/v2/context',
+  'DELETE /api/v2/connectors/:id',
+  'DELETE /api/v2/connectors/:id/subscriptions/:subscriptionId',
+  'GET /api/v2/connectors',
+  'GET /api/v2/connectors/:id',
+  'GET /api/v2/connectors/:id/subscriptions',
+  'GET /api/v2/connectors/providers',
+  'GET /api/v2/connectors/providers/:provider',
+  'PATCH /api/v2/connectors/:id',
+  'PATCH /api/v2/connectors/:id/subscriptions/:subscriptionId',
+  'POST /api/v2/connectors',
+  'POST /api/v2/connectors/:id/actions/:action',
+  'POST /api/v2/connectors/:id/subscriptions',
+  'POST /api/v2/connectors/:id/subscriptions/:subscriptionId/test',
   'GET /api/v2/conversations',
   'GET /api/v2/conversations/:id',
   'GET /api/v2/conversations/:id/chats',
@@ -826,6 +1045,12 @@ const KEY_ROUTES: readonly RouteKey[] = [
   'PATCH /api/v2/keys/:id',
   'POST /api/v2/keys',
   'POST /api/v2/keys/:id/revoke',
+  // Chat keys (wish: omni-chat-threads): a legacy root key's own cs children.
+  // Control-plane and never tenant-addressable: a tenant credential is refused
+  // here before the route runs.
+  'POST /api/v2/keys/children',
+  'POST /api/v2/keys/children/self/revoke',
+  'POST /api/v2/keys/children/:id/revoke',
 ];
 
 const TRUST_ROUTES: readonly RouteKey[] = [
@@ -854,6 +1079,36 @@ const OBSERVABILITY_ROUTES: readonly RouteKey[] = [
   'GET /api/v2/metrics',
 ];
 
+/**
+ * This Omni's own version and the updates its owner confirms (system/update.ts). One server
+ * binary serves every tenant, so its version and its update are deployment-level, never a
+ * tenant's: a tenant credential must not reach them.
+ */
+const SYSTEM_UPDATE_ROUTES: readonly RouteKey[] = ['GET /api/v2/system/update', 'POST /api/v2/system/update'];
+
+const SYSTEM_UPDATE_JUSTIFICATION =
+  "The deployment's own version and its update. GET says what runs, what the update channel publishes and " +
+  'whether an update waits or runs; it reads no tenant row. POST needs OMNI_UPDATE_COMMAND set by the operator ' +
+  "and the exact published version; it then asks for the owner's yes in their own WhatsApp self chat before the " +
+  'operator command runs, except on a loopback-only Omni whose operator set OMNI_UPDATE_CONFIRM=app (a sandbox), ' +
+  'where the request is the yes. Deployment-wide by nature, so platform-admin.';
+
+/**
+ * The operator's way in (routes/v2/owner.ts): claim the deployment, approve a device, mint a
+ * connect link. Deployment-wide, behind auth:admin, which device keys never carry.
+ */
+const OWNER_ROUTES: readonly RouteKey[] = [
+  'POST /api/v2/owner/claim',
+  'POST /api/v2/owner/approve',
+  'POST /api/v2/owner/connect',
+];
+
+const OWNER_JUSTIFICATION =
+  "The deployment's human login, run by its operator: make the admin key's holder the owner of an unclaimed " +
+  'Omni, approve a waiting device code as that owner, or mint a one-time connect link. Needs auth:admin, which ' +
+  'device keys can never carry; answers 409 when login is off (always with multitenancy on). It reads no tenant ' +
+  'row. Deployment-wide by nature, so platform-admin.';
+
 const OBSERVABILITY_JUSTIFICATION =
   'Process-level observability aggregated across every tenant the deployment serves: Prometheus counters and ' +
   'the in-process log ring buffer. There is no per-tenant row to scope, and the values themselves are ' +
@@ -865,6 +1120,20 @@ const OBSERVABILITY_JUSTIFICATION =
 
 /** The committed registry the gate checks against. */
 export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
+  {
+    route: 'GET /api/v2/channels/whatsapp-business/webhook-setup',
+    class: 'platform-admin',
+    justification:
+      'Deployment-wide Meta verification configuration, including the shared verify token. Requires settings:write and refuses tenant credentials and every resource lock; no tenant-owned data is read.',
+  },
+  {
+    route: 'GET /api/v2/system/paired-agents',
+    class: 'platform-admin',
+    justification:
+      'The deployment-wide paired-agent feature status, shared by the one serving binary across all tenants. ' +
+      'Reads only effective process flags and no tenant row; authenticated system:read is required. ' +
+      'Deployment-wide by nature, so platform-admin, like the system update status.',
+  },
   ...TENANT_SCOPED_ROUTES.map((route) => ({ route, class: 'tenant-scoped' as const })),
   ...PLATFORM_ADMIN_ROUTES.map((route) => ({
     route,
@@ -886,6 +1155,16 @@ export const ROUTE_OWNERSHIP: readonly RouteOwnershipDeclaration[] = [
     route,
     class: 'platform-admin' as const,
     justification: OBSERVABILITY_JUSTIFICATION,
+  })),
+  ...SYSTEM_UPDATE_ROUTES.map((route) => ({
+    route,
+    class: 'platform-admin' as const,
+    justification: SYSTEM_UPDATE_JUSTIFICATION,
+  })),
+  ...OWNER_ROUTES.map((route) => ({
+    route,
+    class: 'platform-admin' as const,
+    justification: OWNER_JUSTIFICATION,
   })),
   ...PUBLIC_PRIVACY_CONTRACTS,
 ];

@@ -23,7 +23,7 @@ import {
   chats,
   messages,
 } from '@omni/db';
-import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, or, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, ilike, inArray, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { scopedHandle } from '../tenancy/tenant-scope';
 
 import { sanitizeText } from '../utils/utf8';
@@ -169,6 +169,19 @@ const SINGLE_REACTION_PER_USER_CHANNELS: ReadonlySet<ChannelType> = new Set<Chan
   'whatsapp-baileys',
   'whatsapp-business',
 ]);
+
+/**
+ * Delivery receipts only move forward: `pending < sent < delivered < read`.
+ * For each status, the statuses a message must not already hold for it to
+ * apply. `failed` is outside the order (`markDeliveryFailed` owns its guard).
+ */
+const DELIVERY_STATUS_AT_OR_PAST: Readonly<Record<DeliveryStatus, readonly DeliveryStatus[] | null>> = {
+  pending: ['pending', 'sent', 'delivered', 'read'],
+  sent: ['sent', 'delivered', 'read'],
+  delivered: ['delivered', 'read'],
+  read: ['read'],
+  failed: null,
+};
 
 /**
  * Drop `platformUserId`'s reactions whose emoji differs from `emoji`, and
@@ -851,9 +864,20 @@ export class MessageService {
   // =========================================================================
 
   /**
-   * Update delivery status
+   * Move a message's delivery status forward along
+   * `pending < sent < delivered < read`, in one guarded UPDATE.
+   *
+   * The guard lives in the WHERE clause, so two receipt consumers (delivered
+   * and read run on separate durables) cannot race: a late, out-of-order or
+   * redelivered receipt at or below the current status matches no row and
+   * changes nothing, including `latestEventId`. `failed` sits outside the
+   * order and keeps today's rules: `markDeliveryFailed` guards failures, and
+   * a later receipt may still replace a `failed` status.
+   *
+   * @returns the updated message, or null when it is missing or already at or past `status`
    */
-  async updateDeliveryStatus(id: string, status: DeliveryStatus, latestEventId?: string): Promise<Message> {
+  async advanceDeliveryStatus(id: string, status: DeliveryStatus, latestEventId?: string): Promise<Message | null> {
+    const atOrPast = DELIVERY_STATUS_AT_OR_PAST[status];
     const [updated] = await this.db
       .update(messages)
       .set({
@@ -861,14 +885,28 @@ export class MessageService {
         latestEventId,
         updatedAt: new Date(),
       })
-      .where(eq(messages.id, id))
+      .where(
+        atOrPast
+          ? and(
+              eq(messages.id, id),
+              or(isNull(messages.deliveryStatus), notInArray(messages.deliveryStatus, [...atOrPast])),
+            )
+          : eq(messages.id, id),
+      )
       .returning();
 
-    if (!updated) {
-      throw new NotFoundError('Message', id);
-    }
+    return updated ?? null;
+  }
 
-    return updated;
+  /**
+   * Update delivery status (PATCH /messages/:id/delivery-status).
+   *
+   * Same monotonic rule as `advanceDeliveryStatus`. When the message is
+   * already at or past `status` it is returned unchanged; that extra read
+   * runs only on this manual path, never on the receipt consumers.
+   */
+  async updateDeliveryStatus(id: string, status: DeliveryStatus, latestEventId?: string): Promise<Message> {
+    return (await this.advanceDeliveryStatus(id, status, latestEventId)) ?? this.getById(id);
   }
 
   /**

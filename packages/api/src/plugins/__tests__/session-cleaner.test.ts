@@ -1,7 +1,14 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
 import type { TypedOmniEvent } from '@omni/core';
+import { REMOVED_OPENCLAW_MESSAGE } from '@omni/core';
 import type { Database } from '@omni/db';
+import * as Sentry from '@sentry/bun';
+import { Hono } from 'hono';
+import { errorHandler } from '../../middleware/error';
+import { chatsRoutes } from '../../routes/v2/chats';
 import { currentTenantScope, requireTenantScope } from '../../tenancy/tenant-scope';
+import type { AppVariables } from '../../types';
+import * as loader from '../loader';
 import { clearAgentSession, runTrashEmojiCleanup } from '../session-cleaner';
 
 function makeDbWithAgentProvider(providerId: string) {
@@ -146,6 +153,28 @@ describe('session-cleaner worker tenant boundary (G5)', () => {
     expect(probe.scopeSeen).toBeNull();
   });
 
+  it('(d) an agent-less instance does not touch the chat (nothing to resume)', async () => {
+    let chatLookups = 0;
+    const services = {
+      ...(makeProbeServices({
+        scopeSeen: undefined,
+        getInstanceCalls: 0,
+        sendMessageCalls: 0,
+        disarmTenant: undefined,
+      }) as Record<string, unknown>),
+      chats: {
+        findByExternalIdSmart: async () => {
+          chatLookups += 1;
+          return null;
+        },
+      },
+    } as never;
+
+    await runTrashEmojiCleanup(services, fakeDb(), makeEvent({ correlationId: 'c1' }));
+
+    expect(chatLookups).toBe(0);
+  });
+
   it('(c) a malformed envelope (tenant without version) is refused and performs no cleanup work', async () => {
     const probe: CleanupProbe = {
       scopeSeen: undefined,
@@ -159,5 +188,214 @@ describe('session-cleaner worker tenant boundary (G5)', () => {
     await expect(runTrashEmojiCleanup(services, fakeDb(), event)).rejects.toThrow();
 
     expect(probe.getInstanceCalls).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Providers that cannot reset sessions (webhook): the trash emoji still lifts a
+// handoff pause, because `agentPaused` is Omni's own chat state. Before the fix
+// the "not supported" error was skipped silently BEFORE the resume, so a paused
+// webhook chat stayed paused and every inbound was dropped.
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface WebhookProbe {
+  updates: Array<Record<string, unknown>>;
+  disarmCalls: number;
+  sendCalls: number;
+}
+
+/** A legacy-world Database whose agent lookups resolve to a webhook provider. */
+function webhookAgentDb(): Database {
+  const row = {
+    id: 'agent-w',
+    name: 'webhook agent',
+    agentProviderId: 'provider-webhook-resume',
+    agentType: null,
+    metadata: null,
+    configPath: null,
+  };
+  return {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [row] }) }) }),
+  } as unknown as Database;
+}
+
+function makeWebhookServices(
+  probe: WebhookProbe,
+  settings: Record<string, unknown>,
+  schema: 'webhook' | 'openclaw' | 'agno' = 'webhook',
+) {
+  return {
+    agentRunner: {
+      getInstanceWithProvider: async () => ({
+        id: 'inst-w',
+        agentId: 'agent-w',
+        channel: 'whatsapp-business',
+        agentSessionStrategy: 'per_chat',
+      }),
+    },
+    providers: {
+      getById: async () => ({
+        id: 'provider-webhook-resume',
+        schema,
+        baseUrl: 'http://webhook.invalid/hook',
+        apiKey: '',
+        defaultTimeout: 1,
+      }),
+    },
+    chats: {
+      findByExternalIdSmart: async () => ({ id: 'chat-w', settings }),
+      update: async (_id: string, data: { settings: Record<string, unknown> }) => {
+        probe.updates.push(data.settings);
+        return { id: 'chat-w' };
+      },
+    },
+    followUpLifecycle: {
+      disarm: async () => {
+        probe.disarmCalls += 1;
+      },
+    },
+    instances: {
+      getById: async () => {
+        probe.sendCalls += 1;
+        return { id: 'inst-w', channel: 'whatsapp-business' };
+      },
+    },
+  } as never;
+}
+
+function makeWebhookEvent(): TypedOmniEvent<'message.received'> {
+  return {
+    id: 'evt-w',
+    type: 'message.received',
+    timestamp: new Date().toISOString(),
+    payload: { chatId: 'chat-ext-w', from: 'user-w', content: { text: '🗑️' }, rawPayload: {} },
+    metadata: { instanceId: 'inst-w', personId: 'person-w', correlationId: 'c-w' },
+  } as unknown as TypedOmniEvent<'message.received'>;
+}
+
+function sessionClearApp(services: AppVariables['services'], db: Database) {
+  const app = new Hono<{ Variables: AppVariables }>();
+  app.onError(errorHandler);
+  app.use('*', async (c, next) => {
+    c.set('services', services);
+    c.set('db', db);
+    await next();
+  });
+  app.route('/chats', chatsRoutes);
+  return app;
+}
+
+describe('session-cleaner on providers that cannot reset sessions', () => {
+  it('an Agno upstream 410 sends the error text, keeps the pause, and returns a reported 500', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const settings = { agentPaused: true, muted: true };
+    const services = makeWebhookServices(probe, settings, 'agno');
+    const db = webhookAgentDb();
+    const sendMessage = mock(async () => ({ externalId: 'error-message' }));
+    const plugin = spyOn(loader, 'getPlugin').mockResolvedValue({ sendMessage } as never);
+    const capture = spyOn(Sentry, 'captureException').mockReturnValue('test-event-id');
+    const previousFetch = globalThis.fetch;
+    const fetch = mock(
+      async (_url: string | URL | Request, _init?: RequestInit) => new Response('Gone', { status: 410 }),
+    );
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    try {
+      await runTrashEmojiCleanup(services, db, makeWebhookEvent());
+
+      expect(sendMessage).toHaveBeenCalledWith('inst-w', {
+        to: 'chat-ext-w',
+        content: { type: 'text', text: '❌ Erro ao limpar sessão. Tente novamente.' },
+      });
+      expect(probe.disarmCalls).toBe(0);
+      expect(probe.updates).toEqual([]);
+      expect(settings.agentPaused).toBe(true);
+
+      const response = await sessionClearApp(services, db).request('/chats/clear-session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ instanceId: 'b74a5ecb-4303-49c5-8d46-481c20b343d2', chatId: 'chat-ext-w' }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'Internal server error' } });
+      expect(capture).toHaveBeenCalledWith(expect.objectContaining({ code: 'SERVER_ERROR', statusCode: 410 }));
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch).toHaveBeenCalledWith(
+        'http://webhook.invalid/hook/sessions/chat-ext-w',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+      expect(probe.disarmCalls).toBe(0);
+      expect(probe.updates).toEqual([]);
+    } finally {
+      globalThis.fetch = previousFetch;
+      plugin.mockRestore();
+      capture.mockRestore();
+    }
+  });
+
+  it('silently resumes a removed-provider chat and disarms follow-ups without an outbound call', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { agentPaused: true, muted: true }, 'openclaw');
+    const previousFetch = globalThis.fetch;
+    const fetch = mock(async () => {
+      throw new Error('Unexpected outbound request');
+    });
+    globalThis.fetch = fetch as unknown as typeof globalThis.fetch;
+    try {
+      await runTrashEmojiCleanup(services, webhookAgentDb(), makeWebhookEvent());
+
+      expect(probe.disarmCalls).toBe(1);
+      expect(probe.updates).toHaveLength(1);
+      expect(probe.updates[0]).toMatchObject({ agentPaused: false, muted: true });
+      expect(typeof probe.updates[0]?.agentResumedAt).toBe('string');
+      // Neither an error nor a confirmation is sent for an unavailable provider.
+      expect(probe.sendCalls).toBe(0);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
+  it('POST /chats/clear-session returns the versioned 410 through the real error handler', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { agentPaused: true }, 'openclaw');
+    const app = sessionClearApp(services, webhookAgentDb());
+
+    const response = await app.request('/chats/clear-session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ instanceId: 'b74a5ecb-4303-49c5-8d46-481c20b343d2', chatId: 'chat-ext-w' }),
+    });
+
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({
+      error: { code: 'NOT_FOUND', message: REMOVED_OPENCLAW_MESSAGE, details: { schema: 'openclaw' } },
+    });
+    expect(probe.sendCalls).toBe(0);
+  });
+
+  it('resumes a paused agent and keeps the other chat settings', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { agentPaused: true, muted: true });
+
+    await runTrashEmojiCleanup(services, webhookAgentDb(), makeWebhookEvent());
+
+    expect(probe.disarmCalls).toBe(1);
+    expect(probe.updates).toHaveLength(1);
+    expect(probe.updates[0]).toMatchObject({ agentPaused: false, muted: true });
+    expect(typeof probe.updates[0]?.agentResumedAt).toBe('string');
+    // Still a silent skip for the session itself: no confirmation nor error message.
+    expect(probe.sendCalls).toBe(0);
+  });
+
+  it('disarms follow-ups but writes nothing when the agent is not paused', async () => {
+    const probe: WebhookProbe = { updates: [], disarmCalls: 0, sendCalls: 0 };
+    const services = makeWebhookServices(probe, { muted: true });
+
+    await runTrashEmojiCleanup(services, webhookAgentDb(), makeWebhookEvent());
+
+    expect(probe.disarmCalls).toBe(1);
+    expect(probe.updates).toHaveLength(0);
+    expect(probe.sendCalls).toBe(0);
   });
 });

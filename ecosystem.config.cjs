@@ -72,12 +72,22 @@ const apps = [];
 if (natsManaged) {
   const natsServerPath = path.join(__dirname, 'bin', 'nats-server');
   const natsPort = process.env.NATS_PORT || '4222';
+  // Bind address. Loopback by default so dev NATS is not reachable from the
+  // network; set NATS_HOST=0.0.0.0 (or a LAN IP, with NATS_URL pointing at it)
+  // when other hosts must connect.
+  // Mirrors DEFAULT_NATS_HOST in packages/cli/src/nats-server-args.ts (this CJS
+  // file cannot import TypeScript). NATS_URL is where clients connect.
+  const natsHost = process.env.NATS_HOST || '127.0.0.1';
+  // PM2 splits `args` on spaces, so reject anything that is not a plain host.
+  if (!/^[A-Za-z0-9:][A-Za-z0-9.:-]*$/.test(natsHost)) {
+    throw new Error(`Invalid NATS_HOST ${JSON.stringify(natsHost)}: expected an IP address or hostname`);
+  }
 
   apps.push({
     ...SHARED,
     name: 'omni-v2-nats',
     script: natsServerPath,
-    args: ['-js', '-p', natsPort].join(' '),
+    args: ['-js', '-p', natsPort, '-a', natsHost].join(' '),
     env: {
       NODE_ENV: process.env.NODE_ENV || 'development',
     },

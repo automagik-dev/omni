@@ -9,11 +9,16 @@
  * we rely on the env that was captured at original `pm2 start` time (built
  * by `buildRuntimeEnv` from config). If the stored env is stale, use
  * `omni doctor --fix` to rebuild it deterministically.
+ *
+ * pm2 restart also keeps omni-nats' original arguments, so a changed
+ * `server.natsHost` does not apply here; we warn and point at
+ * `omni stop && omni start` rather than recreating the process.
  */
 
 import { Command } from 'commander';
 import { loadLocalRuntimeConfig, loadServerConfig } from '../config.js';
 import { getHealthCheckUrl, waitForHealth } from '../health.js';
+import { getRunningNatsArgs, natsBindDriftWarning } from '../install-helpers.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, isPm2Available, pm2NotFoundError, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
@@ -48,6 +53,8 @@ async function runRestart(): Promise<void> {
   if (code !== 0) {
     output.warn('Some services may not have restarted cleanly — check pm2 status');
   }
+  const natsDrift = natsBindDriftWarning(await getRunningNatsArgs(), serverConfig);
+  if (natsDrift) output.warn(natsDrift);
 
   // Wait for health check
   const healthUrl = getHealthCheckUrl(apiPort);

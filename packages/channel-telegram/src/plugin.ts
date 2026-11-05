@@ -259,7 +259,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
   /** Active typing refresh intervals keyed by `${instanceId}:${chatId}` */
   private typingIntervals = new Map<
     string,
-    { refresh: ReturnType<typeof setInterval>; failsafe: ReturnType<typeof setTimeout> }
+    { refresh: ReturnType<typeof setInterval>; failsafe: ReturnType<typeof setTimeout>; controller: AbortController }
   >();
 
   // ────────────────────────────────────────────────────────────
@@ -669,7 +669,8 @@ export class TelegramPlugin extends BaseChannelPlugin {
    *
    * Telegram typing expires after ~5s. When duration > 0, we send an initial
    * typing action then refresh every 4s to keep it visible. A 60s failsafe
-   * prevents leaked intervals. Calling with duration === 0 stops the refresh.
+   * prevents leaked intervals. Each action is aborted after 3s; a stop, replacement
+   * or teardown also cancels pending work, without resurrecting its refresh.
    */
   async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
     const key = `${instanceId}:${chatId}`;
@@ -680,34 +681,55 @@ export class TelegramPlugin extends BaseChannelPlugin {
     // duration === 0 means stop typing — just clear and return
     if (duration === 0) return;
 
+    const controller = new AbortController();
     const doTyping = async () => {
-      try {
-        const bot = getBot(instanceId);
-        if (!bot) {
-          this.clearTypingInterval(key);
-          return;
-        }
-        await bot.api.sendChatAction(chatId, 'typing');
-      } catch {
+      if (controller.signal.aborted) return;
+      const bot = getBot(instanceId);
+      if (!bot) {
         this.clearTypingInterval(key);
+        return;
+      }
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      let onAbort: (() => void) | undefined;
+      const stopped = new Promise<never>((_, reject) => {
+        onAbort = () => reject(new Error('Typing action stopped or timed out'));
+        controller.signal.addEventListener('abort', onAbort, { once: true });
+        timeout = setTimeout(() => controller.abort(), 3000);
+      });
+      try {
+        // Race as well as abort: even a transport ignoring the signal is bounded.
+        await Promise.race([
+          Promise.resolve().then(() => {
+            controller.signal.throwIfAborted();
+            return bot.api.sendChatAction(chatId, 'typing', undefined, controller.signal);
+          }),
+          stopped,
+        ]);
+      } catch {
+        // A late failure from the previous start must not cancel its replacement.
+        if (this.typingIntervals.get(key) === entry) this.clearTypingInterval(key);
+      } finally {
+        clearTimeout(timeout);
+        if (onAbort) controller.signal.removeEventListener('abort', onAbort);
       }
     };
 
-    // Send initial typing
+    // Own cancellation before awaiting the first action: a concurrent stop or
+    // replacement must never be followed by a late start resurrecting refresh.
+    const entry = {
+      controller,
+      refresh: setInterval(() => {
+        void doTyping();
+      }, 4000),
+      failsafe: setTimeout(
+        () => {
+          if (this.typingIntervals.get(key) === entry) this.clearTypingInterval(key);
+        },
+        duration && duration > 0 ? duration : 60000,
+      ),
+    };
+    this.typingIntervals.set(key, entry);
     await doTyping();
-
-    // Set up auto-refresh every 4s
-    const refresh = setInterval(() => {
-      doTyping();
-    }, 4000);
-
-    // Honor duration: use caller's duration if positive, otherwise 60s failsafe
-    const timeoutMs = duration && duration > 0 ? duration : 60000;
-    const failsafe = setTimeout(() => {
-      this.clearTypingInterval(key);
-    }, timeoutMs);
-
-    this.typingIntervals.set(key, { refresh, failsafe });
   }
 
   /** Clear a typing refresh interval by key */
@@ -717,6 +739,7 @@ export class TelegramPlugin extends BaseChannelPlugin {
       clearInterval(entry.refresh);
       clearTimeout(entry.failsafe);
       this.typingIntervals.delete(key);
+      entry.controller.abort();
     }
   }
 

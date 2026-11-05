@@ -160,6 +160,17 @@ export function claimIdleTimeoutDelivery(
   return claimIdleTimeoutKey(idleTimeoutClaimKey(chatId, instanceId, armEpoch, eventSequenceIndex), now);
 }
 
+function isFinalStepOfCompletedSequence(
+  row: { disarmReason: FollowUpDisarmReason | null; sequenceIndex: number },
+  eventSequenceIndex: number | null,
+): boolean {
+  return (
+    row.disarmReason === 'sequence_complete' &&
+    typeof eventSequenceIndex === 'number' &&
+    row.sequenceIndex === eventSequenceIndex + 1
+  );
+}
+
 const TERMINAL_DISARM_REASONS: ReadonlySet<FollowUpDisarmReason> = new Set<FollowUpDisarmReason>([
   'session_cleared',
   'handoff',
@@ -668,7 +679,7 @@ export class FollowUpLifecycleService {
       return { skip: true, reason: 'chat_closed' };
     }
     const row = await this.workDb(trustedTenantId, () => this.readExistingRow(chatId, instanceId));
-    if (row?.disarmReason) {
+    if (row?.disarmReason && !isFinalStepOfCompletedSequence(row, eventSequenceIndex)) {
       return { skip: true, reason: `disarmed_${row.disarmReason}` };
     }
     // The sweeper publishes the event carrying the PRE-increment index and then

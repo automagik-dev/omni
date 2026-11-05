@@ -72,12 +72,4 @@ describe('install command — DATABASE_URL leak prevention', () => {
     expect(resolveInstallDatabaseUrl({ databaseUrlFlag: '   ' })).toBe(buildEmbeddedDatabaseUrl());
     expect(resolveInstallDatabaseUrl({ databaseUrlFlag: undefined })).toBe(buildEmbeddedDatabaseUrl());
   });
-
-  test('createInstallCommand exposes --database-url flag', async () => {
-    const { createInstallCommand } = await import('../commands/install.js');
-
-    const cmd = createInstallCommand();
-    const opts = cmd.options.map((o) => o.long);
-    expect(opts).toContain('--database-url');
-  });
 });

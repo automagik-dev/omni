@@ -1,3 +1,4 @@
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 /**
  * Per-source strict schema validation over real PostgreSQL (issue #1000,
  * RFC #925 G1 tail — the deferred "deny-by-default" policy switch).
@@ -23,13 +24,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { EventBus } from '@omni/core';
 import { executeAction } from '@omni/core';
 import { type Database, type EventType, createDbHandle, deadLetterEvents, omniEvents } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
 import { DeadLetterService } from '../dead-letters';
@@ -41,40 +39,33 @@ const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
 
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-1000-strict-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 interface PublishedEvent {
   type: string;
   payload: Record<string, unknown>;
 }
 
 /** An EventBus fake that records publishes — the journal, for assertions. */
-function recordingBus(events: PublishedEvent[]): EventBus {
+function recordingBus(events: PublishedEvent[]): EventBus & ConnectorEventPublisher {
   return {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishConnector: async () => {
+      throw new Error('unexpected connector publish');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+
     publishGeneric: async (type: string, payload: Record<string, unknown>) => {
       events.push({ type, payload });
-      return { id: crypto.randomUUID(), ok: true };
+      return { id: crypto.randomUUID(), sequence: 0, stream: 'memory' };
     },
-  } as unknown as EventBus;
+  };
 }
 
 /** The schema every custom.acme.order payload must satisfy in this suite. */
@@ -115,7 +106,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));
@@ -144,9 +135,9 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
   }, 180_000);
 
   afterAll(async () => {
-    process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+    Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('a source is created non-strict by default (no global default flip)', async () => {
@@ -223,7 +214,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
   });
 
   test('emit_event: unregistered type passes with the global switch off (default)', async () => {
-    process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+    Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     const engineDeps = buildAutomationEngineDeps({ eventSchemas, deadLetters } as unknown as Services, db);
 
     const result = await executeAction(
@@ -259,7 +250,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
       expect(entry?.error.startsWith('schema_not_registered')).toBe(true);
       expect(entry?.nextAutoRetryAt).toBeNull();
     } finally {
-      process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+      Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     }
   });
 
@@ -278,7 +269,7 @@ postgresDescribe('per-source strict schema validation (real PostgreSQL)', () => 
       expect(result.status).toBe('success');
       expect(journalOf('custom.acme.order').length).toBe(publishedBefore + 1);
     } finally {
-      process.env.OMNI_STRICT_EMIT_EVENT_SCHEMAS = undefined;
+      Reflect.deleteProperty(process.env, 'OMNI_STRICT_EMIT_EVENT_SCHEMAS');
     }
   });
 });

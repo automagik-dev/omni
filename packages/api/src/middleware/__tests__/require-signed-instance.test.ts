@@ -264,3 +264,18 @@ describe('require-signed-instance — kill-switch exemption (operator lockout pr
     expect(res.status).toBe(200);
   });
 });
+
+describe('require-signed-instance — reads every body the route validator reads', () => {
+  for (const contentType of ['application/json', 'application/merge-patch+json']) {
+    test(`an unsigned ${contentType} send to a signature-required instance is refused`, async () => {
+      const app = mountWithStub({ instance: { id: 'i1', requireGenieSignature: true } });
+      const res = await app.request('/api/v2/messages/send', {
+        method: 'POST',
+        headers: { 'Content-Type': contentType },
+        body: JSON.stringify({ instanceId: 'i1', to: 'jid', text: 'hi' }),
+      });
+      expect(res.status).toBe(401);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('GENIE_SIGNATURE_REQUIRED');
+    });
+  }
+});

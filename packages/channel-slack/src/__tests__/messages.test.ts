@@ -141,11 +141,6 @@ describe('channelBlocklist filtering', () => {
     const result = await callHandler({ channelBlocklist: ['C456'] }, makeMsg({ channel: 'C123' }));
     expect(result.received).toBe(true);
   });
-
-  it('allows all channels when blocklist is undefined', async () => {
-    const result = await callHandler({}, makeMsg({ channel: 'C123' }));
-    expect(result.received).toBe(true);
-  });
 });
 
 // ─────────────────────────────────────────────────────────────

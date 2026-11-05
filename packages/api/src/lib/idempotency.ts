@@ -38,7 +38,8 @@ export interface IdempotencyResult {
  * processes sharing this database. Safe under NATS redelivery and PM2 restart.
  *
  * @param db         Drizzle Database — writes a row to `processed_events`
- * @param eventId    Canonical OmniEvent.id (unique per publish; stable across redelivery)
+ * @param eventId    Canonical OmniEvent.id, stable across redelivery and repeated DLQ retries.
+ *                   Generic DLQ retries use the dead-letter row id.
  * @param handler    Durable consumer name (e.g. 'session-cleaner', 'agent-dispatcher-msg')
  * @param fn         The side-effect to guard. Only runs on the first claim.
  * @returns          `{ executed: true }` on first claim, `{ executed: false }` on replay skip

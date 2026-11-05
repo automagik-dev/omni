@@ -14,8 +14,11 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  GITHUB_RELEASE_BODY_LIMIT,
   type ParsedCommit,
+  RELEASE_NOTES_MAX_CHARS,
   type RawCommit,
+  type ReleaseNotesInput,
   detectBreaking,
   extractPrNumber,
   groupSections,
@@ -317,6 +320,217 @@ describe('renderReleaseNotes', () => {
     });
     expect(body).toContain('- Sofia');
     expect(body).not.toContain('github-actions[bot]');
+  });
+});
+
+describe('release body cap', () => {
+  const REPO = 'automagik-dev/omni';
+  const COMPARE_URL = `https://github.com/${REPO}/compare/v2.261101.1...v2.261104.7`;
+  const ENTRY = /entry-(\d{4})/;
+
+  /** `count` fix commits, newest first (git log order), each tagged entry-NNNN. */
+  function bulk(count: number, filler: string): ParsedCommit[] {
+    return Array.from({ length: count }, (_, i) =>
+      commit({
+        hash: i.toString(16).padStart(40, '0'),
+        type: 'fix',
+        description: `entry-${String(i).padStart(4, '0')} ${filler}`,
+        pr: 10_000 + i,
+      }),
+    );
+  }
+
+  function input(commits: ParsedCommit[], fromTag: string | null = 'v2.261101.1'): ReleaseNotesInput {
+    return {
+      repo: REPO,
+      fromTag,
+      toTag: 'v2.261104.7',
+      commits,
+      migrations: [{ file: 'packages/db/drizzle/0080_example.sql', summary: 'Adds the example table.' }],
+    };
+  }
+
+  function keptEntries(notes: string): number[] {
+    return notes
+      .split('\n')
+      .filter((line) => line.startsWith('- **api:** entry-'))
+      .map((line) => Number(ENTRY.exec(line)?.[1]));
+  }
+
+  test('caps a ~200k-character changelog, keeping the newest entries and dropping the oldest whole', () => {
+    const oldestBreaking = commit({
+      hash: 'f'.repeat(40),
+      type: 'fix',
+      area: 'cli',
+      description: 'the oldest breaking change',
+      breaking: true,
+      breakingNote: 'set --mode',
+      pr: 9,
+    });
+    const commits = [...bulk(1400, 'x'.repeat(60)), oldestBreaking];
+    const uncapped = renderReleaseNotes(input(commits), { maxChars: Number.POSITIVE_INFINITY });
+    expect(uncapped.length).toBeGreaterThan(190_000);
+
+    const notes = renderReleaseNotes(input(commits));
+    expect(RELEASE_NOTES_MAX_CHARS).toBeLessThan(GITHUB_RELEASE_BODY_LIMIT);
+    expect(notes.length).toBeLessThanOrEqual(RELEASE_NOTES_MAX_CHARS);
+    expect(notes.length).toBeGreaterThan(RELEASE_NOTES_MAX_CHARS - 500);
+
+    const kept = keptEntries(notes);
+    expect(kept.length).toBeGreaterThan(0);
+    expect(kept.length).toBeLessThan(1400);
+    expect(new Set(kept)).toEqual(new Set(Array.from({ length: kept.length }, (_, i) => i)));
+    expect(notes).toContain('entry-0000');
+    expect(notes).not.toContain('entry-1399');
+
+    const uncappedLines = new Set(uncapped.split('\n'));
+    const truncationLine = notes.trimEnd().split('\n').at(-1) ?? '';
+    for (const line of notes.split('\n')) {
+      if (line !== truncationLine) expect(uncappedLines.has(line)).toBe(true);
+    }
+
+    expect(notes).toContain('### 💥 Breaking changes');
+    expect(notes).toContain('- **cli:** The oldest breaking change — set --mode');
+    expect(notes).toContain('### 🗄️ Database migrations');
+    expect(notes).toContain('### 🔐 Verifying release assets');
+    expect(notes).toContain(`**Full changelog:** [v2.261101.1...v2.261104.7](${COMPARE_URL})`);
+    expect(notes.endsWith('\n')).toBe(true);
+    expect(truncationLine).toBe(
+      `> **Release notes truncated:** ${1401 - kept.length} older changelog entries were omitted to fit GitHub's release body limit. See the [full changelog](${COMPARE_URL}) for every change.`,
+    );
+  });
+
+  test('counts multibyte characters as characters, not bytes', () => {
+    const notes = renderReleaseNotes(input(bulk(1400, 'café ação naïve 🚀✨💥🎉 '.repeat(4))));
+    expect(notes.length).toBeLessThanOrEqual(RELEASE_NOTES_MAX_CHARS);
+    expect([...notes].length).toBeLessThanOrEqual(RELEASE_NOTES_MAX_CHARS);
+    expect(Buffer.byteLength(notes, 'utf8')).toBeGreaterThan(RELEASE_NOTES_MAX_CHARS);
+    expect(notes).toContain('entry-0000');
+    expect(notes).not.toContain('entry-1399');
+    expect(notes.trimEnd().split('\n').at(-1)).toStartWith('> **Release notes truncated:**');
+    expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(notes)).toBe(false);
+  });
+
+  test('a cap that only fits the detail sections uses the exact cap boundary', () => {
+    const commits = bulk(50, 'y'.repeat(40));
+    const full = renderReleaseNotes(input(commits), { maxChars: Number.POSITIVE_INFINITY });
+    expect(renderReleaseNotes(input(commits), { maxChars: full.length })).toBe(full);
+    const capped = renderReleaseNotes(input(commits), { maxChars: full.length - 1 });
+    expect(capped.length).toBeLessThanOrEqual(full.length - 1);
+    expect(keptEntries(capped).length).toBeLessThan(50);
+  });
+
+  test('links the tag history when there is no previous tag', () => {
+    const notes = renderReleaseNotes(input(bulk(400, 'z'.repeat(60)), null), { maxChars: 20_000 });
+    expect(notes.length).toBeLessThanOrEqual(20_000);
+    expect(notes).not.toContain('Full changelog:**');
+    expect(notes).toContain(`(https://github.com/${REPO}/commits/v2.261104.7) for every change.`);
+  });
+
+  test('truncates the breaking and migration sections too when they alone exceed the cap, and says so', () => {
+    const breaking = Array.from({ length: 200 }, (_, i) =>
+      commit({
+        hash: (i + 1).toString(16).padStart(40, '0'),
+        type: 'fix',
+        description: `breaking-${String(i).padStart(3, '0')} ${'b'.repeat(40)}`,
+        breaking: true,
+        pr: 500 + i,
+      }),
+    );
+    const notes = renderReleaseNotes(input(breaking), { maxChars: 5_000 });
+    expect(notes.length).toBeLessThanOrEqual(5_000);
+    expect(notes).toContain('### 💥 Breaking changes');
+    expect(notes).toContain('- **api:** Breaking-000 ');
+    expect(notes).not.toContain('Breaking-199');
+    expect(notes).not.toContain('### 🐛 Bug Fixes');
+    const lines = notes.trimEnd().split('\n');
+    expect(lines.at(-1)).toBe(
+      `> **Release notes truncated:** 200 older changelog entries and the end of the sections above were omitted to fit GitHub's release body limit. See the [full changelog](${COMPARE_URL}) for every change.`,
+    );
+    for (const line of lines.slice(0, -1)) {
+      if (line.startsWith('- **')) expect(line).toMatch(/^- \*\*api:\*\* .*\(\[#\d+\]\(https:\/\/github\.com\/.*\)\)$/);
+    }
+  });
+
+  test('a small changelog renders byte-identical to the uncapped output', () => {
+    const base = { author: 'Alice', scope: 'api', breaking: false, breakingNote: null, pr: null };
+    const small: ReleaseNotesInput = {
+      repo: REPO,
+      fromTag: 'v2.261101.1',
+      toTag: 'v2.261104.7',
+      commits: [
+        { ...base, hash: '1'.repeat(40), type: 'feat', area: 'api', description: 'add batch endpoint', pr: 42 },
+        {
+          ...base,
+          hash: '2'.repeat(40),
+          type: 'fix',
+          area: 'channels/whatsapp',
+          scope: 'whatsapp',
+          description: 'retry the socket — café ✅',
+          author: 'Bob',
+        },
+        {
+          ...base,
+          hash: '3'.repeat(40),
+          type: 'feat',
+          area: 'cli',
+          scope: 'cli',
+          description: 'drop the legacy flag',
+          breaking: true,
+          breakingNote: 'use --mode instead',
+          pr: 7,
+        },
+      ],
+      migrations: [{ file: 'packages/db/drizzle/0080_example.sql', summary: 'Adds the example table.' }],
+    };
+    // Rendered by the generator before the cap existed (origin/dev f2207ac0d).
+    const expected = [
+      '### ✨ Highlights',
+      '',
+      '- **cli:** Drop the legacy flag ([#7](https://github.com/automagik-dev/omni/pull/7))',
+      '- **api:** Add batch endpoint ([#42](https://github.com/automagik-dev/omni/pull/42))',
+      '',
+      '### 💥 Breaking changes',
+      '',
+      '- **cli:** Drop the legacy flag — use --mode instead ([#7](https://github.com/automagik-dev/omni/pull/7))',
+      '',
+      '### 🗄️ Database migrations',
+      '',
+      'This release adds 1 database migration. Migrations are additive and idempotent',
+      'per the repository migration contract, and the API applies them automatically at boot',
+      '(`migrateDb()`) — no manual upgrade step is required. See `packages/db/drizzle/` for details.',
+      '',
+      '- [`0080_example.sql`](https://github.com/automagik-dev/omni/blob/v2.261104.7/packages/db/drizzle/0080_example.sql) — Adds the example table.',
+      '',
+      '### 🚀 Features',
+      '',
+      '- **api:** add batch endpoint ([#42](https://github.com/automagik-dev/omni/pull/42))',
+      '- **cli:** drop the legacy flag ([#7](https://github.com/automagik-dev/omni/pull/7))',
+      '',
+      '### 🐛 Bug Fixes',
+      '',
+      '- **channels/whatsapp:** retry the socket — café ✅ ([`2222222`](https://github.com/automagik-dev/omni/commit/2222222222222222222222222222222222222222))',
+      '',
+      '### 👥 Contributors',
+      '',
+      '- Alice',
+      '- Bob',
+      '',
+      '### 🔐 Verifying release assets',
+      '',
+      'Each platform tarball (`darwin-arm64`, `linux-arm64`, `linux-x64-glibc`, `linux-x64-musl`) ships with a',
+      'cosign keyless signature (`.bundle`) and GitHub-native build provenance (`.provenance.json`). Verify any',
+      'tarball with:',
+      '',
+      '```sh',
+      'gh attestation verify omni-2.261104.7-<platform>.tar.gz --repo automagik-dev/omni',
+      '```',
+      '',
+      '**Full changelog:** [v2.261101.1...v2.261104.7](https://github.com/automagik-dev/omni/compare/v2.261101.1...v2.261104.7)',
+      '',
+    ].join('\n');
+    expect(renderReleaseNotes(small)).toBe(expected);
+    expect(renderReleaseNotes(small, { maxChars: expected.length })).toBe(expected);
   });
 });
 

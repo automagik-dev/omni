@@ -119,3 +119,13 @@ deploy/helm/omni/values-local.yaml
 
 # pg-gate keep-warm cluster state (#967)
 .pg-gate-warm.json
+
+# The Bot team at the Automagik release apps/automagik.json pins (apps/automagik.mjs source)
+apps/.automagik/
+
+# Backups Genie's installer leaves beside the configs it edits
+.mcp.json.genie-backup-*
+.codex/config.toml.genie-backup-*
+
+# compiled CLI binary (built by install-client.sh into $TMPDIR)
+packages/cli/omni-bin

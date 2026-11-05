@@ -1,229 +1,157 @@
-/**
- * Tests for Telegram typing indicator auto-refresh behavior.
- *
- * Verifies that sendTyping auto-refreshes every 4s, stops on duration=0,
- * auto-clears via 60s failsafe, and cleans up on disconnect/destroy.
- */
+/** Exercise the real Telegram typing lifecycle with a transport that can hang. */
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import * as client from '../client';
+import type { TelegramBotLike } from '../grammy-shim';
+import { TelegramPlugin } from '../plugin';
 
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-// ---------------------------------------------------------------------------
-// Minimal stubs — we only need to exercise the interval/cleanup logic, not
-// the full grammy or channel-sdk dependency tree.
-// ---------------------------------------------------------------------------
-
-/** Tracks calls to bot.api.sendChatAction() */
-let sendChatActionCalls: number;
-let mockBotAvailable: boolean;
-
-const mockBot = {
-  api: {
-    sendChatAction: mock(async (_chatId: string, _action: string) => {
-      sendChatActionCalls++;
-    }),
-  },
-};
-
-/**
- * Minimal TelegramPlugin-like class that mirrors the typing interval logic
- * from the real plugin without pulling in the full dependency tree.
- */
-class TelegramTypingHarness {
-  private typingIntervals = new Map<
-    string,
-    { refresh: ReturnType<typeof setInterval>; failsafe: ReturnType<typeof setTimeout> }
-  >();
-
-  async sendTyping(instanceId: string, chatId: string, duration?: number): Promise<void> {
-    const key = `${instanceId}:${chatId}`;
-    this.clearTypingInterval(key);
-
-    if (duration === 0) return;
-
-    const doTyping = async () => {
-      try {
-        if (!mockBotAvailable) {
-          this.clearTypingInterval(key);
-          return;
-        }
-        await mockBot.api.sendChatAction(chatId, 'typing');
-      } catch {
-        this.clearTypingInterval(key);
-      }
-    };
-
-    await doTyping();
-
-    const refresh = setInterval(() => {
-      doTyping();
-    }, 4000);
-
-    const failsafe = setTimeout(() => {
-      this.clearTypingInterval(key);
-    }, 60000);
-
-    this.typingIntervals.set(key, { refresh, failsafe });
-  }
-
-  clearTypingInterval(key: string): void {
-    const entry = this.typingIntervals.get(key);
-    if (entry) {
-      clearInterval(entry.refresh);
-      clearTimeout(entry.failsafe);
-      this.typingIntervals.delete(key);
-    }
-  }
-
-  clearAllTypingIntervals(): void {
-    for (const key of [...this.typingIntervals.keys()]) {
-      this.clearTypingInterval(key);
-    }
-  }
-
-  get activeIntervalCount(): number {
-    return this.typingIntervals.size;
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-describe('Telegram sendTyping auto-refresh', () => {
-  let plugin: TelegramTypingHarness;
+describe('Telegram typing requests', () => {
+  let plugin: TelegramPlugin;
+  let sequence = 0;
+  const restores: Array<() => void> = [];
+  const timeouts = new Map<number, { fn: () => void; ms: number }>();
+  const intervals = new Map<number, () => void>();
+  const sendChatAction = mock(async (_chat: string, _action: string, _other?: unknown, _signal?: AbortSignal) => {});
 
   beforeEach(() => {
-    plugin = new TelegramTypingHarness();
-    sendChatActionCalls = 0;
-    mockBotAvailable = true;
-    mockBot.api.sendChatAction.mockClear();
-  });
-
-  afterEach(() => {
-    plugin.clearAllTypingIntervals();
-  });
-
-  it('sends initial typing and starts an interval', async () => {
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-
-    expect(sendChatActionCalls).toBe(1);
-    expect(plugin.activeIntervalCount).toBe(1);
-  });
-
-  it('clears interval when duration === 0', async () => {
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-    expect(plugin.activeIntervalCount).toBe(1);
-
-    await plugin.sendTyping('inst-1', 'chat-1', 0);
-    expect(plugin.activeIntervalCount).toBe(0);
-  });
-
-  it('replaces existing interval on repeat call', async () => {
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-
-    expect(plugin.activeIntervalCount).toBe(1);
-    expect(sendChatActionCalls).toBe(2);
-  });
-
-  it('supports multiple concurrent chats', async () => {
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-    await plugin.sendTyping('inst-1', 'chat-2', 30000);
-
-    expect(plugin.activeIntervalCount).toBe(2);
-
-    await plugin.sendTyping('inst-1', 'chat-1', 0);
-    expect(plugin.activeIntervalCount).toBe(1);
-  });
-
-  it('clearAllTypingIntervals cleans up everything', async () => {
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-    await plugin.sendTyping('inst-1', 'chat-2', 30000);
-    await plugin.sendTyping('inst-2', 'chat-3', 30000);
-
-    expect(plugin.activeIntervalCount).toBe(3);
-
-    plugin.clearAllTypingIntervals();
-    expect(plugin.activeIntervalCount).toBe(0);
-  });
-
-  it('failsafe clears interval after 60s', async () => {
-    const originalSetTimeout = globalThis.setTimeout;
-    const originalClearTimeout = globalThis.clearTimeout;
-    const originalSetInterval = globalThis.setInterval;
-    const originalClearInterval = globalThis.clearInterval;
-
-    const timeouts: Array<{ fn: () => void; ms: number; id: number }> = [];
-    let timeoutId = 0;
-
-    // @ts-expect-error — minimal fake timer
-    globalThis.setTimeout = (fn: () => void, ms: number) => {
-      const id = ++timeoutId;
-      timeouts.push({ fn, ms, id });
+    plugin = new TelegramPlugin();
+    Object.assign(plugin, { logger: { info() {}, debug() {}, warn() {}, error() {} } });
+    timeouts.clear();
+    intervals.clear();
+    sendChatAction.mockReset();
+    sendChatAction.mockResolvedValue(undefined);
+    const bot = { api: { sendChatAction } } as unknown as TelegramBotLike;
+    const getBot = spyOn(client, 'getBot').mockReturnValue(bot);
+    const timeout = spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms: number) => {
+      const id = ++sequence;
+      timeouts.set(id, { fn, ms });
       return id;
-    };
-    // @ts-expect-error — minimal fake timer
-    globalThis.clearTimeout = (id: number) => {
-      const idx = timeouts.findIndex((t) => t.id === id);
-      if (idx !== -1) timeouts.splice(idx, 1);
-    };
-    // @ts-expect-error — minimal fake timer
-    globalThis.setInterval = (_fn: () => void, _ms: number) => {
-      return ++timeoutId;
-    };
-    // @ts-expect-error — minimal fake timer
-    globalThis.clearInterval = (_id: number) => {};
+    }) as unknown as typeof setTimeout);
+    const interval = spyOn(globalThis, 'setInterval').mockImplementation(((fn: () => void) => {
+      const id = ++sequence;
+      intervals.set(id, fn);
+      return id;
+    }) as unknown as typeof setInterval);
+    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout').mockImplementation((id) => {
+      timeouts.delete(Number(id));
+    });
+    const clearIntervalSpy = spyOn(globalThis, 'clearInterval').mockImplementation((id) => {
+      intervals.delete(Number(id));
+    });
+    restores.push(
+      () => getBot.mockRestore(),
+      () => timeout.mockRestore(),
+      () => interval.mockRestore(),
+      () => clearTimeoutSpy.mockRestore(),
+      () => clearIntervalSpy.mockRestore(),
+    );
+  });
 
+  afterEach(async () => {
     try {
-      const testPlugin = new TelegramTypingHarness();
-      await testPlugin.sendTyping('inst-1', 'chat-1', 30000);
-
-      expect(testPlugin.activeIntervalCount).toBe(1);
-
-      const failsafe = timeouts.find((t) => t.ms === 60000);
-      expect(failsafe).toBeDefined();
-      failsafe!.fn();
-
-      expect(testPlugin.activeIntervalCount).toBe(0);
+      await plugin.destroy();
     } finally {
-      globalThis.setTimeout = originalSetTimeout;
-      globalThis.clearTimeout = originalClearTimeout;
-      globalThis.setInterval = originalSetInterval;
-      globalThis.clearInterval = originalClearInterval;
+      for (const restore of restores.splice(0).reverse()) restore();
     }
   });
 
-  it('still creates interval even if bot is unavailable initially', async () => {
-    // Bot goes away before call
-    mockBotAvailable = false;
+  function fireTimeout(ms: number) {
+    const timer = [...timeouts].find(([, value]) => value.ms === ms);
+    if (!timer) throw new Error(`No pending ${ms}ms timeout`);
+    timeouts.delete(timer[0]);
+    timer[1].fn();
+  }
 
-    // The doTyping detects no bot and calls clearTypingInterval, but the
-    // interval hasn't been set yet, so it's a no-op. The interval is still
-    // created to retry when bot may come back.
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-    // Interval created (refresh will retry)
-    expect(plugin.activeIntervalCount).toBe(1);
-    expect(sendChatActionCalls).toBe(0);
-
-    // Restore
-    mockBotAvailable = true;
+  test('sends and refreshes typing, honors duration, and stops on zero', async () => {
+    await plugin.sendTyping('instance', 'chat', 30000);
+    expect(sendChatAction).toHaveBeenCalledTimes(1);
+    expect(intervals.size).toBe(1);
+    expect([...timeouts.values()].map((timer) => timer.ms)).toEqual([30000]);
+    for (const fn of intervals.values()) fn();
+    await turn();
+    expect(sendChatAction).toHaveBeenCalledTimes(2);
+    await plugin.sendTyping('instance', 'chat', 0);
+    expect(intervals.size).toBe(0);
+    expect(timeouts.size).toBe(0);
   });
 
-  it('still creates interval even if initial sendChatAction throws', async () => {
-    mockBot.api.sendChatAction.mockImplementationOnce(async () => {
-      throw new Error('Rate limited');
-    });
-
-    await plugin.sendTyping('inst-1', 'chat-1', 30000);
-    // Same pattern: initial error is caught, clearTypingInterval is no-op
-    // since interval not yet stored. Interval still gets created for retry.
-    expect(plugin.activeIntervalCount).toBe(1);
+  test('a never-resolving initial action aborts and settles after three seconds', async () => {
+    sendChatAction.mockImplementation(() => new Promise<void>(() => {}));
+    const pending = plugin.sendTyping('instance', 'chat', 30000);
+    await turn();
+    const signal = sendChatAction.mock.calls[0]?.[3];
+    expect(signal?.aborted).toBe(false);
+    fireTimeout(3000);
+    await pending;
+    expect(signal?.aborted).toBe(true);
+    expect(intervals.size).toBe(0);
+    expect(timeouts.size).toBe(0);
   });
 
-  it('sends typing without duration (default behavior)', async () => {
-    await plugin.sendTyping('inst-1', 'chat-1');
+  test('a never-resolving refresh has the same three-second deadline', async () => {
+    await plugin.sendTyping('instance', 'chat', 30000);
+    sendChatAction.mockImplementation(() => new Promise<void>(() => {}));
+    for (const fn of intervals.values()) fn();
+    await turn();
+    const signal = sendChatAction.mock.calls[1]?.[3];
+    fireTimeout(3000);
+    await turn();
+    expect(signal?.aborted).toBe(true);
+    expect(intervals.size).toBe(0);
+    expect(timeouts.size).toBe(0);
+  });
 
-    expect(sendChatActionCalls).toBe(1);
-    expect(plugin.activeIntervalCount).toBe(1);
+  test('stop cancels a pending action; late completion cannot restart typing', async () => {
+    let resolve = () => {};
+    sendChatAction.mockImplementation(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        }),
+    );
+    const pending = plugin.sendTyping('instance', 'chat', 30000);
+    await turn();
+    await plugin.sendTyping('instance', 'chat', 0);
+    await pending;
+    resolve();
+    await turn();
+    expect(intervals.size).toBe(0);
+    expect(timeouts.size).toBe(0);
+  });
+
+  test('replacing a pending action does not let its cancellation clear the new refresh', async () => {
+    sendChatAction.mockImplementationOnce(() => new Promise<void>(() => {}));
+    const old = plugin.sendTyping('instance', 'chat', 30000);
+    await turn();
+    await plugin.sendTyping('instance', 'chat', 30000);
+    await old;
+    expect(intervals.size).toBe(1);
+    expect(sendChatAction).toHaveBeenCalledTimes(2);
+    expect(sendChatAction.mock.calls[0]?.[3]?.aborted).toBe(true);
+    expect(sendChatAction.mock.calls[1]?.[3]?.aborted).toBe(false);
+  });
+
+  test('default failsafe and destroy cancel every chat without leaked timers', async () => {
+    await plugin.sendTyping('instance', 'chat');
+    fireTimeout(60000);
+    expect(intervals.size).toBe(0);
+    await plugin.sendTyping('instance', 'one');
+    await plugin.sendTyping('instance', 'two');
+    expect(intervals.size).toBe(2);
+    await plugin.destroy();
+    expect(intervals.size).toBe(0);
+    expect(timeouts.size).toBe(0);
+  });
+
+  test('missing bots and rejected requests leave no refresh or deadline', async () => {
+    spyOn(client, 'getBot').mockReturnValueOnce(undefined);
+    await plugin.sendTyping('instance', 'missing', 30000);
+    expect(sendChatAction).not.toHaveBeenCalled();
+    expect(intervals.size).toBe(0);
+    sendChatAction.mockRejectedValueOnce(new Error('offline'));
+    await plugin.sendTyping('instance', 'failed', 30000);
+    expect(intervals.size).toBe(0);
+    expect(timeouts.size).toBe(0);
   });
 });

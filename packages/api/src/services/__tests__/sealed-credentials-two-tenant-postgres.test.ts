@@ -34,7 +34,8 @@ import {
   applyTenantRlsEnforcement,
   createDbHandle,
 } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { isSealedCredentialField, openCredentialField } from '../../tenancy/sealed-credentials';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
 import { InstanceService } from '../instances';
@@ -81,16 +82,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stdout: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('two-tenant sealed credentials at rest (real PostgreSQL)', () => {
   const dbName = `omni_g5_seal_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -106,7 +97,7 @@ postgresDescribe('two-tenant sealed credentials at rest (real PostgreSQL)', () =
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    superDbUrl = urlFor(superUrl, dbName);
+    superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -132,13 +123,17 @@ postgresDescribe('two-tenant sealed credentials at rest (real PostgreSQL)', () =
     // maxConnections=2, for the same reason as the sibling suites: an ambient
     // (un-scoped) access takes the second connection, where `app.tenant_id` is
     // unset and `omni_current_tenant_id()` RAISES — a loud failure, not a leak.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 2);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      2,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
   }, 180_000);
 
   afterAll(async () => {
     setTenantSecretMasterKey(null);
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   afterEach(() => setTenantSecretMasterKey(null));

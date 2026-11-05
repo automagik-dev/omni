@@ -26,6 +26,56 @@ export type LogEntry = components['schemas']['LogEntry'];
 export type EventMetrics = components['schemas']['EventMetrics'];
 export type EventAnalytics = components['schemas']['EventAnalytics'];
 export type EventTypeInventoryRow = components['schemas']['EventTypeInventoryRow'];
+export type Connector = components['schemas']['Connector'];
+export type ConnectorEventSubscription = components['schemas']['EventSubscription'];
+export type ConnectorProviderSummary = components['schemas']['ProviderSummary'];
+export type ConnectorProviderDetail = components['schemas']['ProviderDetail'];
+
+export interface CreateConnectorBody {
+  provider: string;
+  name: string;
+  credentials: Record<string, string>;
+  /** Write-only connector delivery secret. */
+  hookSecret?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface UpdateConnectorBody {
+  name?: string;
+  credentials?: Record<string, string>;
+  /** Write-only; setting this rotates the connector delivery secret. */
+  hookSecret?: string;
+  config?: Record<string, unknown>;
+}
+
+export type CreateConnectorSubscriptionBody =
+  | {
+      ingress?: 'subscription';
+      eventKey: string;
+      filters?: Record<string, unknown>;
+      targetAutomationId: string;
+      verificationSecret: string;
+    }
+  | {
+      ingress: 'connector';
+      eventKey: string;
+      filters?: Record<string, unknown>;
+      targetAutomationId?: string;
+    };
+
+export interface UpdateConnectorSubscriptionBody {
+  status?: 'active' | 'paused';
+  filters?: Record<string, unknown>;
+  targetAutomationId?: string;
+  verificationSecret?: string;
+}
+
+export interface ListConnectorsParams {
+  provider?: string;
+  status?: 'connected' | 'error' | 'revoked';
+  limit?: number;
+  cursor?: string;
+}
 
 // Types that will be added after SDK regeneration
 // For now, use generic interfaces
@@ -99,7 +149,8 @@ export type Channel =
   | 'asc'
   | 'asc-flow'
   | 'internal'
-  | 'harness';
+  | 'harness'
+  | 'webchat';
 
 // Paginated response helper
 export interface PaginatedResponse<T> {
@@ -478,13 +529,12 @@ export interface ListProvidersParams {
  * Provider schema type
  * - agno: Agno AI orchestration platform
  * - webhook: Webhook-based agent provider
- * - openclaw: OpenClaw Gateway (WebSocket session-based agent runtime)
  * - ag-ui: AG-UI protocol
  * - claude-code: Claude Code agent provider
  * - a2a: Agent-to-Agent protocol provider
  * - nats-genie: NATS-based Genie provider (publishes to NATS topics)
  */
-export type ProviderSchema = 'agno' | 'webhook' | 'openclaw' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
+export type ProviderSchema = 'agno' | 'webhook' | 'ag-ui' | 'claude-code' | 'a2a' | 'nats-genie';
 
 /**
  * Body for creating a provider
@@ -1302,7 +1352,10 @@ export interface RevokeApiKeyBody {
 /** Query parameters for listing API keys */
 export interface ListApiKeysParams {
   status?: ApiKeyStatus;
+  /** Page size, 1-100 (default 50). Keys come newest first. */
   limit?: number;
+  /** Keys to skip, to page past `limit`. */
+  offset?: number;
 }
 
 /** Result of creating an API key (includes the plaintext key) */
@@ -1501,6 +1554,21 @@ function throwIfError(response: Response, error: unknown): asserts error is unde
 /**
  * Create an Omni API client
  */
+async function updateConnectorSubscriptionStatus(
+  client: ReturnType<typeof createClient<paths>>,
+  connectorId: string,
+  subscriptionId: string,
+  status: 'active' | 'paused',
+): Promise<ConnectorEventSubscription> {
+  const { data, error, response } = await client.PATCH('/connectors/{id}/subscriptions/{subscriptionId}', {
+    params: { path: { id: connectorId, subscriptionId } },
+    body: { status },
+  });
+  throwIfError(response, error);
+  if (!data?.data) throw new OmniApiError('Failed to update subscription', 'UPDATE_FAILED', undefined, response.status);
+  return data.data;
+}
+
 export function createOmniClient(config: OmniClientConfig) {
   if (!config.baseUrl) {
     throw new OmniConfigError('baseUrl is required');
@@ -3183,6 +3251,130 @@ export function createOmniClient(config: OmniClientConfig) {
     },
 
     // ========================================================================
+    // CONNECTORS (integration accounts — never channels)
+    // ========================================================================
+
+    /**
+     * Connector accounts, event subscriptions and typed actions.
+     */
+    connectors: {
+      async list(
+        params?: ListConnectorsParams,
+      ): Promise<{ items: Connector[]; meta: { hasMore: boolean; cursor: string | null } }> {
+        const { data, error, response } = await client.GET('/connectors', { params: { query: params } });
+        throwIfError(response, error);
+        return {
+          items: data?.data ?? [],
+          meta: data?.meta ?? { hasMore: false, cursor: null },
+        };
+      },
+
+      async get(id: string): Promise<Connector> {
+        const { data, error, response } = await client.GET('/connectors/{id}', { params: { path: { id } } });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Connector not found', 'NOT_FOUND', undefined, 404);
+        return data.data;
+      },
+
+      async create(body: CreateConnectorBody): Promise<Connector> {
+        const { data, error, response } = await client.POST('/connectors', { body });
+        throwIfError(response, error);
+        if (!data?.data)
+          throw new OmniApiError('Failed to create connector', 'CREATE_FAILED', undefined, response.status);
+        return data.data;
+      },
+
+      async update(id: string, body: UpdateConnectorBody): Promise<Connector> {
+        const { data, error, response } = await client.PATCH('/connectors/{id}', {
+          params: { path: { id } },
+          body,
+        });
+        throwIfError(response, error);
+        if (!data?.data)
+          throw new OmniApiError('Failed to update connector', 'UPDATE_FAILED', undefined, response.status);
+        return data.data;
+      },
+
+      async delete(id: string): Promise<void> {
+        const { error, response } = await client.DELETE('/connectors/{id}', { params: { path: { id } } });
+        throwIfError(response, error);
+      },
+
+      async providers(): Promise<ConnectorProviderSummary[]> {
+        const { data, error, response } = await client.GET('/connectors/providers');
+        throwIfError(response, error);
+        return data?.data ?? [];
+      },
+
+      async provider(provider: string): Promise<ConnectorProviderDetail> {
+        const { data, error, response } = await client.GET('/connectors/providers/{provider}', {
+          params: { path: { provider } },
+        });
+        throwIfError(response, error);
+        if (!data?.data) throw new OmniApiError('Provider not found', 'NOT_FOUND', undefined, 404);
+        return data.data;
+      },
+
+      async invoke(connectorId: string, action: string, input: Record<string, unknown>): Promise<unknown> {
+        const { data, error, response } = await client.POST('/connectors/{id}/actions/{action}', {
+          params: { path: { id: connectorId, action } },
+          body: { input },
+        });
+        throwIfError(response, error);
+        return data?.data;
+      },
+
+      subscriptions: {
+        async list(connectorId: string): Promise<ConnectorEventSubscription[]> {
+          const { data, error, response } = await client.GET('/connectors/{id}/subscriptions', {
+            params: { path: { id: connectorId } },
+          });
+          throwIfError(response, error);
+          return data?.data ?? [];
+        },
+
+        async add(connectorId: string, body: CreateConnectorSubscriptionBody): Promise<ConnectorEventSubscription> {
+          const { data, error, response } = await client.POST('/connectors/{id}/subscriptions', {
+            params: { path: { id: connectorId } },
+            body,
+          });
+          throwIfError(response, error);
+          if (!data?.data)
+            throw new OmniApiError('Failed to create subscription', 'CREATE_FAILED', undefined, response.status);
+          return data.data;
+        },
+
+        async pause(connectorId: string, subscriptionId: string): Promise<ConnectorEventSubscription> {
+          return updateConnectorSubscriptionStatus(client, connectorId, subscriptionId, 'paused');
+        },
+
+        async resume(connectorId: string, subscriptionId: string): Promise<ConnectorEventSubscription> {
+          return updateConnectorSubscriptionStatus(client, connectorId, subscriptionId, 'active');
+        },
+
+        async remove(connectorId: string, subscriptionId: string): Promise<void> {
+          const { error, response } = await client.DELETE('/connectors/{id}/subscriptions/{subscriptionId}', {
+            params: { path: { id: connectorId, subscriptionId } },
+          });
+          throwIfError(response, error);
+        },
+
+        async test(
+          connectorId: string,
+          subscriptionId: string,
+          payload?: Record<string, unknown>,
+        ): Promise<{ eventId: string }> {
+          const { data, error, response } = await client.POST('/connectors/{id}/subscriptions/{subscriptionId}/test', {
+            params: { path: { id: connectorId, subscriptionId } },
+            body: payload ? { payload } : {},
+          });
+          throwIfError(response, error);
+          return data ?? { eventId: '' };
+        },
+      },
+    },
+
+    // ========================================================================
     // EVENT OPS
     // ========================================================================
 
@@ -3535,6 +3727,7 @@ export function createOmniClient(config: OmniClientConfig) {
         const query = new URLSearchParams();
         if (params?.status) query.set('status', params.status);
         if (params?.limit) query.set('limit', String(params.limit));
+        if (params?.offset) query.set('offset', String(params.offset));
         const resp = await apiFetch(`${baseUrl}/api/v2/keys?${query}`, {});
         const json = (await resp.json()) as { items?: ApiKeyRecord[]; meta?: { total: number } };
         if (!resp.ok) throw OmniApiError.from(json, resp.status);

@@ -6,9 +6,11 @@ import { NotFoundError } from '@omni/core';
 import type { AgentEventManifest, EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
 import { type Agent, type NewAgent, agentRoutes, agents, instances } from '@omni/db';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { invalidateProviderCacheForInstance } from '../plugins/agent-dispatcher';
 import { runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
+import { restoreActiveAgentKeys, revokeInactiveAgentKeys } from './agent-key-bindings';
+import { ApiKeyService } from './api-keys';
 
 /**
  * Agent columns whose values get baked into cached IAgentProvider instances by
@@ -72,6 +74,11 @@ export class AgentService {
     this.manifestReconciler = reconciler;
   }
 
+  /** Bind ownership reads to the connection already held by a caller's lock. */
+  withDatabase(db: Database): AgentService {
+    return new AgentService(db, this.eventBus);
+  }
+
   /**
    * List agents with optional filters (paginated)
    */
@@ -102,8 +109,18 @@ export class AgentService {
   /**
    * Get agent by ID
    */
-  async getById(id: string): Promise<Agent> {
-    const [result] = await this.db.select().from(agents).where(eq(agents.id, id)).limit(1);
+  async getById(id: string, ownership?: Pick<Agent, 'tenantId'>): Promise<Agent> {
+    // Explicit ownership also bounds lookups before tenant RLS is enforced.
+    const tenant = ownership
+      ? ownership.tenantId === null
+        ? isNull(agents.tenantId)
+        : eq(agents.tenantId, ownership.tenantId)
+      : undefined;
+    const [result] = await this.db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, id), tenant))
+      .limit(1);
 
     if (!result) {
       throw new NotFoundError('Agent', id);
@@ -137,20 +154,37 @@ export class AgentService {
    * Update an agent
    */
   async update(id: string, data: Partial<NewAgent>): Promise<Agent> {
-    const [updated] = await this.db
-      .update(agents)
-      .set({ ...data, updatedAt: new Date() })
-      .where(eq(agents.id, id))
-      .returning();
-
-    if (!updated) {
-      throw new NotFoundError('Agent', id);
-    }
+    const write = async (db: Database, values: Partial<NewAgent> = data): Promise<Agent> => {
+      const [row] = await db
+        .update(agents)
+        .set({ ...values, updatedAt: new Date() })
+        .where(eq(agents.id, id))
+        .returning();
+      if (!row) throw new NotFoundError('Agent', id);
+      return row;
+    };
+    const updated =
+      data.isActive === undefined && data.name === undefined
+        ? await write(this.db)
+        : await new ApiKeyService(this.db, { eventBus: this.eventBus }).withAgentKeyLock([id], async (keys, db) => {
+            const [previous] = await db.select().from(agents).where(eq(agents.id, id));
+            if (!previous) throw new NotFoundError('Agent', id);
+            const renamed = data.name !== undefined && data.name !== previous.name;
+            if (renamed || data.isActive === false) {
+              // Retire keys while the graph still contains the stored name.
+              // Inactive ownership preserves healthy same-name siblings' keys.
+              await write(db, { isActive: false });
+              await revokeInactiveAgentKeys(keys, db, id);
+            }
+            const row = await write(db, { ...data, isActive: data.isActive ?? previous.isActive });
+            // Only a rename or a real reactivation re-mints current bindings.
+            // Routine active saves leave existing credentials in place.
+            if (row.isActive && (renamed || !previous.isActive)) await restoreActiveAgentKeys(keys, db, id);
+            return row;
+          });
 
     // omni#906: evict cached providers built from the pre-update agent row —
-    // per-instance (not invalidateProviderCache) so the provider's shared
-    // OpenClaw WS clients, whose connection config an agent row can't affect,
-    // stay up.
+    // per-instance so sibling instances retain their own cached configuration.
     if (PROVIDER_BAKED_AGENT_COLUMNS.some((column) => column in data)) {
       // Both reference paths: the instance-level agentId FK and per-chat/user
       // agent routes (mergeRouteOverrides stamps route agents onto the same
@@ -222,15 +256,19 @@ export class AgentService {
    * reconciled against a null manifest (= deleted).
    */
   async delete(id: string): Promise<void> {
-    const [updated] = await this.db
-      .update(agents)
-      .set({ isActive: false, updatedAt: new Date() })
-      .where(eq(agents.id, id))
-      .returning({ id: agents.id, name: agents.name });
-
-    if (!updated) {
-      throw new NotFoundError('Agent', id);
-    }
+    const updated = await new ApiKeyService(this.db, { eventBus: this.eventBus }).withAgentKeyLock(
+      [id],
+      async (keys, db) => {
+        const [updated] = await db
+          .update(agents)
+          .set({ isActive: false, updatedAt: new Date() })
+          .where(eq(agents.id, id))
+          .returning({ id: agents.id, name: agents.name });
+        if (!updated) throw new NotFoundError('Agent', id);
+        await revokeInactiveAgentKeys(keys, db, id);
+        return updated;
+      },
+    );
 
     await this.manifestReconciler?.reconcileAgent({ id: updated.id, name: updated.name }, null);
   }

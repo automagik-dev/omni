@@ -14,7 +14,7 @@ Use for proactive delivery (crons, alerts, cross-chat). Inside an Omni turn (`OM
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
 omni send --instance <id> --to +5511999999999 --text "Hello"
@@ -23,3 +23,5 @@ omni send --instance <id> --to <chatId> --tts "Voice message" --voice-id <eleven
 ```
 
 `--to` accepts a WA JID, phone (+55…), or Omni chat/person UUID. Polls, embeds, stickers, forwards, presence: omni-agent skill (send edge cases).
+
+Use `omni send --help` for `--reply-to`, `--forward` (with `--message` / `--from-chat`), `--sent-by`, `--embed` and `--presence`. For later delivery, inspect `omni schedule --help`; sending later still needs an authorized recipient. Global `--server <name>` selects the credentialed server; it does not obtain a key.

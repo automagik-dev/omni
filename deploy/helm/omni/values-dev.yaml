@@ -136,9 +136,9 @@ service:
   type: LoadBalancer
   port: 8882
 
-# ---- Admin UI (khal-ui) — dogfood on the local dev cluster ------------------
-# Single-container pod: the BFF serves the built SPA AND proxies /omni/* to the
-# in-cluster omni-api Service (OMNI_BASE_URL defaults to http://omni:8882).
+# ---- Admin UI (the Omni UI) — dogfood on the local dev cluster --------------
+# Single-container pod: DSH with Omni's plugins, linked to the in-cluster
+# omni-api Service (OMNI_BASE_URL defaults to http://omni:8882).
 # Build the image locally with `make -C deploy build-ui` (omni-admin-ui:dev,
 # pullPolicy Never — never pulled). Supply the real bearer key at deploy time:
 #   make -C deploy deploy OMNI_API_KEY=omni_sk_…

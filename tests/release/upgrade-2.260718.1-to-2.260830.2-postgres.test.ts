@@ -12,6 +12,7 @@ import { readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { dropDatabaseOrThrow } from '../../packages/db/src/backfill/pg-testing';
 import {
   createDatabaseFromTemplate,
   ensureSqlTemplate,
@@ -158,7 +159,7 @@ postgresDescribe('v2.260718.1 -> v2.260830.2 release rehearsal (real PostgreSQL)
   });
 
   afterAll(() => {
-    if (database) runSqlOn(postgresUrl, `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`);
+    if (database) dropDatabaseOrThrow({ superUrl: postgresUrl, psqlBin }, database);
   });
 
   test('rehearses the quiesced upgrade and proves rolling/image-only rollback unsafe', () => {

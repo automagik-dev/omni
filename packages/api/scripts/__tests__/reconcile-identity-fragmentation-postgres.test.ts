@@ -22,7 +22,8 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Database, createDbHandle, persons, platformIdentities } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { cleanupAfterFailure, dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { reconcile } from '../reconcile-identity-fragmentation';
 
 const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
@@ -47,7 +48,7 @@ async function provisionDatabase(): Promise<{
 }> {
   const dbName = `omni_p0_recon_${crypto.randomUUID().replaceAll('-', '')}`;
   provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-  const dbUrl = urlFor(superUrl, dbName);
+  const dbUrl = pgRoleUrl(superUrl, dbName);
   const handle = createDbHandle({ url: dbUrl, maxConnections: 2 });
   return {
     db: handle.db,
@@ -57,7 +58,7 @@ async function provisionDatabase(): Promise<{
     },
     cleanup: async () => {
       await handle.close().catch(() => undefined);
-      runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+      dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
     },
   };
 }
@@ -114,12 +115,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL)', () => {
   const dbName = `omni_p0_recon_${crypto.randomUUID().replaceAll('-', '')}`;
   const closers: (() => Promise<void>)[] = [];
@@ -127,7 +122,7 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     // Seed: a fragmented number (bare + suffixed → two persons) and a phone-less
     // @lid person whose phone is derivable from chat_id_mappings. The instance is
@@ -163,7 +158,7 @@ postgresDescribe('reconciliation script dry-run mutates nothing (real PostgreSQL
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('dry run detects the fragmentation but writes nothing', async () => {
@@ -236,9 +231,10 @@ postgresDescribe('reconciliation script --apply write-path safety (real PostgreS
       // re-point) have already committed, so this snapshot differs.
       const after = await snapshot(db);
       expect(after).toBe(before);
-    } finally {
-      await cleanup();
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   }, 120_000);
 
   // Bug #2: Step-2 backfill must keep the OLDEST person (oldest-survives),
@@ -270,8 +266,9 @@ postgresDescribe('reconciliation script --apply write-path safety (real PostgreS
       const [survivor] = survivors;
       expect(survivor?.id).toBe(PERSON_LID);
       expect(survivor?.primaryPhone).toBe('+5511666660000');
-    } finally {
-      await cleanup();
+    } catch (error) {
+      await cleanupAfterFailure(cleanup, error);
     }
+    await cleanup();
   }, 120_000);
 });

@@ -8,7 +8,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { optionalDateParam } from '../../schemas/date-query';
 import { ApiKeyService } from '../../services/api-keys';
+import { consumerAccessClause } from '../../services/event-consumers';
 import type { ApiKeyData, AppVariables } from '../../types';
+import { consumerCaller, isOwnOnlyConsumerKey } from './event-consumers';
 
 const eventsRoutes = new Hono<{ Variables: AppVariables }>();
 
@@ -169,7 +171,17 @@ eventsRoutes.get('/types', zValidator('query', z.object({ since: optionalDatePar
   const { since } = c.req.valid('query');
   const services = c.get('services');
   const automations = await services.automations.list({ enabled: true });
-  const items = await services.events.getTypes({ since, automations });
+  // An ownOnly key (events:consume without events:write, #1461) sees only the names of the
+  // consumers it owns, under the consumer routes' own rule. Every other caller is unchanged.
+  const consumerAccess = isOwnOnlyConsumerKey(c.get('apiKey'))
+    ? { consumerAccess: consumerAccessClause(await consumerCaller(c)) }
+    : {};
+  const items = await services.events.getTypes({
+    since,
+    automations,
+    tenantId: c.get('authContext')?.tenantId,
+    ...consumerAccess,
+  });
   return c.json({ items, meta: { since: since?.toISOString() ?? null } });
 });
 

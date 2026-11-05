@@ -1,0 +1,7 @@
+# What dsh writes into every profile it creates (dsh-app-boot), so the plugin manager's
+# pnpm installs a plugin flat beside the others and never fetches dsh's own packages again.
+packages:
+  - .
+
+nodeLinker: hoisted
+autoInstallPeers: false

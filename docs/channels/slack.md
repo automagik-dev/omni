@@ -321,6 +321,34 @@ Beyond send/receive, the Slack plugin supports:
 - **DM open** — `omni slack dm <instance> <userId>` resolves/opens the DM
   channel for a `U…` user id and prints the follow-up send command.
 
+### Outbound mentions and formatting
+
+In `convert` mode, native Slack user/channel mentions (`<@U…>`, `<#C…>`) and Slack
+link tokens survive Markdown conversion. These inline user mentions can notify a user,
+including when they come from model output or relayed text. Broadcast tokens (`<!here>`,
+`<!channel>`, `<!everyone>`) and user-group tokens (`<!subteam^S…>`) in the body are escaped
+so converted replies cannot page a whole channel or group. Other angle brackets and
+ampersands are escaped; fenced and inline code remain literal. Use a code span such as
+`` `<@U123>` `` to display a token literally. Pre-escaping it as `&lt;@U123&gt;` displays the
+entity spelling instead. `passthrough` sends the body without conversion, including any
+raw broadcast tokens.
+
+`POST /api/v2/messages/send` also accepts structured `mentions`, which Slack prepends to
+text **after conversion**: users use `U…`/`W…` IDs, channels use `C…`/`G…` IDs, and
+`type: "role"` uses a Slack user-group `S…` ID. `type: "here"` and `type: "everyone"`
+generate Slack broadcast tokens (the required `id` field is unused for these two types).
+Broadcasts and user groups in convert mode require these explicit structured mentions.
+Duplicate mentions are omitted, including tokens already live in the body. Invalid IDs
+return a 400 validation error. Structured mentions apply to text sends; media/caption
+and streaming sends do not currently accept them.
+
+Media captions honor `messageFormatMode` too: `convert` (the default) converts
+Markdown and escapes free-text broadcasts; `passthrough` keeps the caption raw.
+Native streaming keeps standard Markdown and the native append transport. In
+`convert` mode it neutralizes broadcast/subteam introducers, including those split
+across chunks; it leaves other Markdown unchanged. A short unfinished prefix is
+held until the next chunk or stream completion. Native `passthrough` stays raw.
+
 ## Socket health (#941)
 
 A Slack instance can look "connected" while its WebSocket is deaf —

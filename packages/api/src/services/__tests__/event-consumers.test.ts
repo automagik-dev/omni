@@ -12,16 +12,18 @@ import { ValidationError } from '@omni/core';
 import type { EventBus } from '@omni/core';
 import type { ConsumerAccessFilter, Database, DurableConsumer, OmniEvent, SharedLeaseState } from '@omni/db';
 import { durableConsumers, omniEvents } from '@omni/db';
-import { type SQL, and, gt } from 'drizzle-orm';
+import { type SQL, and, gt, inArray } from 'drizzle-orm';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import {
   type ConsumerCaller,
   DEFAULT_CONSUMER_SETTLE_MS,
   EventConsumerService,
+  MAX_CONSUMERS_PER_OWN_ONLY_KEY,
   accessFilterClause,
   canAccessConsumer,
   claimLease,
   computeLag,
+  consumerAccessClause,
   matchesConsumerAccess,
   matchesConsumerPayload,
   narrowToCaller,
@@ -30,6 +32,7 @@ import {
   resolveConsumerScope,
   resolveConsumerSettleMs,
   resolveInitialCursor,
+  streamInstanceClause,
   truncateAtUnready,
 } from '../event-consumers';
 import { eventTypeFilterClause } from '../events';
@@ -161,6 +164,8 @@ function consumerRow(overrides: Partial<DurableConsumer> = {}): DurableConsumer 
   return {
     id: '00000000-0000-4000-8000-000000000001',
     name: 'c1',
+    tenantId: null,
+    agentId: null,
     eventType: 'message.received',
     excludeTypes: null,
     filters: null,
@@ -242,10 +247,13 @@ describe('accessFilterClause', () => {
 });
 
 describe('scanPage access predicate (via pull)', () => {
-  function todaysWhere(): { sql: string; params: unknown[] } {
-    // The pre-0083 scanPage WHERE: journal_seq bound + type clause, nothing else.
+  function expectedWhere(instanceIds: string[] | null = null): { sql: string; params: unknown[] } {
     return render(
-      and(gt(omniEvents.journalSeq, 0), undefined, eventTypeFilterClause(['message.received'], undefined)) as SQL,
+      and(
+        gt(omniEvents.journalSeq, 0),
+        eventTypeFilterClause(['message.received'], undefined),
+        streamInstanceClause(instanceIds),
+      ) as SQL,
     );
   }
 
@@ -253,7 +261,59 @@ describe('scanPage access predicate (via pull)', () => {
     const pool = mockPool(consumerRow({ accessFilter: 'all' }));
     await new EventConsumerService(pool.db).pull('c1');
     expect(pool.scanWheres).toHaveLength(1);
-    expect(render(pool.scanWheres[0])).toEqual(todaysWhere());
+    expect(render(pool.scanWheres[0])).toEqual(expectedWhere());
+  });
+
+  test('restricted keys cannot pull or lease unscoped consumers, including empty allow-lists', async () => {
+    for (const shared of [false, true]) {
+      for (const instanceIds of [['11111111-1111-4111-8111-1111111111aa'], []]) {
+        const pool = mockPool(consumerRow({ shared }));
+        await expect(
+          new EventConsumerService(pool.db).pull('c1', {}, { keyId: 'restricted', instanceIds }),
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') });
+        expect(pool.scanWheres).toEqual([]);
+        expect(pool.cursorUpdates).toEqual([]);
+      }
+    }
+  });
+
+  test('scoped pulls keep both the consumer and caller instance predicates', async () => {
+    const instanceId = '11111111-1111-4111-8111-1111111111aa';
+    const keyId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const pool = mockPool(consumerRow({ scoped: true, ownerKeyId: keyId, instanceIds: [instanceId] }));
+    await new EventConsumerService(pool.db).pull('c1', {}, { keyId, instanceIds: [instanceId] });
+    expect(render(pool.scanWheres[0])).toEqual(
+      render(
+        and(
+          gt(omniEvents.journalSeq, 0),
+          eventTypeFilterClause(['message.received'], undefined),
+          inArray(omniEvents.instanceId, [instanceId]),
+          streamInstanceClause([instanceId]),
+        ),
+      ),
+    );
+  });
+
+  test('restricted unscoped ack, lease-ack and delete fail before any mutation', async () => {
+    const pool = mockPool(consumerRow());
+    const service = new EventConsumerService(pool.db);
+    const caller = { keyId: 'restricted', instanceIds: [] };
+    await expect(service.ack('c1', 100, undefined, caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.ack('c1', 100, 'lease', caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(service.delete('c1', caller)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(pool.cursorUpdates).toEqual([]);
+  });
+
+  test('inspect and list caughtUp use the caller filter, including an empty allow-list', async () => {
+    for (const instanceIds of [['11111111-1111-4111-8111-1111111111aa'], []]) {
+      const pool = mockPool(consumerRow(), 10);
+      const service = new EventConsumerService(pool.db);
+      const caller = { keyId: 'restricted', instanceIds };
+      expect((await service.inspect('c1', caller)).caughtUp).toBe(true);
+      expect((await service.list(caller))[0]?.caughtUp).toBe(true);
+      expect(pool.scanWheres).toHaveLength(2);
+      for (const clause of pool.scanWheres) expect(render(clause)).toEqual(expectedWhere(instanceIds));
+    }
   });
 
   test("an 'allowed' / 'denied' consumer gets the eq predicate in SQL", async () => {
@@ -262,8 +322,8 @@ describe('scanPage access predicate (via pull)', () => {
       await new EventConsumerService(pool.db).pull('c1');
       const { sql, params } = render(pool.scanWheres[0]);
       expect(sql).toContain('"omni_events"."access_decision" = $');
-      expect(sql.startsWith(todaysWhere().sql.slice(0, -1))).toBe(true);
-      expect(params).toEqual([...todaysWhere().params, filter]);
+      expect(sql.startsWith(expectedWhere().sql.slice(0, -1))).toBe(true);
+      expect(params).toEqual([...expectedWhere().params, filter]);
     }
   });
 });
@@ -391,6 +451,24 @@ describe('resolveConsumerSettleMs', () => {
   });
 });
 
+describe('tenant ownership is independent of instance scoping', () => {
+  test('tenant keys see only matching stamps, while legacy keys keep existing access', () => {
+    const tenantA = '11111111-1111-4111-8111-111111111111';
+    const tenantB = '22222222-2222-4222-8222-222222222222';
+    const keyId = '33333333-3333-4333-8333-333333333333';
+    for (const scoped of [false, true]) {
+      for (const instanceIds of [null, []]) {
+        const caller = { tenantId: tenantA, keyId, instanceIds };
+        const row = consumerRow({ scoped, ownerKeyId: keyId, tenantId: tenantA });
+        expect(canAccessConsumer(row, caller)).toBe(true);
+        expect(canAccessConsumer({ ...row, tenantId: tenantB }, caller)).toBe(false);
+        expect(canAccessConsumer({ ...row, tenantId: null }, caller)).toBe(false);
+        expect(canAccessConsumer(row, { keyId, instanceIds })).toBe(true);
+      }
+    }
+  });
+});
+
 describe('instance-scoped consumers (opt-in, 0082)', () => {
   const INST_A = '11111111-1111-4111-8111-1111111111aa';
   const INST_B = '11111111-1111-4111-8111-1111111111bb';
@@ -412,8 +490,8 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     }
   }
 
-  test('no new option: identical behaviour — an unscoped create resolves to the legacy columns for every key', () => {
-    for (const caller of [...Object.values(callers), undefined]) {
+  test('unrestricted callers keep legacy unscoped creates', () => {
+    for (const caller of [unrestricted, callers.keyless, undefined]) {
       expect(resolveConsumerScope({}, caller)).toEqual({ scoped: false, instanceIds: null, ownerKeyId: null });
       expect(resolveConsumerScope({ scoped: false }, caller)).toEqual({
         scoped: false,
@@ -423,19 +501,23 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     }
   });
 
-  test('no new option: identical behaviour — an unscoped consumer is accessible to every caller', () => {
-    const consumer = { scoped: false, ownerKeyId: null };
+  test('unscoped consumers remain visible for read-only inspection', () => {
+    const consumer = { tenantId: null, scoped: false, ownerKeyId: null };
     for (const caller of [...Object.values(callers), undefined]) {
       expect(canAccessConsumer(consumer, caller)).toBe(true);
     }
   });
 
-  test('no new option: instanceIds without scoped: true is ignored, as an unknown field was before', () => {
+  test('unrestricted unscoped creates ignore instanceIds; restricted creates always validate it', () => {
     const unscoped = { scoped: false, instanceIds: null, ownerKeyId: null } as const;
-    expect(resolveConsumerScope({ instanceIds: [INST_A] }, restricted)).toEqual(unscoped);
+    expect(resolveConsumerScope({ instanceIds: [INST_A] }, restricted)).toEqual({
+      scoped: true,
+      instanceIds: [INST_A],
+      ownerKeyId: KEY_RESTRICTED,
+    });
     expect(resolveConsumerScope({ scoped: false, instanceIds: [INST_A] }, unrestricted)).toEqual(unscoped);
     expect(resolveConsumerScope({ instanceIds: ['not-a-uuid', 42] }, undefined)).toEqual(unscoped);
-    expect(resolveConsumerScope({ instanceIds: 'anything' }, restricted)).toEqual(unscoped);
+    expect(codeOf(() => resolveConsumerScope({ instanceIds: 'anything' }, restricted))).toBe('VALIDATION');
   });
 
   test('scoped: malformed instanceIds is a 400', () => {
@@ -455,6 +537,17 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
     expect(narrowToCaller(base, undefined)).toBe(base);
     const unscopedConsumer = { scoped: false, instanceIds: null, ownerKeyId: null } as DurableConsumer;
     expect(narrowToCaller(unscopedConsumer, restricted)).toBe(unscopedConsumer);
+  });
+
+  test('restricted creates are scoped automatically, even when explicitly opting out', () => {
+    for (const input of [{}, { scoped: false }]) {
+      expect(resolveConsumerScope(input, restricted)).toEqual({
+        scoped: true,
+        instanceIds: [INST_A, INST_B],
+        ownerKeyId: KEY_RESTRICTED,
+      });
+      expect(codeOf(() => resolveConsumerScope(input, { ...restricted, instanceIds: [] }))).toBe('VALIDATION');
+    }
   });
 
   test('restricted key: omitted instanceIds = all of the key instances; owner = calling key', () => {
@@ -519,14 +612,16 @@ describe('instance-scoped consumers (opt-in, 0082)', () => {
   });
 
   test('a scoped consumer is visible to its owner and unrestricted keys only', () => {
-    const consumer = { scoped: true, ownerKeyId: KEY_RESTRICTED };
+    const consumer = { tenantId: null, scoped: true, ownerKeyId: KEY_RESTRICTED };
     expect(canAccessConsumer(consumer, restricted)).toBe(true);
     expect(canAccessConsumer(consumer, unrestricted)).toBe(true);
     expect(canAccessConsumer(consumer, otherRestricted)).toBe(false);
     expect(canAccessConsumer(consumer, { keyId: null, instanceIds: [INST_A] })).toBe(false);
     // An orphaned scoped consumer (owner key gone) stays reachable by unrestricted keys only.
-    expect(canAccessConsumer({ scoped: true, ownerKeyId: null }, unrestricted)).toBe(true);
-    expect(canAccessConsumer({ scoped: true, ownerKeyId: null }, { keyId: null, instanceIds: [] })).toBe(false);
+    expect(canAccessConsumer({ tenantId: null, scoped: true, ownerKeyId: null }, unrestricted)).toBe(true);
+    expect(
+      canAccessConsumer({ tenantId: null, scoped: true, ownerKeyId: null }, { keyId: null, instanceIds: [] }),
+    ).toBe(false);
   });
 });
 
@@ -675,5 +770,71 @@ describe('pull: access filter + waitForReady over a claimed-but-unfilled row', (
     const page = await new EventConsumerService(pool.db).pull('c1');
     expect(seqs(page.items)).toEqual([2]);
     expect(page.cursor).toBe(2);
+  });
+});
+
+describe('ownOnly keys: events:consume without events:write (#1461)', () => {
+  const HOST = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const OTHER = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  const TENANT = '11111111-1111-4111-8111-111111111111';
+  const host: ConsumerCaller = { keyId: HOST, instanceIds: null, ownOnly: true };
+  const sqlOf = (clause: SQL | undefined) => (clause ? new PgDialect().sqlToQuery(clause) : undefined);
+
+  test('the cap is exactly 10 consumers per key, as the OpenAPI text, the guide and the skill say', () => {
+    expect(MAX_CONSUMERS_PER_OWN_ONLY_KEY).toBe(10);
+  });
+
+  test('a create is stamped with the key as owner, unscoped', () => {
+    expect(resolveConsumerScope({}, host)).toEqual({ scoped: false, instanceIds: null, ownerKeyId: HOST });
+    expect(resolveConsumerScope({ scoped: false }, host)).toEqual({
+      scoped: false,
+      instanceIds: null,
+      ownerKeyId: HOST,
+    });
+    // Without a uuid key there is no owner to stamp: refused, never an unowned consumer.
+    expect(() => resolveConsumerScope({}, { keyId: null, instanceIds: null, ownOnly: true })).toThrow(ValidationError);
+    expect(() => resolveConsumerScope({}, { keyId: 'not-a-uuid', instanceIds: null, ownOnly: true })).toThrow(
+      ValidationError,
+    );
+  });
+
+  test('it sees only consumers it owns: unowned, foreign, scoped or agent-owned ones are hidden', () => {
+    expect(canAccessConsumer(consumerRow({ ownerKeyId: HOST }), host)).toBe(true);
+    expect(canAccessConsumer(consumerRow({ ownerKeyId: HOST, scoped: true, instanceIds: [] }), host)).toBe(true);
+    for (const row of [
+      consumerRow({ ownerKeyId: null }),
+      consumerRow({ ownerKeyId: OTHER }),
+      consumerRow({ ownerKeyId: OTHER, scoped: true, instanceIds: [] }),
+      consumerRow({ ownerKeyId: null, agentId: OTHER }),
+    ]) {
+      expect(canAccessConsumer(row, host)).toBe(false);
+    }
+    // Tenancy still applies first: its own key id in another tenant is hidden.
+    expect(canAccessConsumer(consumerRow({ ownerKeyId: HOST, tenantId: null }), { ...host, tenantId: TENANT })).toBe(
+      false,
+    );
+  });
+
+  test('every other caller keeps its access to the same rows', () => {
+    const unowned = consumerRow({ ownerKeyId: null });
+    const hostOwned = consumerRow({ ownerKeyId: HOST });
+    for (const caller of [
+      { keyId: OTHER, instanceIds: null },
+      { keyId: OTHER, instanceIds: null, ownOnly: false },
+    ]) {
+      expect(canAccessConsumer(unowned, caller)).toBe(true);
+      expect(canAccessConsumer(hostOwned, caller)).toBe(true);
+    }
+  });
+
+  test('in SQL, it adds owner_key_id = key to the unchanged clause; without the flag nothing changes', () => {
+    const base: ConsumerCaller = { keyId: HOST, instanceIds: null };
+    expect(sqlOf(consumerAccessClause({ ...base, ownOnly: false }))).toEqual(sqlOf(consumerAccessClause(base)));
+    const owned = sqlOf(consumerAccessClause(host));
+    expect(owned?.sql).toContain('"owner_key_id" = $');
+    expect(owned?.params).toContain(HOST);
+    expect(sqlOf(consumerAccessClause(base))?.sql ?? '').not.toContain('owner_key_id');
+    // A keyless ownOnly caller can reach nothing.
+    expect(sqlOf(consumerAccessClause({ keyId: null, instanceIds: null, ownOnly: true }))?.sql).toContain('false');
   });
 });

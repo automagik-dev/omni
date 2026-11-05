@@ -3,7 +3,8 @@
  *
  * Pure functions — no I/O, no clock access. The caller passes `now` so the
  * sweeper can share a single wall clock across a sweep batch and tests can
- * pin time without monkeypatching.
+ * pin time without monkeypatching. A schedule's jitter draws from `random`
+ * (default `Math.random`), which tests pin the same way.
  *
  * @see issue #404 — Configurable Idle-Chat Follow-Up Sequences
  */
@@ -11,6 +12,8 @@
 import type { FollowUpSchedule, FollowUpSequenceConfig } from '../../schemas/follow-up';
 
 const MS_PER_MINUTE = 60_000;
+/** Jitter never moves an interval below this many minutes (or below the interval, when that is shorter). */
+const JITTER_FLOOR_MINUTES = 1;
 
 /**
  * Return the interval (in minutes) between the nth and (n+1)th follow-up for
@@ -45,6 +48,24 @@ export function intervalMinutesForIndex(schedule: FollowUpSchedule, index: numbe
 }
 
 /**
+ * `minutes` with the schedule's jitter applied: a uniform offset within the
+ * bound, floored at the smaller of `minutes` and one minute. No jitter: `minutes`.
+ *
+ * @param random returns a number in [0, 1), like `Math.random`
+ */
+export function jitteredMinutes(
+  schedule: FollowUpSchedule,
+  minutes: number,
+  random: () => number = Math.random,
+): number {
+  const { jitter } = schedule;
+  if (!jitter) return minutes;
+  const bound = 'minutes' in jitter ? jitter.minutes : jitter.ratio * minutes;
+  const offset = (random() * 2 - 1) * bound;
+  return Math.max(minutes + offset, Math.min(minutes, JITTER_FLOOR_MINUTES));
+}
+
+/**
  * Compute the next fire timestamp (ms since epoch) after the given index has
  * just fired. Returns `null` when the sequence has reached `maxFollowUps` and
  * no further fires should be scheduled.
@@ -52,13 +73,19 @@ export function intervalMinutesForIndex(schedule: FollowUpSchedule, index: numbe
  * @param config resolved follow-up config
  * @param currentIndex zero-based index that was JUST fired
  * @param from wall clock reference in ms (usually the fire time)
+ * @param random the jitter's source (see `jitteredMinutes`)
  */
-export function computeNextFireAt(config: FollowUpSequenceConfig, currentIndex: number, from: number): number | null {
+export function computeNextFireAt(
+  config: FollowUpSequenceConfig,
+  currentIndex: number,
+  from: number,
+  random: () => number = Math.random,
+): number | null {
   const nextIndex = currentIndex + 1;
   if (nextIndex >= config.maxFollowUps) {
     return null;
   }
-  const minutes = intervalMinutesForIndex(config.schedule, nextIndex);
+  const minutes = jitteredMinutes(config.schedule, intervalMinutesForIndex(config.schedule, nextIndex), random);
   return from + Math.round(minutes * MS_PER_MINUTE);
 }
 
@@ -68,8 +95,13 @@ export function computeNextFireAt(config: FollowUpSequenceConfig, currentIndex: 
  *
  * @param config resolved follow-up config
  * @param armedAt wall clock reference in ms (outbound agent message time)
+ * @param random the jitter's source (see `jitteredMinutes`)
  */
-export function computeInitialFireAt(config: FollowUpSequenceConfig, armedAt: number): number {
-  const minutes = intervalMinutesForIndex(config.schedule, 0);
+export function computeInitialFireAt(
+  config: FollowUpSequenceConfig,
+  armedAt: number,
+  random: () => number = Math.random,
+): number {
+  const minutes = jitteredMinutes(config.schedule, intervalMinutesForIndex(config.schedule, 0), random);
   return armedAt + Math.round(minutes * MS_PER_MINUTE);
 }

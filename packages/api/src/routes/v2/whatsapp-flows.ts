@@ -514,18 +514,21 @@ whatsappFlowsRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(instanceId);
-    // Any channel that declares `canSendFlow` can send — the flow itself is
-    // authored on Meta (by us via the routes above, or by a BSP that hosts the
-    // WABA, e.g. Gupshup's Bot Studio). Management routes stay Cloud-API only.
-    const plugin = channelRegistry?.get(instance.channel as ChannelType);
-    if (!plugin) {
-      return c.json(jsonError(`${instance.channel} plugin not registered`, 'PLUGIN_NOT_FOUND'), 500);
+    const channel = instance.channel;
+    const plugin = channelRegistry?.get(channel as ChannelType);
+    const bspChannel = channel === 'asc-flow' || channel === 'whatsapp-business';
+    if (!bspChannel && !plugin?.capabilities.canSendFlow) {
+      return c.json(jsonError(`Instance channel "${channel}" cannot send WhatsApp Flows`, 'WRONG_CHANNEL'), 400);
     }
-    if (!plugin.capabilities.canSendFlow) {
-      return c.json(
-        jsonError(`Instance channel "${instance.channel}" cannot send WhatsApp Flows`, 'WRONG_CHANNEL'),
-        400,
-      );
+    if (channel === 'whatsapp-business') {
+      const guard = ensureWhatsAppBusiness(instance);
+      if (!guard.ok) return c.json(guard.payload, 400);
+    } else if (!flow.flowId) {
+      return c.json(jsonError(`${channel} sends a flow by flowId only`), 400);
+    }
+
+    if (!plugin) {
+      return c.json(jsonError(`${channel} plugin not registered`, 'PLUGIN_NOT_FOUND'), 500);
     }
 
     // Generate the correlation token here so it can be returned to the caller
@@ -542,7 +545,11 @@ whatsappFlowsRoutes.post(
 
     if (!result.success) {
       log.error('flow send failed', { instanceId, to, error: result.error, errorCode: result.errorCode });
-      return c.json(jsonError(result.error ?? 'Flow send failed', result.errorCode ?? 'SEND_FAILED'), 500);
+      const rejected = result.errorCode?.endsWith('BAD_REQUEST') === true;
+      return c.json(
+        jsonError(result.error ?? 'Flow send failed', result.errorCode ?? 'SEND_FAILED'),
+        rejected ? 400 : 500,
+      );
     }
 
     return c.json({ messageId: result.messageId, flowToken }, 201);

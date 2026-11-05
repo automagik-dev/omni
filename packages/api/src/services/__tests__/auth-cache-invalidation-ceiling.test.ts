@@ -57,9 +57,11 @@ function fakeKeyDb(row: Record<string, unknown> | null): { db: Database; reads: 
     select: () => ({
       from: () => ({
         where: () => ({
-          limit: async () => {
+          limit: () => {
             reads.count++;
-            return row ? [row] : [];
+            const rows = row ? [row] : [];
+            // `revoke` reads the row under `FOR UPDATE` first.
+            return Object.assign(Promise.resolve(rows), { for: async () => rows });
           },
         }),
       }),
@@ -184,6 +186,8 @@ describe('apiKeyCache honours the ceiling in the tenant world (synthetic clock)'
         },
       }),
     });
+    // `revoke` runs in a transaction (it revokes the key's children with it).
+    (db as unknown as { transaction: (fn: (tx: Database) => unknown) => unknown }).transaction = (fn) => fn(db);
     (service as unknown as { db: Database }).db = db;
 
     expect(await service.validate(KEY)).not.toBeNull();

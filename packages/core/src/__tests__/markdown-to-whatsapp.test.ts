@@ -2,16 +2,18 @@ import { describe, expect, test } from 'bun:test';
 import { markdownToWhatsApp } from '../markdown-to-whatsapp';
 
 describe('markdownToWhatsApp', () => {
-  test('converts **bold** to *bold*', () => {
-    expect(markdownToWhatsApp('hello **world**')).toBe('hello *world*');
-  });
-
-  test('converts ~~strike~~ to ~strike~', () => {
-    expect(markdownToWhatsApp('hello ~~world~~')).toBe('hello ~world~');
-  });
-
-  test('preserves inline `code`', () => {
-    expect(markdownToWhatsApp('use `console.log`')).toBe('use `console.log`');
+  test.each([
+    ['converts **bold** to *bold*', 'hello **world**', 'hello *world*'],
+    ['converts ~~strike~~ to ~strike~', 'hello ~~world~~', 'hello ~world~'],
+    ['preserves inline `code`', 'use `console.log`', 'use `console.log`'],
+    ['preserves blockquotes', '> quoted text', '> quoted text'],
+    ['converts markdown links to text: url', '[click here](https://example.com)', 'click here: https://example.com'],
+    ['converts headers to bold', '# Title', '*Title*'],
+    ['converts ## headers to bold', '## Subtitle', '*Subtitle*'],
+    ['preserves bullet lists', '- item one\n- item two', '- item one\n- item two'],
+    ['preserves numbered lists', '1. first\n2. second', '1. first\n2. second'],
+  ])('%s', (_name, input, expected) => {
+    expect(markdownToWhatsApp(input)).toBe(expected);
   });
 
   test('strips language hint from code blocks', () => {
@@ -19,32 +21,6 @@ describe('markdownToWhatsApp', () => {
     const result = markdownToWhatsApp(md);
     expect(result).toContain('```\nconst x = 1;\n```');
     expect(result).not.toContain('typescript');
-  });
-
-  test('preserves blockquotes', () => {
-    expect(markdownToWhatsApp('> quoted text')).toBe('> quoted text');
-  });
-
-  test('converts markdown links to text: url', () => {
-    expect(markdownToWhatsApp('[click here](https://example.com)')).toBe('click here: https://example.com');
-  });
-
-  test('converts headers to bold', () => {
-    expect(markdownToWhatsApp('# Title')).toBe('*Title*');
-  });
-
-  test('converts ## headers to bold', () => {
-    expect(markdownToWhatsApp('## Subtitle')).toBe('*Subtitle*');
-  });
-
-  test('preserves bullet lists', () => {
-    const md = '- item one\n- item two';
-    expect(markdownToWhatsApp(md)).toBe('- item one\n- item two');
-  });
-
-  test('preserves numbered lists', () => {
-    const md = '1. first\n2. second';
-    expect(markdownToWhatsApp(md)).toBe('1. first\n2. second');
   });
 
   test('does not convert formatting inside code blocks', () => {

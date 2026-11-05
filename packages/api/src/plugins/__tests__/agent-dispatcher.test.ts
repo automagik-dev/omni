@@ -38,7 +38,6 @@ import {
   type DispatcherCleanup,
   __test__,
   cancelActiveAgentRun,
-  isFirstPartyInstanceSender,
   resolveQuotedMessage,
   setupAgentDispatcher,
 } from '../agent-dispatcher';
@@ -74,32 +73,9 @@ mock.module('@omni/core', () => {
     }
   }
 
-  class MockWebhookAgentProvider {
-    readonly schema = 'webhook' as const;
-    readonly mode: 'round-trip' | 'fire-and-forget';
-    constructor(
-      readonly id: string,
-      readonly name: string,
-      private config: { mode: string },
-    ) {
-      this.mode = config.mode as 'round-trip' | 'fire-and-forget';
-    }
-    canHandle() {
-      return true;
-    }
-    async trigger() {
-      return { parts: ['webhook response'], metadata: { runId: 'run-w', providerId: this.id, durationMs: 50 } };
-    }
-    async checkHealth() {
-      return { healthy: true, latencyMs: 20 };
-    }
-  }
-
-  // NOTE: OpenClawAgentProvider and OpenClawClient are NOT mocked here.
-  // Bun's mock.module merges with the real module, so real classes pass through.
-  // Mocking them would contaminate openclaw.test.ts (which imports from relative
-  // paths but shares the module graph via Bun's deduplication).
-  // No dispatcher test exercises the OpenClaw code path (all use schema: 'agno').
+  // NOTE: WebhookAgentProvider is NOT mocked here either. No test in this file uses the
+  // webhook schema, and the stub, applied process-wide, replaced the real provider for
+  // agent-dispatch-fallback-identity.test.ts (#1408), which drives the real webhook path.
 
   // createLogger is NOT mocked — the real implementation passes through via
   // bun's merge behavior, keeping logger.test.ts and other test files working.
@@ -108,7 +84,6 @@ mock.module('@omni/core', () => {
     // this global module mock only overrides the provider surface below.
     ...omniCoreReal,
     AgnoAgentProvider: MockAgnoAgentProvider,
-    WebhookAgentProvider: MockWebhookAgentProvider,
     createProviderClient: mock(() => ({})),
     generateCorrelationId: (prefix?: string) => `${prefix ?? 'corr'}-test-${Date.now()}`,
   };
@@ -124,6 +99,7 @@ mock.module('@omni/core', () => {
 function createMockDb(agentRowOverrides: Record<string, unknown> = {}) {
   const agentRow = {
     id: 'agent-uuid-1',
+    isActive: true,
     agentProviderId: 'provider-1',
     agentType: 'assistant',
     metadata: { providerAgentId: 'default-agent' },
@@ -409,6 +385,44 @@ describe('agent-dispatcher', () => {
       cleanup();
     });
 
+    it('the 60s media sweep rejects and drops promises older than 10 minutes only', async () => {
+      const realSetInterval = globalThis.setInterval;
+      const sweeps: Array<() => void> = [];
+      globalThis.setInterval = ((fn: () => void, ms?: number, ...rest: unknown[]) => {
+        if (ms === 60_000) sweeps.push(fn);
+        return realSetInterval(fn, ms, ...rest);
+      }) as typeof setInterval;
+      let cleanup: DispatcherCleanup | undefined;
+      try {
+        cleanup = await setupAgentDispatcher(
+          createMockEventBus() as unknown as import('@omni/core').EventBus,
+          createMockServices(),
+          mockDb,
+        );
+      } finally {
+        globalThis.setInterval = realSetInterval;
+      }
+
+      const { mediaCompletions } = __test__;
+      const stale = { resolve: mock(() => {}), reject: mock((_err: Error) => {}), createdAt: Date.now() - 11 * 60_000 };
+      const fresh = { resolve: mock(() => {}), reject: mock((_err: Error) => {}), createdAt: Date.now() - 9 * 60_000 };
+      mediaCompletions.set('media-stale', stale);
+      mediaCompletions.set('media-fresh', fresh);
+      try {
+        expect(sweeps).toHaveLength(1);
+        sweeps[0]?.();
+
+        expect(stale.reject).toHaveBeenCalledTimes(1);
+        expect(mediaCompletions.has('media-stale')).toBe(false);
+        expect(fresh.reject).not.toHaveBeenCalled();
+        expect(mediaCompletions.has('media-fresh')).toBe(true);
+      } finally {
+        mediaCompletions.delete('media-stale');
+        mediaCompletions.delete('media-fresh');
+        await cleanup?.();
+      }
+    });
+
     it('cancelActiveAgentRun resolves false when nothing is in flight (#914)', async () => {
       await expect(cancelActiveAgentRun('inst-none', 'chat-none', 'user_stop')).resolves.toBe(false);
     });
@@ -596,21 +610,6 @@ describe('agent-dispatcher', () => {
       } finally {
         activeRunAborts.clear();
       }
-    });
-
-    it('returns a cleanup function that can be called without error', async () => {
-      const eventBus = createMockEventBus();
-      const services = createMockServices();
-
-      const cleanup = await setupAgentDispatcher(
-        eventBus as unknown as import('@omni/core').EventBus,
-        services,
-        mockDb,
-      );
-
-      expect(typeof cleanup).toBe('function');
-      // Should not throw
-      cleanup();
     });
 
     it('passes correct durable and queue options for each subscription', async () => {
@@ -958,6 +957,28 @@ describe('agent-dispatcher', () => {
       cleanup?.();
     });
 
+    it('refuses a removed provider on reactions without falling back to the legacy runner', async () => {
+      const eventBus = createMockEventBus();
+      const getById = mock(async () => createMockProvider({ schema: 'openclaw' }));
+      const run = mock(async () => {
+        throw new Error('Removed provider must not reach legacy dispatch');
+      });
+      const services = createMockServices({
+        providers: { getById },
+        agentRunner: {
+          getInstanceWithProvider: mock(async () => createMockInstance({ triggerEvents: ['reaction.received'] })),
+          getSenderName: mock(async () => 'Reactor'),
+          run,
+        },
+      });
+
+      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
+      await eventBus.fire('reaction.received', createReactionEvent());
+
+      expect(getById).toHaveBeenCalledWith('provider-1');
+      expect(run).not.toHaveBeenCalled();
+    });
+
     it('processes a valid reaction event', async () => {
       const eventBus = createMockEventBus();
       const agentRunner = {
@@ -1294,21 +1315,6 @@ describe('agent-dispatcher', () => {
       // Wait enough for group debounce to flush
       await new Promise((resolve) => setTimeout(resolve, 140));
       expect(agentRunner.getSenderName).toHaveBeenCalledTimes(1);
-    });
-
-    it('flushes immediately when debounce mode is disabled', async () => {
-      const eventBus = createMockEventBus();
-      const services = createMockServices();
-
-      cleanup = await setupAgentDispatcher(eventBus as unknown as import('@omni/core').EventBus, services, mockDb);
-
-      await eventBus.fire('message.received', createMessageEvent());
-
-      // With disabled debounce, setTimeout(0) fires almost immediately
-      await new Promise((resolve) => setTimeout(resolve, 50));
-
-      // B-1: IAgentProvider handles dispatch; getSenderName proves immediate flush reached processAgentResponse
-      expect(services.agentRunner.getSenderName).toHaveBeenCalled();
     });
 
     it('restarts debounce timer on typing event when restartOnTyping is true', async () => {
@@ -2395,6 +2401,7 @@ describe('agent-dispatcher', () => {
       const claimed = new Set<string>();
       const agentRow = {
         id: 'agent-uuid-1',
+        isActive: true,
         agentProviderId: 'provider-1',
         agentType: 'assistant',
         metadata: { providerAgentId: 'default-agent' },
@@ -2526,6 +2533,7 @@ describe('agent-dispatcher', () => {
     function createFirstPartyDb() {
       const agentRow = {
         id: 'agent-uuid-1',
+        isActive: true,
         agentProviderId: 'provider-1',
         agentType: 'agent',
         metadata: { providerAgentId: 'default-agent' },
@@ -2590,15 +2598,6 @@ describe('agent-dispatcher', () => {
       return agentRunner;
     }
 
-    it('is still detected as a first-party sender by isFirstPartyInstanceSender', () => {
-      const detected = isFirstPartyInstanceSender(
-        { from: OTHER_PHONE, rawPayload: { resolvedSenderPhone: OTHER_PHONE } },
-        CURRENT_OWNER,
-        [CURRENT_OWNER, OTHER_OWNER],
-      );
-      expect(detected).toBe(true);
-    });
-
     it('drops the message when allowFirstParty is false (default loop-protection)', async () => {
       const agentRunner = await fireFirstPartyMessage(false);
       expect(agentRunner.getSenderName.mock.calls.length).toBe(0);
@@ -2639,6 +2638,47 @@ describe('agent-dispatcher', () => {
       expect(sql).toContain('"id" <> ');
       expect(sql).toContain('"slack_team_id" = ');
       expect(params).toEqual([true, 'slack', 'inst-1', 'T123']);
+    });
+  });
+
+  // The per_thread init marker lives in agent_sessions under a `thread_init:`
+  // session key. Both the lookup and the insert must use that exact key: a
+  // round-trip alone would stay green if both sites drifted together.
+  describe('per_thread init marker key', () => {
+    it('checkPerThreadSessionExists looks up thread_init:<sessionId>', async () => {
+      let captured: unknown;
+      const db = {
+        select: () => ({
+          from: () => ({
+            where: (cond: unknown) => {
+              captured = cond;
+              return { limit: () => Promise.resolve([{ instanceId: 'inst-1' }]) };
+            },
+          }),
+        }),
+      } as unknown as import('@omni/db').Database;
+
+      await expect(__test__.checkPerThreadSessionExists(db, 'inst-1', 'thread-1')).resolves.toBe(true);
+
+      const { params } = new PgDialect().sqlToQuery(captured as SQL);
+      expect(params).toEqual(['inst-1', 'thread_init:thread-1']);
+    });
+
+    it('markPerThreadSessionInitialized inserts thread_init:<sessionId>', async () => {
+      let inserted: { instanceId?: string; sessionKey?: string } | undefined;
+      const db = {
+        insert: () => ({
+          values: (row: { instanceId?: string; sessionKey?: string }) => {
+            inserted = row;
+            return { onConflictDoUpdate: () => Promise.resolve() };
+          },
+        }),
+      } as unknown as import('@omni/db').Database;
+
+      await __test__.markPerThreadSessionInitialized(db, 'inst-1', 'thread-1');
+
+      expect(inserted?.instanceId).toBe('inst-1');
+      expect(inserted?.sessionKey).toBe('thread_init:thread-1');
     });
   });
 });

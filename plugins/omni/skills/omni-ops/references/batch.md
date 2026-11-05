@@ -29,3 +29,5 @@ omni batch estimate --instance <id> --type time_based_batch --days 7 --content-t
 omni batch create --instance <id> --type time_based_batch --days 7 --content-types audio --json
 omni batch status <jobId> --json | jq '{status, done: .processedItems, total: .totalItems, errors: .errorCount}'
 ```
+
+Use `omni batch create --help` / `omni batch estimate --help` for installed options. `estimate` creates no job; `create` runs processing and may consume credits, and `--no-confirm` removes its prompt rather than authorizing it. `status --watch` observes progress. Ad hoc media operations are a separate surface: `omni media --help`.

@@ -38,7 +38,7 @@ omni instances update <instance-id> --agent-stream-mode true
 ## Requirements
 
 - Channel must support `editMessage` (currently: Telegram only)
-- Provider must support `triggerStream()` (currently: OpenClaw only)
+- Provider must support `triggerStream()` (Agno, AG-UI, A2A, or Claude Code)
 - Instance must have `agentStreamMode: true`
 
 If any requirement is not met, the instance silently falls back to the standard accumulate-then-reply mode.
@@ -69,7 +69,7 @@ Telegram edit throttle is adaptive:
 
 **Streaming not working:**
 1. Check `agentStreamMode` is `true` on the instance
-2. Check the provider supports `triggerStream()` (OpenClaw only)
+2. Check the provider supports `triggerStream()` (Agno, AG-UI, A2A, or Claude Code)
 3. Check the channel plugin has `capabilities.canStreamResponse: true`
 
 **Rate limit errors:**
@@ -78,4 +78,4 @@ Telegram edit throttle is adaptive:
 
 **Thinking not showing:**
 - Thinking phase was < 2 seconds (skipped by design)
-- The agent may not have reasoning enabled (check OpenClaw agent config)
+- The agent may not have reasoning enabled (check the agent configuration)

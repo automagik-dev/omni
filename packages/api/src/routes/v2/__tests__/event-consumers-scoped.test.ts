@@ -17,12 +17,13 @@
  * live in `__tests__/event-consumers-postgres.test.ts`.
  */
 
-import { describe, expect, mock, test } from 'bun:test';
+import { afterEach, describe, expect, mock, test } from 'bun:test';
 import { type Database, instances } from '@omni/db';
 import { Hono } from 'hono';
 import { errorHandler } from '../../../middleware/error';
 import { CreateConsumerSchema } from '../../../schemas/openapi/event-consumers';
 import { EventConsumerService } from '../../../services/event-consumers';
+import { buildWorkerTenantContext } from '../../../tenancy/worker-tenant-context';
 import type { ApiKeyData, AppVariables } from '../../../types';
 import { eventConsumersRoutes } from '../event-consumers';
 
@@ -45,12 +46,20 @@ const UNRESTRICTED_KEY: ApiKeyData = {
   expiresAt: null,
 };
 
-function mount(services: unknown, apiKey?: ApiKeyData): Hono<{ Variables: AppVariables }> {
+function mount(services: unknown, apiKey?: ApiKeyData, tenantId?: string): Hono<{ Variables: AppVariables }> {
   const app = new Hono<{ Variables: AppVariables }>();
   app.onError(errorHandler);
   app.use('*', async (c, next) => {
-    c.set('services', { eventConsumers: services } as never);
+    c.set('services', {
+      eventConsumers: services,
+      db: {
+        select: () => ({
+          from: () => ({ where: () => ({ limit: async () => [{ ...apiKey, createdBy: 'test', status: 'active' }] }) }),
+        }),
+      },
+    } as never);
     if (apiKey) c.set('apiKey', apiKey);
+    if (tenantId) c.set('authContext', buildWorkerTenantContext(tenantId));
     await next();
   });
   app.route('/', eventConsumersRoutes);
@@ -86,11 +95,25 @@ async function hitEveryRoute(app: Hono<{ Variables: AppVariables }>): Promise<nu
   return responses.map((r) => r.status);
 }
 
-describe('consumer routes forward the caller (no new option: identical behaviour)', () => {
+describe('consumer routes forward the caller', () => {
   for (const [label, key, expected] of [
-    ['restricted key', RESTRICTED_KEY, { keyId: RESTRICTED_KEY.id, instanceIds: [INST_A, INST_B] }],
-    ['unrestricted key', UNRESTRICTED_KEY, { keyId: UNRESTRICTED_KEY.id, instanceIds: null }],
-    ['no key context', undefined, { keyId: null, instanceIds: null }],
+    [
+      'restricted key',
+      RESTRICTED_KEY,
+      {
+        keyId: RESTRICTED_KEY.id,
+        instanceIds: [INST_A, INST_B],
+        tenantId: null,
+        principal: { kind: 'none' },
+        admin: false,
+      },
+    ],
+    [
+      'unrestricted key',
+      UNRESTRICTED_KEY,
+      { keyId: UNRESTRICTED_KEY.id, instanceIds: null, tenantId: null, principal: { kind: 'none' }, admin: true },
+    ],
+    ['no key context', undefined, { keyId: null, instanceIds: null, tenantId: null }],
   ] as const) {
     test(`${label}: every route reaches the service with the original arguments plus the caller`, async () => {
       const service = mockService();
@@ -218,7 +241,7 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
     return {
       status: res.status,
       body: (await res.json()) as {
-        data?: { instanceIds?: string[] };
+        data?: { scoped?: boolean; instanceIds?: string[]; ownerKeyId?: string };
         error?: { code?: string; message?: string; details?: unknown };
       },
     };
@@ -250,6 +273,20 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
     expect(calls).toEqual({ instanceReads: 1, inserts: 1 });
   });
 
+  test('restricted keys automatically create scoped consumers, including scoped: false', async () => {
+    for (const body of [{}, { scoped: false }]) {
+      const { db, calls } = fakeDb([INST_A, INST_B]);
+      const res = await create(db, body, { ...RESTRICTED_KEY, scopes: ['events:write'] });
+      expect(res.status).toBe(201);
+      expect(res.body.data).toMatchObject({
+        scoped: true,
+        instanceIds: [INST_A, INST_B],
+        ownerKeyId: RESTRICTED_KEY.id,
+      });
+      expect(calls).toEqual({ instanceReads: 1, inserts: 1 });
+    }
+  });
+
   test('an uppercase id still resolves against the lowercase column value', async () => {
     const { db } = fakeDb([INST_C]);
     const res = await create(db, { scoped: true, instanceIds: [INST_C.toUpperCase()] }, UNRESTRICTED_KEY);
@@ -264,4 +301,69 @@ describe('POST /events/consumers resolves scoped instance ids (fake database)', 
       expect(calls).toEqual({ instanceReads: 0, inserts: 1 });
     }
   });
+});
+
+// A restricted events:write key must receive a useful 403 before any stream, scan or mutation,
+// even when it guesses a valid unscoped name or submits an SSE position to /ack.
+describe('unscoped consumer delivery and mutations fail closed over HTTP', () => {
+  const db = {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ name: 'legacy', scoped: false }] }) }) }),
+  } as unknown as Database;
+  const app = mount(new EventConsumerService(db), { ...RESTRICTED_KEY, scopes: ['events:write'] });
+  for (const [method, path, body] of [
+    ['POST', '/events/consumers/legacy/pull', undefined],
+    ['GET', '/events/consumers/legacy/stream', undefined],
+    ['POST', '/events/consumers/legacy/ack', { cursor: 100 }],
+    ['POST', '/events/consumers/legacy/ack', { leaseId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }],
+    ['DELETE', '/events/consumers/legacy', undefined],
+  ] as const) {
+    test(`${method} ${path} ${JSON.stringify(body)}`, async () => {
+      const res = await app.request(path, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        error: { code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') },
+      });
+    });
+  }
+});
+
+const previousEnv = { ...process.env };
+afterEach(() => {
+  for (const name of ['OMNI_MULTITENANCY_ENABLED', 'OMNI_PAIRED_AGENT_CONSUMERS']) {
+    if (previousEnv[name] === undefined) Reflect.deleteProperty(process.env, name);
+    else process.env[name] = previousEnv[name];
+  }
+});
+test('multitenancy on without paired flag: tenant credential still refuses restricted unscoped pull, lease, ack, stream and delete', async () => {
+  process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+  Reflect.deleteProperty(process.env, 'OMNI_PAIRED_AGENT_CONSUMERS');
+  const tenantId = crypto.randomUUID();
+  const db = {
+    select: () => ({
+      from: () => ({ where: () => ({ limit: async () => [{ name: 'legacy', scoped: false, tenantId }] }) }),
+    }),
+  } as unknown as Database;
+  const app = mount(new EventConsumerService(db), { ...RESTRICTED_KEY, scopes: ['events:write'] }, tenantId);
+  for (const [method, path, body] of [
+    ['POST', '/events/consumers/legacy/pull', undefined],
+    ['POST', '/events/consumers/legacy/pull?leaseMs=1000', undefined],
+    ['GET', '/events/consumers/legacy/stream', undefined],
+    ['POST', '/events/consumers/legacy/ack', { cursor: 100 }],
+    ['POST', '/events/consumers/legacy/ack', { leaseId: crypto.randomUUID() }],
+    ['DELETE', '/events/consumers/legacy', undefined],
+  ] as const) {
+    const response = await app.request(path, {
+      method,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({
+      error: { code: 'FORBIDDEN', message: expect.stringContaining('Create a scoped consumer') },
+    });
+  }
 });

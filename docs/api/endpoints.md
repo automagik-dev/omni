@@ -678,7 +678,7 @@ Requires `keys:read` or `keys:write` scope.
 
 ```yaml
 GET    /api/v2/keys                           # List API keys
-  Query: limit?, cursor?
+  Query: status?, limit? (1-100, default 50), offset? — newest first
 
 GET    /api/v2/keys/:id                       # Get key details
 
@@ -921,6 +921,12 @@ POST   /api/v2/dead-letters/:id/resolve       # Mark as resolved
 
 POST   /api/v2/dead-letters/:id/abandon       # Abandon (stop retrying)
 ```
+
+For generic events, manual and automatic retries publish with `OmniEvent.id` equal
+to the dead-letter **row id**, stable across attempts. The original `eventId` remains
+on the row for inspection; it is not the retry id. This lets consumer-side
+`processed_events` / `withIdempotency` skip duplicate deliveries after an uncertain
+publish result. Connector retries retain their original journal event ids.
 
 ---
 

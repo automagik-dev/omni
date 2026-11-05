@@ -38,6 +38,7 @@ import { consumerOffsets } from '@omni/db';
 import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import packageJson from '../../package.json';
+import { getAgentKeyRepairHealth } from '../agent-key-repair-state';
 import { safeErrorMessage } from '../middleware/error';
 import { arePluginsDegraded, getPluginsDegradedReason } from '../plugin-state';
 import type { AppVariables, HealthCheck, HealthResponse } from '../types';
@@ -93,12 +94,15 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
     ? { status: 'error', error: getPluginsDegradedReason() ?? 'Plugin initialization failed' }
     : { status: 'ok' };
 
+  const agentKeyRepairCheck = getAgentKeyRepairHealth();
   const deadLettersCheck = await checkDeadLetters(c.get('services'));
 
-  // Determine overall status
-  const hasErrors =
+  // Dependency failures keep their existing availability semantics. A best-effort
+  // key repair warning must not fail Docker/Kubernetes probes and restart Omni.
+  const unavailable =
     dbCheck.status === 'error' || natsCheck.status === 'error' || pluginsFailed || deadLettersCheck.status === 'error';
-  const status: HealthResponse['status'] = hasErrors ? 'degraded' : 'healthy';
+  const status: HealthResponse['status'] =
+    unavailable || agentKeyRepairCheck.status === 'error' ? 'degraded' : 'healthy';
 
   const response: HealthResponse = {
     status,
@@ -109,11 +113,12 @@ export const getHealth = async (c: Context<{ Variables: AppVariables }>) => {
       database: dbCheck,
       nats: natsCheck,
       plugins: pluginsCheck,
+      agentKeyRepair: agentKeyRepairCheck,
       deadLetters: deadLettersCheck,
     },
   };
 
-  return c.json(response, status === 'healthy' ? 200 : 503);
+  return c.json(response, unavailable ? 503 : 200);
 };
 
 /** #1163: a DLQ this deep or this old is an operator problem, not a transient. */
@@ -123,7 +128,7 @@ export const DEAD_LETTER_MAX_AGE_SECONDS = 24 * 60 * 60;
 /**
  * DLQ depth (#1163): pending rows used to accumulate with every surface green.
  * Read through DeadLetterService (the registered access site), not the raw db.
- * A failed query is not reported here — the database check already covers it.
+ * An unreadable queue degrades this check without changing probe availability.
  */
 async function checkDeadLetters(services: AppVariables['services'] | undefined): Promise<HealthCheck> {
   if (!services) return { status: 'ok', details: { available: false } };
@@ -142,7 +147,7 @@ async function checkDeadLetters(services: AppVariables['services'] | undefined):
     return { status: 'ok', details };
   } catch (error) {
     healthLog.warn('Dead letter health query failed', { error: String(error) });
-    return { status: 'ok', details: { available: false } };
+    return { status: 'degraded', details: { available: false } };
   }
 }
 

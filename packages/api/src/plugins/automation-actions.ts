@@ -33,19 +33,27 @@
  * pin a pooled connection for the duration (the G4 leg-2 trap).
  */
 
-import type { AgentCallContext, AgentRunResult, CallAgentActionConfig, ProviderMetrics } from '@omni/core';
+import type {
+  AgentCallContext,
+  AgentRunResult,
+  CallAgentActionConfig,
+  ConnectorCallRequest,
+  OmniEvent,
+  ProviderMetrics,
+} from '@omni/core';
 import {
   PUBLISH_NOT_DECLARED,
   SCHEMA_NOT_REGISTERED,
   agentUsageFromResult,
   checkPublishAllowed,
   createLogger,
-  generateId,
 } from '@omni/core';
 import type { Database, EventType } from '@omni/db';
 import { agents, omniEvents, processedEvents } from '@omni/db';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import type { Services } from '../services';
+import { accessFallbackCandidates, runAccessFallbackChain } from '../services/access';
 import type { AgentRunResult as RunnerResult } from '../services/agent-runner';
 import { recordAutomationTriggerLog, stampAgentUsage } from '../services/agent-usage';
 import { releaseIdleTimeoutClaim } from '../services/follow-up-lifecycle';
@@ -56,6 +64,63 @@ import { getPlugin } from './loader';
 const log = createLogger('automation-actions');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const INBOUND_CALL_AGENT_TYPES = new Set([
+  'message.received',
+  'reaction.received',
+  'reaction.removed',
+  'message.button_click',
+  'message.poll_vote',
+]);
+const InboundCallSourceSchema = z.object({
+  instanceId: z.string().uuid(),
+  from: z.string().refine((value) => value.trim().length > 0),
+  channelType: z.string().optional(),
+  rawPayload: z
+    .object({
+      key: z.object({ participantAlt: z.string().nullish() }).passthrough().nullish(),
+      resolvedSenderPhone: z.string().nullish(),
+    })
+    .passthrough()
+    .nullish(),
+});
+
+/** Authorize the ingress sender even when call_agent takes its chatless fallback. */
+async function admitInboundCallAgent(
+  services: Services,
+  db: Database,
+  event: AgentCallContext['event'],
+  trustedTenantId: string | null,
+): Promise<boolean> {
+  if (!event || !INBOUND_CALL_AGENT_TYPES.has(event.type)) return true;
+  let allowed = false;
+  let reason = 'invalid ingress identity';
+  try {
+    const source = InboundCallSourceSchema.safeParse(event.source);
+    if (source.success) {
+      const instance = await runTenantWorkDb(db, trustedTenantId, () =>
+        services.instances.getById(source.data.instanceId),
+      );
+      const result = await runAccessFallbackChain(accessFallbackCandidates(source.data), (sender) =>
+        services.access.evaluateAccess(instance, sender, source.data.channelType ?? instance.channel, trustedTenantId),
+      );
+      allowed = result.allowed;
+      reason = result.allowed ? 'allowed' : 'policy refused';
+    }
+  } catch {
+    // A policy/lookup failure is a refusal, never an unrestricted chatless run.
+    reason = 'access evaluation failed';
+    log.warn('call_agent ingress access evaluation failed', { eventId: event.id, eventType: event.type });
+  }
+  if (!allowed) {
+    log.warn('Skipping call_agent: ingress access refused', {
+      eventId: event.id,
+      eventType: event.type,
+      reason,
+    });
+  }
+  return allowed;
+}
 
 /** agents.agent_type (entity taxonomy) → provider dispatch type. */
 const AGENT_TYPE_MAP: Record<string, 'agent' | 'team' | 'workflow'> = {
@@ -91,6 +156,7 @@ async function runChatlessCallAgent(
   const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
     scopedHandle(db)
       .select({
+        isActive: agents.isActive,
         name: agents.name,
         agentProviderId: agents.agentProviderId,
         agentType: agents.agentType,
@@ -103,6 +169,10 @@ async function runChatlessCallAgent(
       .limit(1),
   );
   if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+  if (!agentRow.isActive) {
+    log.info('Skipping call_agent: agent inactive', { agentId: agentFkId });
+    throw new Error(`Agent is inactive: ${agentFkId}`);
+  }
   if (!agentRow.agentProviderId) {
     throw new Error(`Agent ${agentFkId} has no agent provider configured (required for chatless call_agent)`);
   }
@@ -247,7 +317,6 @@ async function deadLetterRefusedEmission(
   try {
     await runTenantWorkDb(db, trustedTenantId, () =>
       services.deadLetters.createSchemaValidationFailure({
-        eventId: generateId(),
         eventType: input.eventType,
         subject: input.eventType,
         payload: input.payload,
@@ -295,6 +364,7 @@ async function refusePublishNotDeclared(
 
 /** The dependency shape `AutomationService.startEngine` accepts. */
 export interface AutomationEngineDeps {
+  admitAgentEvent: (event: OmniEvent, trustedTenantId?: string | null) => Promise<boolean>;
   sendMessage: (instanceId: string, to: string, content: string, trustedTenantId?: string | null) => Promise<void>;
   callAgent: (
     context: AgentCallContext,
@@ -327,6 +397,7 @@ export interface AutomationEngineDeps {
     trustedTenantId?: string | null,
     emitterAgentId?: string | null,
   ) => Promise<{ valid: boolean; errors?: string[]; reason?: string }>;
+  callConnector: (request: ConnectorCallRequest, trustedTenantId?: string | null) => Promise<unknown>;
 }
 
 /** Injectable seams (tests only — production uses the module defaults). */
@@ -376,7 +447,27 @@ export function buildAutomationEngineDeps(
       await plugin.sendMessage(instanceId, { to: recipient, content: { type: 'text', text: content } });
     },
 
+    admitAgentEvent: async (event, trustedTenantId = null) =>
+      admitInboundCallAgent(
+        services,
+        db,
+        {
+          id: event.id,
+          type: event.type,
+          source: {
+            instanceId: event.metadata.instanceId,
+            channelType: event.metadata.channelType,
+            from: (event.payload as Record<string, unknown>).from,
+            rawPayload: (event.payload as Record<string, unknown>).rawPayload,
+          },
+        },
+        trustedTenantId,
+      ),
+
     callAgent: async (ctx, cfg, trustedTenantId = null) => {
+      if (!(await admitInboundCallAgent(services, db, ctx.event, trustedTenantId))) {
+        throw new Error('call_agent ingress access refused');
+      }
       // Chatless dispatch (#1010): no instance and no chat resolved from the
       // triggering event — provider comes from the agent row instead.
       if (ctx.chatless) {
@@ -408,6 +499,7 @@ export function buildAutomationEngineDeps(
       const [agentRow] = await runTenantWorkDb(db, trustedTenantId, () =>
         scopedHandle(db)
           .select({
+            isActive: agents.isActive,
             name: agents.name,
             agentProviderId: agents.agentProviderId,
             agentType: agents.agentType,
@@ -419,6 +511,10 @@ export function buildAutomationEngineDeps(
           .limit(1),
       );
       if (!agentRow) throw new Error(`Agent not found: ${agentFkId}`);
+      if (!agentRow.isActive) {
+        log.info('Skipping call_agent: agent inactive', { agentId: agentFkId });
+        throw new Error(`Agent is inactive: ${agentFkId}`);
+      }
 
       const providerAgentId =
         ((agentRow.metadata as Record<string, unknown> | null)?.providerAgentId as string | undefined) ??
@@ -526,6 +622,17 @@ export function buildAutomationEngineDeps(
     // bus. Best-effort ambient delete (additive tenancy phase).
     releaseEmittedEventClaim: async (eventId) => {
       await scopedHandle(db).delete(omniEvents).where(eq(omniEvents.id, eventId));
+    },
+
+    // One typed action for every provider (connector.call). Resolve + open the
+    // credential in a short worker scope (tenant world), then run the provider
+    // call strictly OUTSIDE it — a worker transaction must never span network
+    // I/O. A failed action is a failed action: no automatic retry in v1.
+    callConnector: async (request, trustedTenantId = null) => {
+      const prepared = await runTenantWorkDb(db, trustedTenantId, () =>
+        services.connectors.resolveAction(request.connectorId, request.action, trustedTenantId),
+      );
+      return services.connectors.executePrepared(prepared, request.input, request.timeoutMs, trustedTenantId);
     },
 
     // Emission gates for emit_event, in order (per issue #987):

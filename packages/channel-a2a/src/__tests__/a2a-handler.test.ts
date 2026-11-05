@@ -131,18 +131,12 @@ describe('handleA2ARequest', () => {
       expect(body.error?.code).toBe(-32700);
     });
 
-    it('returns 400 for missing jsonrpc field', async () => {
-      const res = await handleA2ARequest(makeRequest({ method: 'message/send', id: 1 }), makeCtx());
+    it.each([
+      ['jsonrpc', { method: 'message/send', id: 1 }],
+      ['method', { jsonrpc: '2.0', id: 1 }],
+    ])('returns 400 for missing %s field', async (_field, request) => {
+      const res = await handleA2ARequest(makeRequest(request), makeCtx());
       const body = (await res.json()) as JsonRpcBody;
-
-      expect(res.status).toBe(400);
-      expect(body.error?.code).toBe(-32600); // Invalid request
-    });
-
-    it('returns 400 for missing method field', async () => {
-      const res = await handleA2ARequest(makeRequest({ jsonrpc: '2.0', id: 1 }), makeCtx());
-      const body = (await res.json()) as JsonRpcBody;
-
       expect(res.status).toBe(400);
       expect(body.error?.code).toBe(-32600);
     });
@@ -443,11 +437,6 @@ describe('handleA2ARequest', () => {
 
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Type')).toContain('text/event-stream');
-    });
-
-    it('sets cache-control and connection headers', async () => {
-      const res = await handleA2ARequest(makeRequest(validStream), makeCtx());
-
       expect(res.headers.get('Cache-Control')).toContain('no-cache');
       expect(res.headers.get('Connection')).toBe('keep-alive');
     });

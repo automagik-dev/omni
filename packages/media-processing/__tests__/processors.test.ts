@@ -331,6 +331,7 @@ describe('processors', () => {
       }
     });
 
+    // The shell/Python fixture writes 25 MiB; process startup can exceed 5 s on loaded workers.
     it('normalizes once across fallback attempts and rejects oversized normalized audio', async () => {
       const dir = await mkdtemp(join(tmpdir(), 'omni-audio-normalize-'));
       const audioPath = join(dir, 'input.ogg');
@@ -366,7 +367,7 @@ PY
       } finally {
         await rm(dir, { recursive: true, force: true });
       }
-    });
+    }, 30_000);
   });
 
   describe('ImageProcessor', () => {

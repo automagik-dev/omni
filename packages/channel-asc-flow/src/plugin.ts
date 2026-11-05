@@ -77,7 +77,13 @@ import type { AscFlowConfig } from './types';
 import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
-import { buildInteractive, splitBubbles } from './utils/interactive';
+import {
+  type AscFlowDescriptor,
+  buildFlowInteractive,
+  buildInteractive,
+  splitBubbles,
+  textFallbackOf,
+} from './utils/interactive';
 import { isAscMediaFilename, mediaFallbackText, resolveAscInboundMedia } from './utils/media';
 import { OUTBOUND_MEDIA_FALLBACK_TEXT, buildReplyField, buildRichFields, isRichContent } from './utils/outbound';
 import { isStaleFlowReplay } from './utils/turn-freshness';
@@ -344,9 +350,26 @@ export function normalizeBaseUrl(raw: string): string {
  * show the same bubble twice. A refused `/mensagem` with no caption would leave
  * the turn silent, so it says so instead of nothing.
  */
-/** `'buttons' | 'list' | 'text'`, for the `message.sent` payload. */
+/**
+ * The component the last bubble rides on: a Meta WhatsApp Flow when the send
+ * is `content.type: 'flow'` (descriptor in `metadata.flow`, set by the
+ * `/whatsapp-flows/send` route), else the list or buttons from
+ * `content.buttons`. `null` sends the bubble as text.
+ */
+function interactiveOf(
+  content: OutgoingMessage['content'],
+  meta: Record<string, unknown>,
+  lastBubble: string,
+): Record<string, unknown> | null {
+  if (content.type === 'flow') return buildFlowInteractive(lastBubble, meta.flow as AscFlowDescriptor | undefined);
+  return buildInteractive(lastBubble, content.buttons, listOptionsOf(content));
+}
+
+/** `'buttons' | 'list' | 'url' | 'flow' | 'text'`, for the `message.sent` payload. */
 function interactiveKindOf(params: Record<string, unknown> | null): string {
   if (!params) return 'text';
+  if (params.tipo === 5) return 'flow';
+  if (params.tipo === 3) return 'url';
   return params.tipo === 2 ? 'buttons' : 'list';
 }
 
@@ -559,7 +582,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // a URA node) and on the `/mensagem` that delivers that bubble (which is
       // what actually renders buttons today).
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
-      const interativa = rich ? null : buildInteractive(lastBubble, content.buttons, listOptionsOf(content));
+      const interativa = rich ? null : interactiveOf(content, meta, lastBubble);
 
       const { delivered } = await this.deliver(state, cod, {
         text,
@@ -976,7 +999,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // any other, never left to `resposta` (which the flow reads a cycle
       // late). Without this the beneficiary reads the lead-up and never the
       // question itself.
-      return { delivered: (await this.pushBubbles(state, cod, [turn.lastBubble])) > 0 };
+      return {
+        delivered: (await this.pushBubbles(state, cod, [textFallbackOf(turn.lastBubble, turn.interativa)])) > 0,
+      };
     }
 
     // EVERY bubble is pushed, and `resposta` goes back empty.

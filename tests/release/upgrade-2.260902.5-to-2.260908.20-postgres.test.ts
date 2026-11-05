@@ -31,6 +31,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cleanupAfterFailure, dropDatabaseOrThrow } from '../../packages/db/src/backfill/pg-testing';
 import { createDbHandle } from '../../packages/db/src/client';
 import { applyMigrations } from '../../packages/db/src/migrate';
 import {
@@ -334,8 +335,10 @@ postgresDescribe('v2.260902.5 -> v2.260908.20 release rehearsal (real PostgreSQL
           SELECT 'trigger:' || tgname FROM pg_trigger
           WHERE tgrelid = 'public.${table}'::regclass AND NOT tgisinternal
           UNION ALL
+          -- PostgreSQL 18 also lists each NOT NULL here (contype 'n'), so a column a
+          -- migration adds would read as a new constraint; 17 and older list none.
           SELECT 'constraint:' || conname || '|' || contype::text FROM pg_constraint
-          WHERE conrelid = 'public.${table}'::regclass
+          WHERE conrelid = 'public.${table}'::regclass AND contype <> 'n'
         ) AS catalog;
       `);
   }
@@ -365,9 +368,16 @@ postgresDescribe('v2.260902.5 -> v2.260908.20 release rehearsal (real PostgreSQL
   });
 
   afterAll(async () => {
-    if (handle) await handle.close();
-    if (database) runSqlOn(postgresUrl, `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`);
-    if (candidateDrizzleDir) rmSync(candidateDrizzleDir, { recursive: true, force: true });
+    const removeCandidate = () => {
+      if (candidateDrizzleDir) rmSync(candidateDrizzleDir, { recursive: true, force: true });
+    };
+    try {
+      if (handle) await handle.close();
+      if (database) dropDatabaseOrThrow({ superUrl: postgresUrl, psqlBin }, database);
+    } catch (error) {
+      await cleanupAfterFailure(removeCandidate, error);
+    }
+    removeCandidate();
   });
 
   test('applies 0053-0065 once through the journaled migrator and proves image-only rollback safe', async () => {

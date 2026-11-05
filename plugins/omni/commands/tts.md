@@ -14,7 +14,7 @@ Use to pick a TTS voice or send text as a synthesized voice note.
 
 $ARGUMENTS
 
-## Examples (verified)
+## Examples
 
 ```bash
 omni tts voices --json
@@ -23,3 +23,5 @@ omni speak "On my way" --voice Kore   # inside a turn — chat context pre-set
 ```
 
 Providers (gemini/openai/elevenlabs), style prompts, language: omni-agent skill (speak verb) and `omni speak --help`.
+
+Use `omni tts --help`, `omni speak --help` and `omni voice --help` for the installed voice/provider options. `tts voices` is discovery; `send --tts` and `speak` send audio. Scheduled delivery is separate (`omni schedule --help`) and still requires an authorized target.

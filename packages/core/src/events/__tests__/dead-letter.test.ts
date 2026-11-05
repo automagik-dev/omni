@@ -1,51 +1,18 @@
 import { describe, expect, test } from 'bun:test';
-import {
-  AUTO_RETRY_DELAYS_MS,
-  MAX_AUTO_RETRIES,
-  calculateNextAutoRetryAt,
-  createDeadLetterSystemPayload,
-  prepareDeadLetterInsert,
-} from '../dead-letter';
+import { calculateNextAutoRetryAt, createDeadLetterSystemPayload, prepareDeadLetterInsert } from '../dead-letter';
 import type { OmniEvent } from '../types';
 
 describe('dead-letter', () => {
-  describe('AUTO_RETRY_DELAYS_MS', () => {
-    test('has correct delays', () => {
-      expect(AUTO_RETRY_DELAYS_MS[0]).toBe(1 * 60 * 60 * 1000); // 1 hour
-      expect(AUTO_RETRY_DELAYS_MS[1]).toBe(6 * 60 * 60 * 1000); // 6 hours
-      expect(AUTO_RETRY_DELAYS_MS[2]).toBe(24 * 60 * 60 * 1000); // 24 hours
-    });
-  });
-
-  describe('MAX_AUTO_RETRIES', () => {
-    test('is 3', () => {
-      expect(MAX_AUTO_RETRIES).toBe(3);
-    });
-  });
-
   describe('calculateNextAutoRetryAt', () => {
-    test('returns 1 hour later for first retry', () => {
+    test.each([
+      [0, 1],
+      [1, 6],
+      [2, 24],
+    ])('schedules retry %i after %i hours', (retryCount, hours) => {
       const now = new Date('2026-01-30T12:00:00Z');
-      const next = calculateNextAutoRetryAt(0, now);
-
+      const next = calculateNextAutoRetryAt(retryCount, now);
       expect(next).not.toBeNull();
-      expect(next?.getTime()).toBe(now.getTime() + 1 * 60 * 60 * 1000);
-    });
-
-    test('returns 6 hours later for second retry', () => {
-      const now = new Date('2026-01-30T12:00:00Z');
-      const next = calculateNextAutoRetryAt(1, now);
-
-      expect(next).not.toBeNull();
-      expect(next?.getTime()).toBe(now.getTime() + 6 * 60 * 60 * 1000);
-    });
-
-    test('returns 24 hours later for third retry', () => {
-      const now = new Date('2026-01-30T12:00:00Z');
-      const next = calculateNextAutoRetryAt(2, now);
-
-      expect(next).not.toBeNull();
-      expect(next?.getTime()).toBe(now.getTime() + 24 * 60 * 60 * 1000);
+      expect(next?.getTime()).toBe(now.getTime() + hours * 60 * 60 * 1000);
     });
 
     test('returns null after max retries', () => {

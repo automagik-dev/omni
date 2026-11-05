@@ -4,6 +4,7 @@
 
 import type { Context } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import { runWithProducingKey } from '../lib/producer-scope';
 import { ApiKeyService } from '../services/api-keys';
 import { currentTenantScope, runDetachedFromTenantScope } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
@@ -125,7 +126,7 @@ export const authMiddleware = createMiddleware<{ Variables: AppVariables }>(asyn
     ).catch(() => {});
   }
 
-  await next();
+  await runWithProducingKey(keyData.id, () => next());
 
   // Fire-and-forget audit log after response
   if (services.audit) {

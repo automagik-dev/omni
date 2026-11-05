@@ -162,54 +162,21 @@ describe('AgentHeartbeatConsumer', () => {
     expect(recordActivity).toHaveBeenCalledWith('turn-xyz');
   });
 
-  test('malformed JSON → recordActivity NOT called, no crash', async () => {
+  test.each([
+    ['malformed JSON', 'not-json{'],
+    ['missing turnId', { instanceId: 'inst-1', chatId: 'chat-1', timestamp: 'now' }],
+    ['non-object payload', 42],
+  ])('%s → recordActivity NOT called', async (_name, payload) => {
     const recordActivity = mock(async () => {});
     consumer.start({
       natsConnection: nats as never,
       turnService: { recordActivity } as never,
     });
-
     nats.__push({
       subject: 'omni.agent.heartbeat.inst-1.chat-1',
-      data: encode('not-json{'),
+      data: encode(payload),
     });
-
     await flush();
-
-    expect(recordActivity).not.toHaveBeenCalled();
-  });
-
-  test('missing turnId → recordActivity NOT called', async () => {
-    const recordActivity = mock(async () => {});
-    consumer.start({
-      natsConnection: nats as never,
-      turnService: { recordActivity } as never,
-    });
-
-    nats.__push({
-      subject: 'omni.agent.heartbeat.inst-1.chat-1',
-      data: encode({ instanceId: 'inst-1', chatId: 'chat-1', timestamp: 'now' }),
-    });
-
-    await flush();
-
-    expect(recordActivity).not.toHaveBeenCalled();
-  });
-
-  test('non-object payload → recordActivity NOT called', async () => {
-    const recordActivity = mock(async () => {});
-    consumer.start({
-      natsConnection: nats as never,
-      turnService: { recordActivity } as never,
-    });
-
-    nats.__push({
-      subject: 'omni.agent.heartbeat.inst-1.chat-1',
-      data: encode(42),
-    });
-
-    await flush();
-
     expect(recordActivity).not.toHaveBeenCalled();
   });
 

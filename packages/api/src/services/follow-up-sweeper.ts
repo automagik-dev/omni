@@ -15,6 +15,7 @@
 
 import {
   type AdvanceInput,
+  CHANNELS_WITH_MESSAGING_WINDOW,
   type ChannelType,
   type EventBus,
   type FollowUpDisarmReason,
@@ -22,6 +23,7 @@ import {
   type FollowUpStateRepo,
   type FollowUpStateRow,
   type Logger,
+  MESSAGING_WINDOW_MS,
   type MessagingWindowProbe,
   createLogger,
   createMessagingWindowProbe,
@@ -29,7 +31,8 @@ import {
 } from '@omni/core';
 import type { Database } from '@omni/db';
 import { chatFollowUpState, chats, instances, resolveEnforcementMode } from '@omni/db';
-import { type SQL, and, eq, gt, isNull, lt, lte, sql } from 'drizzle-orm';
+import { type SQL, and, eq, gt, isNull, lt, lte, notInArray, or, sql } from 'drizzle-orm';
+import { notInActiveCloseStateSql } from '../lib/close-contact-state';
 import { isMultitenancyEnabled } from '../tenancy/feature-flag';
 import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -85,6 +88,7 @@ export interface SweepStats {
   fired: number;
   disarmed: number;
   skipped: number;
+  deferred: number;
   rearmed: number;
   // Index signature so this satisfies `Record<string, unknown>` for the
   // logger's structured-context parameter without a cast at the call site.
@@ -142,6 +146,8 @@ export class FollowUpSweeperService {
       recordFired: async (input) => runTenantWorkDb(this.pool, tenantId, () => this.recordFired(input)),
       recordDisarmed: async (id, reason, at) =>
         runTenantWorkDb(this.pool, tenantId, () => this.recordDisarmed(id, reason, at)),
+      recordDeferred: async (id, sequenceIndex, nextFireAt, at) =>
+        runTenantWorkDb(this.pool, tenantId, () => this.recordDeferred(id, sequenceIndex, nextFireAt, at)),
     };
   }
 
@@ -169,6 +175,19 @@ export class FollowUpSweeperService {
       .where(eq(chatFollowUpState.id, id));
   }
 
+  private async recordDeferred(id: string, sequenceIndex: number, nextFireAt: Date, at: Date): Promise<void> {
+    await this.db
+      .update(chatFollowUpState)
+      .set({ nextFireAt, updatedAt: at })
+      .where(
+        and(
+          eq(chatFollowUpState.id, id),
+          eq(chatFollowUpState.sequenceIndex, sequenceIndex),
+          isNull(chatFollowUpState.disarmReason),
+        ),
+      );
+  }
+
   /**
    * Inject the lifecycle service after construction. Required for the
    * stale-pause re-arm pass introduced in #624 — wired by `services/index.ts`
@@ -191,7 +210,7 @@ export class FollowUpSweeperService {
    */
   async sweep(): Promise<SweepStats> {
     if (!this.eventBus) {
-      return { scanned: 0, fired: 0, disarmed: 0, skipped: 0, rearmed: 0 };
+      return { scanned: 0, fired: 0, disarmed: 0, skipped: 0, deferred: 0, rearmed: 0 };
     }
 
     // Flag-off: the single pre-G5 pass, byte-identical — no enumeration, no
@@ -205,7 +224,7 @@ export class FollowUpSweeperService {
     // transitional NULL-tenant pass outside enforcement. A suspended/archived
     // tenant drops out of the enumeration, so its periodic work stops at the
     // next tick — dequeue-time revalidation at cron cadence.
-    const totals: SweepStats = { scanned: 0, fired: 0, disarmed: 0, skipped: 0, rearmed: 0 };
+    const totals: SweepStats = { scanned: 0, fired: 0, disarmed: 0, skipped: 0, deferred: 0, rearmed: 0 };
     if (this.authPlaneDb) {
       const tenantIds = await enumerateActiveWorkTenants(this.authPlaneDb);
       for (const tenantId of tenantIds) {
@@ -232,7 +251,7 @@ export class FollowUpSweeperService {
   }
 
   private accumulate(totals: SweepStats, pass: SweepStats): void {
-    for (const key of ['scanned', 'fired', 'disarmed', 'skipped', 'rearmed'] as const) {
+    for (const key of ['scanned', 'fired', 'disarmed', 'skipped', 'deferred', 'rearmed'] as const) {
       totals[key] = (totals[key] ?? 0) + (pass[key] ?? 0);
     }
   }
@@ -241,7 +260,7 @@ export class FollowUpSweeperService {
   private async sweepWorld(world: SweepWorld): Promise<SweepStats> {
     // Pass 1 — re-arm stale customer_replied pauses (#624).
     // Runs before the fire-due pass so any row that newly transitions back
-    // to armed is eligible immediately on the next tick.
+    // to armed is eligible to fire later in this same sweep.
     const rearmed = await this.sweepStaleCustomerReplied(world);
     // Pass 2 — original fire-due sweep.
     const fireStats = await sweepFollowUps({
@@ -280,6 +299,7 @@ export class FollowUpSweeperService {
     const now = new Date();
     const minBoundary = new Date(now.getTime() - STALE_PAUSE_MAX_AGE_MS);
     const maxBoundary = new Date(now.getTime() - STALE_PAUSE_MIN_AGE_MS);
+    const windowBoundary = new Date(now.getTime() - MESSAGING_WINDOW_MS);
 
     // Wrap the SELECT in a transaction with `FOR UPDATE SKIP LOCKED` to
     // mirror `findAndLockDue` (line ~100). Two reasons:
@@ -313,6 +333,7 @@ export class FollowUpSweeperService {
             })
             .from(chatFollowUpState)
             .leftJoin(chats, eq(chatFollowUpState.chatId, chats.id))
+            .leftJoin(instances, eq(chatFollowUpState.instanceId, instances.id))
             .where(
               and(
                 eq(chatFollowUpState.disarmReason, 'customer_replied'),
@@ -321,6 +342,13 @@ export class FollowUpSweeperService {
                 // Same null-safe agentPaused gate as `findAndLockDue` —
                 // preserves the #528 race fix for the re-arm path.
                 sql`(${chats.settings}->>'agentPaused') IS DISTINCT FROM 'true'`,
+                notInActiveCloseStateSql(chats.settings, now),
+                or(
+                  isNull(instances.channel),
+                  notInArray(instances.channel, [...CHANNELS_WITH_MESSAGING_WINDOW]),
+                  sql`(${chatFollowUpState.sequenceConfig}->'stopOutsideMessagingWindow') = 'false'::jsonb`,
+                  gt(chatFollowUpState.lastInboundCustomerMessageAt, windowBoundary),
+                ),
                 ...worldPredicate,
               ),
             )

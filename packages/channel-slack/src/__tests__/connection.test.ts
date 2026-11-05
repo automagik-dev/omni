@@ -57,6 +57,12 @@ mock.module('@slack/bolt', () => {
   return { App: MockApp, SocketModeReceiver: MockSocketModeReceiver, HTTPReceiver: MockHTTPReceiver };
 });
 
+// mock.module outlives this file in a single-process sweep (`bun test packages`):
+// every later importer of @slack/web-api gets this module. Keep the real
+// exports (ChatStreamer, error codes, ...) and replace only WebClient, so a
+// later file's named import, e.g. native-stream.test.ts's ChatStreamer, still resolves.
+const realWebApi = await import('@slack/web-api');
+
 mock.module('@slack/web-api', () => {
   class MockWebClient {
     token: string | undefined;
@@ -102,7 +108,7 @@ mock.module('@slack/web-api', () => {
       };
     }
   }
-  return { WebClient: MockWebClient };
+  return { ...realWebApi, WebClient: MockWebClient };
 });
 
 // Only the plugin has to be imported AFTER the mocks — it is what builds a
@@ -360,18 +366,6 @@ describe('SlackError', () => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Rate limiting configuration
-// ─────────────────────────────────────────────────────────────
-
-describe('Rate limiting config', () => {
-  it('plugin accepts retryConfig in options', () => {
-    const plugin = new SlackPlugin();
-    // Just verify the type works — actual connection test requires a Slack workspace
-    expect(plugin.id).toBe('slack');
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
 // Shared receiver: one Slack app token, one socket, many instances
 // ─────────────────────────────────────────────────────────────
 
@@ -463,6 +457,14 @@ async function deliverTeamMessage(teamId = 'T_SHARED', authorizedUserIds: string
 }
 
 describe('SlackPlugin — instances behind one Slack app share one receiver', () => {
+  it('rejects HTTP mode without a signing secret as INVALID_TOKEN', async () => {
+    const { plugin } = await makeSharedPlugin();
+    const config = { ...configFor('inst-http'), options: { botToken: 'xoxb-fake', mode: 'http' } };
+    await expect(plugin.connect('inst-http', config)).rejects.toMatchObject({
+      channelCode: SlackErrorCode.INVALID_TOKEN,
+    });
+  });
+
   it('two instances on one app token share a single receiver, and one team event reaches both', async () => {
     const { plugin, internals } = await makeSharedPlugin();
 

@@ -28,7 +28,7 @@ import type {
   StreamSender,
   ThreadStarterCache,
 } from '@omni/channel-sdk';
-import { DebounceManager } from '@omni/core';
+import { DebounceManager, ValidationError } from '@omni/core';
 import type { ChannelType, ContentType } from '@omni/core/types';
 import type { App } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
@@ -48,6 +48,7 @@ import { setupInteractionHandlers } from './handlers/interactions';
 import { type SlackDebouncedArgs, setupMessageHandlers, shouldSkipMessage } from './handlers/messages';
 import { setupPinHandlers } from './handlers/pins';
 import { type SlackStatusMethod, clearTypingStatus, forgetStatusMemo, setSlackThreadStatus } from './handlers/typing';
+import { inlineSlackMentions, markdownToMrkdwn } from './markdown';
 import { uploadFile, uploadFileFromUrl } from './senders/media';
 import { type NativeStreamSender, createNativeStreamSender } from './senders/native-stream';
 import { createSlackStreamSender } from './senders/stream';
@@ -73,6 +74,53 @@ import { resolveSlackEmojiName } from './utils/emoji';
 const downloadGuard = createDownloadGuard();
 
 type SlackPresenceType = 'typing' | 'recording' | 'paused';
+
+const SLACK_MENTION_ID_PATTERNS = {
+  user: /^[UW][A-Z0-9]+$/,
+  channel: /^[CG][A-Z0-9]+$/,
+  role: /^S[A-Z0-9]+$/,
+};
+const slackMentionsSchema = z
+  .array(
+    z
+      .object({
+        id: z.string().min(1),
+        type: z.enum(['user', 'channel', 'role', 'everyone', 'here']).default('user'),
+      })
+      .refine(
+        ({ id, type }) => type === 'everyone' || type === 'here' || SLACK_MENTION_ID_PATTERNS[type].test(id),
+        'Invalid Slack mention ID',
+      ),
+  )
+  .default([]);
+
+/** Match Discord's structured-mention prefix; Slack roles are user groups (subteams). */
+function withSlackMentions(text: string, value: unknown): string {
+  const parsed = slackMentionsSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new ValidationError('Invalid Slack mentions: use U/W user IDs, C/G channel IDs or S user-group IDs');
+  }
+  if (parsed.data.length === 0) return text;
+  const existing = inlineSlackMentions(text);
+  const tokens = new Set(
+    parsed.data.map(({ id, type }) => {
+      switch (type) {
+        case 'user':
+          return `<@${id}>`;
+        case 'channel':
+          return `<#${id}>`;
+        case 'role':
+          return `<!subteam^${id}>`;
+        case 'everyone':
+          return '<!everyone>';
+        case 'here':
+          return '<!here>';
+      }
+    }),
+  );
+  const prefix = [...tokens].filter((token) => !existing.has(token)).join(' ');
+  return prefix ? (text ? `${prefix} ${text}` : prefix) : text;
+}
 
 /**
  * Lift the fields the receiver routes on out of one of Bolt's per-event body
@@ -941,6 +989,8 @@ export class SlackPlugin extends BaseChannelPlugin {
 
       return { success: true, messageId, timestamp: Date.now() };
     } catch (error) {
+      // Caller input errors must reach the API's 400 mapper, not become send failures (502).
+      if (error instanceof ValidationError) throw error;
       const errorMessage = error instanceof Error ? error.message : String(error);
       const errorCode = error instanceof SlackError ? error.channelCode : SlackErrorCode.SEND_FAILED;
       const retryable = error instanceof SlackError ? error.recoverable : false;
@@ -2486,17 +2536,20 @@ export class SlackPlugin extends BaseChannelPlugin {
     const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
     const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+    const body = message.content.text ?? '';
+    const formattedText = formatMode === 'passthrough' ? body : markdownToMrkdwn(body);
 
     return sendTextMessage(
       attachment.actingClient,
       {
         channelId,
-        text: message.content.text ?? '',
+        text: withSlackMentions(formattedText, message.metadata?.mentions),
         threadTs,
         username: config.defaultUsername,
         iconUrl: config.defaultIconUrl,
         iconEmoji: config.defaultIconEmoji,
-        formatMode,
+        // Structured broadcasts are explicit caller intent, added only after conversion.
+        formatMode: 'passthrough',
         ephemeral: message.metadata?.ephemeral === true,
         ephemeralUserId: message.metadata?.ephemeralUserId as string | undefined,
       },
@@ -2513,6 +2566,9 @@ export class SlackPlugin extends BaseChannelPlugin {
   ): Promise<string> {
     const replyToMode = config.replyToMode ?? 'all';
     const threadTs = this.resolveThreadTs(replyToMode, message.replyTo, message.threadId);
+    const formatMode = (message.metadata?.messageFormatMode as 'convert' | 'passthrough') ?? 'convert';
+    const caption = message.content.text || message.content.caption;
+    const initialComment = formatMode === 'passthrough' || caption === undefined ? caption : markdownToMrkdwn(caption);
 
     if (message.metadata?.base64) {
       const buffer = Buffer.from(message.metadata.base64 as string, 'base64');
@@ -2524,7 +2580,7 @@ export class SlackPlugin extends BaseChannelPlugin {
           content: buffer,
           filename,
           threadTs,
-          initialComment: message.content.text || message.content.caption,
+          initialComment,
         },
         this.logger,
       );
@@ -2541,7 +2597,7 @@ export class SlackPlugin extends BaseChannelPlugin {
         url: message.content.mediaUrl,
         filename: message.content.filename || `file-${Date.now()}`,
         threadTs,
-        initialComment: message.content.text || message.content.caption,
+        initialComment,
       },
       this.logger,
     );

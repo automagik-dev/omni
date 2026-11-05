@@ -47,19 +47,8 @@ function hoursAgo(n: number, from = Date.now()): number {
 
 describe('Session Reset Strategy Engine', () => {
   describe('resolveResetConfig', () => {
-    it('should return "none" for null config', () => {
-      const result = resolveResetConfig(null, 'dm');
-      expect(result.mode).toBe('none');
-    });
-
-    it('should return "none" for undefined config', () => {
-      const result = resolveResetConfig(undefined, 'dm');
-      expect(result.mode).toBe('none');
-    });
-
-    it('should return "none" for empty config', () => {
-      const result = resolveResetConfig({}, 'dm');
-      expect(result.mode).toBe('none');
+    it.each([null, undefined, {}])('should return "none" for %p config', (config) => {
+      expect(resolveResetConfig(config, 'dm').mode).toBe('none');
     });
 
     it('should return chat-type-specific config when available', () => {

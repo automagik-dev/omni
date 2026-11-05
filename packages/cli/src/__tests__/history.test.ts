@@ -131,6 +131,12 @@ mock.module('../output.js', () => ({
 const mockGetMessages = mock(() => Promise.resolve(MOCK_MESSAGES));
 
 mock.module('../client.js', () => ({
+  // Bun's module mocks are process-wide: every export another test file imports must exist.
+  exitNotAuthenticated: () => {
+    throw new Error('not authenticated');
+  },
+  getOptionalClient: () => null,
+  installActorHeader: () => {},
   getClient: () => ({
     chats: {
       getMessages: mockGetMessages,
@@ -172,38 +178,18 @@ describe('history command', () => {
     clearEnvKey('OMNI_CHAT');
     clearEnvKey('OMNI_MESSAGE');
     if (savedHome !== undefined) process.env.OMNI_CONFIG_DIR = savedHome;
-    else process.env.OMNI_CONFIG_DIR = undefined;
+    else clearEnvKey('OMNI_CONFIG_DIR');
   });
 
-  test('fetches messages with default limit of 10', async () => {
+  test.each([
+    ['fetches messages with default limit of 10', [], { limit: 10, before: undefined }],
+    ['respects --limit option', ['--limit', '20'], { limit: 20, before: undefined }],
+    ['respects --before option for pagination', ['--before', 'ext-msg-003'], { limit: 10, before: 'ext-msg-003' }],
+  ] as const)('%s', async (_name, argv, expected) => {
     const cmd = createHistoryCommand();
-    await cmd.parseAsync(['node', 'history']);
-
+    await cmd.parseAsync(['node', 'history', ...argv]);
     expect(mockGetMessages).toHaveBeenCalledTimes(1);
-    expect(mockGetMessages).toHaveBeenCalledWith('chat-001', {
-      limit: 10,
-      before: undefined,
-    });
-  });
-
-  test('respects --limit option', async () => {
-    const cmd = createHistoryCommand();
-    await cmd.parseAsync(['node', 'history', '--limit', '20']);
-
-    expect(mockGetMessages).toHaveBeenCalledWith('chat-001', {
-      limit: 20,
-      before: undefined,
-    });
-  });
-
-  test('respects --before option for pagination', async () => {
-    const cmd = createHistoryCommand();
-    await cmd.parseAsync(['node', 'history', '--before', 'ext-msg-003']);
-
-    expect(mockGetMessages).toHaveBeenCalledWith('chat-001', {
-      limit: 10,
-      before: 'ext-msg-003',
-    });
+    expect(mockGetMessages).toHaveBeenCalledWith('chat-001', expected);
   });
 
   test('passes formatted rows to output.list with raw messages', async () => {

@@ -25,6 +25,7 @@ import {
 import { ERROR_CODES, OmniError } from '../../errors';
 import { createLogger } from '../../logger';
 import { createOmniEvent } from '../factory';
+import { isConnectorEventType } from '../types';
 
 const log = createLogger('nats');
 
@@ -59,6 +60,7 @@ function buildTraceHeaders(): ReturnType<typeof natsHeaders> | null {
   }
 }
 import type {
+  ConnectorEventPublisher,
   EventBus,
   EventBusConfig,
   EventHandler,
@@ -68,6 +70,7 @@ import type {
   Subscription,
 } from '../bus';
 import type {
+  ConnectorEventType,
   CoreEventType,
   EventPayloadMap,
   EventType,
@@ -147,7 +150,7 @@ export function toPayloadTooLargeError(error: unknown, size: number, maxPayload:
 /**
  * NatsEventBus implementation
  */
-export class NatsEventBus implements EventBus {
+export class NatsEventBus implements EventBus, ConnectorEventPublisher {
   private nc: NatsConnection | null = null;
   private js: JetStreamClient | null = null;
   private jsm: JetStreamManager | null = null;
@@ -237,6 +240,7 @@ export class NatsEventBus implements EventBus {
     payload: EventPayloadMap[T],
     metadata?: Partial<OmniEvent['metadata']>,
   ): Promise<PublishResult> {
+    if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
     return this.publishInternal(type, payload, metadata);
   }
 
@@ -248,6 +252,7 @@ export class NatsEventBus implements EventBus {
     payload: GenericEventPayload,
     metadata?: Partial<OmniEvent['metadata']>,
   ): Promise<PublishResult> {
+    if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
     // Validate via registry
     const validation = eventRegistry.validate(type, payload);
     if (!validation.success) {
@@ -258,8 +263,18 @@ export class NatsEventBus implements EventBus {
   }
 
   /**
-   * Internal publish implementation
+   * Connector ingress and retries retain the journal claim's event identity.
    */
+  async publishConnector(
+    type: ConnectorEventType,
+    payload: Record<string, unknown>,
+    metadata: Partial<OmniEvent['metadata']> & { publishEventId: string },
+  ): Promise<PublishResult> {
+    if (!isConnectorEventType(type) || !metadata.publishEventId) throw new Error('Invalid connector publish');
+    return this.publishInternal(type, payload, metadata);
+  }
+
+  /** Internal publish implementation shared by the typed public paths. */
   private async publishInternal(
     type: EventType,
     payload: unknown,

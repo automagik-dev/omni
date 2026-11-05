@@ -1,9 +1,9 @@
 /**
  * Meta WhatsApp Cloud — media message sender.
  *
- * Handles image/audio/video/document/sticker outbound messages via the
- * `link` form (public URL). The `id` form (pre-uploaded media handle)
- * is Group 6's concern.
+ * Handles image/audio/video/document/sticker outbound messages, either by
+ * `link` (public URL) or by `id` (media uploaded first with
+ * `MetaWhatsAppClient.uploadMedia`, for file bytes sent as base64).
  *
  * Notes:
  *   - Audio messages reject captions on Meta's side. We drop any caption
@@ -18,6 +18,9 @@ import type { MetaMediaPayload, MetaOutboundMessage, MetaSendResponse } from '..
 import { toMetaPhone } from '../utils/identity';
 
 export type MetaMediaKind = 'image' | 'audio' | 'video' | 'document' | 'sticker';
+
+/** A public URL, or the id of media already uploaded to Meta. */
+export type MetaMediaSource = string | { id: string };
 
 /**
  * Map a MIME type to a Meta media kind.
@@ -40,14 +43,14 @@ export function resolveMetaMediaType(mimeType?: string): MetaMediaKind {
 export async function sendMedia(
   client: MetaWhatsAppClient,
   to: string,
-  mediaUrl: string,
+  source: MetaMediaSource,
   mimeType?: string,
   caption?: string,
   filename?: string,
   replyTo?: string,
 ): Promise<MetaSendResponse> {
   const kind = resolveMetaMediaType(mimeType);
-  const media: MetaMediaPayload = { link: mediaUrl };
+  const media: MetaMediaPayload = typeof source === 'string' ? { link: source } : { id: source.id };
 
   // Captions: image / video / document only. Audio + sticker reject them.
   if (caption && (kind === 'image' || kind === 'video' || kind === 'document')) {

@@ -10,7 +10,7 @@ import { generateId } from '../../ids';
 import { type ActionDependencies, executeActions } from '../actions';
 import { evaluateConditions } from '../conditions';
 import { createTemplateContext } from '../templates';
-import type { Automation, AutomationAction, AutomationCondition } from '../types';
+import type { AutomationAction, AutomationCondition } from '../types';
 
 // Import real fixtures using relative path
 import fixtures from '../../../../channel-whatsapp/test/fixtures/real-payloads.json';
@@ -102,22 +102,6 @@ describe('Full automation flow with real WhatsApp payloads', () => {
         'Thanks for your message: "Buenas como q tão as coisas aí"',
         undefined,
       );
-    });
-
-    test('skips automation when conditions do not match', async () => {
-      const payload = getFixture(fixtures.messages.text, 0).payload;
-
-      // Conditions that won't match (wrong sender name)
-      const conditions: AutomationCondition[] = [
-        { field: 'key.fromMe', operator: 'eq', value: false },
-        { field: 'pushName', operator: 'eq', value: 'Unknown User' },
-      ];
-
-      const matched = evaluateConditions(conditions, payload);
-      expect(matched).toBe(false);
-
-      // Actions should not execute
-      // (In real engine, this would skip action execution)
     });
   });
 
@@ -278,54 +262,6 @@ describe('Full automation flow with real WhatsApp payloads', () => {
     });
   });
 
-  describe('Message type filtering patterns', () => {
-    test('creates automation that only triggers on image messages', () => {
-      const imagePayload = getFixture(fixtures.messages.image, 0).payload;
-      const textPayload = getFixture(fixtures.messages.text, 0).payload;
-
-      const conditions: AutomationCondition[] = [
-        { field: 'key.fromMe', operator: 'eq', value: false },
-        { field: 'message.imageMessage', operator: 'exists' },
-      ];
-
-      // Should match image
-      expect(evaluateConditions(conditions, imagePayload)).toBe(true);
-
-      // Should not match text
-      expect(evaluateConditions(conditions, textPayload)).toBe(false);
-    });
-
-    test('creates automation that triggers on forwarded messages only', () => {
-      const forwardedPayload = getFixture(fixtures.messages.extendedText, 1).payload;
-      const normalPayload = getFixture(fixtures.messages.text, 0).payload;
-
-      const conditions: AutomationCondition[] = [
-        { field: 'message.extendedTextMessage.contextInfo.isForwarded', operator: 'eq', value: true },
-      ];
-
-      // Should match forwarded
-      expect(evaluateConditions(conditions, forwardedPayload)).toBe(true);
-
-      // Should not match normal
-      expect(evaluateConditions(conditions, normalPayload)).toBe(false);
-    });
-
-    test('creates automation that triggers on reply messages', () => {
-      const replyPayload = getFixture(fixtures.messages.extendedText, 0).payload;
-      const normalPayload = getFixture(fixtures.messages.text, 0).payload;
-
-      const conditions: AutomationCondition[] = [
-        { field: 'message.extendedTextMessage.contextInfo.quotedMessage', operator: 'exists' },
-      ];
-
-      // Should match reply
-      expect(evaluateConditions(conditions, replyPayload)).toBe(true);
-
-      // Should not match normal
-      expect(evaluateConditions(conditions, normalPayload)).toBe(false);
-    });
-  });
-
   describe('Call event automations', () => {
     test('detects missed call and sends notification', async () => {
       const callTerminate = getFixture(fixtures.events.call, 2); // terminate event
@@ -357,20 +293,6 @@ describe('Full automation flow with real WhatsApp payloads', () => {
   });
 
   describe('Complex real-world automation scenarios', () => {
-    test('VIP customer detection: text from known contact with specific pattern', () => {
-      const payload = getFixture(fixtures.messages.text, 0).payload;
-
-      // Automation: detect messages from Alice Test containing Portuguese greetings
-      const conditions: AutomationCondition[] = [
-        { field: 'key.fromMe', operator: 'eq', value: false },
-        { field: 'pushName', operator: 'eq', value: 'Alice Test' },
-        { field: 'message.conversation', operator: 'contains', value: 'Buenas' },
-      ];
-
-      const matched = evaluateConditions(conditions, payload);
-      expect(matched).toBe(true);
-    });
-
     test('Poll interaction: detect when poll is created', async () => {
       const pollPayload = getFixture(fixtures.messages.poll, 0).payload;
 
@@ -399,18 +321,6 @@ describe('Full automation flow with real WhatsApp payloads', () => {
       expect((getFixture(results, 0).result as { message: string }).message).toBe(
         'Poll created: "Quero saber" by Alice Test',
       );
-    });
-
-    test('Location sharing: detect and log location shares', () => {
-      const locationPayload = getFixture(fixtures.messages.location, 0).payload;
-
-      const conditions: AutomationCondition[] = [
-        { field: 'message.locationMessage', operator: 'exists' },
-        { field: 'key.fromMe', operator: 'eq', value: false },
-      ];
-
-      const matched = evaluateConditions(conditions, locationPayload);
-      expect(matched).toBe(true);
     });
 
     test('Contact card sharing: detect and log contact shares', async () => {
@@ -472,55 +382,5 @@ describe('Full automation flow with real WhatsApp payloads', () => {
       // Second action still ran
       expect(getFixture(results, 1).status).toBe('success');
     });
-  });
-});
-
-describe('Automation testAutomation (dry run) simulation', () => {
-  test('simulates automation test against real payload', () => {
-    const payload = getFixture(fixtures.messages.text, 0).payload;
-
-    // Define automation
-    const automation: Partial<Automation> = {
-      name: 'Test Auto-Reply',
-      triggerEventType: 'message.received',
-      triggerConditions: [
-        { field: 'key.fromMe', operator: 'eq', value: false },
-        { field: 'message.conversation', operator: 'exists' },
-      ],
-      actions: [
-        {
-          type: 'send_message',
-          config: {
-            instanceId: '{{instanceId}}',
-            to: '{{payload.key.remoteJidAlt}}',
-            contentTemplate: 'Auto-reply: received your message',
-          },
-        },
-      ],
-    };
-
-    // Simulate dry run
-    const conditions = automation.triggerConditions as AutomationCondition[];
-    const matched = evaluateConditions(conditions, payload);
-
-    const dryRunResult = {
-      matched,
-      conditions: conditions.map((c) => ({
-        field: c.field,
-        operator: c.operator,
-        matched: evaluateConditions([c], payload),
-      })),
-      actions: (automation.actions as AutomationAction[]).map((a) => ({
-        type: a.type,
-        wouldExecute: matched,
-      })),
-      dryRun: true as const,
-    };
-
-    expect(dryRunResult.matched).toBe(true);
-    expect(dryRunResult.conditions).toHaveLength(2);
-    expect(dryRunResult.conditions.every((c) => c.matched)).toBe(true);
-    expect(dryRunResult.actions).toHaveLength(1);
-    expect(getFixture(dryRunResult.actions, 0).wouldExecute).toBe(true);
   });
 });

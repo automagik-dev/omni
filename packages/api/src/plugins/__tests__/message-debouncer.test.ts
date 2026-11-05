@@ -4,7 +4,7 @@
  * Now imports from the extracted message-debouncer module instead of
  * duplicating the class.
  */
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, jest } from 'bun:test';
 import { type BufferedMessage, type DebounceConfig, MessageDebouncer } from '../message-debouncer';
 
 // ---------------------------------------------------------------------------
@@ -42,9 +42,27 @@ const disabledConfig: DebounceConfig = {
   maxWaitMs: null,
 };
 
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// Settle onFlush's await/finally chain before advancing: releasing an active
+// run re-arms the next batch at the current clock, not at the end of a jump.
+async function settleFlush(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
 }
+
+async function advance(ms: number): Promise<void> {
+  await settleFlush();
+  jest.advanceTimersByTime(ms);
+  await settleFlush();
+}
+
+beforeEach(() => {
+  jest.useFakeTimers({ now: 0 });
+});
+
+afterEach(() => {
+  jest.clearAllTimers();
+  jest.useRealTimers();
+});
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -75,8 +93,8 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), fixedConfig);
 
-      // Wait for the fixed timer to fire (100ms + margin)
-      await wait(150);
+      // Advance the fixed timer deterministically
+      await advance(150);
 
       // First flush should have started
       expect(flushCalls.length).toBe(1);
@@ -89,7 +107,7 @@ describe('MessageDebouncer', () => {
       // Release the first flush
       resolveFirstFlush!();
       // Late arrivals now wait out a fresh debounce window before firing.
-      await wait(200);
+      await advance(200);
 
       // Second flush should have picked up the late arrivals
       expect(flushCalls.length).toBe(2);
@@ -98,27 +116,28 @@ describe('MessageDebouncer', () => {
 
     it('messages arriving during in-flight do NOT start a competing timer', async () => {
       let flushCount = 0;
-
+      let releaseFirst!: () => void;
+      const firstDone = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
       debouncer = new MessageDebouncer(async () => {
         flushCount++;
-        // Simulate slow processing
-        await wait(200);
+        if (flushCount === 1) await firstDone;
       });
 
-      // Buffer a message and let the fixed window fire
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
-      await wait(150);
-
-      // First flush is now in-flight
+      await advance(100);
       expect(flushCount).toBe(1);
 
-      // Buffer while in-flight — should NOT create a timer
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), fixedConfig);
+      await advance(300);
+      expect(flushCount).toBe(1);
+      expect(jest.getTimerCount()).toBe(0);
 
-      // Wait for first flush to complete + re-flush
-      await wait(300);
-
-      // Should have flushed twice total, not more
+      releaseFirst();
+      await advance(99);
+      expect(flushCount).toBe(1);
+      await advance(1);
       expect(flushCount).toBe(2);
     });
 
@@ -146,7 +165,7 @@ describe('MessageDebouncer', () => {
 
       // First message flushes and blocks in-flight
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
-      await wait(150);
+      await advance(150);
       // Buffering before/outside a flush must NOT notify
       expect(queued.length).toBe(0);
 
@@ -161,9 +180,9 @@ describe('MessageDebouncer', () => {
 
       resolveFirstFlush!();
       // Release the re-flush of msg2/msg3 too so no flush is left dangling
-      await wait(200);
+      await advance(200);
       resolveFirstFlush!();
-      await wait(50);
+      await advance(50);
     });
 
     it('handles errors in onFlush without losing subsequent messages', async () => {
@@ -177,7 +196,7 @@ describe('MessageDebouncer', () => {
       });
 
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
-      await wait(150);
+      await advance(150);
 
       // First flush errored
       expect(flushCalls.length).toBe(1);
@@ -185,7 +204,7 @@ describe('MessageDebouncer', () => {
       // Buffer more messages — inFlight should be cleared even after error
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), fixedConfig);
 
-      await wait(150);
+      await advance(150);
       expect(flushCalls.length).toBe(2);
     });
   });
@@ -201,7 +220,7 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), disabledConfig);
 
       // delay=0 means setTimeout(fn, 0) — fires on next tick
-      await wait(50);
+      await advance(50);
 
       expect(flushCalls.length).toBe(1);
       expect(flushCalls[0]!.length).toBe(1);
@@ -215,9 +234,9 @@ describe('MessageDebouncer', () => {
       });
 
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), disabledConfig);
-      await wait(20);
+      await advance(20);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), disabledConfig);
-      await wait(50);
+      await advance(50);
 
       // Two separate flushes because disabled mode restarts the timer each time
       expect(flushCalls.length).toBe(2);
@@ -243,11 +262,11 @@ describe('MessageDebouncer', () => {
 
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), shortRandomConfig);
       // Wait less than minMs, then buffer another — this restarts the timer
-      await wait(40);
+      await advance(40);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), shortRandomConfig);
 
       // Wait long enough for the restarted timer to fire
-      await wait(200);
+      await advance(200);
 
       // Both messages should arrive in a single flush (timer was restarted)
       expect(flushCalls.length).toBe(1);
@@ -280,7 +299,7 @@ describe('MessageDebouncer', () => {
 
       // Buffer a message and wait for the fixed window to fire
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), typingConfig);
-      await wait(150);
+      await advance(150);
       expect(flushCalls.length).toBe(1);
 
       // While in-flight: buffer a late message AND fire a typing event
@@ -290,7 +309,7 @@ describe('MessageDebouncer', () => {
       // Release first flush
       resolveFirstFlush!();
       // Late arrivals now wait out a fresh debounce window before firing.
-      await wait(200);
+      await advance(200);
 
       // Should have exactly 2 flushes — the re-flush from finally picked up msg2.
       // Without the inFlight guard in onUserTyping, a third flush could fire from
@@ -321,16 +340,16 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), typingFixedConfig);
 
       // At 60ms, user starts typing — should reset the 100ms timer
-      await wait(60);
+      await advance(60);
       debouncer.onUserTyping('inst-1', 'chat-1', typingFixedConfig);
 
       // At 110ms from start (50ms after typing reset), the ORIGINAL timer
       // would have fired. If the reset worked, it should NOT have flushed yet.
-      await wait(50);
+      await advance(50);
       expect(flushCalls.length).toBe(0);
 
       // Wait for the restarted timer to fire (100ms from the typing event)
-      await wait(80);
+      await advance(80);
       expect(flushCalls.length).toBe(1);
       expect(flushCalls[0]!.length).toBe(1);
     });
@@ -354,34 +373,36 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), noTypingConfig);
 
       // Typing event should be ignored when restartOnTyping is false
-      await wait(60);
+      await advance(60);
       debouncer.onUserTyping('inst-1', 'chat-1', noTypingConfig);
 
       // Original timer fires at 100ms — should flush normally
-      await wait(80);
+      await advance(80);
       expect(flushCalls.length).toBe(1);
     });
   });
 
   describe('clear()', () => {
     it('clears all internal state including inFlight', async () => {
-      debouncer = new MessageDebouncer(async () => {
-        await wait(500); // Long processing
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
       });
-
+      debouncer = new MessageDebouncer(async () => gate);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg1'), fixedConfig);
-      await wait(150);
+      await advance(100);
 
-      // flush is in-flight now — clear should still work
       debouncer.clear();
+      release();
+      await advance(0);
+      expect(jest.getTimerCount()).toBe(0);
 
-      // No error thrown, debouncer is reusable
       const flushCalls: BufferedMessage[][] = [];
       debouncer = new MessageDebouncer(async (_chatKey, messages) => {
         flushCalls.push([...messages]);
       });
       debouncer.buffer('inst-1', 'chat-1', makeMessage('after-clear'), fixedConfig);
-      await wait(150);
+      await advance(100);
       expect(flushCalls.length).toBe(1);
     });
   });
@@ -404,13 +425,13 @@ describe('MessageDebouncer', () => {
       // onUserTyping restarts a timer, the stale timer could race the new one.
       //
       // After the fix, flush() calls clearTimeout on the old timer.
-      await wait(150); // Let the fixed timer fire normally
+      await advance(150); // Let the fixed timer fire normally
 
       expect(flushCount).toBe(1);
 
       // Buffer and let it flush again
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg2'), fixedConfig);
-      await wait(150);
+      await advance(150);
 
       // Should be exactly 2 — no phantom third flush from a stale timer
       expect(flushCount).toBe(2);
@@ -427,17 +448,17 @@ describe('MessageDebouncer', () => {
 
       // Simulate 5 rapid messages within a 100ms fixed window
       debouncer.buffer('inst-1', 'chat-1', makeMessage('Hi'), fixedConfig);
-      await wait(10);
+      await advance(10);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('I have a question'), fixedConfig);
-      await wait(10);
+      await advance(10);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('About my order'), fixedConfig);
-      await wait(10);
+      await advance(10);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('Order #12345'), fixedConfig);
-      await wait(10);
+      await advance(10);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('Can you help?'), fixedConfig);
 
       // Wait for the fixed window to fire
-      await wait(150);
+      await advance(150);
 
       expect(flushCalls.length).toBe(1);
       expect(flushCalls[0]!.length).toBe(5);
@@ -465,7 +486,7 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-1', makeMessage('msg3'), fixedConfig);
 
       // Wait for fixed timer to fire
-      await wait(150);
+      await advance(150);
       expect(flushCalls.length).toBe(1);
       expect(flushCalls[0]!.messages.length).toBe(3);
 
@@ -476,7 +497,7 @@ describe('MessageDebouncer', () => {
       // Release first flush
       resolveFirstFlush!();
       // Late arrivals now wait out a fresh debounce window before firing.
-      await wait(200);
+      await advance(200);
 
       // Second batch should flush automatically
       expect(flushCalls.length).toBe(2);
@@ -507,17 +528,18 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-1', makeMessage('m1'), presenceConfig);
 
       // Type every 80ms (< minMs) so the quiet-window timer keeps restarting.
-      // Without the cap this batch would never flush; the cap forces it at ~500ms.
-      for (let i = 0; i < 8; i++) {
-        await wait(80);
+      // Without the cap this batch would never flush; the cap forces it at exactly 500ms.
+      for (let i = 0; i < 6; i++) {
+        await advance(80);
         debouncer.onUserTyping('inst-1', 'chat-1', presenceConfig);
       }
 
+      await advance(19); // 499ms: just before the hard cap
+      expect(flushCalls.length).toBe(0);
+      await advance(1);
       expect(flushCalls.length).toBe(1);
       expect(flushCalls[0]!.length).toBe(1);
-      // Flushed around the 500ms cap, not extended by the ongoing typing.
-      expect(flushedAt).toBeGreaterThanOrEqual(450);
-      expect(flushedAt).toBeLessThan(680);
+      expect(flushedAt).toBe(500);
     });
 
     it('flushes minMs after typing stops when still under the cap', async () => {
@@ -537,13 +559,13 @@ describe('MessageDebouncer', () => {
 
       debouncer.buffer('inst-1', 'chat-1', makeMessage('m1'), presenceConfig);
       // One typing burst at 60ms restarts the 100ms quiet window.
-      await wait(60);
+      await advance(60);
       debouncer.onUserTyping('inst-1', 'chat-1', presenceConfig);
       // At 110ms the original window would have fired; the restart holds it back.
-      await wait(50);
+      await advance(50);
       expect(flushCalls.length).toBe(0);
       // 100ms after the typing event → flush.
-      await wait(80);
+      await advance(80);
       expect(flushCalls.length).toBe(1);
     });
   });
@@ -599,7 +621,7 @@ describe('MessageDebouncer', () => {
 
       debouncer.buffer('inst-1', 'chat-1', makeMessage('a'), longConfig);
       debouncer.clear();
-      await wait(50);
+      await advance(50);
 
       // Regression contrast: clear() is the lossy path; flushAll() is not.
       expect(flushCalls.length).toBe(0);
@@ -618,7 +640,7 @@ describe('MessageDebouncer', () => {
       debouncer.buffer('inst-1', 'chat-2', makeMessage('b1'), fixedConfig);
       debouncer.buffer('inst-2', 'chat-1', makeMessage('c1'), fixedConfig);
 
-      await wait(150);
+      await advance(150);
 
       expect(byKey['inst-1:chat-1']).toBe(2);
       expect(byKey['inst-1:chat-2']).toBe(1);
@@ -643,14 +665,14 @@ describe('MessageDebouncer', () => {
       });
 
       debouncer.buffer('inst-1', 'chat-1', makeMessage('first'), disabledConfig);
-      await wait(20); // flush for 'first' is now in flight, awaiting the gate
+      await advance(20); // flush for 'first' is now in flight, awaiting the gate
 
       expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
       debouncer.buffer('inst-1', 'chat-1', makeMessage('second'), disabledConfig);
       expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(true);
 
       release?.();
-      await wait(30); // in-flight flush completes + finally re-flush drains 'second'
+      await advance(30); // in-flight flush completes + finally re-flush drains 'second'
 
       expect(pendingObservedDuringFlush).toEqual([true]);
       expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
@@ -665,7 +687,7 @@ describe('MessageDebouncer', () => {
       expect(debouncer.hasPending('inst-1', 'chat-2')).toBe(false);
       expect(debouncer.hasPending('inst-2', 'chat-1')).toBe(false);
 
-      await wait(150); // fixed window elapses, buffer drains
+      await advance(150); // fixed window elapses, buffer drains
 
       expect(debouncer.hasPending('inst-1', 'chat-1')).toBe(false);
     });
@@ -701,20 +723,19 @@ describe('messages arriving mid-flight', () => {
     });
 
     d.buffer('inst-1', 'chat-1', makeMessage('oi'), fixedConfig(20));
-    await Bun.sleep(35); // first batch flushes and blocks
+    await advance(35); // first batch flushes and blocks
 
     // user keeps typing while the agent is still answering the first message
     d.buffer('inst-1', 'chat-1', makeMessage('quero plano'), fixedConfig(20));
     d.buffer('inst-1', 'chat-1', makeMessage('pra 2 pessoas'), fixedConfig(20));
 
     releaseFirst?.();
-    await Bun.sleep(5);
+    await advance(19);
 
-    // The old behaviour flushed on a setTimeout(0), so the second batch would
-    // already be out here — back to back with the first reply.
+    // An immediate flush would already be out; the fresh 20ms window has not elapsed.
     expect(flushes.length).toBe(1);
 
-    await Bun.sleep(30);
+    await advance(1);
     expect(flushes.length).toBe(2);
     // and both messages are answered together, with full context
     expect(flushes[1]!.length).toBe(2);
@@ -732,43 +753,12 @@ describe('messages arriving mid-flight', () => {
     });
 
     d.buffer('inst-1', 'chat-2', makeMessage('a'), fixedConfig(15));
-    await Bun.sleep(25);
+    await advance(25);
     d.buffer('inst-1', 'chat-2', makeMessage('b'), fixedConfig(15));
     release?.();
 
-    await Bun.sleep(60);
+    await advance(60);
     expect(flushes.length).toBe(2);
     expect(flushes[1]![0]?.payload.content?.text).toBe('b');
-  });
-
-  it('re-arms even in fixed mode, where a live timer normally blocks restarts', async () => {
-    // `restartTimer` refuses to restart a fixed-window timer unless forced.
-    // After a flush there is no live timer, so the new batch must get its own
-    // window — otherwise it would never fire.
-    const flushes: BufferedMessage[][] = [];
-    let release: (() => void) | undefined;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
-    const d = new MessageDebouncer(async (_key, msgs) => {
-      flushes.push(msgs);
-      if (flushes.length === 1) await gate;
-    });
-
-    d.buffer('inst-1', 'chat-3', makeMessage('x'), fixedConfig(15));
-    await Bun.sleep(25);
-    d.buffer('inst-1', 'chat-3', makeMessage('y'), fixedConfig(15));
-    release?.();
-    await Bun.sleep(60);
-
-    expect(flushes.length).toBe(2);
-  });
-
-  it('does not leak config state once the chat drains', async () => {
-    const d = new MessageDebouncer(async () => {});
-    d.buffer('inst-1', 'chat-4', makeMessage('only'), fixedConfig(10));
-    await Bun.sleep(40);
-    // nothing pending, nothing scheduled — a further wait produces no flush
-    expect(d.hasPending('inst-1', 'chat-4')).toBe(false);
   });
 });

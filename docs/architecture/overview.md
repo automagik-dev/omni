@@ -220,7 +220,7 @@ packages/
 │       │   ├── nats/             # Streams, consumers, registry
 │       │   └── types.ts          # Event type definitions
 │       ├── automations/          # Automation engine + actions
-│       ├── providers/            # Agent provider factory (webhook, openclaw, …)
+│       ├── providers/            # Agent provider factory (webhook, …)
 │       ├── schemas/              # Zod schemas (messages, agents, manifests, …)
 │       ├── connectors/           # Connector liveness contract
 │       ├── sessions/ scheduler/ secrets/ egress/ observability/ …
@@ -251,7 +251,6 @@ packages/
 ├── channel-harness/               # E2E agent-testing channel
 ├── channel-internal/              # In-process agent-to-agent routing
 ├── media-processing/              # Transcription, vision, extraction
-├── plugin-openclaw/               # Omni as a channel inside OpenClaw
 ├── voice-client/                  # Voice transport/codec library
 ├── cli/                           # LLM-optimized CLI (`omni`)
 ├── sdk/                           # Auto-generated TypeScript SDK
@@ -494,7 +493,7 @@ with Omni through:
   `omni events wait`)
 - **The REST API + SDKs** — OpenAPI-described, so agents can consume the spec
   directly
-- **Agent providers** — bind an agent (webhook, OpenClaw, Claude Code, A2A,
+- **Agent providers** — bind an agent (webhook, Claude Code, A2A,
   and more) to an instance so it responds to messages; see
   [[provider-system|Provider System]]
 - **Agent event manifests** — declare what an agent consumes/publishes and let

@@ -43,6 +43,7 @@ import {
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import * as oauthTokenCache from '../../lib/oauth-token-cache';
+import { runOutsideProducerScope } from '../../lib/producer-scope';
 import { resolveMetaApiVersion } from '../../lib/whatsapp-business-connection';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
@@ -252,20 +253,22 @@ whatsappBusinessRoutes.post(
     }
 
     try {
-      await plugin.connect(id, {
-        instanceId: id,
-        credentials: {
-          metaAccessToken: accessToken,
-          metaPhoneNumberId: body.phoneNumberId,
-          metaWabaId: body.wabaId,
-          metaAppId: body.appId,
-          metaBusinessId: body.businessId,
-          metaApiVersion: apiVersion,
-          metaConnectionMethod: connectionMethod,
-          metaDisplayPhoneNumber: displayPhoneNumber,
-        },
-        options: {},
-      });
+      await runOutsideProducerScope(() =>
+        plugin.connect(id, {
+          instanceId: id,
+          credentials: {
+            metaAccessToken: accessToken,
+            metaPhoneNumberId: body.phoneNumberId,
+            metaWabaId: body.wabaId,
+            metaAppId: body.appId,
+            metaBusinessId: body.businessId,
+            metaApiVersion: apiVersion,
+            metaConnectionMethod: connectionMethod,
+            metaDisplayPhoneNumber: displayPhoneNumber,
+          },
+          options: {},
+        }),
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error';
       log.error('plugin.connect failed for whatsapp-business', { instanceId: id, error: message });

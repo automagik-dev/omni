@@ -6,6 +6,7 @@
  */
 
 import type {
+  ConnectorEventType,
   CoreEventType,
   EventPayloadMap,
   EventType,
@@ -59,8 +60,17 @@ export interface SubscribeOptions {
 }
 
 /**
- * Event bus interface for publishing and subscribing to events
+ * Trusted connector ingress and journal-backed retries share this capability.
  */
+export interface ConnectorEventPublisher {
+  publishConnector(
+    type: ConnectorEventType,
+    payload: Record<string, unknown>,
+    metadata: Partial<OmniEvent['metadata']> & { publishEventId: string },
+  ): Promise<PublishResult>;
+}
+
+/** Event bus interface for publishing and subscribing to events. */
 export interface EventBus {
   /**
    * Connect to the event bus

@@ -19,6 +19,7 @@ import {
   setConfigValue,
 } from '../config.js';
 import * as output from '../output.js';
+import { quoteShellArg } from '../utils/shell.js';
 
 /**
  * Reject `servers` / `servers.*` keys with a pointer to `omni server`.
@@ -30,8 +31,15 @@ import * as output from '../output.js';
  */
 function rejectServersKey(key: string): void {
   if (!isServersConfigKey(key)) return;
+  const serverArg = quoteShellArg(describeActiveServer().name);
   output.error(`Config key '${key}' is managed by 'omni server', not 'omni config'`, {
-    use: ['omni server list', 'omni server add <name> <url> --api-key <key>', 'omni server use <name>'],
+    use: [
+      'omni server list',
+      'omni server add <name> <url>',
+      `Sign in interactively: omni auth login --server ${serverArg}`,
+      `Or read a key from stdin: omni auth login --server ${serverArg} --api-key-stdin < /secure/path/omni-api-key`,
+      'omni server use <name>',
+    ],
   });
 }
 

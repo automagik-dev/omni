@@ -1,7 +1,7 @@
 /**
  * Provider module exports
  *
- * Provides clients for executing AI agents (Agno, Webhook, OpenClaw)
+ * Provides clients for executing AI agents (Agno, Webhook, Claude Code)
  * and the unified AgentProvider abstraction for multi-provider dispatch.
  */
 
@@ -9,6 +9,7 @@
 export {
   type ProviderRequest,
   type ProviderFile,
+  type ProviderOriginIdentity,
   type ProviderResponse,
   type ProviderMetrics,
   type StreamChunk,
@@ -29,6 +30,7 @@ export {
   OMNI_EXECUTION_CONTEXT_EXTENSION_URI,
   buildOmniEnv,
   buildOmniExecutionContext,
+  buildOriginExecutionContext,
   buildProviderRequestContext,
 } from './execution-context';
 
@@ -55,15 +57,7 @@ export type { ClaudeCodeConfig, ClaudeCodeStreamConfig, StreamRunResult, StreamR
 export { AgnoAgentProvider } from './agno-provider';
 export { ClaudeCodeAgentProvider } from './claude-code-provider';
 export type { ClaudeCodeProviderOptions, SessionStorage } from './claude-code-provider';
-export { WebhookAgentProvider } from './webhook-provider';
-export {
-  ED25519_PKCS8_PREFIX,
-  OpenClawAgentProvider,
-  OpenClawClient,
-  createOpenClawProvider,
-  generateDeviceKeypair,
-} from './openclaw';
-export type { DeviceKeypair, OpenClawClientConfig, OpenClawProviderConfig } from './openclaw';
+export { WebhookAgentClient, WebhookAgentProvider, webhookProviderConfig } from './webhook-provider';
 export { AgUiAgentProvider, createAgUiProvider } from './ag-ui-provider';
 export { A2AAgentProvider, createA2AProvider } from './a2a-provider';
 // NATS Genie Provider (replaces filesystem-based genie-client for new integrations)
@@ -78,3 +72,10 @@ export {
   isProviderSchemaSupported,
   getSupportedProviderSchemas,
 } from './factory';
+
+export {
+  REMOVED_OPENCLAW_MESSAGE,
+  assertProviderAvailable,
+  isRemovedProviderError,
+  removedProviderMessage,
+} from './removed-providers';

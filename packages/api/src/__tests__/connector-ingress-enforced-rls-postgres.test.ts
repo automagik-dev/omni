@@ -1,0 +1,795 @@
+/**
+ * Connector ingress under REAL row-level security (finding F3).
+ *
+ * The legacy acceptance suite (`connector-ingress-postgres.test.ts`) runs on a
+ * superuser handle, so it proves the product loop but not that the loop
+ * survives enforcement. This suite is the missing half:
+ *
+ *   * migrations, then `applyTenantRlsEnforcement` + `applyTenancyRoles`;
+ *   * every query goes through the non-owning `NOBYPASSRLS` runtime role;
+ *   * a valid signed delivery resolves its tenant WITHOUT a request credential,
+ *     claims exactly one `connector.event` journal row, and runs the target
+ *     automation exactly once;
+ *   * paused is `202 ignored`; unknown and badly signed are the same 401;
+ *   * tenant A cannot read tenant B's subscription, connector, journal or run.
+ *
+ * The automation engine is the real engine. Two pre-existing G6 gaps are
+ * isolated rather than papered over: `processed_events` is still unowned, so
+ * the execution claim uses the test seam explicitly (the production dependency
+ * remains the same code path); `automations` is assigned its tenant in the
+ * fixture because connector subscriptions can only target a tenant-owned
+ * automation under enforcement. Both are reported as open decisions.
+ *
+ * Requires a DISPOSABLE superuser URL (`OMNI_G4_POSTGRES_URL`); the pg-gate
+ * provisions one. Skipped otherwise, like every `*-postgres.test.ts` here.
+ */
+
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { createHmac, randomUUID } from 'node:crypto';
+import { clickupManifest } from '@omni/connector-clickup';
+import { ConnectorRegistry } from '@omni/connector-sdk';
+import {
+  CONNECTOR_EVENT_TYPE,
+  CURRENT_ENVELOPE_VERSION,
+  type ConnectorEventPublisher,
+  type Automation as CoreAutomation,
+  type EventBus,
+  type GenericEventHandler,
+  createAutomationEngine,
+  isConnectorEventType,
+  setEnvelopeInstanceTenantResolver,
+} from '@omni/core';
+import {
+  DEFAULT_ROLE_NAMES,
+  type Database,
+  applyTenancyRoles,
+  applyTenantRlsEnforcement,
+  assertEnforcedRuntimeIdentity,
+  automationLogs,
+  automations,
+  connectorEventSubscriptions,
+  connectors,
+  createDbHandle,
+  deadLetterEvents,
+  omniEvents,
+  unwrapDbError,
+} from '@omni/db';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
+import { eq, sql } from 'drizzle-orm';
+import { buildAutomationEngineDeps } from '../plugins/automation-actions';
+import { createServices } from '../services';
+import { ConnectorService } from '../services/connectors';
+import { DeadLetterService } from '../services/dead-letters';
+import { connectorIngressLookupActive, resolveConnectorIngressTenant } from '../tenancy/connector-ingress';
+import {
+  __resetInstanceOwnerRegistry,
+  installInstanceOwnerResolver,
+  rememberInstanceOwners,
+} from '../tenancy/instance-owner-registry';
+import { scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
+
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+const TENANT_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+const TENANT_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2';
+const SECRET_A = 'connector-ingress-enforced-secret-a';
+const SECRET_B = 'connector-ingress-enforced-secret-b';
+const TOKEN_A = 'pk_enforced_acceptance_a';
+const TOKEN_B = 'pk_enforced_acceptance_b';
+
+const BODY_A = JSON.stringify({
+  event: 'taskStatusUpdated',
+  task_id: 'task-a',
+  history_items: [{ id: 'history-enforced-a', date: 1_780_000_000_000, field: 'status', after: 'done' }],
+});
+const BODY_B = JSON.stringify({
+  event: 'taskStatusUpdated',
+  task_id: 'task-b',
+  history_items: [{ id: 'history-enforced-b', date: 1_780_000_000_001, field: 'status', after: 'done' }],
+});
+const BODY_MALFORMED = JSON.stringify({ task_id: 'task-malformed' });
+const BODY_PAUSED = JSON.stringify({
+  event: 'taskStatusUpdated',
+  task_id: 'task-paused',
+  history_items: [{ id: 'history-enforced-paused', date: 1_780_000_000_002, field: 'status', after: 'done' }],
+});
+
+interface CommentRequest {
+  url: string;
+  body: string;
+}
+
+function sign(secret: string, body: string): string {
+  return createHmac('sha256', secret).update(body).digest('hex');
+}
+
+function password(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Buffer.from(bytes).toString('base64url');
+}
+
+/** Minimal in-memory pub/sub: publish awaits every matching subscriber, like NATS ack-after-handle. */
+function inMemoryBus(): {
+  bus: EventBus & ConnectorEventPublisher;
+  handlers: Array<{ pattern: string; handler: GenericEventHandler }>;
+} {
+  const handlers: Array<{ pattern: string; handler: GenericEventHandler }> = [];
+  const publishInternal: EventBus['publishGeneric'] = async (type, payload, metadata) => {
+    const id = (metadata?.publishEventId as string | undefined) ?? randomUUID();
+    const event = { id, type, payload, metadata: { correlationId: id, ...metadata }, timestamp: Date.now() };
+    for (const { pattern, handler } of handlers) {
+      const matches = pattern.endsWith('.>')
+        ? type === pattern.slice(0, -2) || type.startsWith(`${pattern.slice(0, -2)}.`)
+        : pattern === type;
+      if (matches) await handler(event);
+    }
+    return { id, sequence: 0, stream: '' };
+  };
+  const bus: EventBus & ConnectorEventPublisher = {
+    async connect() {},
+    async publish() {
+      return { id: '', sequence: 0, stream: '' };
+    },
+    async publishGeneric(type, payload, metadata) {
+      if (isConnectorEventType(type)) throw new Error('Connector events require publishConnector');
+      return publishInternal(type, payload, metadata);
+    },
+    async publishConnector(
+      type: `connector.${string}`,
+      payload: Record<string, unknown>,
+      metadata: { publishEventId: string },
+    ) {
+      return publishInternal(type, payload, metadata);
+    },
+    async subscribe() {
+      return { id: randomUUID(), pattern: '', unsubscribe: async () => {} };
+    },
+    async subscribePattern(pattern: string, handler: GenericEventHandler) {
+      handlers.push({ pattern, handler });
+      return { id: randomUUID(), pattern, unsubscribe: async () => {} };
+    },
+    async subscribeMany() {
+      return { id: randomUUID(), pattern: '', unsubscribe: async () => {} };
+    },
+    async subscribeAll() {
+      return { id: randomUUID(), pattern: '', unsubscribe: async () => {} };
+    },
+    async close() {},
+    isConnected: () => true,
+  };
+  return { bus, handlers };
+}
+
+postgresDescribe('connector ingress under enforced RLS (real PostgreSQL)', () => {
+  const dbName = `omni_connector_rls_${crypto.randomUUID().replace(/-/g, '').slice(0, 12)}`;
+  const passwords = { ddl: password(), runtime: password(), authPlane: password() };
+  let handle: ReturnType<typeof createDbHandle> | null = null;
+  let db: Database;
+  let authHandle: ReturnType<typeof createDbHandle> | null = null;
+  let unownedDeadLetterId: string;
+  const commentRequests: CommentRequest[] = [];
+  let bus: EventBus & ConnectorEventPublisher;
+  let engine: ReturnType<typeof createAutomationEngine> | null = null;
+  let services: ReturnType<typeof createServices>;
+  let ids: {
+    connectorA: string;
+    connectorB: string;
+    subscriptionA: string;
+    subscriptionPaused: string;
+    subscriptionB: string;
+    automationA: string;
+    automationB: string;
+  };
+
+  const fakeClickUpFetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    if (url.includes('/task/') && url.endsWith('/comment')) {
+      commentRequests.push({ url, body: typeof init?.body === 'string' ? init.body : '' });
+      return new Response(JSON.stringify({ id: 'comment-1', text: 'Done' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ err: 'unexpected URL' }), {
+      status: 404,
+      headers: { 'content-type': 'application/json' },
+    });
+  }) as unknown as typeof fetch;
+
+  /** One read inside a tenant's enforced scope. */
+  async function inTenant<T>(tenantId: string, fn: () => Promise<T>): Promise<T> {
+    return runTenantWorkDb(db, tenantId, fn);
+  }
+
+  beforeAll(async () => {
+    provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
+    handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
+    const superDb = handle.db;
+
+    // Seed BEFORE enforcement: the ownership triggers null tenant_id on insert,
+    // so `automations` gets its tenant by UPDATE (the G6-supported path). The
+    // connector tables have no trigger and accept the persisted owner directly.
+    await superDb.execute(
+      `INSERT INTO tenants (id, slug, display_name, max_key_ttl_seconds, max_key_rate_limit, max_key_budget) VALUES
+         ('${TENANT_A}', 'enforced-a', 'Enforced A', 86400, 1000, 1000),
+         ('${TENANT_B}', 'enforced-b', 'Enforced B', 86400, 1000, 1000);`,
+    );
+
+    const [connectorA] = await superDb
+      .insert(connectors)
+      .values({
+        provider: 'clickup',
+        name: 'Enforced ClickUp A',
+        credentials: JSON.stringify({ token: TOKEN_A }),
+        config: {},
+        status: 'connected',
+        tenantId: TENANT_A,
+      })
+      .returning();
+    const [connectorB] = await superDb
+      .insert(connectors)
+      .values({
+        provider: 'clickup',
+        name: 'Enforced ClickUp B',
+        credentials: JSON.stringify({ token: TOKEN_B }),
+        config: {},
+        status: 'connected',
+        tenantId: TENANT_B,
+      })
+      .returning();
+    if (!connectorA || !connectorB) throw new Error('connector seed failed');
+
+    const [automationA] = await superDb
+      .insert(automations)
+      .values({
+        name: 'Enforced comment A',
+        triggerEventType: CONNECTOR_EVENT_TYPE,
+        actions: [
+          {
+            type: 'connector.call',
+            config: {
+              connectorId: connectorA.id,
+              action: 'add_comment',
+              input: { taskId: '{{payload.task_id}}', comment: 'Done' },
+            },
+          },
+        ],
+        enabled: true,
+      } as never)
+      .returning();
+    const [automationB] = await superDb
+      .insert(automations)
+      .values({
+        name: 'Enforced comment B',
+        triggerEventType: CONNECTOR_EVENT_TYPE,
+        actions: [
+          {
+            type: 'connector.call',
+            config: {
+              connectorId: connectorB.id,
+              action: 'add_comment',
+              input: { taskId: '{{payload.task_id}}', comment: 'Done' },
+            },
+          },
+        ],
+        enabled: true,
+      } as never)
+      .returning();
+    if (!automationA || !automationB) throw new Error('automation seed failed');
+    await superDb.update(automations).set({ tenantId: TENANT_A }).where(eq(automations.id, automationA.id));
+    await superDb.update(automations).set({ tenantId: TENANT_B }).where(eq(automations.id, automationB.id));
+
+    const [subscriptionA] = await superDb
+      .insert(connectorEventSubscriptions)
+      .values({
+        connectorId: connectorA.id,
+        providerEventKey: 'taskStatusUpdated',
+        filters: {},
+        targetAutomationId: automationA.id,
+        verificationSecret: SECRET_A,
+        status: 'active',
+        tenantId: TENANT_A,
+      })
+      .returning();
+    const [subscriptionPaused] = await superDb
+      .insert(connectorEventSubscriptions)
+      .values({
+        connectorId: connectorA.id,
+        // Different binding key: the unique index is (connector, event key,
+        // automation), and this subscription is only ever paused-acked.
+        providerEventKey: 'taskCreated',
+        filters: {},
+        targetAutomationId: automationA.id,
+        verificationSecret: SECRET_A,
+        status: 'paused',
+        tenantId: TENANT_A,
+      })
+      .returning();
+    const [subscriptionB] = await superDb
+      .insert(connectorEventSubscriptions)
+      .values({
+        connectorId: connectorB.id,
+        providerEventKey: 'taskStatusUpdated',
+        filters: {},
+        targetAutomationId: automationB.id,
+        verificationSecret: SECRET_B,
+        status: 'active',
+        tenantId: TENANT_B,
+      })
+      .returning();
+    if (!subscriptionA || !subscriptionPaused || !subscriptionB) throw new Error('subscription seed failed');
+
+    ids = {
+      connectorA: connectorA.id,
+      connectorB: connectorB.id,
+      subscriptionA: subscriptionA.id,
+      subscriptionPaused: subscriptionPaused.id,
+      subscriptionB: subscriptionB.id,
+      automationA: automationA.id,
+      automationB: automationB.id,
+    };
+
+    // A pre-tenancy row has no persisted source; payload claims cannot recover
+    // ownership. G6 backfill owns its repair, so it must remain fail-closed.
+    const [unowned] = await superDb
+      .insert(deadLetterEvents)
+      .values({
+        eventId: randomUUID(),
+        eventType: 'custom.unowned',
+        subject: 'custom.unowned',
+        payload: { metadata: { tenantId: TENANT_A } },
+        error: 'pre-tenancy failure',
+        nextAutoRetryAt: new Date(0),
+      })
+      .returning();
+    if (!unowned) throw new Error('unowned dead-letter seed failed');
+    expect(unowned.tenantId).toBeNull();
+    unownedDeadLetterId = unowned.id;
+
+    // REAL enforcement: the runtime handle below is a non-owning NOBYPASSRLS
+    // role, and every tenant table is FORCE RLS.
+    await applyTenantRlsEnforcement(superDb);
+    await applyTenancyRoles(superDb, passwords, DEFAULT_ROLE_NAMES, dbName);
+
+    const runtimeHandle = createDbHandle({
+      url: pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      maxConnections: 4,
+    });
+    db = runtimeHandle.db;
+    const runtimeIdentity = await assertEnforcedRuntimeIdentity(db);
+    expect(runtimeIdentity.currentUser).toBe(DEFAULT_ROLE_NAMES.runtime);
+
+    await assertPgTestRole(db, DEFAULT_ROLE_NAMES.runtime);
+    const inMemory = inMemoryBus();
+    bus = inMemory.bus;
+
+    services = createServices(db, bus);
+    authHandle = createDbHandle({
+      url: pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      maxConnections: 2,
+    });
+    services.deadLetters.setAuthPlane(authHandle.db);
+    // Inject the fake ClickUp transport into the real service.
+    (services as unknown as { connectors: ConnectorService }).connectors = new ConnectorService(
+      db,
+      bus,
+      new ConnectorRegistry([clickupManifest]),
+      { fetch: fakeClickUpFetch },
+    );
+
+    // Real engine, loaded inside tenant A's scope (an ambient load would fail
+    // closed under enforcement, which is the point).
+    const loadedA = await inTenant(TENANT_A, () => services.automations.getById(ids.automationA));
+    const loadedB = await inTenant(TENANT_B, () => services.automations.getById(ids.automationB));
+    engine = createAutomationEngine({ defaultConcurrency: 5 });
+    engine.setLogger(async (log, trustedTenantId) => {
+      await runTenantWorkDb(db, trustedTenantId ?? null, () => services.automations.logExecution(log));
+    });
+    const deps = buildAutomationEngineDeps(services, db);
+    await engine.start(bus, [loadedA, loadedB] as unknown as CoreAutomation[], {
+      ...deps,
+      // `processed_events` is still G6-unowned (its INSERT is parentless and
+      // would violate RLS). The connector-ingress proof is independent of that
+      // table; the real engine, action path and logger still run.
+      claimExecution: async () => true,
+    });
+  }, 180_000);
+
+  afterAll(async () => {
+    await engine?.stop().catch(() => undefined);
+    await authHandle?.close().catch(() => undefined);
+    await handle?.close().catch(() => undefined);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
+  });
+
+  async function deliver(
+    subscriptionId: string,
+    body: string,
+    secret: string,
+  ): Promise<{ status: number; body: Record<string, unknown> }> {
+    return services.connectors.receive(subscriptionId, body, { 'x-signature': sign(secret, body) });
+  }
+
+  function journalFor(tenantId: string, idempotencyKey: string) {
+    return inTenant(tenantId, () =>
+      scopedHandle(db).select().from(omniEvents).where(eq(omniEvents.idempotencyKey, idempotencyKey)),
+    );
+  }
+
+  test('the enforced lookup is installed and resolves persisted tenants without a context', async () => {
+    expect(await connectorIngressLookupActive(db)).toBe(true);
+    expect(await resolveConnectorIngressTenant(db, ids.subscriptionA)).toBe(TENANT_A);
+    expect(await resolveConnectorIngressTenant(db, ids.subscriptionB)).toBe(TENANT_B);
+    expect(await resolveConnectorIngressTenant(db, randomUUID())).toBeNull();
+    expect(await resolveConnectorIngressTenant(db, 'not-a-uuid')).toBeNull();
+  });
+
+  test('one signed delivery claims one journal row and runs the automation once', async () => {
+    const result = await deliver(ids.subscriptionA, BODY_A, SECRET_A);
+    expect(result.status).toBe(202);
+    expect(result.body).toMatchObject({ received: true });
+
+    const journal = await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`);
+    expect(journal).toHaveLength(1);
+    expect(journal[0]?.channel).toBe('internal');
+    expect(journal[0]?.eventType).toBe(CONNECTOR_EVENT_TYPE);
+    expect(journal[0]?.tenantId).toBe(TENANT_A);
+    expect(journal[0]?.chatId).toBeNull();
+    expect(journal[0]?.personId).toBeNull();
+
+    const runs = await inTenant(TENANT_A, () =>
+      scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
+    );
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.tenantId).toBe(TENANT_A);
+
+    expect(commentRequests).toHaveLength(1);
+    expect(commentRequests[0]?.url).toContain('/task/task-a/comment');
+    expect(JSON.parse(commentRequests[0]?.body ?? '{}')).toMatchObject({ comment_text: 'Done' });
+
+    expect(await journalFor(TENANT_B, `connector:${ids.subscriptionB}:history-enforced-b`)).toHaveLength(0);
+  });
+
+  test('a signed but unparseable delivery is a structured 500 and records one failure', async () => {
+    const beforeComments = commentRequests.length;
+    const result = await deliver(ids.subscriptionA, BODY_MALFORMED, SECRET_A);
+    expect(result.status).toBe(500);
+    expect(result.body).toEqual({
+      error: { code: 'DELIVERY_FAILED', message: 'Connector delivery could not be processed' },
+    });
+
+    const [subscription] = await inTenant(TENANT_A, () =>
+      scopedHandle(db)
+        .select()
+        .from(connectorEventSubscriptions)
+        .where(eq(connectorEventSubscriptions.id, ids.subscriptionA)),
+    );
+    expect(subscription?.consecutiveFailures).toBe(1);
+    expect(subscription?.lastError).toContain('not a webhook payload');
+    // The failure counter moved; the delivery counter and the journal did not.
+    expect(subscription?.totalDeliveries).toBe(1);
+    const journal = await inTenant(TENANT_A, () =>
+      scopedHandle(db).select().from(omniEvents).where(eq(omniEvents.eventType, CONNECTOR_EVENT_TYPE)),
+    );
+    expect(journal).toHaveLength(1);
+    expect(commentRequests).toHaveLength(beforeComments);
+  });
+
+  test('a paused subscription verifies, acks ignored, and publishes nothing', async () => {
+    const before = commentRequests.length;
+    const result = await deliver(ids.subscriptionPaused, BODY_PAUSED, SECRET_A);
+    expect(result.status).toBe(202);
+    expect(result.body).toMatchObject({ received: true, ignored: true });
+    expect(await journalFor(TENANT_A, `connector:${ids.subscriptionPaused}:history-enforced-paused`)).toHaveLength(0);
+    expect(commentRequests).toHaveLength(before);
+  });
+
+  test('unknown, badly signed and cross-secret deliveries collapse into the same 401', async () => {
+    const unknown = await deliver(randomUUID(), BODY_A, SECRET_A);
+    const badSignature = await deliver(ids.subscriptionA, BODY_A, SECRET_B);
+    const malformedId = await deliver('not-a-uuid', BODY_A, SECRET_A);
+    for (const result of [unknown, badSignature, malformedId]) {
+      expect(result.status).toBe(401);
+      expect(result.body).toEqual(badSignature.body);
+    }
+    expect(await journalFor(TENANT_B, `connector:${ids.subscriptionB}:history-enforced-b`)).toHaveLength(0);
+  });
+
+  test('the runtime role is not a member of the ingress role and cannot read without context', async () => {
+    const [membership] = (await db.execute(sql`
+      SELECT pg_has_role(current_user, 'omni_connector_ingress', 'USAGE') AS member
+    `)) as unknown as { member: boolean }[];
+    expect(membership?.member).toBe(false);
+
+    let caught: unknown;
+    try {
+      await db.select().from(connectorEventSubscriptions).limit(1).execute();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeDefined();
+    const cause = (caught as { cause?: unknown }).cause;
+    expect(String(cause ?? caught)).toMatch(/app\.tenant_id|insufficient|row-level security/i);
+  });
+
+  test('tenant A cannot read tenant B subscription, connector or journal', async () => {
+    const subscriptions = await inTenant(TENANT_A, () =>
+      scopedHandle(db)
+        .select({ id: connectorEventSubscriptions.id })
+        .from(connectorEventSubscriptions)
+        .where(eq(connectorEventSubscriptions.id, ids.subscriptionB)),
+    );
+    expect(subscriptions).toHaveLength(0);
+
+    const foreignConnector = await inTenant(TENANT_A, () =>
+      scopedHandle(db).select({ id: connectors.id }).from(connectors).where(eq(connectors.id, ids.connectorB)),
+    );
+    expect(foreignConnector).toHaveLength(0);
+
+    expect(await journalFor(TENANT_B, `connector:${ids.subscriptionB}:history-enforced-b`)).toHaveLength(0);
+  });
+
+  test('tenant B has its own working loop, isolated from A', async () => {
+    const result = await deliver(ids.subscriptionB, BODY_B, SECRET_B);
+    expect(result.status).toBe(202);
+
+    const journalB = await journalFor(TENANT_B, `connector:${ids.subscriptionB}:history-enforced-b`);
+    expect(journalB).toHaveLength(1);
+    expect(journalB[0]?.tenantId).toBe(TENANT_B);
+    expect(await journalFor(TENANT_A, `connector:${ids.subscriptionB}:history-enforced-b`)).toHaveLength(0);
+
+    expect(commentRequests).toHaveLength(2);
+    expect(commentRequests[1]?.url).toContain('/task/task-b/comment');
+
+    const runsB = await inTenant(TENANT_B, () =>
+      scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationB)),
+    );
+    expect(runsB).toHaveLength(1);
+    expect(runsB[0]?.tenantId).toBe(TENANT_B);
+  });
+
+  test('a redelivery is a duplicate and does not run again', async () => {
+    const before = commentRequests.length;
+    const result = await deliver(ids.subscriptionA, BODY_A, SECRET_A);
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ received: true, duplicate: true });
+    expect(commentRequests).toHaveLength(before);
+    expect(await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`)).toHaveLength(1);
+  });
+
+  test('an existing NULL-owned dead letter is invisible to every tenant', async () => {
+    for (const tenantId of [TENANT_A, TENANT_B]) {
+      await expect(inTenant(tenantId, () => services.deadLetters.getById(unownedDeadLetterId))).rejects.toThrow(
+        'not found',
+      );
+      await expect(inTenant(tenantId, () => services.deadLetters.retry(unownedDeadLetterId))).rejects.toThrow(
+        'not found',
+      );
+      expect(
+        (await inTenant(tenantId, () => services.deadLetters.list({ eventType: ['custom.unowned'] }))).items,
+      ).toEqual([]);
+    }
+  });
+
+  test('a source-less schema refusal inherits authenticated scope under enforced RLS', async () => {
+    const refusalInput = {
+      eventId: randomUUID(),
+      eventType: 'custom.refused',
+      subject: 'custom.refused',
+      payload: { metadata: { tenantId: TENANT_B } },
+      errors: ['invalid schema'],
+    };
+    const dead = await inTenant(TENANT_A, () => services.deadLetters.createSchemaValidationFailure(refusalInput));
+    expect(dead.eventId).not.toBe(refusalInput.eventId);
+    expect(dead.tenantId).toBe(TENANT_A);
+    expect(await inTenant(TENANT_A, () => services.deadLetters.getById(dead.id))).toMatchObject({ tenantId: TENANT_A });
+    await expect(inTenant(TENANT_B, () => services.deadLetters.getById(dead.id))).rejects.toThrow('not found');
+    await inTenant(TENANT_A, () => services.deadLetters.abandon(dead.id));
+  });
+
+  test('under multitenancy a retry restores instanceId only for an instance its row tenant owns (#1566)', async () => {
+    const instanceOfA = randomUUID();
+    const instanceOfB = randomUUID();
+    const type = 'custom.dlq-instance-confined' as const;
+    const envelope = (instanceId: string) => {
+      const id = randomUUID();
+      return {
+        event: {
+          id,
+          type,
+          payload: { instanceId },
+          metadata: { correlationId: id, instanceId },
+          timestamp: Date.now(),
+        },
+        subject: type,
+        error: new Error('consumer failed'),
+        retryCount: 0,
+        autoRetry: false,
+      };
+    };
+    const published: Parameters<GenericEventHandler>[0][] = [];
+    const subscription = await bus.subscribePattern(type, async (event) => {
+      published.push(event);
+    });
+    const previous = {
+      OMNI_MULTITENANCY_ENABLED: process.env.OMNI_MULTITENANCY_ENABLED,
+      OMNI_DB_ENFORCEMENT: process.env.OMNI_DB_ENFORCEMENT,
+    };
+    // The same owner lookup the bus stamps tenants from.
+    installInstanceOwnerResolver();
+    rememberInstanceOwners([
+      { id: instanceOfA, tenantId: TENANT_A },
+      { id: instanceOfB, tenantId: TENANT_B },
+    ]);
+    try {
+      process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+      process.env.OMNI_DB_ENFORCEMENT = 'on';
+      if (!handle) throw new Error('missing superuser handle');
+
+      // (1) A NULL-owned row naming a tenant-owned instance is never retried
+      // under enforcement, so nothing is published into any tenant.
+      const unowned = await new DeadLetterService(handle.db, bus).create(envelope(instanceOfB));
+      expect(unowned.tenantId).toBeNull();
+      for (const tenantId of [TENANT_A, TENANT_B]) {
+        await expect(inTenant(tenantId, () => services.deadLetters.retry(unowned.id))).rejects.toThrow('not found');
+      }
+
+      // (2) A tenant-A row naming a tenant-B instance stays in tenant A, without the instance.
+      const foreign = await inTenant(TENANT_A, () => services.deadLetters.create(envelope(instanceOfB)));
+      expect((await inTenant(TENANT_A, () => services.deadLetters.retry(foreign.id))).success).toBe(true);
+      expect(published.at(-1)?.id).toBe(foreign.id);
+      expect(published.at(-1)?.metadata.tenantId).toBe(TENANT_A);
+      expect(published.at(-1)?.metadata.instanceId).toBeUndefined();
+
+      // (3) A tenant-A row naming a tenant-A instance keeps it.
+      const own = await inTenant(TENANT_A, () => services.deadLetters.create(envelope(instanceOfA)));
+      expect((await inTenant(TENANT_A, () => services.deadLetters.retry(own.id))).success).toBe(true);
+      expect(published.at(-1)?.id).toBe(own.id);
+      expect(published.at(-1)?.metadata).toMatchObject({ tenantId: TENANT_A, instanceId: instanceOfA });
+      expect(published.map((event) => event.id)).not.toContain(unowned.id);
+    } finally {
+      for (const [key, value] of Object.entries(previous)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, key);
+        else process.env[key] = value;
+      }
+      setEnvelopeInstanceTenantResolver(null);
+      __resetInstanceOwnerRegistry();
+      await subscription.unsubscribe();
+    }
+  });
+
+  test('a retried generic dead letter runs under its row tenant, never the stored envelope tenant (#1552)', async () => {
+    const eventId = randomUUID();
+    const type = 'custom.dlq-envelope-tenant';
+    const dead = await inTenant(TENANT_A, () =>
+      services.deadLetters.create({
+        event: {
+          id: eventId,
+          type,
+          payload: { value: 'enforced' },
+          metadata: { correlationId: eventId, tenantId: TENANT_B, envelopeVersion: CURRENT_ENVELOPE_VERSION },
+          timestamp: Date.now(),
+        },
+        subject: type,
+        error: new Error('consumer failed'),
+        retryCount: 0,
+        autoRetry: false,
+      }),
+    );
+    expect(dead.tenantId).toBe(TENANT_A);
+    await expect(inTenant(TENANT_B, () => services.deadLetters.retry(dead.id))).rejects.toThrow('not found');
+    const published: Parameters<GenericEventHandler>[0][] = [];
+    const subscription = await bus.subscribePattern(type, async (event) => {
+      published.push(event);
+    });
+    try {
+      expect((await inTenant(TENANT_A, () => services.deadLetters.retry(dead.id))).success).toBe(true);
+    } finally {
+      await subscription.unsubscribe();
+    }
+    expect(published).toHaveLength(1);
+    expect(published[0]).toMatchObject({
+      id: dead.id,
+      payload: { value: 'enforced' },
+      metadata: { tenantId: TENANT_A, correlationId: eventId, source: 'dead-letter-retry' },
+    });
+  });
+
+  test('scheduler retries tenant-owned dead letters in scope while tenant B cannot see or retry them', async () => {
+    const [row] = await journalFor(TENANT_A, `connector:${ids.subscriptionA}:history-enforced-a`);
+    if (!row || !handle) throw new Error('missing enforced ingress fixture');
+    // Off-request creation derives ownership from the persisted source event,
+    // ignoring the forged envelope tenant. Scheduler work uses the runtime role.
+    const writer = new DeadLetterService(handle.db, bus);
+    const dead = await writer.create({
+      event: {
+        id: row.id,
+        type: CONNECTOR_EVENT_TYPE,
+        payload: row.rawPayload ?? {},
+        metadata: { correlationId: row.id, tenantId: TENANT_B, envelopeVersion: CURRENT_ENVELOPE_VERSION },
+        timestamp: Date.now(),
+      },
+      subject: CONNECTOR_EVENT_TYPE,
+      error: new Error('consumer failed'),
+      retryCount: 0,
+    });
+    const [stored] = await handle.db
+      .update(deadLetterEvents)
+      .set({ nextAutoRetryAt: new Date(0) })
+      .where(eq(deadLetterEvents.id, dead.id))
+      .returning();
+    expect(stored?.tenantId).toBe(TENANT_A);
+    expect(stored?.payload).toMatchObject({ metadata: { tenantId: TENANT_B } });
+    expect(await inTenant(TENANT_B, () => services.deadLetters.list())).toMatchObject({ items: [] });
+    await expect(inTenant(TENANT_B, () => services.deadLetters.getById(dead.id))).rejects.toThrow('not found');
+    await expect(inTenant(TENANT_B, () => services.deadLetters.retry(dead.id))).rejects.toThrow('not found');
+    expect(await inTenant(TENANT_B, () => services.deadLetters.processAutoRetries())).toEqual({
+      processed: 0,
+      succeeded: 0,
+      failed: 0,
+    });
+    const before = commentRequests.length;
+    const runsBefore = await inTenant(TENANT_A, () =>
+      scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
+    );
+    let published = 0;
+    const subscription = await bus.subscribePattern(CONNECTOR_EVENT_TYPE, async () => {
+      published++;
+    });
+    try {
+      const previousFlag = process.env.OMNI_MULTITENANCY_ENABLED;
+      const previousMode = process.env.OMNI_DB_ENFORCEMENT;
+      try {
+        process.env.OMNI_MULTITENANCY_ENABLED = 'true';
+        process.env.OMNI_DB_ENFORCEMENT = 'on';
+        expect(await services.deadLetters.processAutoRetries()).toEqual({ processed: 1, succeeded: 1, failed: 0 });
+        expect(await services.deadLetters.getPendingCount()).toBe(0);
+      } finally {
+        if (previousFlag === undefined) Reflect.deleteProperty(process.env, 'OMNI_MULTITENANCY_ENABLED');
+        else process.env.OMNI_MULTITENANCY_ENABLED = previousFlag;
+        if (previousMode === undefined) Reflect.deleteProperty(process.env, 'OMNI_DB_ENFORCEMENT');
+        else process.env.OMNI_DB_ENFORCEMENT = previousMode;
+      }
+      expect(published).toBe(1);
+      expect(commentRequests).toHaveLength(before + 1);
+      expect(commentRequests.at(-1)?.url).toContain('/task/task-a/comment');
+      const runsAfter = await inTenant(TENANT_A, () =>
+        scopedHandle(db).select().from(automationLogs).where(eq(automationLogs.automationId, ids.automationA)),
+      );
+      expect(runsAfter).toHaveLength(runsBefore.length + 1);
+      const [after] = await handle.db.select().from(deadLetterEvents).where(eq(deadLetterEvents.id, dead.id));
+      expect(after).toMatchObject({ tenantId: TENANT_A, status: 'resolved', resolvedBy: 'auto-retry-1' });
+      const [unowned] = await handle.db
+        .select()
+        .from(deadLetterEvents)
+        .where(eq(deadLetterEvents.id, unownedDeadLetterId));
+      expect(unowned).toMatchObject({ tenantId: null, status: 'pending', autoRetryCount: 0, lastRetryAt: null });
+    } finally {
+      await subscription.unsubscribe();
+    }
+  });
+
+  test('ambient summary and retention reads propagate missing-scope failures', async () => {
+    if (!handle) throw new Error('missing enforcement fixture');
+    // Keep a matching retention row so the DELETE must evaluate its RLS policy.
+    await handle.db
+      .update(deadLetterEvents)
+      .set({
+        status: 'resolved',
+        createdAt: new Date(0),
+      })
+      .where(eq(deadLetterEvents.id, unownedDeadLetterId));
+    for (const read of ['getPendingSummary', 'getStats', 'cleanupExpired'] as const) {
+      await expect(
+        services.deadLetters[read]().catch((error) => {
+          throw unwrapDbError(error);
+        }),
+      ).rejects.toMatchObject({ code: '42501' });
+    }
+  });
+});

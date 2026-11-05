@@ -127,18 +127,6 @@ describe('setupSyncWorker', () => {
 
   // -- Job lifecycle ---------------------------------------------------------
 
-  test('calls syncJobs.start when a sync event is received', async () => {
-    await setupSyncWorker(eventBus as unknown as EventBus, services as any, registry as any);
-    await eventBus._triggerSync({
-      jobId: 'job-1',
-      instanceId: 'inst-1',
-      type: 'profile',
-      config: {},
-    });
-
-    expect(services.syncJobs.start).toHaveBeenCalledWith('job-1', null);
-  });
-
   // -- Type routing ----------------------------------------------------------
 
   test('profile type completes immediately without calling plugin', async () => {

@@ -8,22 +8,113 @@
  */
 
 import {
+  ChannelTypeSchema,
+  type ConnectorEventPublisher,
   type DeadLetterEntry,
   type EventBus,
+  type EventMetadata,
   type EventType,
   NotFoundError,
+  PUBLISH_NOT_DECLARED,
+  SCHEMA_NOT_REGISTERED,
   SCHEMA_VALIDATION_FAILED,
   calculateNextAutoRetryAt,
   createDeadLetterSystemPayload,
   createLogger,
+  generateId,
+  isConnectorEventType,
   prepareDeadLetterInsert,
+  resolveInstanceOwnerTenantId,
 } from '@omni/core';
 import type { Database, DeadLetterStatus } from '@omni/db';
-import { deadLetterEvents } from '@omni/db';
-import { and, desc, eq, gte, inArray, lte, or, sql } from 'drizzle-orm';
-import { scopedHandle } from '../tenancy/tenant-scope';
+import { deadLetterEvents, resolveEnforcementMode } from '@omni/db';
+import { and, desc, eq, gte, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import { isMultitenancyEnabled } from '../tenancy/feature-flag';
+import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
+import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
+import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
+import { DEAD_LETTER_RETRY_SOURCES } from './dead-letter-sources';
+import { EventSchemaService } from './event-schemas';
 
 const log = createLogger('dead-letters');
+
+// The scheduler runs every 15 minutes. Expiry recovers an interrupted attempt;
+// publication remains at-least-once if its outcome was unknown at the crash.
+const RETRY_LEASE_MS = 15 * 60 * 1000;
+type RetryClaim = Pick<DeadLetterEntry, 'id' | 'lastRetryAt'>;
+
+function isGovernanceRefusal(error: string): boolean {
+  return [SCHEMA_VALIDATION_FAILED, SCHEMA_NOT_REGISTERED, PUBLISH_NOT_DECLARED].some((reason) =>
+    error.startsWith(`${reason}:`),
+  );
+}
+
+const optional = <T extends z.ZodTypeAny>(schema: T) =>
+  schema
+    .nullish()
+    .catch(undefined)
+    .transform((value) => value ?? undefined);
+
+/**
+ * The consumed envelope `create` stores as the row's payload. Only the fields
+ * that scope the event to its instance and flow come back on a retry. The
+ * tenant is never read from here: ownership is the row's persisted tenant_id.
+ * Producer identity, the envelope version and timings are stamped by the
+ * factory and are not restored either.
+ */
+const StoredEnvelopeSchema = z.object({
+  id: z.string(),
+  type: z.string(),
+  payload: z.record(z.unknown()),
+  metadata: z.object({
+    correlationId: optional(z.string()),
+    causationId: optional(z.string()),
+    instanceId: optional(z.string()),
+    channelType: optional(ChannelTypeSchema),
+    personId: optional(z.string()),
+    platformIdentityId: optional(z.string()),
+    traceId: optional(z.string()),
+    ingestMode: optional(z.enum(['realtime', 'history-sync'])),
+  }),
+});
+
+/**
+ * A retry must never move an event into a tenant its row was not already in. A
+ * restored instanceId lets the publish derive the instance owner's tenant (the
+ * owner registry is filled whatever the flag), so it stays only when that owner
+ * IS the row's tenant. A NULL-owned row never equals a resolved owner. With no
+ * resolved owner it stays only while the flag is off (the single-tenant restore);
+ * with the flag on an unknown owner drops it. A dropped instance means an
+ * instance-less receipt replay, which event-persistence does not insert.
+ */
+function confineToRowTenant(metadata: Partial<EventMetadata>, rowTenantId: string | null): Partial<EventMetadata> {
+  if (!metadata.instanceId) return metadata;
+  const owner = resolveInstanceOwnerTenantId(metadata.instanceId);
+  // An unknown owner keeps the single-tenant restore only with the flag off.
+  if (owner === null ? !isMultitenancyEnabled() : owner === rowTenantId) return metadata;
+  const { instanceId: _foreign, ...confined } = metadata;
+  return confined;
+}
+
+/**
+ * The original event of a row filed by `create`, or null for a row whose
+ * payload is not that row's own envelope (schema refusals store the refused
+ * payload itself).
+ */
+function storedEnvelope(
+  entry: { eventId: string; eventType: string; error: string },
+  stored: Record<string, unknown>,
+): { payload: Record<string, unknown>; metadata: Partial<EventMetadata> } | null {
+  if (isGovernanceRefusal(entry.error)) return null;
+  const parsed = StoredEnvelopeSchema.safeParse(stored);
+  if (!parsed.success || parsed.data.id !== entry.eventId || parsed.data.type !== entry.eventType) return null;
+  const metadata = Object.fromEntries(
+    Object.entries(parsed.data.metadata).filter(([, value]) => value !== undefined),
+  ) as Partial<EventMetadata>;
+  return { payload: parsed.data.payload, metadata };
+}
 
 /**
  * Filter options for listing dead letters
@@ -63,10 +154,37 @@ export class DeadLetterService {
   }
 
   private warnedNoBus = false;
+  private authPlaneDb: Database | null = null;
+
+  setAuthPlane(authPlaneDb: Database): void {
+    this.authPlaneDb = authPlaneDb;
+  }
+
+  /** Request work never fans out; periodic work discovers owners on the auth plane. */
+  private async workTenants(): Promise<Array<string | null>> {
+    const caller = currentTenantScope()?.tenantId;
+    if (caller || !isMultitenancyEnabled()) return [caller ?? null];
+    const tenants = await enumerateActiveWorkTenants(this.authPlaneDb ?? this.pool);
+    return resolveEnforcementMode() === 'enforced' ? tenants : [...tenants, null];
+  }
+
+  private workDb<T>(tenantId: string | null, work: () => Promise<T>): Promise<T> {
+    // Reuse an active request transaction; worker DB blocks commit before publish.
+    if (currentTenantScope()?.tenantId === tenantId) return work();
+    return runTenantWorkDb(this.pool, tenantId, work);
+  }
+
+  private workPredicate(tenantId: string | null) {
+    return tenantId
+      ? eq(deadLetterEvents.tenantId, tenantId)
+      : isMultitenancyEnabled()
+        ? isNull(deadLetterEvents.tenantId)
+        : undefined;
+  }
 
   constructor(
     private readonly pool: Database,
-    private eventBus: EventBus | null,
+    private eventBus: (EventBus & ConnectorEventPublisher) | null,
   ) {}
 
   /**
@@ -187,7 +305,6 @@ export class DeadLetterService {
    * never succeed, so these rows are manual-intervention only.
    */
   async createSchemaValidationFailure(input: {
-    eventId: string;
     eventType: string;
     subject: string;
     payload: Record<string, unknown>;
@@ -202,7 +319,8 @@ export class DeadLetterService {
     const [result] = await this.db
       .insert(deadLetterEvents)
       .values({
-        eventId: input.eventId,
+        // Refusals have no journaled source event; generate their identity here.
+        eventId: generateId(),
         eventType: input.eventType,
         subject: input.subject,
         payload: input.payload,
@@ -247,6 +365,7 @@ export class DeadLetterService {
         { ...systemPayload },
         {
           source: 'dead-letter-service',
+          ...(result.tenantId ? { tenantId: result.tenantId } : {}),
         },
       );
     } catch (err) {
@@ -254,68 +373,162 @@ export class DeadLetterService {
     }
   }
 
+  private async republish(
+    entry: { id: string; eventId: string; eventType: string; error: string; tenantId?: string | null },
+    payload: Record<string, unknown>,
+    source: string,
+  ): Promise<void> {
+    if (!this.eventBus) throw new Error('Event bus not available');
+    if (isGovernanceRefusal(entry.error)) {
+      // Refusal rows have no trusted emitter identity: schema validity cannot
+      // establish permission to publish a type the original agent did not declare.
+      if (entry.error.startsWith(`${PUBLISH_NOT_DECLARED}:`)) {
+        throw new Error('Publish declaration refusals must be re-emitted through the original source');
+      }
+      // Use the current, uncached registry row in its tenant work scope. Normal
+      // lax ingress allows unknown types, but recovery of a refusal requires an
+      // enabled schema and a valid payload. Do not file another refusal row.
+      const verdict = await this.workDb(entry.tenantId ?? null, () =>
+        new EventSchemaService(this.pool).validatePayload(entry.eventType, payload),
+      );
+      if (!verdict.enabled || !verdict.valid) {
+        throw new Error(
+          `Schema refusal remains pending: ${verdict.enabled ? verdict.errors.join('; ') : 'schema disabled'}`,
+        );
+      }
+    }
+    if (isConnectorEventType(entry.eventType)) {
+      const connectorType = entry.eventType;
+      const restored = await runTenantWorkDb(this.pool, entry.tenantId ?? null, () =>
+        restoreConnectorEvent(this.db, entry.eventId, connectorType, entry.tenantId ?? null),
+      );
+      await this.eventBus.publishConnector(entry.eventType, restored.payload, { ...restored.metadata, source });
+    } else {
+      const original = storedEnvelope(entry, payload);
+      const eventBus = this.eventBus;
+      const publish = () =>
+        eventBus.publishGeneric(entry.eventType as EventType, original?.payload ?? payload, {
+          ...(original ? confineToRowTenant(original.metadata, entry.tenantId ?? null) : {}),
+          source,
+          // Every generic retry publishes OmniEvent.id = this dead-letter row ID,
+          // stable across attempts for consumer-side idempotency. Do not reuse
+          // entry.eventId: it may already have a retained failed-handler claim.
+          publishEventId: entry.id,
+          // The row's tenant, explicitly. A NULL-owned row has none to give, so it is
+          // published outside any request scope rather than inheriting the caller's.
+          ...(entry.tenantId ? { tenantId: entry.tenantId } : {}),
+        });
+      await (entry.tenantId ? publish() : runDetachedFromTenantScope(publish));
+    }
+  }
+
   /**
    * Manually retry a dead letter
    */
   async retry(id: string): Promise<RetryResult> {
-    const deadLetter = await this.getById(id);
+    const current = await this.getById(id);
 
-    if (deadLetter.status === 'resolved') {
+    if (current.status === 'resolved') {
       return { success: false, deadLetterId: id, error: 'Dead letter already resolved' };
     }
 
-    if (deadLetter.status === 'retrying') {
+    if (current.status === 'retrying') {
       return { success: false, deadLetterId: id, error: 'Dead letter already retrying' };
     }
 
-    // Update status to retrying
-    await this.db
+    // A NULL-owned row has no tenant to republish in, and a manual retry runs in
+    // the caller's request scope. Under multitenancy refuse it here; the scheduler
+    // (no request scope) still republishes such rows tenantless.
+    if (!current.tenantId && isMultitenancyEnabled()) {
+      return { success: false, deadLetterId: id, error: 'Dead letter has no owning tenant' };
+    }
+
+    // A status read is not ownership: only the pending-to-retrying claim wins.
+    const [deadLetter] = await this.db
       .update(deadLetterEvents)
       .set({
         status: 'retrying',
         lastRetryAt: new Date(),
       })
-      .where(eq(deadLetterEvents.id, id));
+      .where(and(eq(deadLetterEvents.id, id), eq(deadLetterEvents.status, 'pending')))
+      .returning();
 
-    // Try to republish the original event
-    if (this.eventBus) {
-      try {
-        const originalEvent = deadLetter.payload;
-        await this.eventBus.publishGeneric(deadLetter.eventType as EventType, originalEvent, {
-          source: 'dead-letter-retry',
-        });
-
-        // Mark as resolved on successful retry
-        await this.db
-          .update(deadLetterEvents)
-          .set({
-            status: 'resolved',
-            resolvedAt: new Date(),
-            resolvedBy: 'manual-retry',
-            manualRetryCount: deadLetter.manualRetryCount + 1,
-          })
-          .where(eq(deadLetterEvents.id, id));
-
-        log.info('Dead letter manually retried successfully', { deadLetterId: id });
-        return { success: true, deadLetterId: id };
-      } catch (err) {
-        // Update retry count and status back to pending
-        const newAutoRetryCount = deadLetter.autoRetryCount;
-        await this.db
-          .update(deadLetterEvents)
-          .set({
-            status: 'pending',
-            manualRetryCount: deadLetter.manualRetryCount + 1,
-            nextAutoRetryAt: calculateNextAutoRetryAt(newAutoRetryCount),
-          })
-          .where(eq(deadLetterEvents.id, id));
-
-        log.error('Dead letter manual retry failed', { deadLetterId: id, error: String(err) });
-        return { success: false, deadLetterId: id, error: String(err) };
-      }
+    if (!deadLetter) {
+      return { success: false, deadLetterId: id, error: 'Dead letter is no longer pending' };
     }
 
-    return { success: false, deadLetterId: id, error: 'Event bus not available' };
+    try {
+      await this.republish(deadLetter, deadLetter.payload, DEAD_LETTER_RETRY_SOURCES[0]);
+    } catch (err) {
+      const [updated] = await this.db
+        .update(deadLetterEvents)
+        .set({
+          status: 'pending',
+          error: `${deadLetter.error}\n[Manual-retry]: ${String(err)}`,
+          manualRetryCount: deadLetter.manualRetryCount + 1,
+          nextAutoRetryAt:
+            isGovernanceRefusal(deadLetter.error) || err instanceof ConnectorProvenanceError
+              ? null
+              : calculateNextAutoRetryAt(deadLetter.autoRetryCount),
+        })
+        .where(this.retryClaimPredicate(deadLetter))
+        .returning({ id: deadLetterEvents.id });
+
+      log.error('Dead letter manual retry failed', { deadLetterId: id, error: String(err) });
+      return {
+        success: false,
+        deadLetterId: id,
+        error: updated ? String(err) : 'Dead letter retry lease is no longer owned',
+      };
+    }
+
+    // A successful publish must never enter the publish-failure reset above.
+    // Keep its lease if bookkeeping fails; expiry handles an uncertain result.
+    try {
+      const resolved = await this.resolveRetry(deadLetter, 'manual-retry', new Date(), deadLetter.manualRetryCount + 1);
+      if (!resolved) return { success: false, deadLetterId: id, error: 'Dead letter retry lease is no longer owned' };
+      log.info('Dead letter manually retried successfully', { deadLetterId: id });
+      return { success: true, deadLetterId: id };
+    } catch (err) {
+      log.error('Published retry could not be marked resolved; keeping retry lease', {
+        deadLetterId: id,
+        error: String(err),
+      });
+      return { success: false, deadLetterId: id, error: 'Event published but retry finalization failed' };
+    }
+  }
+
+  private retryClaimPredicate(claim: RetryClaim) {
+    return and(
+      eq(deadLetterEvents.id, claim.id),
+      eq(deadLetterEvents.status, 'retrying'),
+      // Fence an expired claimant from a later retry of the same row (ABA).
+      claim.lastRetryAt ? eq(deadLetterEvents.lastRetryAt, claim.lastRetryAt) : isNull(deadLetterEvents.lastRetryAt),
+    );
+  }
+
+  private async resolveRetry(
+    claim: RetryClaim,
+    resolvedBy: string,
+    now: Date,
+    manualRetryCount?: number,
+  ): Promise<boolean> {
+    // A request may own the claim in its outer tenant transaction. Isolate a
+    // failed final write so catching it does not roll the outer claim back
+    // to pending. Workers likewise keep their separately committed claim.
+    const [updated] = await this.db.transaction((tx) =>
+      tx
+        .update(deadLetterEvents)
+        .set({
+          status: 'resolved',
+          resolvedAt: now,
+          resolvedBy,
+          ...(manualRetryCount !== undefined ? { manualRetryCount } : {}),
+        })
+        .where(this.retryClaimPredicate(claim))
+        .returning({ id: deadLetterEvents.id }),
+    );
+    return !!updated;
   }
 
   /**
@@ -384,62 +597,60 @@ export class DeadLetterService {
     let succeeded = 0;
     let failed = 0;
 
-    // Find pending dead letters with due auto-retry
-    const dueForRetry = await this.db
-      .select()
-      .from(deadLetterEvents)
-      .where(and(eq(deadLetterEvents.status, 'pending'), lte(deadLetterEvents.nextAutoRetryAt, now)))
-      .limit(100); // Process in batches
+    for (const tenantId of await this.workTenants()) {
+      await this.recoverExpiredRetries(tenantId, now);
+      const dueForRetry = await this.workDb(tenantId, () =>
+        this.db
+          .select()
+          .from(deadLetterEvents)
+          .where(
+            and(
+              eq(deadLetterEvents.status, 'pending'),
+              lte(deadLetterEvents.nextAutoRetryAt, now),
+              this.workPredicate(tenantId),
+            ),
+          )
+          .limit(100),
+      );
 
-    for (const deadLetter of dueForRetry) {
-      processed++;
+      for (const candidate of dueForRetry) {
+        const [deadLetter] = await this.workDb(tenantId, () =>
+          this.db
+            .update(deadLetterEvents)
+            .set({ status: 'retrying', lastRetryAt: now })
+            .where(
+              and(
+                eq(deadLetterEvents.id, candidate.id),
+                eq(deadLetterEvents.status, 'pending'),
+                lte(deadLetterEvents.nextAutoRetryAt, now),
+                this.workPredicate(tenantId),
+              ),
+            )
+            .returning(),
+        );
+        if (!deadLetter) continue;
+        processed++;
 
-      // Mark as retrying
-      await this.db
-        .update(deadLetterEvents)
-        .set({ status: 'retrying', lastRetryAt: now })
-        .where(eq(deadLetterEvents.id, deadLetter.id));
-
-      // Try to republish
-      if (this.eventBus) {
         try {
-          const originalEvent = deadLetter.payload as Record<string, unknown>;
-          await this.eventBus.publishGeneric(deadLetter.eventType as EventType, originalEvent, {
-            source: 'dead-letter-auto-retry',
-          });
-
-          // Success - mark as resolved
-          await this.db
-            .update(deadLetterEvents)
-            .set({
-              status: 'resolved',
-              resolvedAt: now,
-              resolvedBy: `auto-retry-${deadLetter.autoRetryCount + 1}`,
-            })
-            .where(eq(deadLetterEvents.id, deadLetter.id));
-
-          succeeded++;
-          log.info('Auto-retry succeeded', { deadLetterId: deadLetter.id });
+          await this.republish(deadLetter, deadLetter.payload, DEAD_LETTER_RETRY_SOURCES[1]);
         } catch (err) {
-          // Failed - increment retry count and schedule next
-          const newRetryCount = deadLetter.autoRetryCount + 1;
-          const nextRetry = calculateNextAutoRetryAt(newRetryCount, now);
+          failed += await this.workDb(tenantId, () => this.recordAutoRetryFailure(deadLetter, err, now));
+          continue;
+        }
 
-          await this.db
-            .update(deadLetterEvents)
-            .set({
-              status: 'pending',
-              autoRetryCount: newRetryCount,
-              nextAutoRetryAt: nextRetry,
-              error: `${deadLetter.error}\n[Auto-retry ${newRetryCount}]: ${String(err)}`,
-            })
-            .where(eq(deadLetterEvents.id, deadLetter.id));
-
+        try {
+          const resolved = await this.workDb(tenantId, () =>
+            this.resolveRetry(deadLetter, `auto-retry-${deadLetter.autoRetryCount + 1}`, now),
+          );
+          if (resolved) {
+            succeeded++;
+            log.info('Auto-retry succeeded', { deadLetterId: deadLetter.id });
+          }
+        } catch (err) {
           failed++;
-          log.warn('Auto-retry failed', {
+          log.error('Published retry could not be marked resolved; keeping retry lease', {
             deadLetterId: deadLetter.id,
-            retryCount: newRetryCount,
-            nextRetryAt: nextRetry?.toISOString() ?? 'manual-only',
+            error: String(err),
           });
         }
       }
@@ -452,16 +663,86 @@ export class DeadLetterService {
     return { processed, succeeded, failed };
   }
 
+  private async recordAutoRetryFailure(
+    deadLetter: RetryClaim & { autoRetryCount: number; error: string },
+    error: unknown,
+    now: Date,
+  ): Promise<0 | 1> {
+    const manualOnly = isGovernanceRefusal(deadLetter.error) || error instanceof ConnectorProvenanceError;
+    const retryCount = deadLetter.autoRetryCount + (manualOnly ? 0 : 1);
+    const nextRetry = manualOnly ? null : calculateNextAutoRetryAt(retryCount, now);
+    const [updated] = await this.db
+      .update(deadLetterEvents)
+      .set({
+        status: 'pending',
+        autoRetryCount: retryCount,
+        nextAutoRetryAt: nextRetry,
+        error: `${deadLetter.error}\n[Auto-retry ${manualOnly ? 'skipped' : retryCount}]: ${String(error)}`,
+      })
+      .where(this.retryClaimPredicate(deadLetter))
+      .returning({ id: deadLetterEvents.id });
+    if (!updated) return 0;
+    log.warn(manualOnly ? 'Auto-retry skipped' : 'Auto-retry failed', {
+      deadLetterId: deadLetter.id,
+      retryCount,
+      nextRetryAt: nextRetry?.toISOString() ?? 'manual-only',
+    });
+    return manualOnly ? 0 : 1;
+  }
+
+  private async recoverExpiredRetries(tenantId: string | null, now: Date): Promise<void> {
+    const cutoff = new Date(now.getTime() - RETRY_LEASE_MS);
+    const expired = await this.workDb(tenantId, () =>
+      this.db
+        .select()
+        .from(deadLetterEvents)
+        .where(
+          and(
+            eq(deadLetterEvents.status, 'retrying'),
+            lt(deadLetterEvents.lastRetryAt, cutoff),
+            this.workPredicate(tenantId),
+          ),
+        )
+        .limit(100),
+    );
+    for (const claim of expired) {
+      // Claim kind is not persisted. Charge any interrupted attempt to the
+      // bounded auto-retry budget, including interrupted manual retries.
+      // Existing manual-only rows must never gain an automatic schedule.
+      const retryCount = claim.autoRetryCount + 1;
+      const nextRetry =
+        claim.nextAutoRetryAt && !isGovernanceRefusal(claim.error) ? calculateNextAutoRetryAt(retryCount, now) : null;
+      const [updated] = await this.workDb(tenantId, () =>
+        this.db
+          .update(deadLetterEvents)
+          .set({
+            status: 'pending',
+            autoRetryCount: retryCount,
+            nextAutoRetryAt: nextRetry,
+            error: `${claim.error}\n[Retry lease expired]: interrupted attempt counted`,
+          })
+          .where(and(this.retryClaimPredicate(claim), this.workPredicate(tenantId)))
+          .returning({ id: deadLetterEvents.id }),
+      );
+      if (updated) log.warn('Expired dead letter retry recovered', { deadLetterId: claim.id, retryCount });
+    }
+  }
+
   /**
    * Get count of pending dead letters (for metrics)
    */
   async getPendingCount(): Promise<number> {
-    const [result] = await this.db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(deadLetterEvents)
-      .where(eq(deadLetterEvents.status, 'pending'));
-
-    return result?.count ?? 0;
+    let pending = 0;
+    for (const tenantId of await this.workTenants()) {
+      pending += await this.workDb(tenantId, async () => {
+        const [result] = await this.db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(deadLetterEvents)
+          .where(and(eq(deadLetterEvents.status, 'pending'), this.workPredicate(tenantId)));
+        return result?.count ?? 0;
+      });
+    }
+    return pending;
   }
 
   /** Pending depth and oldest pending row, for the /health DLQ check (#1163). */

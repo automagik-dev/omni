@@ -28,9 +28,16 @@ import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import postgres from 'postgres';
+import { dropDatabaseOrThrow } from './backfill/pg-testing';
 import { type Database, createDbHandle } from './client';
-import { provisionMigratedDatabase } from './pg-migrated-template';
-import { DEFAULT_ROLE_NAMES, RLS_TENANT_TABLES, applyTenantRlsEnforcement, readEnforcementState } from './tenancy-rls';
+import { assertPgTestRole, pgRoleUrl, provisionMigratedDatabase } from './pg-migrated-template';
+import {
+  CONNECTOR_INGRESS_ROLE,
+  DEFAULT_ROLE_NAMES,
+  RLS_TENANT_TABLES,
+  applyTenantRlsEnforcement,
+  readEnforcementState,
+} from './tenancy-rls';
 import { applyTenancyRoles, readRoleAttributes, roleAttributeViolations } from './tenancy-roles';
 import { EnforcementStartupError, assertEnforcedRuntimeIdentity } from './tenancy-startup';
 
@@ -74,16 +81,6 @@ function runSqlOn(url: string, script: string): SqlResult {
   } finally {
     rmSync(file, { force: true });
   }
-}
-
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
 }
 
 /** A private, fully migrated database — file-level clone of the template (#967). */
@@ -190,7 +187,7 @@ postgresDescribe('G3 enforcement (real PostgreSQL)', () => {
   beforeAll(async () => {
     // ---- enforced world -------------------------------------------------
     createMigratedDatabase(enforcedDbName);
-    const enforcedSuperUrl = urlFor(superUrl, enforcedDbName);
+    const enforcedSuperUrl = pgRoleUrl(superUrl, enforcedDbName);
     const seeded = runSqlOn(enforcedSuperUrl, SEED);
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);
 
@@ -224,25 +221,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
     await applyTenantRlsEnforcement(provisioner.db);
     await applyTenancyRoles(provisioner.db, passwords, DEFAULT_ROLE_NAMES, enforcedDbName, [LEGACY_SCOPED_ROLE]);
     legacyScoped = connect(
-      urlFor(superUrl, enforcedDbName, { name: LEGACY_SCOPED_ROLE, password: legacyScopedPassword }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: LEGACY_SCOPED_ROLE, password: legacyScopedPassword }),
       1,
     );
 
-    ddl = connect(urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.ddl, password: passwords.ddl }));
+    ddl = connect(pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.ddl, password: passwords.ddl }));
     runtime = connect(
-      urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
     );
+    await assertPgTestRole(runtime.db, DEFAULT_ROLE_NAMES.runtime);
     pooledRuntime = connect(
-      urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
       1,
     );
     authPlane = connect(
-      urlFor(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      pgRoleUrl(superUrl, enforcedDbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
     );
 
     // ---- legacy world ---------------------------------------------------
     createMigratedDatabase(legacyDbName);
-    const legacySuperUrl = urlFor(superUrl, legacyDbName);
+    const legacySuperUrl = pgRoleUrl(superUrl, legacyDbName);
     const legacySeeded = runSqlOn(legacySuperUrl, SEED);
     if (legacySeeded.exitCode !== 0) throw new Error(`legacy seed failed: ${legacySeeded.stderr}`);
     legacy = connect(legacySuperUrl);
@@ -252,11 +250,23 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
     for (const handle of [provisioner, ddl, runtime, pooledRuntime, authPlane, legacy, legacyScoped]) {
       if (handle) await handle.close();
     }
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${enforcedDbName}" WITH (FORCE);`);
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${legacyDbName}" WITH (FORCE);`);
+    // Every step runs even after one fails; a single failure surfaces as is,
+    // several surface together in order.
+    const errors: unknown[] = [];
+    const step = (run: () => void) => {
+      try {
+        run();
+      } catch (error) {
+        errors.push(error);
+      }
+    };
+    step(() => dropDatabaseOrThrow({ superUrl, psqlBin }, enforcedDbName));
+    step(() => dropDatabaseOrThrow({ superUrl, psqlBin }, legacyDbName));
     // Roles are cluster-wide; the synthetic cutover role must not outlive the
     // databases it was scoped to.
-    runSqlOn(superUrl, `DROP ROLE IF EXISTS "${LEGACY_SCOPED_ROLE}";`);
+    step(() => runSqlOn(superUrl, `DROP ROLE IF EXISTS "${LEGACY_SCOPED_ROLE}";`));
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, 'rls suite teardown failed');
   });
 
   // -------------------------------------------------------------------------
@@ -871,6 +881,18 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE O
       const present =
         await provisioner.raw`SELECT rolname::text AS name FROM pg_roles WHERE rolname = ANY(${provisioned})`;
       expect(present).toHaveLength(provisioned.length);
+    });
+
+    test('the connector-ingress role is NOLOGIN and holds no bypass attribute', async () => {
+      const [row] = await provisioner.raw`
+        SELECT rolname::text AS name, rolcanlogin, rolbypassrls, rolsuper, rolcreatedb, rolcreaterole
+        FROM pg_roles WHERE rolname = ${CONNECTOR_INGRESS_ROLE}`;
+      expect(row).toBeDefined();
+      expect(row?.rolcanlogin).toBe(false);
+      expect(row?.rolbypassrls).toBe(false);
+      expect(row?.rolsuper).toBe(false);
+      expect(row?.rolcreatedb).toBe(false);
+      expect(row?.rolcreaterole).toBe(false);
     });
   });
 });

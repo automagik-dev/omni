@@ -181,7 +181,7 @@ If you catch yourself about to run a prohibited command, STOP and use the Bun eq
 | Runtime | Bun | Node.js |
 | Language | TypeScript (strict) | JavaScript |
 | HTTP Framework | Hono | Express, Fastify |
-| Type-safe API | tRPC | GraphQL, REST-only |
+| Type-safe API | REST + OpenAPI-generated SDKs | GraphQL |
 | Database ORM | Drizzle | Prisma, TypeORM |
 | Database | PostgreSQL | MySQL, MongoDB |
 | Event Bus | NATS JetStream | Redis Pub/Sub, RabbitMQ |
@@ -197,13 +197,11 @@ If you catch yourself about to run a prohibited command, STOP and use the Bun eq
 omni-v2/
 ├── packages/
 │   ├── core/           # Events, identity, schemas (shared)
-│   ├── api/            # HTTP API (Hono + tRPC + OpenAPI)
+│   ├── api/            # HTTP API (Hono + REST + OpenAPI)
 │   ├── channel-sdk/    # Plugin SDK for channel developers
 │   ├── channel-*/      # Official channel implementations
 │   ├── cli/            # LLM-optimized CLI
 │   └── sdk/            # Auto-generated TypeScript SDK
-├── apps/
-│   └── ui/             # React dashboard
 ├── docs/               # Documentation
 ├── scripts/            # Build, deploy, SDK generation
 ├── .claude/            # AI workflow (agents, commands, hooks, skills)
@@ -220,7 +218,7 @@ omni-v2/
 | Zod schemas | `packages/core/src/schemas/` | Shared validation |
 | Database schema | `packages/core/src/db/` | Drizzle schema |
 | API endpoints | `packages/api/src/routes/` | HTTP handlers |
-| tRPC routers | `packages/api/src/trpc/` | Type-safe internal API |
+| API schemas | `packages/api/src/schemas/openapi/` | OpenAPI contract and generated SDK types |
 | Channel plugins | `packages/channel-*/` | Isolated per channel |
 | Shared types | `packages/core/src/types/` | TypeScript interfaces |
 | CLI commands | `packages/cli/src/commands/` | LLM-optimized CLI |
@@ -496,6 +494,11 @@ ci(rolling-pr): update workflow permissions
 ### Public Release Boundary
 
 - Integration versioning happens on `dev`.
+- Omni's DSH plugins (`apps/omni-channels-dsh`, `apps/omni-canvas-dsh`) carry the
+  Omni version of their last change: a cut moves a plugin only when its folder
+  changed since its version's tag. Each declares the oldest Omni it needs in
+  `engines.omni`, checked against that release's API (`scripts/plugin-compat.ts`);
+  a minimum above the repo's version means "the release this change is cut in".
 - The reviewed version carries unchanged into `main`.
 - The public `main` path only verifies existing immutable artifacts.
 - Production release and runtime decisions belong to the separate/private

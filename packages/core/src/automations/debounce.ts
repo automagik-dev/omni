@@ -9,6 +9,7 @@
  * - presence: Extend timer on composing/recording events
  */
 
+import type { OmniEvent } from '../events/types';
 import { createLogger } from '../logger';
 import type { DebounceConfig } from './types';
 
@@ -22,6 +23,8 @@ export interface DebouncedMessage {
   text?: string;
   timestamp: number;
   payload: Record<string, unknown>;
+  /** Original ingress envelope, retained only for admission before batch rendering. */
+  event?: OmniEvent;
   /**
    * Id of the real event that entered the window (#956). The flush callback
    * builds a SYNTHETIC event, so without carrying the source identity the
@@ -71,14 +74,6 @@ export type ConversationKey = string;
  */
 export function buildConversationKey(instanceId: string, personId: string): ConversationKey {
   return `${instanceId}:${personId}`;
-}
-
-/**
- * Parse conversation key back to components
- */
-export function parseConversationKey(key: ConversationKey): { instanceId: string; personId: string } {
-  const parts = key.split(':');
-  return { instanceId: parts[0] ?? '', personId: parts[1] ?? '' };
 }
 
 /**
@@ -306,13 +301,6 @@ export class DebounceManager {
    */
   getActiveWindowCount(): number {
     return this.windows.size;
-  }
-
-  /**
-   * Get pending message count for a conversation
-   */
-  getPendingCount(key: ConversationKey): number {
-    return this.windows.get(key)?.messages.length ?? 0;
   }
 }
 

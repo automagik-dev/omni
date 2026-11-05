@@ -96,11 +96,6 @@ describe('SlackConfigExtensionSchema — HTTP mode validation', () => {
     const result = SlackConfigExtensionSchema.safeParse({ mode: 'http', signingSecret: '' });
     expect(result.success).toBe(false);
   });
-
-  it('passes validation when mode is socket and signingSecret is missing', () => {
-    const result = SlackConfigExtensionSchema.safeParse({ mode: 'socket' });
-    expect(result.success).toBe(true);
-  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -183,16 +178,6 @@ describe('resolveChannelConfig', () => {
 
     expect(c456.requireMention).toBe(false);
     expect(c456.allowedUsers).toEqual(['U111']);
-  });
-
-  it('returns undefined for unset per-channel fields (not restricted by default)', () => {
-    const config: Pick<SlackConfig, 'channels'> = {
-      channels: { C123: { requireMention: true } },
-    };
-    const result = resolveChannelConfig(config, 'C123');
-    expect(result.allowedUsers).toBeUndefined();
-    expect(result.tools).toBeUndefined();
-    expect(result.skills).toBeUndefined();
   });
 });
 

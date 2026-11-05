@@ -8,6 +8,7 @@
  */
 
 import {
+  type ConnectorEventPublisher,
   type EventBus,
   type ReplayOptions,
   type ReplayResult,
@@ -15,6 +16,7 @@ import {
   createLogger,
   createReplayCompletedPayload,
   createReplayStartedPayload,
+  isConnectorEventType,
   validateReplayOptions,
 } from '@omni/core';
 import type { Database, OmniEvent } from '@omni/db';
@@ -23,6 +25,8 @@ import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { isTenantWorkAdmissible } from '../tenancy/periodic-tenant-work';
 import { currentTenantScope, runDetachedFromTenantScope, scopedHandle } from '../tenancy/tenant-scope';
 import { runTenantWorkDb } from '../tenancy/worker-tenant-context';
+import { ConnectorProvenanceError, restoreConnectorEvent } from './connectors';
+import { cleanupDeadLettersForTenants } from './dead-letter-maintenance';
 import type { DeadLetterService } from './dead-letters';
 import type { PayloadStoreService } from './payload-store';
 
@@ -95,7 +99,7 @@ export class EventOpsService {
 
   constructor(
     private readonly pool: Database,
-    private eventBus: EventBus | null,
+    private eventBus: (EventBus & ConnectorEventPublisher) | null,
     private deadLetterService: DeadLetterService,
     private payloadStoreService: PayloadStoreService,
   ) {}
@@ -358,7 +362,7 @@ export class EventOpsService {
     const [autoRetry, payloadCleanup, deadLetterCleanup] = await Promise.all([
       this.deadLetterService.processAutoRetries(),
       this.payloadStoreService.cleanupExpired(),
-      this.deadLetterService.cleanupExpired(),
+      cleanupDeadLettersForTenants(this.pool, this.authPlaneDb, this.deadLetterService),
     ]);
 
     log.info('Scheduled event ops completed', {
@@ -484,13 +488,30 @@ export class EventOpsService {
                 _originalEventId: event.id,
               };
 
-              await this.eventBus.publishGeneric(event.eventType, replayPayload as Record<string, unknown>, {
-                source: 'replay',
-              });
+              if (isConnectorEventType(event.eventType)) {
+                const connectorType = event.eventType;
+                const restored = await runTenantWorkDb(this.pool, replayTenantId, () =>
+                  restoreConnectorEvent(this.db, event.id, connectorType, event.tenantId),
+                );
+                await this.eventBus.publishConnector(
+                  event.eventType,
+                  { ...restored.payload, _replay: true, _replaySessionId: sessionId },
+                  {
+                    ...restored.metadata,
+                    source: 'replay',
+                  },
+                );
+              } else {
+                await this.eventBus.publishGeneric(event.eventType, replayPayload, { source: 'replay' });
+              }
 
               session.progress.processed++;
               session.progress.currentEventTime = event.receivedAt;
             } catch (err) {
+              if (err instanceof ConnectorProvenanceError) {
+                session.progress.skipped++;
+                continue;
+              }
               session.progress.errors++;
               errors.push({
                 eventId: event.id,

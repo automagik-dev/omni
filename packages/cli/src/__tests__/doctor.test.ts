@@ -18,14 +18,27 @@
  * assert on the returned CheckResult array directly.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type DoctorDeps, runDoctor } from '../commands/doctor.js';
+import { OmniApiError, createOmniClient } from '@omni/sdk';
+import { type DoctorDeps, checkConnectorUnmatched, runDoctor } from '../commands/doctor.js';
 import type { Config, ServerConfig } from '../config.js';
 import type { MigrationResult } from '../lib/embedded-canonical-migration.js';
 import { DEFAULT_PGSERVE_PORT, buildRuntimeEnv } from '../runtime-env.js';
+
+const configDir = mkdtempSync(join(tmpdir(), 'omni-doctor-config-'));
+let previousConfigDir: string | undefined;
+beforeAll(() => {
+  previousConfigDir = process.env.OMNI_CONFIG_DIR;
+  process.env.OMNI_CONFIG_DIR = configDir;
+});
+afterAll(() => {
+  if (previousConfigDir === undefined) Reflect.deleteProperty(process.env, 'OMNI_CONFIG_DIR');
+  else process.env.OMNI_CONFIG_DIR = previousConfigDir;
+  rmSync(configDir, { recursive: true, force: true });
+});
 
 // Neutralize host XDG_RUNTIME_DIR so the synchronous canonical-pgserve socket
 // probe in runtime-env.ts (`probeCanonicalSocketSync`) returns false. Without
@@ -56,6 +69,8 @@ interface HarnessState {
   apiPid: number | undefined;
   /** omni-nats pm2 child PID. Used by port-canonical-owner. */
   natsPid: number | undefined;
+  /** omni-nats script args as pm2 recorded them. Used by nats-bind-address. */
+  natsArgs?: string[];
   /**
    * Map of port → owning PID (or null when nothing listens). Stubs the
    * `ss -tlnp` lookup. Healthy default has each canonical port owned by
@@ -260,6 +275,8 @@ async function recordPm2(state: HarnessState, args: string[], env?: Record<strin
 
 function mkDeps(state: HarnessState): DoctorDeps {
   return {
+    fetchPairedAgentsStatus: async () => ({ enabled: true, reason: null }),
+    listConnectors: async () => ({ items: [], meta: { hasMore: false, cursor: null } }),
     getPm2Processes: async () => {
       // Build a pm2-jlist-shaped response driven by harness state.
       const expected = buildRuntimeEnv(state.serverConfig, state.cliConfig);
@@ -291,6 +308,7 @@ function mkDeps(state: HarnessState): DoctorDeps {
             status: state.natsStatus,
             env: {},
             max_restarts: state.natsMaxRestarts,
+            args: state.natsArgs,
           },
         },
       ];
@@ -374,8 +392,196 @@ function mkDeps(state: HarnessState): DoctorDeps {
 // Tests
 // ---------------------------------------------------------------------------
 
+describe('doctor connector unmatched counters', () => {
+  for (const [name, error] of [
+    ['401', new OmniApiError('Unauthorized', 'UNAUTHORIZED', undefined, 401)],
+    ['403', new OmniApiError('Forbidden', 'FORBIDDEN', undefined, 403)],
+    ['missing key', new OmniApiError('Authenticated connectors:read is required', 'UNAUTHORIZED', undefined, 401)],
+  ]) {
+    test(`reports the access hint for ${name}`, async () => {
+      const checks = await checkConnectorUnmatched({
+        listConnectors: async () => {
+          throw error;
+        },
+      });
+      expect(checks[0]?.detail).toBe(
+        'Connector counters unavailable; authenticated connectors:read access is required.',
+      );
+    });
+  }
+
+  for (const [name, error, reason] of [
+    ['network failure', new Error('\u001b[31mConnection refused\u001b[0m\n\u0085\u202e'), 'Connection refused'],
+    [
+      'server failure',
+      new OmniApiError('Service unavailable', 'INTERNAL_ERROR', undefined, 502),
+      'Service unavailable',
+    ],
+    ['unknown failure', null, 'Unknown error'],
+    ['long failure', new Error('x'.repeat(250)), 'x'.repeat(200)],
+  ]) {
+    test(`reports a short sanitized reason for ${name}`, async () => {
+      const checks = await checkConnectorUnmatched({
+        listConnectors: async () => {
+          throw error;
+        },
+      });
+      expect(checks[0]?.detail).toBe(`Connector counters unavailable: ${reason}`);
+    });
+  }
+
+  test('reports malformed connector data as an invalid response', async () => {
+    const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+    client.raw.use({
+      onRequest: () => Response.json({ data: [{ id: 'connector-1', name: 'GitLab' }], meta: { hasMore: false } }),
+    });
+    const checks = await checkConnectorUnmatched({ listConnectors: client.connectors.list });
+    expect(checks[0]?.detail).toContain('Connector counters unavailable: Invalid connector response: totalUnmatched:');
+    expect(checks[0]?.detail).not.toContain('access is required');
+  });
+
+  for (const cursor of [null, 'repeated-cursor']) {
+    test(`reports an invalid pagination cursor (${cursor})`, async () => {
+      const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+      client.raw.use({ onRequest: () => Response.json({ data: [], meta: { hasMore: true, cursor } }) });
+      const checks = await checkConnectorUnmatched({ listConnectors: client.connectors.list });
+      expect(checks[0]?.detail).toBe('Connector counters unavailable: Invalid connector pagination cursor');
+    });
+  }
+
+  for (const [lastUnmatchedAt, level] of [
+    ['2026-11-01T17:00:00.000Z', 'WARN'],
+    ['2026-10-31T18:00:00.000Z', 'WARN'],
+    ['2026-10-31T17:59:59.999Z', 'OK'],
+    ['2026-11-01T18:00:00.001Z', 'WARN'],
+    [null, 'OK'],
+  ]) {
+    test(`uses the injected 24h window for ${lastUnmatchedAt}`, async () => {
+      const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+      client.raw.use({
+        onRequest: () =>
+          Response.json({
+            data: [
+              {
+                id: 'connector-1',
+                name: 'GitLab',
+                totalUnmatched: 17,
+                lastUnmatchedAt,
+                lastUnmatchedEventType: 'unparsed',
+              },
+            ],
+            meta: { hasMore: false },
+          }),
+      });
+      const checks = await checkConnectorUnmatched({
+        listConnectors: client.connectors.list,
+        now: () => Date.parse('2026-11-01T18:00:00.000Z'),
+      });
+      expect(checks[0]?.level).toBe(level);
+      expect(checks[0]?.detail).toContain('total_unmatched=17');
+      expect(checks[0]?.detail).toContain(`last_unmatched_at=${lastUnmatchedAt ?? '-'}`);
+    });
+  }
+
+  test('strips ANSI escapes and ASCII controls from unparsed provider names', async () => {
+    const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+    client.raw.use({
+      onRequest() {
+        return Response.json({
+          data: [
+            {
+              id: 'connector-1',
+              name: 'GitLab',
+              totalUnmatched: 1,
+              lastUnmatchedAt: null,
+              lastUnmatchedEventType:
+                '\u001b]0;fake-title\u0007\u001b[31mUnparsed provider name\u001b[0m\n\r\t\u0000\u007f',
+            },
+          ],
+          meta: { hasMore: false, cursor: null },
+        });
+      },
+    });
+    const checks = await checkConnectorUnmatched({ listConnectors: client.connectors.list });
+    expect(checks[0]?.detail).toBe(
+      'GitLab (connector-1): total_unmatched=1 last_unmatched_at=- last_unmatched_event_type=Unparsed provider name',
+    );
+  });
+
+  test('prints one line per connector from a paginated authenticated read, without fetching health for counters', async () => {
+    const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+    const requests: string[] = [];
+    const rows = [
+      {
+        id: 'connector-1',
+        name: 'GitLab',
+        totalUnmatched: 17,
+        lastUnmatchedAt: '2026-11-01T12:00:00.000Z',
+        lastUnmatchedEventType: 'connector.gitlab.issue.updated',
+      },
+      { id: 'connector-2', name: 'Idle hook', totalUnmatched: 0, lastUnmatchedAt: null, lastUnmatchedEventType: null },
+    ];
+    client.raw.use({
+      onRequest({ request }) {
+        expect(request.method).toBe('GET');
+        expect(request.headers.get('x-api-key')).toBe('mock-doctor-key');
+        const url = new URL(request.url);
+        expect(url.pathname).toBe('/api/v2/connectors');
+        requests.push(url.pathname);
+        const nextPage = url.searchParams.has('cursor');
+        if (nextPage) expect(url.searchParams.get('cursor')).toBe('page-2');
+        return Response.json({
+          data: [rows[nextPage ? 1 : 0]],
+          meta: { hasMore: !nextPage, cursor: nextPage ? null : 'page-2' },
+        });
+      },
+    });
+    const deps = {
+      ...mkDeps(mkHarness()),
+      listConnectors: client.connectors.list,
+      now: () => Date.parse('2026-11-01T18:00:00.000Z'),
+    };
+    const report = await runDoctor({ fix: false }, deps);
+    const checks = report.checks.filter((check) => check.id === 'connector-unmatched');
+    expect(checks).toEqual([
+      {
+        id: 'connector-unmatched',
+        level: 'WARN',
+        detail:
+          'GitLab (connector-1): total_unmatched=17 last_unmatched_at=2026-11-01T12:00:00.000Z last_unmatched_event_type=connector.gitlab.issue.updated',
+      },
+      {
+        id: 'connector-unmatched',
+        level: 'OK',
+        detail: 'Idle hook (connector-2): total_unmatched=0 last_unmatched_at=- last_unmatched_event_type=-',
+      },
+    ]);
+    expect(requests).toEqual(['/api/v2/connectors', '/api/v2/connectors']);
+  });
+
+  test('refused authenticated reads warn instead of falling back to public health', async () => {
+    const client = createOmniClient({ baseUrl: 'https://omni.test.invalid', apiKey: 'mock-doctor-key' });
+    const requests: string[] = [];
+    client.raw.use({
+      onRequest({ request }) {
+        requests.push(new URL(request.url).pathname);
+        return Response.json({ error: { code: 'FORBIDDEN', message: 'connectors:read required' } }, { status: 403 });
+      },
+    });
+    const checks = await checkConnectorUnmatched({ listConnectors: client.connectors.list });
+    expect(checks).toEqual([
+      {
+        id: 'connector-unmatched',
+        level: 'WARN',
+        detail: 'Connector counters unavailable; authenticated connectors:read access is required.',
+      },
+    ]);
+    expect(requests).toEqual(['/api/v2/connectors']);
+  });
+});
+
 describe('runDoctor — read-only mode', () => {
-  test('reports all 13 checks with OK when state is healthy', async () => {
+  test('reports all checks with OK when state is healthy', async () => {
     // Match the harness version to whatever the CLI currently reports so
     // `version-match` is OK without hard-coding the CLI version here.
     const { VERSION } = await import('../version.js');
@@ -384,7 +590,7 @@ describe('runDoctor — read-only mode', () => {
 
     const report = await runDoctor({ fix: false }, deps);
 
-    expect(report.checks).toHaveLength(13);
+    expect(report.checks).toHaveLength(15);
     const ids = report.checks.map((c) => c.id);
     expect(ids).toEqual([
       'pm2-env-drift',
@@ -400,11 +606,13 @@ describe('runDoctor — read-only mode', () => {
       'pgserve-canonical',
       'port-canonical-owner',
       'embedded-data-orphaned',
+      'nats-bind-address',
+      'paired-agents',
     ]);
     for (const check of report.checks) {
       expect(check.level).toBe('OK');
     }
-    expect(report.summary).toEqual({ ok: 13, warn: 0, fail: 0 });
+    expect(report.summary).toEqual({ ok: 15, warn: 0, fail: 0 });
     expect(report.fixesApplied).toEqual([]);
   });
 
@@ -1359,5 +1567,78 @@ describe('runDoctor — pm2-status --fix dispatches port reconciliation', () => 
     // The pm2-status fix entry mentions the reclaim outcome.
     const fix = report.fixesApplied.find((f) => f.includes('reclaimed') || f.includes('restarted omni-nats'));
     expect(fix).toBeDefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// nats-bind-address: warn (never fix) when omni-nats runs on an old address
+// ---------------------------------------------------------------------------
+
+describe('runDoctor — nats-bind-address', () => {
+  const NATS_ARGS = ['-js', '-sd', '/tmp/data/nats'];
+
+  test('OK when omni-nats runs with the configured address', async () => {
+    const state = mkHarness({ natsArgs: [...NATS_ARGS, '-a', '127.0.0.1'] });
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    expect(report.checks.find((c) => c.id === 'nats-bind-address')?.level).toBe('OK');
+  });
+
+  test('WARN when omni-nats predates the bind address (no -a, all interfaces)', async () => {
+    const state = mkHarness({ natsArgs: NATS_ARGS });
+    const report = await runDoctor({ fix: false }, mkDeps(state));
+    const check = report.checks.find((c) => c.id === 'nats-bind-address');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('listens on 0.0.0.0');
+    expect(check?.detail).toContain('omni stop && omni start');
+  });
+
+  test("--fix leaves omni-nats alone — applying the address is the user's call", async () => {
+    const state = mkHarness({ natsArgs: [...NATS_ARGS, '-a', '0.0.0.0'] });
+    const report = await runDoctor({ fix: true }, mkDeps(state));
+    expect(report.checks.find((c) => c.id === 'nats-bind-address')?.level).toBe('WARN');
+    expect(state.pm2Calls.filter((c) => c.args.includes('omni-nats'))).toEqual([]);
+  });
+});
+
+describe('paired-agent doctor status', () => {
+  const cases: { status: Awaited<ReturnType<DoctorDeps['fetchPairedAgentsStatus']>>; level: string; text: string }[] = [
+    { status: { enabled: true, reason: null }, level: 'OK', text: 'paired agents ON' },
+    { status: { enabled: false, reason: 'flag_unset' }, level: 'OK', text: 'flag_unset' },
+    { status: { enabled: false, reason: 'multitenancy_enabled' }, level: 'WARN', text: 'OMNI_MULTITENANCY_ENABLED' },
+    { status: { error: 'HTTP 403 requires system:read' }, level: 'WARN', text: 'HTTP 403 requires system:read' },
+  ];
+  for (const entry of cases) {
+    test(`${entry.text}: reports ${entry.level} and preserves the failure count used for exit status`, async () => {
+      const deps = mkDeps(mkHarness());
+      const baseline = await runDoctor({}, deps);
+      let calledPort = 0;
+      deps.fetchPairedAgentsStatus = async (port) => {
+        calledPort = port;
+        return entry.status;
+      };
+      const report = await runDoctor({}, deps);
+      const check = report.checks.find((item) => item.id === 'paired-agents');
+      expect(check?.level).toBe(entry.level);
+      expect(check?.detail).toContain(entry.text);
+      expect(calledPort).toBe(8882);
+      expect(report.summary.fail).toBe(baseline.summary.fail);
+      if ('enabled' in entry.status && !entry.status.enabled) {
+        expect(check?.detail).toContain('paired agents OFF');
+        expect(check?.detail).toContain('OMNI_PAIRED_AGENT_CONSUMERS');
+        expect(check?.detail).toContain('forward-only');
+        expect(check?.detail).toContain('paired-agent-journal-indexes.md#rolling-back');
+      }
+    });
+  }
+  test('a rejected status fetch is WARN and strips terminal controls from the reason', async () => {
+    const deps = mkDeps(mkHarness());
+    deps.fetchPairedAgentsStatus = async () => {
+      throw new Error('offline\x1b[31m');
+    };
+    const report = await runDoctor({}, deps);
+    const check = report.checks.find((item) => item.id === 'paired-agents');
+    expect(check?.level).toBe('WARN');
+    expect(check?.detail).toContain('offline');
+    expect(check?.detail).not.toContain('\x1b');
   });
 });

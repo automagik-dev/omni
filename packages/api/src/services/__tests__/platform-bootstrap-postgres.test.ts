@@ -17,7 +17,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { type Database, apiKeys, authCredentials, createDbHandle, platformApiKeys, principals } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
 import { eq, sql } from 'drizzle-orm';
 import { generateSecret, hashSecret, secretPrefix } from '../../tenancy/hash';
 import { AuthBootstrapService } from '../auth-bootstrap';
@@ -26,12 +26,6 @@ import { PlatformBootstrapService } from '../platform-bootstrap';
 const superUrl = process.env.OMNI_G3_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G3_PSQL_BIN ?? 'psql';
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 const SUBJECT = 'platform-operator';
 const KEY_NAME = 'platform-operator';
@@ -45,7 +39,7 @@ postgresDescribe('platform credential bootstrap (real PostgreSQL)', () => {
 
   beforeAll(() => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 4 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 4 });
     closers.push(() => handle.close().catch(() => undefined));
     db = handle.db;
     service = new PlatformBootstrapService(db);

@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
+    branches: [main, dev, labs]
   pull_request:
-    branches: [main, dev]
+    branches: [main, dev, labs]
   # Merge-queue support (#990): when a merge queue is enabled on dev, GitHub
   # synthesizes gh-readonly-queue/* merge commits (PR + dev + any PRs queued
   # ahead) and requires the branch-protection checks to pass on THEM before
@@ -17,7 +17,7 @@ on:
   # Enabling the queue itself is a one-time settings change — see
   # docs/ci/merge-queue.md.
   merge_group:
-    branches: [main, dev]
+    branches: [main, dev, labs]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -99,6 +99,7 @@ jobs:
 
           scripts/release/release-workflow-contract.test.sh
           scripts/release/stable-release-order.test.sh
+          scripts/release/release-notes-body-guard.test.sh
           scripts/release/verify-promotion-candidate.test.sh
           scripts/release/verify-oci-release.test.sh
           scripts/release/verify-release-source.test.sh
@@ -116,9 +117,15 @@ jobs:
           HELM_BIN="${tools}/helm/linux-amd64/helm" scripts/ci/test-helm-image-digest.sh
           "${tools}/actionlint/actionlint" .github/workflows/*.yml
 
+      - name: Herdr merge helper tests
+        # Stub-gh harness for .herdr/tools/merge-when-green.sh: bash and jq only, no network.
+        # Each case runs under timeout, so a polling loop that never ends fails instead of hanging.
+        timeout-minutes: 5
+        run: bash .herdr/tools/merge-when-green.test.sh
+
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.4
 
       - name: Turbo remote cache
         uses: rharkor/caching-for-turbo@35a1f2e1570392a7fc1c03552acaf6340f0c5eef # v2.2.1
@@ -135,7 +142,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: bin/
-          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
+          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh', 'packages/cli/src/nats-pin.json') }}
 
       - name: Install dependencies
         run: bun install
@@ -148,12 +155,14 @@ jobs:
         # so it re-drifts on every merge to dev. The base is resolved exactly
         # like the migration gate below: HEAD^1 of the test merge commit,
         # falling back to the base-branch tip when the PR merged mid-run.
-        # Pushes to dev/main keep the strict full check.
+        # Pushes to dev/main keep the strict full check. Omni's DSH plugins may lag the
+        # root (they carry the Omni version of their last change): the check reads the
+        # release tags it compares, fetching each one this shallow clone lacks.
         env:
           VERSION_BASE_BRANCH: ${{ github.base_ref || 'dev' }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          bun test scripts/verify-versions.test.ts
+          bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts scripts/bun-installers.test.ts
           if [ "${EVENT_NAME}" = "push" ]; then
             bun scripts/verify-versions.ts
           else
@@ -166,6 +175,17 @@ jobs:
               bun scripts/verify-versions.ts --base "origin/${VERSION_BASE_BRANCH}"
             fi
           fi
+
+      - name: Marketplace index gate
+        # marketplace/automagik.json pins Omni's plugins to commits; the gate proves each
+        # one is an ancestor of HEAD and holds the package it names, so it needs history.
+        # It also checks each plugin against the API of the oldest Omni it declares
+        # (scripts/plugin-compat.test.ts), reading that release's tag.
+        run: |
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --no-tags --unshallow origin
+          fi
+          make marketplace-check
 
       - name: Migration contract gate
         # Static check of packages/db/drizzle/ (journal ↔ files bijection,
@@ -293,6 +313,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      - name: Plugin skill CLI drift
+        run: make skill-cli-check
+
       - name: Lint
         run: bunx biome check .
 
@@ -325,14 +348,13 @@ jobs:
         # cache replay on the integration branch, and the one-process run is
         # also the only configuration where cross-file state leaks (e.g.
         # globalThis.fetch pollution, issue #967 comment) reproduce. Scope to
-        # omni packages + the ui app; apps/khal-ui is a decoupled sub-project
-        # (private @khal-os deps) with its own test run.
+        # omni packages.
         # merge_group events (#990) take this same path deliberately: the
         # queue's speculative merge commit is exactly the state dev would
         # become, so sweeping it catches green-in-isolation/red-in-combination
         # PR pairs (the #964+#965 global-fetch clash) BEFORE they land.
         if: ${{ github.event_name != 'pull_request' }}
-        run: bun test packages apps/ui --env-file=.env
+        run: bun test packages --env-file=.env
         env:
           NODE_ENV: test
           LOG_LEVEL: silent
@@ -365,7 +387,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.4
 
       - name: Cache bun packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -375,28 +397,43 @@ jobs:
           restore-keys: |
             bun-${{ runner.os }}-
 
+      - name: Cache NATS binary
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: bin/
+          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh', 'packages/cli/src/nats-pin.json') }}
+
       - name: Install dependencies
         run: bun install
 
+      - name: Download NATS
+        run: ./scripts/ensure-nats.sh
+
       - name: Resolve a PostgreSQL server build
+        # The PostgreSQL Omni runs: autopg (the CLI's embedded server, the Helm
+        # chart's and deploy/autopg.Dockerfile's) pins 18, so the gate runs 18,
+        # not whatever the runner image carries (Ubuntu 24.04 ships 16, whose
+        # catalog differs: 18 lists NOT NULL constraints in pg_constraint).
         # `initdb` alone is not enough: a client-only distribution ships initdb
         # and psql but no `postgres`, and initdb then dies halfway through. The
         # harness applies the same postgres-next-to-initdb test, so apply it
-        # here and install only when the runner image does not already satisfy
-        # it. OMNI_PG_BIN_DIR is exported so the harness never has to guess.
+        # here. OMNI_PG_BIN_DIR is exported so the harness never has to guess.
+        env:
+          PG_MAJOR: '18'
         run: |
           set -euo pipefail
-          find_bin_dir() {
-            for dir in /usr/lib/postgresql/*/bin; do
-              if [ -x "$dir/postgres" ] && [ -x "$dir/initdb" ]; then echo "$dir"; return 0; fi
-            done
-            return 1
-          }
-          if ! BIN_DIR=$(find_bin_dir); then
-            echo "No PostgreSQL server build on the runner — installing one."
+          BIN_DIR="/usr/lib/postgresql/${PG_MAJOR}/bin"
+          if [ ! -x "$BIN_DIR/postgres" ] || [ ! -x "$BIN_DIR/initdb" ]; then
+            echo "No PostgreSQL ${PG_MAJOR} server build on the runner — installing one."
+            # The gate makes its own disposable cluster: the package's is not needed.
+            sudo mkdir -p /etc/postgresql-common/createcluster.d
+            echo 'create_main_cluster = false' | sudo tee /etc/postgresql-common/createcluster.d/no-main.conf >/dev/null
+            if ! apt-cache show "postgresql-${PG_MAJOR}" >/dev/null 2>&1; then
+              sudo apt-get install -y --no-install-recommends postgresql-common
+              sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+            fi
             sudo apt-get update
-            sudo apt-get install -y --no-install-recommends postgresql postgresql-client
-            BIN_DIR=$(find_bin_dir)
+            sudo apt-get install -y --no-install-recommends "postgresql-${PG_MAJOR}" "postgresql-client-${PG_MAJOR}"
           fi
           echo "Using PostgreSQL server build at $BIN_DIR"
           "$BIN_DIR/postgres" --version
@@ -442,7 +479,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.4
 
       - name: Cache bun packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -479,6 +516,7 @@ jobs:
             packages/api/src/plugins/__tests__/media-remote-e2e.test.ts \
             packages/api/src/plugins/__tests__/media-processor-remote.test.ts \
             packages/api/src/plugins/__tests__/agent-dispatcher-media-remote.test.ts \
+            packages/api/src/routes/v2/__tests__/media-route.test.ts \
             2>&1 | tee remote-media-tests.log
 
       - name: Verify suites executed (not skipped)
@@ -498,6 +536,115 @@ jobs:
           fi
           echo "S3/MinIO suites executed against a real MinIO (S3 backend init lines + non-zero pass count present)"
 
+  omni-channels-dsh:
+    # apps/omni-channels-dsh is Omni's channels, chats and automations as a DSH plugin on the
+    # Bot team (@automagik/bots-dsh, from automagik-dev/automagik): Node for DSH, outside the
+    # Bun workspaces, tested against the DSH release pinned in its own dev/harness/package.json,
+    # which Bun installs. Its own lockfile stays npm's: Bun resolves every peer from the
+    # registry, and this plugin peers on plugins that ship through the market, not npm.
+    # Its tests compose the team's runtime and client.js, from the Automagik release
+    # apps/automagik.json pins, with its own.
+    name: Omni channels for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-channels-dsh
+    env:
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-channels-dsh/dev/harness/node_modules
+          key: dsh-harness-bun-omni-channels-${{ runner.os }}-${{ hashFiles('apps/omni-channels-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          [ -d dev/harness/node_modules ] || bun run harness
+
+      - name: The Bot team at the pinned Automagik release
+        run: node ../automagik.mjs source
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test
+
+  omni-canvas-dsh:
+    # apps/omni-canvas-dsh is Omni's canvases as a DSH plugin on the Bot team and Omni's
+    # channels (@automagik/bots-dsh at the Automagik release apps/automagik.json pins,
+    # apps/omni-channels-dsh): Node for DSH, outside the Bun
+    # workspaces, tested against the DSH release pinned in its own dev/harness/package.json,
+    # which Bun installs. Its own lockfile stays npm's, as omni-channels-dsh's does: it peers
+    # on those Omni plugins, which are not on npm, and Bun resolves every peer there.
+    # Its tests compose all three runtimes and client bundles from this checkout, so the
+    # channels plugin's own dependencies (zod) are installed too.
+    name: Omni canvases for DSH (plugin tests)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: apps/omni-canvas-dsh
+    env:
+      # @openuidev/lang-core's postinstall sends install telemetry otherwise.
+      DO_NOT_TRACK: '1'
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.4
+
+      - name: Cache the pinned DSH harness
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: apps/omni-canvas-dsh/dev/harness/node_modules
+          key: dsh-harness-bun-omni-canvas-${{ runner.os }}-${{ hashFiles('apps/omni-canvas-dsh/dev/harness/package.json') }}
+
+      - name: Install
+        run: |
+          npm ci --no-fund --no-audit
+          npm ci --no-fund --no-audit --ignore-scripts --prefix ../omni-channels-dsh
+          [ -d dev/harness/node_modules ] || bun run harness
+
+      - name: The Bot team at the pinned Automagik release
+        run: node ../automagik.mjs source
+
+      - name: Generated files are current
+        run: node scripts/build-client.mjs --check
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Test
+        run: bun run test
+
   smoke-test:
     name: Smoke Test (Fresh Environment)
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -510,7 +657,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
-          bun-version: 1.3.14
+          bun-version: 1.4.4
 
       - name: Turbo remote cache
         uses: rharkor/caching-for-turbo@35a1f2e1570392a7fc1c03552acaf6340f0c5eef # v2.2.1
@@ -527,7 +674,7 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: bin/
-          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh') }}
+          key: nats-${{ runner.os }}-${{ hashFiles('scripts/ensure-nats.sh', 'packages/cli/src/nats-pin.json') }}
 
       - name: Install dependencies
         run: bun install

@@ -1,4 +1,10 @@
-import type { AgentTrigger, OmniCustomerContext, OmniExecutionContext, ProviderRequest } from './types';
+import type {
+  AgentTrigger,
+  OmniCustomerContext,
+  OmniExecutionContext,
+  ProviderOriginIdentity,
+  ProviderRequest,
+} from './types';
 
 export const OMNI_EXECUTION_CONTEXT_EXTENSION_URI = 'https://omni.dev/extensions/execution-context/v1';
 
@@ -111,5 +117,48 @@ export function buildProviderRequestContext(
     ...(context.content.referencedMessageId ? { replyToMessageId: context.content.referencedMessageId } : {}),
     env: buildOmniEnv(context, executionContext),
     executionContext,
+  };
+}
+
+/**
+ * The execution context a legacy fallback request carries (#1408).
+ *
+ * The native `WebhookAgentProvider` builds its context from an {@link AgentTrigger}.
+ * The legacy fallback has no trigger — only the agent-runner request plus the
+ * origin identity the caller preserved — so this reconstructs the same shape
+ * from those, keeping `source.messageId` equal to the platform message id the
+ * receiver already saw. Returns null when the request cannot describe a source
+ * channel: without one there is no truthful context to send, and the payload
+ * omits `executionContext` rather than inventing identifiers.
+ */
+export function buildOriginExecutionContext(
+  request: ProviderRequest,
+  origin: ProviderOriginIdentity,
+  traceId: string,
+): OmniExecutionContext | null {
+  const platform = request.platform;
+  if (!platform?.channel) return null;
+
+  const platformUserId = platform.id || request.userId;
+  const personId = request.userId !== platformUserId ? request.userId : undefined;
+
+  return {
+    identity: {
+      userId: request.userId,
+      ...(personId ? { personId } : {}),
+      platformUserId,
+      ...(request.sender?.displayName ? { displayName: request.sender.displayName } : {}),
+    },
+    source: {
+      channel: platform.channel,
+      instanceId: platform.instanceId,
+      chatId: request.chat?.id ?? '',
+      ...(request.chat?.threadId ? { threadId: request.chat.threadId } : {}),
+      messageId: origin.messageId,
+    },
+    session: {
+      id: request.sessionId ?? request.userId,
+    },
+    trace: { id: traceId },
   };
 }

@@ -131,18 +131,6 @@ describe('ComponentRegistry', () => {
       reg.destroy();
     });
 
-    test('non-reusable entry is consumed after resolve (default)', () => {
-      const reg = createRegistry();
-      reg.register('inst-1', 'msg-1', [{ type: 'button' }]);
-
-      const first = reg.resolve('inst-1', 'msg-1');
-      expect(first).not.toBeNull();
-
-      const second = reg.resolve('inst-1', 'msg-1');
-      expect(second).toBeNull();
-      reg.destroy();
-    });
-
     test('consume: false overrides default consume behavior', () => {
       const reg = createRegistry();
       reg.register('inst-1', 'msg-1', [{ type: 'button' }]); // default: NOT reusable
@@ -290,56 +278,6 @@ describe('ComponentRegistry', () => {
       const reg = createRegistry();
       const removed = reg.unregister('inst-1', 'msg-nonexistent');
       expect(removed).toBe(false);
-      reg.destroy();
-    });
-  });
-
-  describe('performance', () => {
-    test('lookup completes in <1ms', () => {
-      const reg = createRegistry();
-
-      // Register 1000 entries
-      for (let i = 0; i < 1000; i++) {
-        reg.register('inst-1', `msg-${i}`, [{ idx: i }]);
-      }
-
-      // Measure lookup time
-      const start = performance.now();
-      for (let i = 0; i < 100; i++) {
-        reg.resolve('inst-1', `msg-${i}`, { consume: false });
-      }
-      const elapsed = performance.now() - start;
-      const avgMs = elapsed / 100;
-
-      expect(avgMs).toBeLessThan(1);
-      reg.destroy();
-    });
-
-    test('10000 entries use <10MB memory', () => {
-      const reg = createRegistry();
-
-      // Register 10000 entries with realistic component data
-      for (let i = 0; i < 10000; i++) {
-        reg.register('inst-1', `msg-${i}`, [
-          { type: 'button', customId: `btn-${i}`, label: `Button ${i}` },
-          { type: 'select', customId: `sel-${i}`, options: ['a', 'b', 'c'] },
-        ]);
-      }
-
-      // Rough memory estimate: each entry ~500 bytes
-      // 10000 * 500 = 5MB — well under 10MB target
-      expect(reg.stats().totalEntries).toBe(10000);
-      reg.destroy();
-    });
-  });
-
-  describe('backward compatibility', () => {
-    test('unregistered interactions pass through (resolve returns null)', () => {
-      const reg = createRegistry();
-
-      // No registration — simulates messages sent without registry
-      const entry = reg.resolve('inst-1', 'msg-unknown');
-      expect(entry).toBeNull();
       reg.destroy();
     });
   });

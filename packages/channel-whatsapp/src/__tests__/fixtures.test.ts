@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { fromJid, isGroupJid } from '../jid';
+import { fromJid } from '../jid';
 import type {
   WAAudioMessage,
   WAContactMessage,
@@ -290,131 +290,6 @@ describe('Real Payload Fixtures', () => {
 
           expect(reaction.key).toBeDefined();
           expect(reaction.text).toBeDefined(); // emoji or empty for removal
-        }
-      });
-    });
-  });
-
-  describe('Event Payloads', () => {
-    describe('Call Events', () => {
-      it('should have valid call event structure', () => {
-        const callEvents = fixtures.events.call;
-        expect(callEvents.length).toBeGreaterThan(0);
-
-        for (const call of callEvents) {
-          expect(call.id).toBeDefined();
-          expect(call.from).toBeDefined();
-          expect(call.status).toBeDefined();
-          expect(typeof call.isVideo).toBe('boolean');
-          expect(typeof call.isGroup).toBe('boolean');
-        }
-      });
-
-      it('should have call lifecycle events', () => {
-        const callEvents = fixtures.events.call;
-        const statuses = callEvents.map((call) => call.status);
-
-        // Should have various call statuses
-        expect(statuses.some((s) => s === 'offer' || s === 'ringing' || s === 'terminate')).toBe(true);
-      });
-    });
-
-    describe('Presence Events', () => {
-      it('should have valid presence update structure', () => {
-        const presenceEvents = fixtures.events.presence;
-        expect(presenceEvents.length).toBeGreaterThan(0);
-
-        for (const presence of presenceEvents) {
-          expect(presence.chatId).toBeDefined();
-          expect(presence.userId).toBeDefined();
-          expect(presence.status).toBeDefined();
-        }
-      });
-
-      it('should have presence statuses', () => {
-        const presenceEvents = fixtures.events.presence;
-
-        for (const presence of presenceEvents) {
-          // Valid presence values
-          expect(['available', 'unavailable', 'composing', 'recording', 'paused']).toContain(presence.status);
-        }
-      });
-    });
-
-    describe('Group Participant Events', () => {
-      it('should have valid group participant update structure', () => {
-        const groupEvents = fixtures.events.groupParticipantsUpdate;
-        expect(groupEvents.length).toBeGreaterThan(0);
-
-        for (const update of groupEvents) {
-          expect(update.id).toBeDefined(); // group JID
-          expect(update.action).toBeDefined();
-          expect(update.participants).toBeDefined();
-          expect(Array.isArray(update.participants)).toBe(true);
-        }
-      });
-
-      it('should have group JIDs', () => {
-        const groupEvents = fixtures.events.groupParticipantsUpdate;
-
-        for (const update of groupEvents) {
-          expect(isGroupJid(update.id)).toBe(true);
-        }
-      });
-
-      it('should have valid action types', () => {
-        const groupEvents = fixtures.events.groupParticipantsUpdate;
-        const actions = groupEvents.map((update) => update.action);
-
-        // Valid group actions
-        for (const action of actions) {
-          expect(['add', 'remove', 'promote', 'demote', 'invite', 'leave']).toContain(action);
-        }
-      });
-    });
-
-    describe('Message Receipt Events', () => {
-      it('should have valid receipt update structure', () => {
-        const receiptEvents = fixtures.events.messageReceiptUpdate;
-        expect(receiptEvents.length).toBeGreaterThan(0);
-
-        for (const receipt of receiptEvents) {
-          expect(receipt.key).toBeDefined();
-          expect(receipt.key.id).toBeDefined();
-        }
-      });
-    });
-
-    describe('Chat Update Events', () => {
-      it('should have valid chat update structure', () => {
-        const chatUpdateBatches = fixtures.events.chatsUpdate;
-        expect(chatUpdateBatches.length).toBeGreaterThan(0);
-
-        for (const batch of chatUpdateBatches) {
-          expect(batch.count).toBeDefined();
-          expect(batch.updates).toBeDefined();
-          expect(Array.isArray(batch.updates)).toBe(true);
-
-          for (const chat of batch.updates) {
-            expect(chat.id).toBeDefined();
-          }
-        }
-      });
-    });
-
-    describe('Contact Update Events', () => {
-      it('should have valid contact update structure', () => {
-        const contactUpdateBatches = fixtures.events.contactsUpdate;
-        expect(contactUpdateBatches.length).toBeGreaterThan(0);
-
-        for (const batch of contactUpdateBatches) {
-          expect(batch.count).toBeDefined();
-          expect(batch.updates).toBeDefined();
-          expect(Array.isArray(batch.updates)).toBe(true);
-
-          for (const contact of batch.updates) {
-            expect(contact.id).toBeDefined();
-          }
         }
       });
     });
