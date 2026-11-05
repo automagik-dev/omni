@@ -162,7 +162,7 @@ ExecStart=/usr/local/bin/bun /var/lib/omni/sandbox/runtime/node_modules/@automag
 Restart=always
 RestartSec=5
 KillMode=control-group
-TimeoutStopSec=300
+TimeoutStopSec=660
 RuntimeMaxSec=infinity
 WatchdogSec=0
 RemainAfterExit=no
@@ -172,6 +172,8 @@ WantedBy=multi-user.target
 ```
 
 Use the actual pinned Bun path and a home writable only by the service user.
+Set `TimeoutStopSec` to at least 660 seconds, above the ten-minute install deadline
+and its shutdown grace; allow more time for slow drains or large backup copies.
 `Type=exec` also works. The unit must run the supervisor as its main PID, use
 `Restart=always` and `KillMode=control-group` or `mixed`, and have no watchdog or runtime deadline. `ExitType`, on systemd
 versions that support it, must remain `main`. Do not use `--at-login` with an external
@@ -208,6 +210,14 @@ A persistent 503 (for example an old dead letter) never stops or restarts the sa
 Only backup retirement requires HTTP 200: the new supervisor checks every five seconds
 until health succeeds. Until then the backup stays and `logs/update.log` records a fixed
 unhealthy reason. Identical consecutive refused-boot/health result lines are not repeated.
+
+A retained backup blocks later in-app updates. To keep the new version after a lasting
+503, confirm the backup manifest is `installed` and its `to` matches the running version,
+then stop the external unit and confirm its processes have exited. Move the entire
+`.update-backup` directory to an archive outside the sandbox home, without restoring
+its components, and start the unit again. This keeps the new install, preserves an
+operator rollback archive, and permits later updates. Resolve the degraded health
+condition separately; archiving the backup does not fix it.
 
 Crash recovery distinguishes copying from installation. `.update-backup/manifest.json`
 starts in `backing-up`, changes to `installing` only after every protected component was

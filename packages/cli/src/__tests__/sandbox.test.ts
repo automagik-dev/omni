@@ -1455,6 +1455,7 @@ describe('SandboxSupervisor', () => {
         await Bun.sleep(0);
         expect(fake.children).toHaveLength(3);
         expect(readFileSync(layout.statePath, 'utf8')).toBe(original);
+        expect(existsSync(join(home, 'runtime/partial'))).toBe(false);
         expect(existsSync(join(home, '.update-backup'))).toBe(false);
         expect(readFileSync(sandboxUpdateLogPath(layout), 'utf8')).toContain(SANDBOX_UPDATE_COPY_INTERRUPTED);
       } finally {
