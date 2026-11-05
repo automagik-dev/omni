@@ -10,7 +10,7 @@ Builds event-driven automations on Omni v2 with `omni automations`: trigger even
 
 1. `omni automations list --json` — update an existing automation instead of duplicating it.
 2. Create disabled: `omni automations create ... --disabled`.
-3. Mock-test: `omni automations test <id> --event '<json>'` — `test` never fires live actions; `execute` does.
+3. Mock-test: `omni automations test <id> --event '<json>'` — without `--execute`, test runs no actions. Both `test --execute` and `execute` run real actions and need authorization.
 4. Enable, trigger a real event, confirm a matching entry in `omni automations logs <id>`.
 
 ## Evidence

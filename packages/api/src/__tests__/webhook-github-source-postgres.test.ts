@@ -1,3 +1,4 @@
+import type { ConnectorEventPublisher } from '@omni/core';
 /**
  * The GitHub source recipe, end-to-end over the REAL HTTP ingress and real
  * PostgreSQL (issue #983, RFC #925 Phase 3 — source 1 of 2).
@@ -30,12 +31,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { createHmac } from 'node:crypto';
-import { readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
 import { type Database, createDbHandle, deadLetterEvents, omniEvents, webhookSources } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq, like } from 'drizzle-orm';
 import { createApp } from '../app';
 import { EventSchemaService } from '../services/event-schemas';
@@ -54,40 +55,37 @@ const GITHUB_EVENT_TYPES = [
   'custom.github.release',
 ] as const;
 
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-983-github-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 interface PublishedEvent {
   type: string;
   payload: Record<string, unknown>;
 }
 
 /** An EventBus fake that records generic publishes (all this path uses). */
-function recordingBus(events: PublishedEvent[]): EventBus {
+function recordingBus(events: PublishedEvent[]): EventBus & ConnectorEventPublisher {
   return {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishConnector: async () => {
+      throw new Error('unexpected connector publish');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+
     publishGeneric: async (type: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) => {
       events.push({ type, payload });
-      return { id: crypto.randomUUID(), type, timestamp: Date.now(), payload, metadata };
+      return {
+        id: typeof metadata?.publishEventId === 'string' ? metadata.publishEventId : crypto.randomUUID(),
+        sequence: 0,
+        stream: 'memory',
+      };
     },
-  } as unknown as EventBus;
+  };
 }
 
 /** Sign a raw body exactly the way GitHub does. */
@@ -181,7 +179,7 @@ postgresDescribe('GitHub source recipe end-to-end (#983, real PostgreSQL)', () =
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const handle = createDbHandle({ url: urlFor(superUrl, dbName), maxConnections: 3 });
+    const handle = createDbHandle({ url: pgRoleUrl(superUrl, dbName), maxConnections: 3 });
     db = handle.db;
     close = handle.close;
 
@@ -214,7 +212,7 @@ postgresDescribe('GitHub source recipe end-to-end (#983, real PostgreSQL)', () =
 
   afterAll(async () => {
     await close?.().catch(() => undefined);
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('declaring the cadence armed liveness supervision on create (#961)', async () => {

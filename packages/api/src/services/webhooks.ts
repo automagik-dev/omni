@@ -29,13 +29,18 @@ import {
   type WebhookPollConfig,
   type WebhookSource,
   omniEvents,
+  resolveEnforcementMode,
   webhookSources,
 } from '@omni/db';
-import { and, eq, isNotNull, sql } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { deriveIdempotencyKey, resolvePayloadPath } from '../lib/ingress-idempotency';
+import { requestProducerColumns } from '../lib/key-agent';
 import { executePoll, isPollAllowlistConfigured, isPollDue, resolveAllowedCommand } from '../lib/poll-connector';
+import { isMultitenancyEnabled, pairedAgentFlagState } from '../tenancy/feature-flag';
+import { enumerateActiveWorkTenants } from '../tenancy/periodic-tenant-work';
 import { openCredentialField, sealCredentialField } from '../tenancy/sealed-credentials';
-import { currentTenantScope, scopedHandle } from '../tenancy/tenant-scope';
+import { currentTenantScope, runAfterTenantCommit, scopedHandle } from '../tenancy/tenant-scope';
+import { runInWorkerTenantScope } from '../tenancy/worker-tenant-context';
 import type { DeadLetterService } from './dead-letters';
 import type { EventSchemaService } from './event-schemas';
 
@@ -200,7 +205,84 @@ export class WebhookService {
      */
     private readonly eventSchemas: EventSchemaService | null = null,
     private readonly deadLetters: DeadLetterService | null = null,
+    private readonly authPlaneDb: Database | null = null,
   ) {}
+
+  /** Bounded per-process cache, including unknown/ambiguous names. No secrets. */
+  private readonly ingressOwners = new Map<string, { tenantId: string | null | undefined; expiresAt: number }>();
+
+  private invalidateIngressOwners(): void {
+    runAfterTenantCommit(() => this.ingressOwners.clear());
+  }
+
+  /** Public ingress discovers only ownership, then verifies/receives in that scope. */
+  async receivePublic(
+    name: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string>,
+    options: WebhookReceiveOptions,
+  ): Promise<WebhookReceiveResult> {
+    const verifiedOptions = { ...options, autoCreate: false, requireSignature: true };
+    if (!isMultitenancyEnabled()) return this.receive(name, payload, headers, verifiedOptions);
+
+    let tenantId: string | null | undefined;
+    try {
+      tenantId = await this.cachedIngressOwner(name);
+    } catch (error) {
+      log.warn('Webhook ingress ownership discovery failed', { sourceName: name, error: String(error) });
+      throw new OmniError({ code: ERROR_CODES.UNAUTHORIZED, message: 'Webhook verification failed' });
+    }
+    if (tenantId === undefined) {
+      throw new OmniError({ code: ERROR_CODES.UNAUTHORIZED, message: 'Webhook verification failed' });
+    }
+    const owner = { tenantId };
+    const receive = () => this.receiveWithOwner(name, payload, headers, verifiedOptions, owner);
+    return tenantId ? runInWorkerTenantScope(this.pool, tenantId, receive) : receive();
+  }
+
+  private async cachedIngressOwner(name: string): Promise<string | null | undefined> {
+    let cached = this.ingressOwners.get(name);
+    if (cached && cached.expiresAt <= Date.now()) {
+      this.ingressOwners.delete(name);
+      cached = undefined;
+    }
+    if (!cached) {
+      const tenantId = await this.discoverIngressOwner(name);
+      cached = { tenantId: tenantId, expiresAt: Date.now() + 30000 };
+      // Evict oldest entries so random public names cannot grow memory without bound.
+      if (this.ingressOwners.size >= 1000) {
+        const oldest = this.ingressOwners.keys().next().value;
+        if (oldest !== undefined) this.ingressOwners.delete(oldest);
+      }
+      this.ingressOwners.set(name, cached);
+    }
+    return cached.tenantId;
+  }
+
+  /** One auth-plane enumeration and at most N narrow scoped name reads per miss. */
+  private async discoverIngressOwner(name: string): Promise<string | null | undefined> {
+    if (!this.authPlaneDb) throw new Error('Webhook ingress requires tenant discovery');
+    const candidates: Array<string | null> = [];
+    const lookup = async (tenantId: string | null) => {
+      const rows = await this.db
+        .select({ tenantId: webhookSources.tenantId })
+        .from(webhookSources)
+        .where(
+          and(
+            eq(webhookSources.name, name),
+            tenantId ? eq(webhookSources.tenantId, tenantId) : isNull(webhookSources.tenantId),
+          ),
+        )
+        .limit(2);
+      candidates.push(...rows.map((row) => row.tenantId));
+    };
+    for (const tenantId of await enumerateActiveWorkTenants(this.authPlaneDb)) {
+      await runInWorkerTenantScope(this.pool, tenantId, () => lookup(tenantId));
+      if (candidates.length > 1) break;
+    }
+    if (resolveEnforcementMode() !== 'enforced' && candidates.length <= 1) await lookup(null);
+    return candidates.length === 1 ? candidates[0] : undefined;
+  }
 
   /**
    * List all webhook sources
@@ -263,6 +345,7 @@ export class WebhookService {
       throw new Error('Failed to create webhook source');
     }
 
+    this.invalidateIngressOwners();
     return created;
   }
 
@@ -312,6 +395,7 @@ export class WebhookService {
       throw new NotFoundError('WebhookSource', id);
     }
 
+    this.invalidateIngressOwners();
     return updated;
   }
 
@@ -352,6 +436,7 @@ export class WebhookService {
     if (!result.length) {
       throw new NotFoundError('WebhookSource', id);
     }
+    this.invalidateIngressOwners();
   }
 
   /**
@@ -369,10 +454,36 @@ export class WebhookService {
     headers: Record<string, string>,
     options: WebhookReceiveOptions = {},
   ): Promise<WebhookReceiveResult> {
+    return this.receiveWithOwner(sourceName, payload, headers, options);
+  }
+
+  private async getReceiveSource(name: string, owner?: { tenantId: string | null }): Promise<WebhookSource | null> {
+    if (!owner) return this.getByName(name);
+    const [source] = await this.db
+      .select()
+      .from(webhookSources)
+      .where(
+        and(
+          eq(webhookSources.name, name),
+          owner.tenantId ? eq(webhookSources.tenantId, owner.tenantId) : isNull(webhookSources.tenantId),
+        ),
+      )
+      .limit(1);
+    return source ?? null;
+  }
+
+  /** Only public discovery imposes an explicit owner; authenticated reads keep legacy NULL sources. */
+  private async receiveWithOwner(
+    sourceName: string,
+    payload: Record<string, unknown>,
+    headers: Record<string, string>,
+    options: WebhookReceiveOptions,
+    owner?: { tenantId: string | null },
+  ): Promise<WebhookReceiveResult> {
     const { autoCreate = false, rawBody, requireSignature = false } = options;
 
     // Get or create source
-    let source = await this.getByName(sourceName);
+    let source = await this.getReceiveSource(sourceName, owner);
 
     if (!source && autoCreate) {
       source = await this.create({
@@ -425,9 +536,8 @@ export class WebhookService {
       ...payload,
     };
 
-    // Provisional id: referenced by the schema gate's dead-letter entry and
-    // returned when no bus is wired; the publish path below replaces it with
-    // the PUBLISHED event's id (#956).
+    // Fallback identity when no bus is wired; the publish path below returns
+    // the PUBLISHED event's id (#956). Schema refusals have their own identity.
     const eventId = generateId();
 
     // Schema-registry gate (issue #959): a registered type's payload must
@@ -436,13 +546,7 @@ export class WebhookService {
     // never enters the journal; unregistered types pass through (opt-in) —
     // unless the source enforces strict schemas (issue #1000), in which case
     // an unregistered type is refused with reason `schema_not_registered`.
-    await this.enforceRegisteredSchema(
-      eventType,
-      eventPayload,
-      eventId,
-      `webhook '${sourceName}'`,
-      source.strictSchemas,
-    );
+    await this.enforceRegisteredSchema(eventType, eventPayload, `webhook '${sourceName}'`, source.strictSchemas);
 
     // Ingress idempotency (#958): derive the delivery-identity key from the
     // source's template and CLAIM it by inserting the journal row — the
@@ -470,7 +574,15 @@ export class WebhookService {
       rawPayload: payload,
       idempotencyKey,
       receivedAt: new Date(),
-      metadata: { correlationId: eventId, source: 'webhook', fullEventType: eventType, webhookSource: sourceName },
+      metadata: {
+        correlationId: eventId,
+        source: 'webhook',
+        fullEventType: eventType,
+        webhookSource: sourceName,
+        webhookSourceId: source.id,
+      },
+      ...(await requestProducerColumns(this.db)),
+      ...(pairedAgentFlagState('consumers').enabled ? { sourceKind: 'webhook_source', sourceId: source.id } : {}),
     });
 
     if (claim.duplicate) {
@@ -632,7 +744,6 @@ export class WebhookService {
   private async enforceRegisteredSchema(
     eventType: CustomEventType,
     payload: Record<string, unknown>,
-    eventId: string,
     origin: string,
     strict = false,
   ): Promise<void> {
@@ -640,11 +751,11 @@ export class WebhookService {
       return;
     }
     const verdict = await this.eventSchemas.validate(eventType, payload);
-
+    // Refusals have no persisted source event. Correlation and causation IDs
+    // belong to the producer's flow, so they cannot identify a DLQ owner.
     if (strict && !verdict.registered) {
       const errors = [`no enabled schema is registered for event type '${eventType}'`];
       await this.deadLetters?.createSchemaValidationFailure({
-        eventId,
         eventType,
         subject: eventType,
         payload,
@@ -665,7 +776,6 @@ export class WebhookService {
     }
 
     await this.deadLetters?.createSchemaValidationFailure({
-      eventId,
       eventType,
       subject: eventType,
       payload,
@@ -696,13 +806,13 @@ export class WebhookService {
     rawMetadata?: TriggerEventMetadata,
   ): Promise<TriggerEventResult> {
     const metadata = await this.inheritParentCorrelation(rawMetadata);
-    // Provisional id for the schema gate's dead-letter reference and the
-    // no-bus fallback; the publish path returns the PUBLISHED event's id (#956).
-    const provisionalId = metadata?.correlationId ?? generateId();
+    // Fallback identity when no bus is wired. Flow metadata never supplies
+    // an event identity; publishing returns the PUBLISHED event's id (#956).
+    const provisionalId = generateId();
 
     // Same gate as the webhook ingress: a registered type's contract holds on
     // every publish path into the journal (issue #959).
-    await this.enforceRegisteredSchema(eventType, payload, provisionalId, 'manual trigger');
+    await this.enforceRegisteredSchema(eventType, payload, 'manual trigger');
 
     const bus = this.eventBus;
     if (!bus) {
@@ -775,6 +885,7 @@ export class WebhookService {
       idempotencyKey,
       causationId: metadata.causationId ?? null,
       receivedAt: new Date(),
+      ...(await requestProducerColumns(this.db)),
       metadata: {
         correlationId: metadata.correlationId ?? eventId,
         source: 'manual-trigger',

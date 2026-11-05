@@ -7,21 +7,6 @@ import { configureLogging, getLogConfig } from '@omni/core';
 import { MediaProcessingService, createMediaProcessingService } from '../src/service';
 
 describe('MediaProcessingService', () => {
-  describe('constructor', () => {
-    it('initializes with config', () => {
-      const service = new MediaProcessingService({
-        groqApiKey: 'test-key',
-        defaultLanguage: 'en',
-      });
-      expect(service).toBeDefined();
-    });
-
-    it('initializes without API keys', () => {
-      const service = new MediaProcessingService({});
-      expect(service).toBeDefined();
-    });
-  });
-
   describe('missing vision API key warning', () => {
     let stdoutSpy: ReturnType<typeof spyOn>;
     let previousLogConfig: ReturnType<typeof getLogConfig>;
@@ -136,12 +121,6 @@ describe('MediaProcessingService', () => {
   describe('getSupportedMimeTypes', () => {
     const service = new MediaProcessingService({});
 
-    it('returns array of supported types', () => {
-      const mimeTypes = service.getSupportedMimeTypes();
-      expect(Array.isArray(mimeTypes)).toBe(true);
-      expect(mimeTypes.length).toBeGreaterThan(0);
-    });
-
     it('includes common types', () => {
       const mimeTypes = service.getSupportedMimeTypes();
       expect(mimeTypes).toContain('audio/*');
@@ -163,13 +142,6 @@ describe('MediaProcessingService', () => {
   describe('createMediaProcessingService', () => {
     it('creates service with defaults', () => {
       const service = createMediaProcessingService();
-      expect(service).toBeInstanceOf(MediaProcessingService);
-    });
-
-    it('creates service with partial config', () => {
-      const service = createMediaProcessingService({
-        defaultLanguage: 'en',
-      });
       expect(service).toBeInstanceOf(MediaProcessingService);
     });
 

@@ -85,4 +85,3 @@ Use Nano Banana Pro (Gemini image gen):
 GEMINI_API_KEY="..." uv run /path/to/nano-banana-pro/scripts/generate_image.py \
   --prompt "..." --filename "out.png" --resolution 1K
 ```
-Key is saved in `~/.openclaw/openclaw.json` under `skills.nano-banana-pro.env`.

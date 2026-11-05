@@ -25,3 +25,5 @@ omni persons presence <personId> --json | jq '{online: .online, lastSeen: .lastS
 # All persons matching a phone prefix
 omni persons search "+5511" --limit 100 --json | jq '.[] | {id, name, phone}'
 ```
+
+Use `omni persons --help` and the leaf command's help for installed options. Search/presence are reads; merge deletes the source and link/unlink change identity associations. Confirm identities and the intended mutation before applying them; don't treat an identity merge as a messaging retry.

@@ -18,7 +18,6 @@ import {
   resolveCanonicalJid,
   resolveToLidJid,
   resolveToPhoneJid,
-  resolveToPhoneJidLegacy,
   toGroupJid,
   toJid,
 } from '../jid';
@@ -315,10 +314,6 @@ describe('JID Utilities', () => {
 
     it('returns original LID when unresolvable', () => {
       expect(resolveToPhoneJid('100000001@lid', null)).toBe('100000001@lid');
-    });
-
-    it('is the same as resolveToPhoneJidLegacy', () => {
-      expect(resolveToPhoneJid).toBe(resolveToPhoneJidLegacy);
     });
   });
 

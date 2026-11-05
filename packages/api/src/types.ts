@@ -5,8 +5,10 @@
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { EventBus } from '@omni/core';
 import type { Database } from '@omni/db';
-import type { ApiKeyProfile, ApiKeyProfileOverrides } from '@omni/db';
+import type { ApiKeyProfile, ApiKeyProfileOverrides, Chat } from '@omni/db';
+import type { Login } from './login';
 import type { Services } from './services';
+import type { SystemUpdater } from './system/update';
 import type { PlatformAuthContext, TenantAuthContext } from './tenancy/auth-context';
 import type { TenantSelectionSource } from './tenancy/request-auth';
 
@@ -47,7 +49,18 @@ export interface AppVariables {
   eventBus: EventBus | null;
   channelRegistry: ChannelRegistry | null;
   services: Services;
+  /** Updates the owner confirms (system/update.ts); set for the /api/v2 routes by app.ts. */
+  updater?: SystemUpdater;
+  /** Human login, or null when it is off; set for the /api/v2 routes by app.ts (routes/v2/owner.ts). */
+  login?: Login | null;
   apiKey?: ApiKeyData;
+  /**
+   * The chat row the scope lock resolved for a `/chats/:id/*` request, with the
+   * raw `:id` it resolved. Set only for a key with an instance lock; the
+   * `chats.ts` routes read it (lib/resolve-chat-id.ts) instead of resolving
+   * `:id` again, so the lock and the route always name the same chat.
+   */
+  resolvedChat?: { raw: string; chat: Chat };
   requestId: string;
   /**
    * Genie host id when the request carried a verified `X-Genie-Signature`.
@@ -93,7 +106,7 @@ export interface AppVariables {
  * Health check result
  */
 export interface HealthCheck {
-  status: 'ok' | 'error';
+  status: 'ok' | 'degraded' | 'error';
   latency?: number;
   error?: string;
   details?: Record<string, unknown>;
@@ -111,6 +124,7 @@ export interface HealthResponse {
     database: HealthCheck;
     nats: HealthCheck;
     plugins?: HealthCheck;
+    agentKeyRepair?: HealthCheck;
     deadLetters?: HealthCheck;
   };
   // Instance inventory is deliberately absent — /health is unauthenticated and

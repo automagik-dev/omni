@@ -4,9 +4,26 @@
     ".": {
       "entry": [
         "scripts/test-messaging.ts",
+        "scripts/check-skill-cli.test.ts",
+        "scripts/check-skill-cli.ts",
         "scripts/kill-stale-test-daemons.ts",
         "scripts/pg-gate.ts",
+        "scripts/pg-gate-report.test.ts",
+        "scripts/pg-gate-inventory.test.ts",
+        "scripts/disposable-pg-cluster.test.ts",
         "scripts/pg-gate-warm.ts",
+        "scripts/marketplace.ts",
+        "scripts/marketplace.test.ts",
+        "scripts/pack-market.ts",
+        "scripts/pack-market.test.ts",
+        "scripts/plugin-lane.test.ts",
+        "scripts/admin-ui-image.test.ts",
+        "scripts/bun-version.test.ts",
+        "scripts/bun-installers.test.ts",
+        "scripts/package-managers.test.ts",
+        "scripts/plugin-compat.ts",
+        "scripts/plugin-compat.test.ts",
+        "scripts/plugin-versions.test.ts",
         "scripts/bootstrap-platform-credential.ts",
         "scripts/release/generate-release-notes.test.ts"
       ],
@@ -26,7 +43,7 @@
       "ignoreBinaries": ["make"]
     },
     "packages/api": {
-      "entry": ["src/schemas/openapi/*.ts"],
+      "entry": ["src/schemas/openapi/*.ts", "src/**/__tests__/fixtures/*.ts"],
       "project": ["src/**/*.ts"],
       "ignore": ["src/plugins/agent-responder.ts"]
     },
@@ -77,21 +94,6 @@
     },
     "packages/media-processing": {
       "project": ["src/**/*.ts"]
-    },
-    "packages/plugin-openclaw": {
-      "project": ["src/**/*.ts"]
-    },
-    "apps/ui": {
-      "entry": [
-        "src/pages/*.tsx",
-        "src/components/ui/*.tsx",
-        "src/hooks/*.ts",
-        "src/lib/*.ts",
-        "src/types/*.ts",
-        "src/**/*.test.ts"
-      ],
-      "project": ["src/**/*.{ts,tsx}"],
-      "ignoreDependencies": ["tailwindcss"]
     }
   },
   "ignoreWorkspaces": ["packages/sdk", "packages/sdk-go", "packages/sdk-python", "packages/audio-decode-shim"],

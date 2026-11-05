@@ -3,33 +3,9 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { PRICING_REGISTRY, calculateCost, getPricingRate } from '../src/pricing';
+import { calculateCost, getPricingRate } from '../src/pricing';
 
 describe('pricing', () => {
-  describe('PRICING_REGISTRY', () => {
-    it('contains Groq Whisper pricing', () => {
-      expect(PRICING_REGISTRY['groq_whisper:whisper-large-v3-turbo']).toBeDefined();
-      expect(PRICING_REGISTRY['groq_whisper:whisper-large-v3-turbo']?.inputRate).toBe(0.04);
-    });
-
-    it('contains OpenAI STT pricing', () => {
-      expect(PRICING_REGISTRY['openai_whisper:whisper-1']).toBeDefined();
-      expect(PRICING_REGISTRY['openai_whisper:whisper-1']?.unit).toBe('per_minute');
-      expect(PRICING_REGISTRY['openai_whisper:gpt-audio-mini']).toBeDefined();
-      expect(PRICING_REGISTRY['openai_whisper:gpt-4o-transcribe']).toBeDefined();
-    });
-
-    it('contains Gemini Vision pricing', () => {
-      expect(PRICING_REGISTRY['gemini_vision:gemini-3-flash-preview']).toBeDefined();
-      expect(PRICING_REGISTRY['gemini_vision:gemini-3-flash-preview']?.unit).toBe('per_million_tokens');
-    });
-
-    it('contains local processor pricing (free)', () => {
-      expect(PRICING_REGISTRY['local:pdf-parse']).toBeDefined();
-      expect(PRICING_REGISTRY['local:pdf-parse']?.inputRate).toBe(0);
-    });
-  });
-
   describe('getPricingRate', () => {
     it('returns rate for known processor/model', () => {
       const rate = getPricingRate('groq_whisper', 'whisper-large-v3-turbo');

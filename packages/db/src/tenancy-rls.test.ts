@@ -18,17 +18,28 @@ import { PgTable, getTableConfig } from 'drizzle-orm/pg-core';
 import * as schema from './schema';
 import { TENANT_TABLES } from './tenancy-ownership';
 import {
+  APPLICATION_SCOPED_TENANT_TABLES,
   AUTH_PLANE_READABLE_TABLES,
   AUTH_PLANE_ROW_FUNCTION,
+  CONNECTOR_INGRESS_READABLE_TABLES,
+  CONNECTOR_INGRESS_ROLE,
   G1_TENANT_PLANE_TABLES,
   POLICY_COMMANDS,
   QUALIFIED_AUTH_PLANE_FUNCTION,
   QUALIFIED_AUTH_PLANE_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION,
+  QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION,
   QUALIFIED_TENANT_CONTEXT_FUNCTION,
   RLS_EXCLUSIONS,
   RLS_TENANT_TABLES,
   RUNTIME_DENIED_TABLES,
+  connectorIngressFunctionStatements,
+  connectorIngressRoleStatements,
   contextFunctionStatements,
+  dropConnectorIngressFunctionStatements,
   dropContextFunctionStatements,
   dropPolicyStatements,
   policyName,
@@ -55,11 +66,14 @@ const SCHEMA_TENANT_TABLES: string[] = (Object.values(schema) as unknown[])
   .sort();
 
 describe('RLS coverage', () => {
-  test('every schema table carrying tenant_id is either covered or explicitly excluded', () => {
+  test('every schema table carrying tenant_id has an explicit isolation classification', () => {
     expect(SCHEMA_TENANT_TABLES.length).toBeGreaterThan(0);
     const covered = new Set(RLS_TENANT_TABLES);
     const excluded = new Set(RLS_EXCLUSIONS.map((e) => e.table));
-    const unaccounted = SCHEMA_TENANT_TABLES.filter((t) => !covered.has(t) && !excluded.has(t));
+    const applicationScoped = new Set(APPLICATION_SCOPED_TENANT_TABLES.map((entry) => entry.table));
+    const unaccounted = SCHEMA_TENANT_TABLES.filter(
+      (t) => !covered.has(t) && !excluded.has(t) && !applicationScoped.has(t),
+    );
     expect(unaccounted).toEqual([]);
   });
 
@@ -86,6 +100,20 @@ describe('RLS coverage', () => {
       expect(exclusion.justification.length).toBeGreaterThan(60);
       expect(RLS_TENANT_TABLES).not.toContain(exclusion.table);
       expect(RUNTIME_DENIED_TABLES).toContain(exclusion.table);
+    }
+  });
+
+  test('only the durable consumer legacy registry uses application scoping, with a documented boundary', () => {
+    expect(APPLICATION_SCOPED_TENANT_TABLES.map((entry) => entry.table)).toEqual([
+      'durable_consumers',
+      'agent_source_grants',
+    ]);
+    for (const entry of APPLICATION_SCOPED_TENANT_TABLES) {
+      expect(SCHEMA_TENANT_TABLES).toContain(entry.table);
+      expect(entry.justification.length).toBeGreaterThan(60);
+      expect(RLS_TENANT_TABLES).not.toContain(entry.table);
+      expect(RLS_EXCLUSIONS.map((exclusion) => exclusion.table)).not.toContain(entry.table);
+      expect(RUNTIME_DENIED_TABLES).not.toContain(entry.table);
     }
   });
 
@@ -157,6 +185,71 @@ describe('policy shape', () => {
     }
   });
 
+  test('the connector-ingress exemption is SELECT only and separately id-bound on its two tables', () => {
+    expect(CONNECTOR_INGRESS_READABLE_TABLES).toEqual(['connector_event_subscriptions', 'connectors']);
+    for (const table of CONNECTOR_INGRESS_READABLE_TABLES) {
+      const statements = tablePolicyStatements(table);
+      const select = statements.find((s) => s.startsWith(`CREATE POLICY "${policyName(table, 'select')}"`)) ?? '';
+      const helper =
+        table === 'connectors'
+          ? QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION
+          : QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION;
+      expect(select).toContain(helper);
+      for (const command of ['insert', 'update', 'delete'] as const) {
+        const policy = statements.find((s) => s.startsWith(`CREATE POLICY "${policyName(table, command)}"`)) ?? '';
+        expect(policy).not.toContain(helper);
+      }
+    }
+    // No other tenant table gains the disjunct.
+    const exempt = new Set(CONNECTOR_INGRESS_READABLE_TABLES);
+    for (const table of RLS_TENANT_TABLES) {
+      if (exempt.has(table)) continue;
+      expect(tablePolicyStatements(table).join('\n')).not.toContain(QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION);
+      expect(tablePolicyStatements(table).join('\n')).not.toContain(QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION);
+    }
+  });
+
+  test('the connector-ingress lookup is bounded, SECURITY DEFINER, and returns only the tenant', () => {
+    const functions = connectorIngressFunctionStatements().join('\n');
+    expect(functions).toContain(`CREATE OR REPLACE FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}`);
+    expect(functions).toContain('SECURITY DEFINER');
+    expect(functions).toContain(`WHERE s."id" = p_subscription_id`);
+    expect(functions).toContain(`s."status" IN ('active', 'paused', 'error')`);
+    expect(functions).toContain(`s."tenant_id" IS NOT NULL`);
+    expect(functions).toContain(`s."ingress" = 'subscription'`);
+    expect(functions).toContain(`s."verification_secret" IS NOT NULL`);
+    expect(functions).toContain(`s."target_automation_id" IS NOT NULL`);
+    expect(functions).toContain('RETURN v_tenant;');
+    // The row policy binds to one transaction-local id and falls back to tenant
+    // equality for every non-member.
+    expect(functions).toContain(`current_setting('app.connector_ingress_subscription_id', true)`);
+    expect(functions).toContain(`RETURN row_tenant = ${QUALIFIED_TENANT_CONTEXT_FUNCTION}();`);
+    expect(functions).not.toContain('BYPASSRLS');
+  });
+
+  test('connector lookup has a separate id binding, constrained owner and no PUBLIC execution', () => {
+    const functions = connectorIngressFunctionStatements().join('\n');
+    expect(functions).toContain(`WHERE c."id" = p_connector_id`);
+    expect(functions).toContain(`current_setting('app.connector_ingress_connector_id', true)`);
+    expect(functions).toContain(
+      `ALTER FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION}(uuid) OWNER TO "${CONNECTOR_INGRESS_ROLE}"`,
+    );
+    expect(functions).toContain(
+      `REVOKE ALL ON FUNCTION ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_TENANT_FUNCTION}(uuid) FROM PUBLIC`,
+    );
+    expect(dropConnectorIngressFunctionStatements().join('\n')).toContain(
+      `DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_CONNECTOR_ROW_FUNCTION}(uuid, uuid)`,
+    );
+  });
+
+  test('the ingress role is NOLOGIN and never a bypass identity', () => {
+    const role = connectorIngressRoleStatements().join('\n');
+    expect(role).toContain('WITH NOLOGIN');
+    expect(role).toContain('NOBYPASSRLS');
+    expect(role).toContain(`rolname = '${CONNECTOR_INGRESS_ROLE}'`);
+    expect(role).not.toContain('LOGIN PASSWORD');
+  });
+
   test('the helpers are created in public and called as public — no search_path can split them', () => {
     const created = contextFunctionStatements();
     for (const qualified of [
@@ -182,6 +275,7 @@ describe('policy shape', () => {
     expect(plan).toContain(`${QUALIFIED_TENANT_CONTEXT_FUNCTION}()`);
     expect(plan).not.toMatch(/[^.]\bomni_current_tenant_id\(\)/);
     expect(plan).not.toMatch(/[^.]\bomni_auth_plane_row_visible\(/);
+    expect(plan).not.toMatch(/[^.]\bomni_connector_ingress_row_visible\(/);
   });
 
   test('the auth-plane exemption is a role-membership predicate, never BYPASSRLS', () => {
@@ -196,6 +290,10 @@ describe('policy shape', () => {
       expect(drops).toContain(`ALTER TABLE "${table}" NO FORCE ROW LEVEL SECURITY;`);
       expect(drops).toContain(`ALTER TABLE "${table}" DISABLE ROW LEVEL SECURITY;`);
     }
+    const helperDrops = dropConnectorIngressFunctionStatements().join('\n');
+    expect(helperDrops).toContain(`DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_TENANT_FUNCTION}(uuid)`);
+    expect(helperDrops).toContain(`DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_ROW_FUNCTION}(uuid, uuid)`);
+    expect(helperDrops).toContain(`DROP FUNCTION IF EXISTS ${QUALIFIED_CONNECTOR_INGRESS_MEMBER_FUNCTION}()`);
   });
 
   test('an unsafe table identifier is rejected rather than interpolated', () => {

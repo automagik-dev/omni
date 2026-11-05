@@ -7,6 +7,9 @@ python3 - "${ROOT}" <<'PY'
 import json
 import re
 import sys
+import os
+import subprocess
+import tempfile
 from pathlib import Path
 
 root = Path(sys.argv[1])
@@ -24,6 +27,20 @@ deploy_readme = (root / "deploy/README.md").read_text(encoding="utf-8")
 claude_reference = (root / ".claude/CLAUDE.md").read_text(encoding="utf-8")
 upgrade_runbook = (root / "docs/deployment/upgrade-2.260902.5-to-2.260908.20.md").read_text(encoding="utf-8")
 errors: list[str] = []
+
+# Run the workflow's actual version pipeline: trailing diagnostics must not SIGPIPE
+# the executable under GitHub's bash -e -o pipefail shell.
+version_line = next(line.strip() for line in workflows["build-tarballs.yml"].splitlines()
+                    if 'ACTUAL=$("${STAGE}/omni" --version' in line)
+with tempfile.TemporaryDirectory(prefix="tarball-version-") as stage:
+    executable = Path(stage) / "omni"
+    executable.write_text("#!/usr/bin/env bash\nset -euo pipefail\nprintf 'omni v2.260830.2\\n'\ndd if=/dev/zero bs=1048576 count=1 2>/dev/null\n")
+    executable.chmod(0o755)
+    result = subprocess.run(["bash", "-eo", "pipefail", "-c",
+                             version_line + '\n[[ "$ACTUAL" == "2.260830.2" ]]'],
+                            env={**os.environ, "STAGE": stage}, capture_output=True, text=True)
+    if result.returncode:
+        errors.append(f"tarball version pipeline truncated producer output (exit {result.returncode})")
 
 
 def require(text: str, pattern: str, message: str) -> None:
@@ -622,6 +639,7 @@ if (root / ".well-known/homolog.json").exists():
 for gate in (
     "release-workflow-contract.test.sh",
     "stable-release-order.test.sh",
+    "release-notes-body-guard.test.sh",
     "verify-promotion-candidate.test.sh",
     "verify-oci-release.test.sh",
     "verify-release-source.test.sh",
@@ -681,8 +699,9 @@ require(ci, r"candidate=true", "the promotion pin gate error text does not name 
 
 # pin-candidate.yml is the only writer of the public channel pins: it
 # re-verifies the candidate from public state (tag, attested alias, stable
-# release), writes exactly three files, and pushes to dev with the same
-# machine credential and concurrency group as version.yml's bump. Its
+# release), writes exactly four files (the three public channel pins and the
+# market index listing Omni's plugins at the candidate), and pushes to dev
+# with the same machine credential and concurrency group as version.yml's bump. Its
 # github.token stays read-only and it never builds, tags, or publishes.
 pin_candidate = workflows.get("pin-candidate.yml")
 if pin_candidate is None:
@@ -699,7 +718,9 @@ else:
     require(pin_candidate, r"verify-remote-tag\.sh[\s\S]{0,120}--mode exact", "candidate pin does not bind the remote tag to the candidate")
     require(pin_candidate, r"gh attestation verify \"oci://\$\{IMAGE\}@\$\{digest\}\"[\s\S]{0,200}--source-digest \"\$\{candidate_sha\}\"[\s\S]{0,100}--signer-workflow \"\$\{GITHUB_REPOSITORY\}/\.github/workflows/image-build\.yml\"", "candidate pin does not require the alias to be attested from the candidate source by the minter")
     require(pin_candidate, r"== \$'false\\tfalse' \]\] \|\| \{", "candidate pin does not require a public stable release at the tag")
-    require(pin_candidate, r"git add \.well-known/latest\.json \.well-known/dev\.json deploy/helm/omni/values\.yaml\n", "candidate pin does not commit exactly the three public channel pin files")
+    require(pin_candidate, r"git add \.well-known/latest\.json \.well-known/dev\.json deploy/helm/omni/values\.yaml marketplace/automagik\.json\n", "candidate pin does not commit exactly the three public channel pin files and the market index")
+    require(pin_candidate, r"bun scripts/marketplace\.ts pin \"v\$\{VERSION\}\"\n\s+bun scripts/marketplace\.ts check\n", "candidate pin does not list Omni's plugins at the candidate's version in the market index")
+    require(pin_candidate, r"bun install --frozen-lockfile --ignore-scripts\n", "candidate pin does not install the market tooling without install scripts (they could leave git hooks for the commit)")
     require(pin_candidate, r'git commit -m "chore\(release\): pin candidate v\$\{VERSION\}"', "candidate pin commit is not a conventional chore(release) commit")
     require(pin_candidate, r"VERSION_WRITER_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}\.git\" \\\n\s+\"HEAD:refs/heads/dev\"", "candidate pin does not push to dev with the machine writer credential")
     for pattern, message in (
@@ -775,7 +796,7 @@ else:
         errors.append(f"candidate pipeline mint permissions are {permissions_at(rc_jobs.get('mint', []), 4)}, expected exactly {expected_mint}")
     if permissions_at(rc_jobs.get("pin", []), 4) != {"contents": "read", "packages": "read", "attestations": "read"}:
         errors.append("candidate pipeline pin permissions are not exactly read-only")
-require(version_workflow, r"^  workflow_call:\n    inputs:\n      candidate:\n[\s\S]{0,300}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n[\s\S]{0,200}    outputs:\n      version:\n", "the version workflow cannot be called for an in-run candidate cut that emits its version")
+require(version_workflow, r"^  workflow_call:\n    inputs:\n      candidate:\n[\s\S]{0,300}    secrets:\n      VERSION_BUMP_PAT:\n        required: true\n[\s\S]{0,600}    outputs:\n      version:\n", "the version workflow cannot be called for an in-run candidate cut that emits its version")
 require(version_workflow, r"\(github\.event_name == 'push' && inputs\.candidate == true\)", "the version writer admits a called push that is not a candidate cut")
 back_merge = workflows.get("back-merge-main.yml")
 if back_merge is None:

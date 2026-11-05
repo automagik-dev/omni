@@ -153,7 +153,7 @@ omni providers create \
 omni instances update <id> --agent-provider <provider-id>
 ```
 
-Provider schemas: `agno` · `webhook` · `openclaw` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
+Provider schemas: `agno` · `webhook` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
 
 | Trigger | When | Use Case |
 |---------|------|----------|
@@ -226,7 +226,7 @@ Deep dives: [event system](docs/architecture/event-system.md) · [durable consum
                          └─────────┬─────────┘
               ┌────────────────────┼────────────────────┐
         ┌─────▼─────┐        ┌─────▼─────┐        ┌─────▼─────┐
-        │  REST API │        │    CLI    │        │ Dashboard │ Interfaces
+        │  REST API │        │    CLI    │        │  Desktop  │ Interfaces
         └───────────┘        └───────────┘        └───────────┘
 ```
 
@@ -237,7 +237,7 @@ Deep dives: [event system](docs/architecture/event-system.md) · [durable consum
 packages/
 ├── core/                    # Events, identity, schemas
 ├── db/                      # Drizzle ORM + PostgreSQL
-├── api/                     # Hono + tRPC + OpenAPI
+├── api/                     # Hono + REST + OpenAPI
 ├── channel-sdk/             # Plugin SDK
 ├── channel-whatsapp/        # WhatsApp Baileys
 ├── channel-whatsapp-business/ # WhatsApp Cloud API (Meta)
@@ -254,13 +254,10 @@ packages/
 ├── channel-internal/        # In-process agent-to-agent routing
 ├── cli/                     # `omni` command
 ├── media-processing/        # Media sync and extraction
-├── plugin-openclaw/         # Omni as a channel inside OpenClaw
 ├── voice-client/            # Voice transport/codec library (Discord voice)
 ├── sdk/                     # TypeScript SDK
 ├── sdk-go/                  # Go SDK
 └── sdk-python/              # Python SDK
-apps/
-└── ui/                      # React + Vite + Tailwind dashboard
 ```
 
 </details>
@@ -344,7 +341,7 @@ omni providers list
 omni providers test <id>
 ```
 
-Schemas: `agno` · `webhook` · `openclaw` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
+Schemas: `agno` · `webhook` · `ag-ui` · `claude-code` · `a2a` · `nats-genie`
 
 #### `automations` — Event-driven workflows
 
@@ -478,14 +475,9 @@ Regenerate SDKs after API changes:
 make sdk-generate
 ```
 
-## Web Dashboard
+## Desktop app
 
-```bash
-make dev-ui    # Dev → http://localhost:5173
-make build-ui  # Prod → served by API on :8882
-```
-
-Pages: Dashboard · Instances · Chats · Chat View · Contacts · Persons · Providers · Automations · Access Rules · Batch Jobs · Dead Letters · Events · Logs · Voices · Settings
+Omni's UI is the [Automagik desktop app](https://github.com/automagik-dev/automagik/tree/dev/apps/desktop) (`omni desktop` opens it with Omni preloaded): it runs Omni on your machine or connects to a remote one. The API serves no web pages of its own.
 
 <details>
 <summary>🔐 API Keys & Security</summary>
@@ -511,10 +503,13 @@ Namespaces include: `messages`, `chats`, `instances`, `persons`, `events`, `acce
 |----------|---------|-------------|
 | `API_PORT` | `8882` | API server port |
 | `DATABASE_URL` | `postgresql://...localhost:8432/omni` | PostgreSQL |
-| `NATS_URL` | `nats://localhost:4222` | NATS connection |
+| `NATS_URL` | `nats://localhost:4222` | Where clients connect to NATS |
+| `NATS_HOST` | `127.0.0.1` | Address the source-checkout PM2 NATS listens on (installer: `omni config set server.natsHost`) |
 | `OMNI_API_KEY` | *(auto)* | Override primary key |
 
 Set `*_MANAGED=false` for external services. Full list: `.env.example`.
+
+Managed NATS listens on loopback only once `omni-nats` is (re)created by `omni start`, `omni install` or a later `omni update` (`omni restart` keeps the previous arguments and warns when they differ). After upgrading an existing install, run `omni stop && omni start` once. Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start`. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
 
 | Service | PM2 Name (installer / source checkout) | Port |
 |---------|----------------------------------------|------|
@@ -528,7 +523,6 @@ Set `*_MANAGED=false` for external services. Full list: `.env.example`.
 
 ```bash
 make dev           # Start all services + API
-make dev-ui        # Start dashboard dev server
 make test          # Run test suite
 make typecheck     # TypeScript checks
 make lint          # Biome lint
@@ -542,10 +536,13 @@ make sdk-generate  # Regenerate SDKs from OpenAPI
 |----------|---------|-------------|
 | `API_PORT` | `8882` | API server port |
 | `DATABASE_URL` | `postgresql://user:password@localhost:8432/omni` | PostgreSQL connection |
-| `NATS_URL` | `nats://localhost:4222` | NATS connection |
+| `NATS_URL` | `nats://localhost:4222` | Where clients connect to NATS |
+| `NATS_HOST` | `127.0.0.1` | Address the source-checkout PM2 NATS listens on (installer: `omni config set server.natsHost`) |
 | `OMNI_API_KEY` | auto-generated | Override primary API key |
 
 Set `*_MANAGED=false` for external services. Full list in `.env.example`.
+
+Managed NATS listens on loopback only once `omni-nats` is (re)created by `omni start`, `omni install` or a later `omni update` (`omni restart` keeps the previous arguments and warns when they differ). After upgrading an existing install, run `omni stop && omni start` once. Set `NATS_HOST` / `server.natsHost` to `0.0.0.0` only when other hosts must connect, and protect it (NATS auth/TLS or a private network). Apply with `omni stop && omni start`. See [docs/guides/install.md](docs/guides/install.md#nats-bind-address).
 
 | Service | PM2 Name (installer / source checkout) | Port |
 |---------|----------------------------------------|------|
@@ -579,11 +576,10 @@ export class MyPlugin extends BaseChannelPlugin {
 |---|---|
 | Runtime | [Bun](https://bun.sh) |
 | HTTP | [Hono](https://hono.dev) |
-| API | [tRPC](https://trpc.io) + OpenAPI |
+| API | Hono REST + OpenAPI |
 | DB | PostgreSQL + [Drizzle](https://orm.drizzle.team) |
 | Events | [NATS JetStream](https://nats.io) |
 | Validation | [Zod](https://zod.dev) |
-| Frontend | React + [Vite](https://vitejs.dev) + Tailwind |
 | Monorepo | [Turborepo](https://turbo.build) |
 | Linter | [Biome](https://biomejs.dev) |
 

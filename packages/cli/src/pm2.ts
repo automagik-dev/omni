@@ -168,7 +168,7 @@ export async function runPm2(args: string[], envOverrides?: Record<string, strin
   return proc.exited;
 }
 
-/** Run a PM2 command and capture stdout */
+/** Run a PM2 command, capturing stdout and draining stderr without displaying it. */
 export async function capturePm2(...args: string[]): Promise<{ code: number; stdout: string }> {
   const proc = Bun.spawn({
     cmd: ['pm2', ...args],
@@ -176,8 +176,11 @@ export async function capturePm2(...args: string[]): Promise<{ code: number; std
     stderr: 'pipe',
     env: process.env,
   });
-  const stdout = await new Response(proc.stdout).text();
-  const code = await proc.exited;
+  const [stdout, , code] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
   return { code, stdout };
 }
 

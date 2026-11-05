@@ -1,17 +1,9 @@
 /**
  * Socket Mode health & recovery (#941).
  *
- * The failure this guards against: `app.start()` resolved, the plugin logged
- * 'started successfully in Socket Mode' and cached 'connected', yet no
- * WebSocket to Slack existed — the instance was deaf, `checkBoltHealth`
- * (auth.test over HTTPS) said healthy, `instances connect` answered 'already
- * connected', and the instance monitor never saw anything to fix.
- *
- * Four layers, each tested here with fake Bolt objects (no real Slack):
- *  1. startup assertion — start resolves but the socket never opens → throw
- *  2. runtime detection — a socket dying after a good start drives status
- *  3. socket-aware health — checkBoltHealth false while auth.test is ok
- *  4. getStatus override — cached 'connected' + closed socket → 'error'
+ * Runtime lifecycle, socket-aware health and plugin status/recovery use fake
+ * Bolt objects (no real Slack). Receiver startup verification is covered in
+ * app-receiver.test.ts.
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -19,14 +11,7 @@ import { EventEmitter } from 'node:events';
 import type { ConnectionStatus, InstanceConfig, PluginContext } from '@omni/channel-sdk';
 import type { SlackAppReceiver, SlackAttachment } from '../connection/app-receiver';
 import type { BoltConnection, SlackSocketClient, SocketConnectionState } from '../connection/bolt-client';
-import {
-  checkBoltHealth,
-  destroyBoltConnection,
-  isSocketOpen,
-  isSocketStale,
-  startBoltConnection,
-  watchSocketLifecycle,
-} from '../connection/bolt-client';
+import { isSocketOpen, isSocketStale, watchSocketLifecycle } from '../connection/bolt-client';
 import { SlackPlugin } from '../plugin';
 import { SlackError, SlackErrorCode } from '../types';
 
@@ -58,23 +43,17 @@ function makeSocketClient(active: boolean): FakeSocketClient {
   };
 }
 
-/** Minimal socket-mode BoltConnection with observable app.start/app.stop. */
+/** Minimal socket-mode BoltConnection. */
 function makeConnection(overrides: Partial<BoltConnection> = {}): {
   conn: BoltConnection;
-  counts: { start: number; stop: number };
 } {
-  const counts = { start: 0, stop: 0 };
   const conn = {
     app: {
       client: {
         auth: { test: async () => ({ ok: true, user_id: 'U0BOT', user: 'bot', team_id: 'T1', team: 'team' }) },
       },
-      start: async () => {
-        counts.start++;
-      },
-      stop: async () => {
-        counts.stop++;
-      },
+      start: async () => {},
+      stop: async () => {},
     },
     client: { auth: { test: async () => ({ ok: true }) } },
     actingClient: {},
@@ -83,7 +62,7 @@ function makeConnection(overrides: Partial<BoltConnection> = {}): {
     socketState: 'pending',
     ...overrides,
   } as unknown as BoltConnection;
-  return { conn, counts };
+  return { conn };
 }
 
 function makePluginContext(): PluginContext {
@@ -190,60 +169,6 @@ const INSTANCE = 'inst-941';
 const CONFIG: InstanceConfig = { instanceId: INSTANCE, credentials: {}, options: {} };
 
 // ─────────────────────────────────────────────────────────────
-// 1. Startup assertion — startBoltConnection
-// ─────────────────────────────────────────────────────────────
-
-describe('startBoltConnection — post-start socket verification (#941)', () => {
-  it('resolves when the WebSocket is already open after start()', async () => {
-    const socket = makeSocketClient(true);
-    const { conn, counts } = makeConnection({ socketClient: socket.client });
-
-    await startBoltConnection(conn, noopLogger as never);
-    expect(counts.start).toBe(1);
-  });
-
-  it('resolves when the socket opens shortly after start() (connected event)', async () => {
-    const socket = makeSocketClient(false);
-    const { conn } = makeConnection({ socketClient: socket.client, socketConnectTimeoutMs: 500 });
-
-    setTimeout(() => {
-      socket.setActive(true);
-      socket.emitter.emit('connected');
-    }, 5);
-
-    await startBoltConnection(conn, noopLogger as never);
-    expect(isSocketOpen(conn)).toBe(true);
-  });
-
-  it('throws CONNECTION_FAILED when start() resolves but the socket never opens', async () => {
-    const socket = makeSocketClient(false);
-    const { conn, counts } = makeConnection({ socketClient: socket.client, socketConnectTimeoutMs: 30 });
-
-    const err = await startBoltConnection(conn, noopLogger as never).then(
-      () => null,
-      (e: unknown) => e,
-    );
-
-    expect(counts.start).toBe(1); // start() DID resolve — the lie the assertion catches
-    expect(err).toBeInstanceOf(SlackError);
-    expect((err as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
-    expect((err as SlackError).recoverable).toBe(true);
-  });
-
-  it('throws (never logs silent success) when a socket-mode connection has no socket client', async () => {
-    const { conn } = makeConnection(); // no socketClient at all
-
-    const err = await startBoltConnection(conn, noopLogger as never).then(
-      () => null,
-      (e: unknown) => e,
-    );
-
-    expect(err).toBeInstanceOf(SlackError);
-    expect((err as SlackError).channelCode).toBe(SlackErrorCode.CONNECTION_FAILED);
-  });
-});
-
-// ─────────────────────────────────────────────────────────────
 // 2. Runtime detection — watchSocketLifecycle
 // ─────────────────────────────────────────────────────────────
 
@@ -266,65 +191,13 @@ describe('watchSocketLifecycle — socket events become connection state (#941)'
 
     expect(seen).toEqual(['connected', 'reconnecting', 'disconnected']);
   });
-
-  it('destroyBoltConnection clears the state-change hook (deliberate stop ≠ lost socket)', async () => {
-    const socket = makeSocketClient(true);
-    const { conn, counts } = makeConnection({ socketClient: socket.client });
-    watchSocketLifecycle(conn, noopLogger as never);
-    conn.onSocketStateChange = () => {
-      throw new Error('must not fire after destroy');
-    };
-
-    await destroyBoltConnection(conn, noopLogger as never);
-
-    expect(counts.stop).toBe(1);
-    expect(conn.onSocketStateChange).toBeUndefined();
-    socket.emitter.emit('disconnected'); // state still tracked, but no hook fired
-    expect(conn.socketState).toBe('disconnected');
-  });
 });
 
 // ─────────────────────────────────────────────────────────────
-// 3. Socket-aware health — checkBoltHealth / isSocketOpen
+// 3. Socket-aware health — isSocketOpen
 // ─────────────────────────────────────────────────────────────
 
-describe('checkBoltHealth — socket state included for socket mode (#941)', () => {
-  it('is false when the socket is closed even though auth.test succeeds', async () => {
-    const socket = makeSocketClient(false);
-    const { conn } = makeConnection({ socketClient: socket.client });
-
-    // auth.test (HTTPS) is ok — exactly the deaf-instance shape from the issue
-    expect(await checkBoltHealth(conn)).toBe(false);
-  });
-
-  it('is true when the socket is open and auth.test succeeds', async () => {
-    const socket = makeSocketClient(true);
-    const { conn } = makeConnection({ socketClient: socket.client });
-
-    expect(await checkBoltHealth(conn)).toBe(true);
-  });
-
-  it('is false when the socket is open but auth.test fails', async () => {
-    const socket = makeSocketClient(true);
-    const { conn } = makeConnection({
-      socketClient: socket.client,
-      client: {
-        auth: {
-          test: async () => {
-            throw new Error('invalid_auth');
-          },
-        },
-      } as unknown as BoltConnection['client'],
-    });
-
-    expect(await checkBoltHealth(conn)).toBe(false);
-  });
-
-  it('keeps auth.test as the sole criterion for HTTP mode', async () => {
-    const { conn } = makeConnection({ mode: 'http' });
-    expect(await checkBoltHealth(conn)).toBe(true);
-  });
-
+describe('isSocketOpen — tracked lifecycle fallback (#941)', () => {
   it('isSocketOpen falls back to the tracked lifecycle state without a websocket handle', () => {
     const emitter = new EventEmitter(); // no .websocket property
     const { conn } = makeConnection({

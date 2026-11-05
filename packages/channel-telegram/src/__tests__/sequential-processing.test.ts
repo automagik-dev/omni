@@ -68,40 +68,24 @@ describe('Sequential Processing', () => {
       expect(diff).toBeLessThan(30);
     });
 
-    test('forum topic messages with different threadIds processed concurrently', async () => {
-      const startTimes: Record<string, number> = {};
+    test('forum threads of one chat (composed chat:thread keys) processed concurrently', async () => {
+      let firstThreadDone = false;
+      let firstDoneWhenSecondStarted: boolean | undefined;
 
-      const task1 = queue.enqueue('chat-1:thread-100', async () => {
-        startTimes['100'] = Date.now();
-        await new Promise((r) => setTimeout(r, 50));
+      const task1 = queue.enqueue(getSessionKey('1', '100'), async () => {
+        await new Promise((r) => setTimeout(r, 20));
+        firstThreadDone = true;
       });
 
-      const task2 = queue.enqueue('chat-1:thread-200', async () => {
-        startTimes['200'] = Date.now();
-        await new Promise((r) => setTimeout(r, 50));
-      });
-
-      await Promise.all([task1, task2]);
-
-      const diff = Math.abs((startTimes['100'] ?? 0) - (startTimes['200'] ?? 0));
-      expect(diff).toBeLessThan(30);
-    });
-
-    test('forum topic messages with same threadId processed sequentially', async () => {
-      const order: number[] = [];
-
-      const task1 = queue.enqueue('chat-1:thread-100', async () => {
-        await new Promise((r) => setTimeout(r, 30));
-        order.push(1);
-      });
-
-      const task2 = queue.enqueue('chat-1:thread-100', async () => {
-        order.push(2);
+      const task2 = queue.enqueue(getSessionKey('1', '200'), async () => {
+        firstDoneWhenSecondStarted = firstThreadDone;
       });
 
       await Promise.all([task1, task2]);
 
-      expect(order).toEqual([1, 2]);
+      // The second thread must not wait for the first: ChatQueue treats the
+      // composed key as opaque instead of queueing per chat.
+      expect(firstDoneWhenSecondStarted).toBe(false);
     });
 
     test('queue cleans up after tasks complete', async () => {

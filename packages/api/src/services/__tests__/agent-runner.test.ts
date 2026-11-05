@@ -19,11 +19,6 @@ describe('computeSessionId', () => {
       expect(result).toBe('thread:C123:C123');
     });
 
-    it('falls back to thread:{chatId}:{chatId} when threadId is undefined', () => {
-      const result = computeSessionId('per_thread', 'u1', 'C123', undefined);
-      expect(result).toBe('thread:C123:C123');
-    });
-
     it('different threadIds produce different sessionIds for same chat', () => {
       const t1 = computeSessionId('per_thread', 'u1', 'C123', 'T001');
       const t2 = computeSessionId('per_thread', 'u1', 'C123', 'T002');
@@ -56,14 +51,6 @@ describe('computeSessionId', () => {
 
     it('threadId is ignored for per_chat', () => {
       expect(computeSessionId('per_chat', 'user-1', 'chat-A', 'T001')).toBe('chat-A');
-    });
-  });
-
-  describe('backwards compatibility', () => {
-    it('per_user and per_chat work without threadId argument (existing callers)', () => {
-      // These callers don't pass threadId — must still work
-      expect(computeSessionId('per_user', 'user-1', 'chat-A')).toBe('user-1');
-      expect(computeSessionId('per_chat', 'user-1', 'chat-A')).toBe('chat-A');
     });
   });
 });

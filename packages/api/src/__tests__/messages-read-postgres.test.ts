@@ -1,0 +1,652 @@
+/**
+ * Tests for read receipt endpoints:
+ * - POST /messages/:id/read (single message)
+ * - POST /messages/read (batch)
+ * - POST /chats/:id/read (entire chat)
+ *
+ * @see api-completeness wish
+ */
+
+import { afterAll, beforeAll, describe, expect, mock, test } from 'bun:test';
+import { NotFoundError, OmniError } from '@omni/core';
+import type { Database, Instance } from '@omni/db';
+import { chats, instances, messages } from '@omni/db';
+import { Hono } from 'hono';
+import { createServices } from '../services';
+import type { AppVariables } from '../types';
+import { createMigratedTestDatabase } from './fixtures/pg-clone';
+
+// Helper to create a mock plugin with configurable capabilities
+function createMockPlugin(
+  overrides: Partial<{
+    canReceiveReadReceipts: boolean;
+    markAsRead: (
+      instanceId: string,
+      chatId: string,
+      messageIds: string[],
+      messageData?: Array<{ externalId: string; rawPayload?: Record<string, unknown> | null; isFromMe?: boolean }>,
+      readReceiptMode?: 'on' | 'off' | 'exclude-self',
+    ) => Promise<void>;
+    markChatAsRead: (
+      instanceId: string,
+      chatId: string,
+      readReceiptMode?: 'on' | 'off' | 'exclude-self',
+    ) => Promise<void>;
+  }> = {},
+) {
+  return {
+    capabilities: {
+      canSendText: true,
+      canSendMedia: true,
+      canSendReaction: true,
+      canSendTyping: true,
+      canReceiveReadReceipts: overrides.canReceiveReadReceipts ?? true,
+      canReceiveDeliveryReceipts: true,
+      canEditMessage: true,
+      canDeleteMessage: true,
+      canReplyToMessage: true,
+      canForwardMessage: true,
+      canSendContact: true,
+      canSendLocation: true,
+      canSendSticker: true,
+      canHandleGroups: true,
+      canHandleBroadcast: false,
+      maxMessageLength: 65536,
+      supportedMediaTypes: [],
+      maxFileSize: 100 * 1024 * 1024,
+    },
+    markAsRead: overrides.markAsRead ?? mock(async () => {}),
+    markChatAsRead: overrides.markChatAsRead ?? mock(async () => {}),
+  };
+}
+
+// Helper to create a mock channel registry
+function createMockChannelRegistry(plugin: ReturnType<typeof createMockPlugin> | null = null) {
+  return {
+    get: mock(() => plugin),
+    getAll: mock(() => (plugin ? [plugin] : [])),
+    has: mock(() => !!plugin),
+  };
+}
+
+const superUrl = process.env.OMNI_G4_POSTGRES_URL ?? '';
+const postgresDescribe = superUrl ? describe : describe.skip;
+const psqlBin = process.env.OMNI_G4_PSQL_BIN ?? 'psql';
+
+postgresDescribe('Read Receipt Endpoints', () => {
+  let db: Database;
+  const clone = createMigratedTestDatabase({ superUrl, psqlBin });
+  let testInstance: Instance;
+  let testChat: { id: string; externalId: string };
+  let testDmChat: { id: string; externalId: string };
+  let testMessage: { id: string; externalId: string };
+  let testDmMessage: { id: string; externalId: string };
+
+  beforeAll(async () => {
+    db = clone.setup();
+
+    // Create a test instance
+    const [instance] = await db
+      .insert(instances)
+      .values({
+        name: `test-read-${Date.now()}`,
+        channel: 'whatsapp-baileys' as const,
+      })
+      .returning();
+    if (!instance) {
+      throw new Error('Failed to create test instance');
+    }
+    testInstance = instance;
+
+    // Create a test chat
+    const [chat] = await db
+      .insert(chats)
+      .values({
+        instanceId: testInstance.id,
+        externalId: `test-chat-${Date.now()}@g.us`,
+        chatType: 'group',
+        channel: 'whatsapp-baileys',
+        name: 'Test Chat',
+      })
+      .returning();
+    if (!chat) {
+      throw new Error('Failed to create test chat');
+    }
+    testChat = { id: chat.id, externalId: chat.externalId };
+
+    // Create a test message (with rawPayload containing participant for group read receipts)
+    const [message] = await db
+      .insert(messages)
+      .values({
+        chatId: testChat.id,
+        externalId: `BAE5TEST${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'Test message',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+        rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } },
+      })
+      .returning();
+    if (!message) {
+      throw new Error('Failed to create test message');
+    }
+    testMessage = { id: message.id, externalId: message.externalId };
+
+    // Create a DM chat (non-group — no participant needed)
+    const [dmChat] = await db
+      .insert(chats)
+      .values({
+        instanceId: testInstance.id,
+        externalId: '5511888888888@s.whatsapp.net',
+        chatType: 'dm',
+        channel: 'whatsapp-baileys',
+        name: 'DM Chat',
+      })
+      .returning();
+    if (!dmChat) throw new Error('Failed to create DM chat');
+    testDmChat = { id: dmChat.id, externalId: dmChat.externalId };
+
+    // Create a DM message (no participant in rawPayload)
+    const [dmMsg] = await db
+      .insert(messages)
+      .values({
+        chatId: testDmChat.id,
+        externalId: `BAE5DM${Date.now()}`,
+        source: 'realtime',
+        messageType: 'text',
+        textContent: 'DM test message',
+        platformTimestamp: new Date(),
+        isFromMe: false,
+        rawPayload: { key: { remoteJid: '5511888888888@s.whatsapp.net', fromMe: false } },
+      })
+      .returning();
+    if (!dmMsg) throw new Error('Failed to create DM message');
+    testDmMessage = { id: dmMsg.id, externalId: dmMsg.externalId };
+  });
+
+  afterAll(() => clone.teardown());
+
+  function createTestApp(mockPlugin: ReturnType<typeof createMockPlugin> | null = createMockPlugin()) {
+    const services = createServices(db, null);
+    const mockRegistry = createMockChannelRegistry(mockPlugin);
+
+    const app = new Hono<{ Variables: AppVariables }>();
+
+    // Error handler
+    app.onError((error, c) => {
+      if (error instanceof NotFoundError) {
+        return c.json({ error: { code: 'NOT_FOUND', message: error.message } }, 404);
+      }
+      if (error instanceof OmniError) {
+        return c.json({ error: { code: error.code, message: error.message } }, 400);
+      }
+      return c.json({ error: { code: 'INTERNAL_ERROR', message: error.message } }, 500);
+    });
+
+    app.use('*', async (c, next) => {
+      c.set('services', services);
+      c.set('channelRegistry', mockRegistry as unknown as AppVariables['channelRegistry']);
+      c.set('apiKey', { id: 'test-key', name: 'test', scopes: ['*'], instanceIds: null, expiresAt: null });
+      await next();
+    });
+
+    // Import and mount routes
+    const { messagesRoutes } = require('../routes/v2/messages');
+    const { chatsRoutes } = require('../routes/v2/chats');
+    app.route('/messages', messagesRoutes);
+    app.route('/chats', chatsRoutes);
+
+    return { app, mockPlugin, mockRegistry };
+  }
+
+  describe('POST /messages/:id/read (single message)', () => {
+    test('successfully marks single message as read', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request(`/messages/${testMessage.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { success: boolean; data: { messageId: string; externalMessageId: string } };
+      expect(body.success).toBe(true);
+      expect(body.data.messageId).toBe(testMessage.id);
+      expect(body.data.externalMessageId).toBe(testMessage.externalId);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      // Plugin receives messageData with rawPayload so it can extract channel-specific keys,
+      // isFromMe so it can skip its own messages, plus readReceiptMode ('on' is the default)
+      expect(markAsReadMock).toHaveBeenCalledWith(
+        testInstance.id,
+        testChat.externalId,
+        [testMessage.externalId],
+        [
+          {
+            externalId: testMessage.externalId,
+            rawPayload: { key: { participant: '5511999999999@s.whatsapp.net' } },
+            isFromMe: false,
+          },
+        ],
+        'on',
+      );
+    });
+
+    test('returns error when channel does not support read receipts', async () => {
+      const mockPlugin = createMockPlugin({ canReceiveReadReceipts: false });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request(`/messages/${testMessage.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('CAPABILITY_NOT_SUPPORTED');
+    });
+
+    test('returns 404 for non-existent message', async () => {
+      const { app } = createTestApp();
+
+      const res = await app.request('/messages/00000000-0000-0000-0000-000000000000/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(404);
+    });
+
+    test('returns error when instance does not match message', async () => {
+      // Create a second instance
+      const [otherInstance] = await db
+        .insert(instances)
+        .values({
+          name: `test-other-${Date.now()}`,
+          channel: 'whatsapp-baileys' as const,
+        })
+        .returning();
+      if (!otherInstance) {
+        throw new Error('Failed to create other instance');
+      }
+
+      const { app } = createTestApp();
+
+      const res = await app.request(`/messages/${testMessage.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: otherInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('VALIDATION');
+      expect(body.error.message).toContain('Instance ID does not match');
+    });
+  });
+
+  describe('POST /messages/read (batch)', () => {
+    test('successfully marks multiple messages as read', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const messageIds = ['MSG001', 'MSG002', 'MSG003'];
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.externalId, // using external ID
+          messageIds,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { success: boolean; data: { messageCount: number } };
+      expect(body.success).toBe(true);
+      expect(body.data.messageCount).toBe(3);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      // messageIds don't exist in DB → messageData is empty array; readReceiptMode defaults to 'on'
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, [], 'on');
+    });
+
+    test('batch resolves messageData from DB for existing messages', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.externalId,
+          messageIds: [testMessage.externalId], // real message in DB
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      // Plugin receives messageData with rawPayload containing participant
+      const callArgs = markAsReadMock.mock.calls[0] as unknown[];
+      expect(callArgs[0]).toBe(testInstance.id);
+      expect(callArgs[1]).toBe(testChat.externalId);
+      expect(callArgs[2]).toEqual([testMessage.externalId]);
+      const messageData = callArgs[3] as Array<{
+        externalId: string;
+        rawPayload: Record<string, unknown>;
+        isFromMe?: boolean;
+      }>;
+      expect(messageData).toHaveLength(1);
+      expect(messageData[0]?.externalId).toBe(testMessage.externalId);
+      expect(messageData[0]?.rawPayload).toEqual({ key: { participant: '5511999999999@s.whatsapp.net' } });
+      expect(messageData[0]?.isFromMe).toBe(false);
+      // readReceiptMode is the 5th argument
+      expect(callArgs[4]).toBe('on');
+    });
+
+    test('successfully marks batch using internal chat UUID', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const messageIds = ['MSG001'];
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.id, // using internal UUID
+          messageIds,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { success: boolean; data: { chatId: string } };
+      expect(body.success).toBe(true);
+      // Should resolve to external ID
+      expect(body.data.chatId).toBe(testChat.externalId);
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, messageIds, [], 'on');
+    });
+
+    test('returns error when channel does not support read receipts', async () => {
+      const mockPlugin = createMockPlugin({ canReceiveReadReceipts: false });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.externalId,
+          messageIds: ['MSG001'],
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('CAPABILITY_NOT_SUPPORTED');
+    });
+
+    test('validates messageIds array (min 1)', async () => {
+      const { app } = createTestApp();
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.externalId,
+          messageIds: [], // empty array
+        }),
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    test('validates messageIds array (max 100)', async () => {
+      const { app } = createTestApp();
+
+      // Create array with 101 elements
+      const tooManyIds = Array.from({ length: 101 }, (_, i) => `MSG${i}`);
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testChat.externalId,
+          messageIds: tooManyIds,
+        }),
+      });
+
+      expect(res.status).toBe(400);
+    });
+
+    test('returns error when instance does not match chat', async () => {
+      // Create a second instance
+      const [otherInstance] = await db
+        .insert(instances)
+        .values({
+          name: `test-other-batch-${Date.now()}`,
+          channel: 'whatsapp-baileys' as const,
+        })
+        .returning();
+      if (!otherInstance) {
+        throw new Error('Failed to create other instance');
+      }
+
+      const { app } = createTestApp();
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: otherInstance.id,
+          chatId: testChat.id, // internal UUID of chat belonging to different instance
+          messageIds: ['MSG001'],
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('VALIDATION');
+      expect(body.error.message).toContain('Instance ID does not match');
+    });
+  });
+
+  describe('DM (non-group) read receipts', () => {
+    test('single DM message passes messageData without participant', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request(`/messages/${testDmMessage.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ instanceId: testInstance.id }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      const callArgs = markAsReadMock.mock.calls[0] as unknown[];
+      // DM rawPayload has no participant field
+      expect(callArgs[3]).toEqual([
+        {
+          externalId: testDmMessage.externalId,
+          rawPayload: { key: { remoteJid: '5511888888888@s.whatsapp.net', fromMe: false } },
+          isFromMe: false,
+        },
+      ]);
+      expect(callArgs[4]).toBe('on');
+    });
+
+    test('batch DM passes messageData from DB', async () => {
+      const markAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markAsRead: markAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request('/messages/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+          chatId: testDmChat.externalId,
+          messageIds: [testDmMessage.externalId],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      const callArgs = markAsReadMock.mock.calls[0] as unknown[];
+      const messageData = callArgs[3] as Array<{ externalId: string; rawPayload: { key: Record<string, unknown> } }>;
+      expect(messageData).toHaveLength(1);
+      expect(messageData[0]?.externalId).toBe(testDmMessage.externalId);
+      // rawPayload has no participant — plugin won't try to set one
+      expect(messageData[0]?.rawPayload.key.participant).toBeUndefined();
+      expect(callArgs[4]).toBe('on');
+    });
+  });
+
+  describe('POST /chats/:id/read (entire chat)', () => {
+    test('successfully marks entire chat as read using markChatAsRead', async () => {
+      const markChatAsReadMock = mock(async () => {});
+      const mockPlugin = createMockPlugin({ markChatAsRead: markChatAsReadMock });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request(`/chats/${testChat.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { success: boolean; data: { chatId: string; externalChatId: string } };
+      expect(body.success).toBe(true);
+      expect(body.data.chatId).toBe(testChat.id);
+      expect(body.data.externalChatId).toBe(testChat.externalId);
+      expect(markChatAsReadMock).toHaveBeenCalledTimes(1);
+      expect(markChatAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, 'on');
+    });
+
+    test('falls back to markAsRead with "all" when markChatAsRead not available', async () => {
+      const markAsReadMock = mock(async () => {});
+      // Create plugin without markChatAsRead
+      const mockPlugin = {
+        capabilities: {
+          canSendText: true,
+          canSendMedia: true,
+          canSendReaction: true,
+          canSendTyping: true,
+          canReceiveReadReceipts: true,
+          canReceiveDeliveryReceipts: true,
+          canEditMessage: true,
+          canDeleteMessage: true,
+          canReplyToMessage: true,
+          canForwardMessage: true,
+          canSendContact: true,
+          canSendLocation: true,
+          canSendSticker: true,
+          canHandleGroups: true,
+          canHandleBroadcast: false,
+          maxMessageLength: 65536,
+          supportedMediaTypes: [],
+          maxFileSize: 100 * 1024 * 1024,
+        },
+        markAsRead: markAsReadMock,
+        // markChatAsRead is NOT defined
+      };
+      const { app } = createTestApp(mockPlugin as unknown as ReturnType<typeof createMockPlugin>);
+
+      const res = await app.request(`/chats/${testChat.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(markAsReadMock).toHaveBeenCalledTimes(1);
+      expect(markAsReadMock).toHaveBeenCalledWith(testInstance.id, testChat.externalId, ['all'], undefined, 'on');
+    });
+
+    test('returns error when channel does not support read receipts', async () => {
+      const mockPlugin = createMockPlugin({ canReceiveReadReceipts: false });
+      const { app } = createTestApp(mockPlugin);
+
+      const res = await app.request(`/chats/${testChat.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string } };
+      expect(body.error.code).toBe('CAPABILITY_NOT_SUPPORTED');
+    });
+
+    test('returns 404 for non-existent chat', async () => {
+      const { app } = createTestApp();
+
+      const res = await app.request('/chats/00000000-0000-0000-0000-000000000000/read', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: testInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(404);
+    });
+
+    test('returns error when instance does not match chat', async () => {
+      // Create a second instance
+      const [otherInstance] = await db
+        .insert(instances)
+        .values({
+          name: `test-other-chat-${Date.now()}`,
+          channel: 'whatsapp-baileys' as const,
+        })
+        .returning();
+      if (!otherInstance) {
+        throw new Error('Failed to create other instance');
+      }
+
+      const { app } = createTestApp();
+
+      const res = await app.request(`/chats/${testChat.id}/read`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          instanceId: otherInstance.id,
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe('VALIDATION');
+      expect(body.error.message).toContain('Instance ID does not match');
+    });
+  });
+});

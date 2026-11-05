@@ -7,13 +7,13 @@
  * `*-postgres.test.ts` file, which the db-access guard's scanner excludes — so
  * this helper adds zero sites to the guard.
  *
- * Not a test file itself; imported by direct path from the G6 postgres suites.
+ * Imported by G6 suites directly and by API suites through @omni/db/pg-testing.
  */
 
 import { rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { provisionMigratedDatabase } from '../pg-migrated-template';
+import { type PgSuperAccess, pgRoleUrl, provisionMigratedDatabase } from '../pg-migrated-template';
 import { type ToolingSql, openToolingConnection } from './db';
 
 /** The disposable superuser URL every G6 suite keys on (via the pg-gate). */
@@ -52,13 +52,6 @@ export function runSqlOrThrow(url: string, script: string): void {
   if (result.exitCode !== 0) throw new Error(`psql failed: ${result.stderr || result.stdout}`);
 }
 
-/** Build a URL for a specific database on the same disposable cluster. */
-export function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
-
 /**
  * Create a fresh database on the disposable cluster with every committed
  * migration applied — a file-level clone of the migrated template (#967), so
@@ -68,16 +61,47 @@ export function urlFor(base: string, database: string): string {
 export function provisionDatabase(base: string, fixture?: string): { database: string; url: string } {
   const database = `omni_g6_${crypto.randomUUID().replaceAll('-', '')}`;
   provisionMigratedDatabase({ superUrl: base, psqlBin: psqlBin() }, database);
-  const url = urlFor(base, database);
+  const url = pgRoleUrl(base, database);
   if (fixture) runSqlOrThrow(url, fixture);
   return { database, url };
-}
-
-export function dropDatabase(base: string, database: string): void {
-  runSqlOn(base, `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`);
 }
 
 /** Open a tooling connection to a provisioned database. Caller must `end()`. */
 export function connect(url: string): ToolingSql {
   return openToolingConnection(url);
+}
+
+/**
+ * Run a failed test's cleanup, then rethrow the test's error. A cleanup failure
+ * never replaces it: both surface as AggregateError([testError, cleanupError]),
+ * the test's error first. Call it from the test body's catch, and call the same
+ * cleanup after the try on success, so a cleanup failure still fails the test.
+ */
+export async function cleanupAfterFailure(cleanup: () => Promise<void> | void, error: unknown): Promise<never> {
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    throw new AggregateError([error, cleanupError], 'test failed, then its cleanup failed');
+  }
+  throw error;
+}
+
+/** Drop a suite database through the disposable-target guard; a failed DROP fails the suite. */
+export function dropDatabaseOrThrow(access: PgSuperAccess, database: string): void {
+  const result = Bun.spawnSync({
+    cmd: [
+      access.psqlBin,
+      '-X',
+      '--no-psqlrc',
+      '--set',
+      'ON_ERROR_STOP=1',
+      '--dbname',
+      pgRoleUrl(access.superUrl, 'postgres'),
+      '-c',
+      `DROP DATABASE IF EXISTS "${database}" WITH (FORCE);`,
+    ],
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (result.exitCode !== 0) throw new Error(`Failed to drop test database ${database}: ${result.stderr.toString()}`);
 }

@@ -42,6 +42,21 @@ export const DisarmReasonSchema = z.enum([
 export type DisarmReason = z.infer<typeof DisarmReasonSchema>;
 
 /**
+ * Optional random spread on every interval of a schedule (#1261), so chats armed
+ * together don't all fire on the same tick: on unofficial WhatsApp channels,
+ * outbound at fixed intervals and in bursts raises the risk of a ban. Each
+ * interval moves by a uniform random offset within `±minutes`, or within
+ * `±ratio` of the interval, and never drops below the smaller of the interval
+ * and one minute. Absent: the schedule is exact, as before.
+ */
+export const FollowUpJitterSchema = z.union([
+  z.object({ minutes: z.number().positive().finite() }).strict(),
+  z.object({ ratio: z.number().gt(0).max(1) }).strict(),
+]);
+
+export type FollowUpJitter = z.infer<typeof FollowUpJitterSchema>;
+
+/**
  * Fixed-list schedule: cycles through `intervalsMinutes` in order.
  * The first follow-up fires `intervalsMinutes[0]` after the agent reply;
  * the second fires `intervalsMinutes[1]` after the first, etc.
@@ -53,6 +68,7 @@ export const FixedScheduleSchema = z.object({
   intervalsMinutes: z
     .array(z.number().positive().finite())
     .min(1, 'intervalsMinutes must contain at least one interval'),
+  jitter: FollowUpJitterSchema.optional(),
 });
 
 export type FixedSchedule = z.infer<typeof FixedScheduleSchema>;
@@ -66,6 +82,7 @@ export const ExponentialScheduleSchema = z.object({
   initialMinutes: z.number().positive().finite(),
   factor: z.number().gt(1, 'factor must be greater than 1').finite(),
   maxMinutes: z.number().positive().finite(),
+  jitter: FollowUpJitterSchema.optional(),
 });
 
 export type ExponentialSchedule = z.infer<typeof ExponentialScheduleSchema>;
@@ -73,6 +90,50 @@ export type ExponentialSchedule = z.infer<typeof ExponentialScheduleSchema>;
 export const FollowUpScheduleSchema = z.discriminatedUnion('kind', [FixedScheduleSchema, ExponentialScheduleSchema]);
 
 export type FollowUpSchedule = z.infer<typeof FollowUpScheduleSchema>;
+
+const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+const MINUTES_PER_DAY = 24 * 60;
+
+export function timeOfDayToMinutes(time: string): number {
+  const [hours, minutes] = time.split(':');
+  return Number(hours) * 60 + Number(minutes);
+}
+
+function isTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export const FollowUpQuietHoursSchema = z
+  .object({
+    start: z.string().regex(TIME_OF_DAY_PATTERN, 'start must be HH:MM (24-hour)'),
+    end: z.string().regex(TIME_OF_DAY_PATTERN, 'end must be HH:MM (24-hour)'),
+    timezone: z.string().refine(isTimeZone, 'timezone must be an IANA time zone, e.g. America/Sao_Paulo'),
+    spreadMinutes: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    if (!TIME_OF_DAY_PATTERN.test(value.start) || !TIME_OF_DAY_PATTERN.test(value.end)) return;
+    const quietMinutes =
+      (timeOfDayToMinutes(value.end) - timeOfDayToMinutes(value.start) + MINUTES_PER_DAY) % MINUTES_PER_DAY;
+    if (quietMinutes === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['end'], message: 'start and end must differ' });
+      return;
+    }
+    if ((value.spreadMinutes ?? 0) >= MINUTES_PER_DAY - quietMinutes) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['spreadMinutes'],
+        message: 'spreadMinutes must be shorter than the time between end and start',
+      });
+    }
+  });
+
+export type FollowUpQuietHours = z.infer<typeof FollowUpQuietHoursSchema>;
 
 /**
  * Full follow-up sequence configuration.
@@ -111,6 +172,7 @@ export const FollowUpSequenceConfigSchema = z
      * Default: true.
      */
     showTypingIndicator: z.boolean().default(true),
+    quietHours: FollowUpQuietHoursSchema.optional(),
   })
   .strict();
 

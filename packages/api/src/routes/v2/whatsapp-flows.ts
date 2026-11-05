@@ -512,12 +512,21 @@ whatsappFlowsRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(instanceId);
-    const guard = ensureWhatsAppBusiness(instance);
-    if (!guard.ok) return c.json(guard.payload, 400);
+    // asc-flow is a BSP on Meta and renders the same flow message
+    // (`msg_interativa_parametros.tipo = 5`); only SENDING goes through it.
+    // Flow management (create/publish/keys) stays Meta-direct and
+    // whatsapp-business-only: on ASC the flow is registered on the platform.
+    const channel = instance.channel === 'asc-flow' ? 'asc-flow' : 'whatsapp-business';
+    if (channel === 'whatsapp-business') {
+      const guard = ensureWhatsAppBusiness(instance);
+      if (!guard.ok) return c.json(guard.payload, 400);
+    } else if (!flow.flowId) {
+      return c.json(jsonError('asc-flow sends a flow by flowId only'), 400);
+    }
 
-    const plugin = channelRegistry?.get('whatsapp-business');
+    const plugin = channelRegistry?.get(channel);
     if (!plugin) {
-      return c.json(jsonError('whatsapp-business plugin not registered', 'PLUGIN_NOT_FOUND'), 500);
+      return c.json(jsonError(`${channel} plugin not registered`, 'PLUGIN_NOT_FOUND'), 500);
     }
 
     // Generate the correlation token here so it can be returned to the caller

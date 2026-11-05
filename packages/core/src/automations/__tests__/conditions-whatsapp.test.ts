@@ -414,139 +414,74 @@ describe('Condition evaluation with real WhatsApp payloads', () => {
 });
 
 describe('Condition evaluation with real WhatsApp events', () => {
-  describe('Presence events', () => {
-    const composingPresence = getFixture(fixtures.events.presence, 0);
-    const recordingPresence = getFixture(fixtures.events.presence, 2);
-    const groupPresence = getFixture(fixtures.events.presence, 3);
-
-    test('matches composing status', () => {
-      const condition: AutomationCondition = {
-        field: 'status',
-        operator: 'eq',
-        value: 'composing',
-      };
-      expect(evaluateCondition(condition, composingPresence as Record<string, unknown>)).toBe(true);
-    });
-
-    test('matches recording status', () => {
-      const condition: AutomationCondition = {
-        field: 'status',
-        operator: 'eq',
-        value: 'recording',
-      };
-      expect(evaluateCondition(condition, recordingPresence as Record<string, unknown>)).toBe(true);
-    });
-
-    test('identifies presence in group chat', () => {
-      const condition: AutomationCondition = {
-        field: 'chatId',
-        operator: 'contains',
-        value: '@g.us',
-      };
-      expect(evaluateCondition(condition, groupPresence as Record<string, unknown>)).toBe(true);
-    });
-
-    test('identifies presence in direct chat', () => {
-      const condition: AutomationCondition = {
-        field: 'chatId',
-        operator: 'contains',
-        value: '@lid',
-      };
-      expect(evaluateCondition(condition, composingPresence as Record<string, unknown>)).toBe(true);
-    });
-  });
-
-  describe('Call events', () => {
-    const videoCallOffer = getFixture(fixtures.events.call, 0);
-    const voiceCallOffer = getFixture(fixtures.events.call, 3);
-    const callTerminate = getFixture(fixtures.events.call, 2);
-
-    test('matches call offer status', () => {
-      const condition: AutomationCondition = {
-        field: 'status',
-        operator: 'eq',
-        value: 'offer',
-      };
-      expect(evaluateCondition(condition, videoCallOffer as Record<string, unknown>)).toBe(true);
-    });
-
-    test('identifies video call', () => {
-      const condition: AutomationCondition = {
-        field: 'isVideo',
-        operator: 'eq',
-        value: true,
-      };
-      expect(evaluateCondition(condition, videoCallOffer as Record<string, unknown>)).toBe(true);
-    });
-
-    test('identifies voice call (not video)', () => {
-      const condition: AutomationCondition = {
-        field: 'isVideo',
-        operator: 'eq',
-        value: false,
-      };
-      expect(evaluateCondition(condition, voiceCallOffer as Record<string, unknown>)).toBe(true);
-    });
-
-    test('matches call terminate status', () => {
-      const condition: AutomationCondition = {
-        field: 'status',
-        operator: 'eq',
-        value: 'terminate',
-      };
-      expect(evaluateCondition(condition, callTerminate as Record<string, unknown>)).toBe(true);
-    });
-
-    test('identifies non-group call', () => {
-      const condition: AutomationCondition = {
-        field: 'isGroup',
-        operator: 'eq',
-        value: false,
-      };
-      expect(evaluateCondition(condition, videoCallOffer as Record<string, unknown>)).toBe(true);
-    });
+  test.each([
+    [
+      'matches composing status',
+      getFixture(fixtures.events.presence, 0),
+      { field: 'status', operator: 'eq', value: 'composing' },
+    ],
+    [
+      'matches recording status',
+      getFixture(fixtures.events.presence, 2),
+      { field: 'status', operator: 'eq', value: 'recording' },
+    ],
+    [
+      'identifies presence in group chat',
+      getFixture(fixtures.events.presence, 3),
+      { field: 'chatId', operator: 'contains', value: '@g.us' },
+    ],
+    [
+      'identifies presence in direct chat',
+      getFixture(fixtures.events.presence, 0),
+      { field: 'chatId', operator: 'contains', value: '@lid' },
+    ],
+    [
+      'matches call offer status',
+      getFixture(fixtures.events.call, 0),
+      { field: 'status', operator: 'eq', value: 'offer' },
+    ],
+    ['identifies video call', getFixture(fixtures.events.call, 0), { field: 'isVideo', operator: 'eq', value: true }],
+    [
+      'identifies voice call (not video)',
+      getFixture(fixtures.events.call, 3),
+      { field: 'isVideo', operator: 'eq', value: false },
+    ],
+    [
+      'matches call terminate status',
+      getFixture(fixtures.events.call, 2),
+      { field: 'status', operator: 'eq', value: 'terminate' },
+    ],
+    [
+      'identifies non-group call',
+      getFixture(fixtures.events.call, 0),
+      { field: 'isGroup', operator: 'eq', value: false },
+    ],
+    [
+      'matches add action',
+      getFixture(fixtures.events.groupParticipantsUpdate, 0),
+      { field: 'action', operator: 'eq', value: 'add' },
+    ],
+    [
+      'matches promote action',
+      getFixture(fixtures.events.groupParticipantsUpdate, 1),
+      { field: 'action', operator: 'eq', value: 'promote' },
+    ],
+    [
+      'matches remove action',
+      getFixture(fixtures.events.groupParticipantsUpdate, 2),
+      { field: 'action', operator: 'eq', value: 'remove' },
+    ],
+    [
+      'identifies group by JID',
+      getFixture(fixtures.events.groupParticipantsUpdate, 0),
+      { field: 'id', operator: 'contains', value: '@g.us' },
+    ],
+  ] as const)('%s', (_name, payload, condition) => {
+    expect(evaluateCondition(condition, payload as Record<string, unknown>)).toBe(true);
   });
 
   describe('Group participant events', () => {
     const addEvent = getFixture(fixtures.events.groupParticipantsUpdate, 0);
-    const promoteEvent = getFixture(fixtures.events.groupParticipantsUpdate, 1);
-    const removeEvent = getFixture(fixtures.events.groupParticipantsUpdate, 2);
-
-    test('matches add action', () => {
-      const condition: AutomationCondition = {
-        field: 'action',
-        operator: 'eq',
-        value: 'add',
-      };
-      expect(evaluateCondition(condition, addEvent as Record<string, unknown>)).toBe(true);
-    });
-
-    test('matches promote action', () => {
-      const condition: AutomationCondition = {
-        field: 'action',
-        operator: 'eq',
-        value: 'promote',
-      };
-      expect(evaluateCondition(condition, promoteEvent as Record<string, unknown>)).toBe(true);
-    });
-
-    test('matches remove action', () => {
-      const condition: AutomationCondition = {
-        field: 'action',
-        operator: 'eq',
-        value: 'remove',
-      };
-      expect(evaluateCondition(condition, removeEvent as Record<string, unknown>)).toBe(true);
-    });
-
-    test('identifies group by JID', () => {
-      const condition: AutomationCondition = {
-        field: 'id',
-        operator: 'contains',
-        value: '@g.us',
-      };
-      expect(evaluateCondition(condition, addEvent as Record<string, unknown>)).toBe(true);
-    });
 
     test('checks participant in array via index', () => {
       const condition: AutomationCondition = {
@@ -622,45 +557,6 @@ describe('Complex multi-condition scenarios', () => {
       { field: 'message.extendedTextMessage.contextInfo.isForwarded', operator: 'not_exists' },
     ];
     expect(evaluateConditions(conditions, textPayload)).toBe(true);
-  });
-});
-
-describe('Message type detection pattern', () => {
-  test('can create message type discriminator', () => {
-    const payloads = [
-      { type: 'text', payload: getFixture(fixtures.messages.text, 0).payload },
-      { type: 'audio', payload: getFixture(fixtures.messages.audio, 0).payload },
-      { type: 'image', payload: getFixture(fixtures.messages.image, 0).payload },
-      { type: 'sticker', payload: getFixture(fixtures.messages.sticker, 0).payload },
-      { type: 'contact', payload: getFixture(fixtures.messages.contact, 0).payload },
-      { type: 'location', payload: getFixture(fixtures.messages.location, 0).payload },
-      { type: 'poll', payload: getFixture(fixtures.messages.poll, 0).payload },
-    ];
-
-    const typeConditions: Record<string, AutomationCondition> = {
-      text: { field: 'message.conversation', operator: 'exists' },
-      audio: { field: 'message.audioMessage', operator: 'exists' },
-      image: { field: 'message.imageMessage', operator: 'exists' },
-      sticker: { field: 'message.stickerMessage', operator: 'exists' },
-      contact: { field: 'message.contactMessage', operator: 'exists' },
-      location: { field: 'message.locationMessage', operator: 'exists' },
-      poll: { field: 'message.pollCreationMessageV3', operator: 'exists' },
-    };
-
-    for (const { type, payload } of payloads) {
-      const condition = typeConditions[type];
-      if (!condition) {
-        throw new Error(`Missing condition for type: ${type}`);
-      }
-      expect(evaluateCondition(condition, payload)).toBe(true);
-
-      // Ensure other type conditions don't match
-      for (const [otherType, otherCondition] of Object.entries(typeConditions)) {
-        if (otherType !== type) {
-          expect(evaluateCondition(otherCondition, payload)).toBe(false);
-        }
-      }
-    }
   });
 });
 

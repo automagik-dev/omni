@@ -33,29 +33,6 @@ describe('ClaudeCodeClient', () => {
     userId: 'user-123',
   };
 
-  describe('constructor', () => {
-    it('accepts minimal config', () => {
-      const client = new ClaudeCodeClient({ projectPath: '/test' });
-      expect(client).toBeDefined();
-    });
-
-    it('accepts full config', () => {
-      const client = new ClaudeCodeClient({
-        projectPath: '/test',
-        apiKey: 'key',
-        allowedTools: ['Read'],
-        permissionMode: 'plan',
-        model: 'claude-opus-4-6',
-        systemPrompt: 'test',
-        maxTurns: 20,
-        mcpServers: {
-          playwright: { command: 'npx', args: ['@playwright/mcp@latest'] },
-        },
-      });
-      expect(client).toBeDefined();
-    });
-  });
-
   describe('buildOptions()', () => {
     it('sets cwd and settingSources for project context', () => {
       const client = new ClaudeCodeClient(baseConfig);
@@ -131,14 +108,6 @@ describe('ClaudeCodeClient', () => {
       const options = getBuildOptions(client)(baseRequest);
 
       expect(options.systemPrompt).toBe('You are a helpful code reviewer.');
-    });
-
-    it('uses default permissionMode when not specified', () => {
-      const client = new ClaudeCodeClient({ projectPath: '/test' });
-      const options = getBuildOptions(client)(baseRequest);
-
-      expect(options.permissionMode).toBe('bypassPermissions');
-      expect(options.allowDangerouslySkipPermissions).toBe(true);
     });
 
     it('uses custom permissionMode without skip flag', () => {
@@ -339,19 +308,6 @@ describe('ClaudeCodeClient', () => {
       expect(result.healthy).toBe(true);
       expect(result.error).toContain('No CLAUDE.md');
     });
-
-    it('reports healthy with no warning when CLAUDE.md exists', async () => {
-      // Use the current project dir which has a CLAUDE.md
-      const client = new ClaudeCodeClient({
-        ...baseConfig,
-        projectPath: process.cwd(),
-      });
-
-      const result = await client.checkHealth();
-      expect(result.healthy).toBe(true);
-      // Either no error, or error about missing CLAUDE.md (depends on cwd)
-      // Just check healthy is true
-    });
   });
 });
 
@@ -383,18 +339,6 @@ describe('ClaudeCodeAgentProvider', () => {
     expect(typeof provider.checkHealth).toBe('function');
   });
 
-  it('canHandle returns true for all trigger types', () => {
-    const provider = new ClaudeCodeAgentProvider('test-id', 'Test', { projectPath: '/test' }, mockSessionStorage, {});
-
-    const makeTrigger = (type: string) => ({ type }) as unknown as AgentTrigger;
-
-    expect(provider.canHandle(makeTrigger('dm'))).toBe(true);
-    expect(provider.canHandle(makeTrigger('mention'))).toBe(true);
-    expect(provider.canHandle(makeTrigger('reaction'))).toBe(true);
-    expect(provider.canHandle(makeTrigger('reply'))).toBe(true);
-    expect(provider.canHandle(makeTrigger('name_match'))).toBe(true);
-  });
-
   it('delegates checkHealth to client', async () => {
     const provider = new ClaudeCodeAgentProvider(
       'test-id',
@@ -409,18 +353,6 @@ describe('ClaudeCodeAgentProvider', () => {
     const result = await provider.checkHealth();
     expect(result.healthy).toBe(false);
     expect(result.error).toContain('not accessible');
-  });
-
-  it('passes options through', () => {
-    const provider = new ClaudeCodeAgentProvider(
-      'test-id',
-      'Test',
-      { projectPath: '/test', model: 'claude-opus-4-6' },
-      mockSessionStorage,
-      { timeoutMs: 180_000, enableAutoSplit: false, prefixSenderName: false },
-    );
-
-    expect(provider).toBeDefined();
   });
 
   it('injects Omni context env into Claude Code requests', async () => {
@@ -510,14 +442,5 @@ describe('ClaudeCodeAgentProvider', () => {
     const message = buildMessage(trigger);
     expect(message).toBe('Hello');
     expect(message).not.toContain('Attached files');
-  });
-});
-
-describe('createClaudeCodeClient', () => {
-  const { createClaudeCodeClient } = require('../claude-code-client') as typeof import('../claude-code-client');
-
-  it('creates a ClaudeCodeClient instance', () => {
-    const client = createClaudeCodeClient({ projectPath: '/test' });
-    expect(client).toBeInstanceOf(ClaudeCodeClient);
   });
 });

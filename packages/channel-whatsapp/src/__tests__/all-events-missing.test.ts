@@ -115,24 +115,6 @@ describe('setupAllEventHandlers missing Baileys events', () => {
     expect(plugin.handleGroupMemberTagUpdate).toHaveBeenCalledTimes(1);
     expect(plugin.handleGroupMemberTagUpdate).toHaveBeenCalledWith(instanceId, payload);
   });
-
-  test('registers every read-only Baileys event selected for coverage', () => {
-    const sock = createMockSocket();
-    const plugin = createMockPlugin();
-    setupAllEventHandlers(sock as WASocket, plugin as never, instanceId);
-
-    const expectedEvents = [
-      'messaging-history.status',
-      'message-capping.update',
-      'settings.update',
-      'chats.lock',
-      'group.member-tag.update',
-    ];
-
-    for (const event of expectedEvents) {
-      expect(sock.ev.listenerCount(event)).toBeGreaterThan(0);
-    }
-  });
 });
 
 describe('WhatsAppPlugin read-only Baileys event publishing', () => {

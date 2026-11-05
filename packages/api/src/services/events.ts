@@ -534,9 +534,19 @@ export class EventService {
    * through AutomationService so this service adds no `automations` db site).
    */
   async getTypes(
-    options: { since?: Date; automations?: Array<{ name: string; triggerEventType: string }> } = {},
+    options: {
+      since?: Date;
+      tenantId?: string | null;
+      automations?: Array<{ name: string; triggerEventType: string }>;
+      /**
+       * Narrows the consumer names to those the caller may reach (the route passes
+       * consumerAccessClause for an ownOnly key, #1461). Absent for every other caller.
+       */
+      consumerAccess?: SQL;
+    } = {},
   ): Promise<EventTypeInventoryRow[]> {
     const autos = options.automations ?? [];
+    const tenantConsumers = options.tenantId ? eq(durableConsumers.tenantId, options.tenantId) : undefined;
     const [observed, schemas, consumers] = await Promise.all([
       this.db
         .select({
@@ -551,7 +561,10 @@ export class EventService {
       this.db
         .select({ eventType: eventSchemas.eventType, version: eventSchemas.version, enabled: eventSchemas.enabled })
         .from(eventSchemas),
-      this.db.select({ name: durableConsumers.name, eventType: durableConsumers.eventType }).from(durableConsumers),
+      this.db
+        .select({ name: durableConsumers.name, eventType: durableConsumers.eventType })
+        .from(durableConsumers)
+        .where(options.consumerAccess ? and(tenantConsumers, options.consumerAccess) : tenantConsumers),
     ]);
 
     const schemaByType = new Map(schemas.map((s) => [s.eventType, s]));

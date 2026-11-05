@@ -19,13 +19,23 @@
  * normalizes it anyway, so exempting it loses nothing. Files that exist on
  * the base keep the strict check: a mismatch there is real drift.
  *
+ * Omni's own DSH plugins (apps/*-dsh) carry the Omni version of their last change
+ * (scripts/lib/plugin-versions.ts): a plugin may lag the root, and is then
+ * reported LAGS, as long as its version is an Omni release no newer than the
+ * root's, its folder is unchanged between that release and the root's, its
+ * npm lockfile carries its own version, and its `engines.omni` minimum is a
+ * release no newer than its own (or a pending one above the root's). Changes
+ * after the root's release are pending: the next cut moves the plugin. The
+ * releases are read from their tags, fetched one by one in a shallow clone.
+ *
  * Wired into the Quality Gate job in .github/workflows/ci.yml as the
  * "Verify version sync" step so version drift fails CI fast.
  */
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { getAllVersionFields, repoRoot } from './lib/version-fields';
+import { pluginProblems, releaseCommit } from './lib/plugin-versions';
+import { type VersionField, getAllVersionFields, repoRoot } from './lib/version-fields';
 
 function readRootVersion(): string {
   const content = readFileSync(join(repoRoot, 'package.json'), 'utf-8');
@@ -73,6 +83,33 @@ export function fieldStatus(
   return 'MISMATCH';
 }
 
+/** A plugin's own version: its package.json's, which its lockfile must carry too. */
+function pluginVersion(dir: string): string | null {
+  try {
+    const data = JSON.parse(readFileSync(join(repoRoot, dir, 'package.json'), 'utf-8')) as { version?: unknown };
+    return typeof data.version === 'string' ? data.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A plugin field's status: its package.json is OK at the root's version and LAGS behind it (the
+ * rule itself is pluginProblems'); its lockfile must carry the plugin's own version.
+ */
+export function pluginFieldStatus(
+  field: Pick<VersionField, 'path'>,
+  actual: string | null,
+  own: string | null,
+  reference: string,
+  basePaths: Set<string> | null,
+): 'OK' | 'LAGS' | 'NEW' | 'MISMATCH' {
+  const expected = own ?? reference;
+  if (actual !== null && actual === expected) return actual === reference ? 'OK' : 'LAGS';
+  if (basePaths !== null && !basePaths.has(field.path)) return 'NEW';
+  return 'MISMATCH';
+}
+
 function main(): void {
   const reference = readRootVersion();
   console.log(`Reference version: ${reference}`);
@@ -84,19 +121,37 @@ function main(): void {
   const fields = getAllVersionFields();
   let mismatches = 0;
   let fresh = 0;
+  let lagging = 0;
 
   for (const field of fields) {
     const actual = field.read();
-    const status = fieldStatus(actual, reference, field.path, basePaths);
+    const status = field.plugin
+      ? pluginFieldStatus(field, actual, pluginVersion(field.plugin), reference, basePaths)
+      : fieldStatus(actual, reference, field.path, basePaths);
     const display = actual ?? '<missing>';
     console.log(`${status.padEnd(8)} ${field.path} → ${display}`);
     if (status === 'MISMATCH') mismatches++;
     if (status === 'NEW') fresh++;
+    if (status === 'LAGS') lagging++;
+  }
+
+  // The plugins' own rule. The root's release is its tag; on the cut commit itself, before that
+  // tag is pushed, it is HEAD.
+  const cut = releaseCommit(repoRoot, reference) ?? 'HEAD';
+  const newPlugins = new Set(
+    fields.filter((field) => field.plugin && basePaths !== null && !basePaths.has(field.path)).map((f) => f.plugin),
+  );
+  for (const { dir, problem } of pluginProblems(repoRoot, reference, cut)) {
+    if (newPlugins.has(dir)) continue;
+    console.log(`MISMATCH ${dir}: ${problem}`);
+    mismatches++;
   }
 
   const total = fields.length;
   const matched = total - mismatches - fresh;
-  const newNote = fresh > 0 ? `, ${fresh} new (exempt — auto-bump normalizes after merge)` : '';
+  const newNote =
+    (lagging > 0 ? `, ${lagging} plugin fields at their own last-change release` : '') +
+    (fresh > 0 ? `, ${fresh} new (exempt — auto-bump normalizes after merge)` : '');
 
   if (mismatches === 0) {
     console.log(`\nOK: ${matched}/${total} files match${newNote}`);

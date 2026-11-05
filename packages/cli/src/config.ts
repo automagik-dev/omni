@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { DEFAULT_NATS_HOST, NatsHostSchema } from './nats-server-args.js';
 
 /** Command visibility categories */
 export type CommandCategory = 'core' | 'standard' | 'advanced' | 'debug';
@@ -30,6 +31,20 @@ export interface ServerConfig {
    * embedded mode continues. Operators migrate via `omni doctor --fix`.
    */
   useCanonicalPgserve?: boolean;
+  /**
+   * Bind address of the CLI-managed nats-server (`-a`), used by `omni start`,
+   * `omni install` and the `--systemd` unit. Absent on older configs → the
+   * loopback default from `nats-server-args.ts`. `0.0.0.0` / `::` exposes NATS
+   * to the network; omni-api keeps connecting via `NATS_URL` (localhost).
+   */
+  natsHost?: string;
+  /**
+   * Where people reach this Omni (OMNI_PUBLIC_URL), e.g. https://omni.example.com. Optional:
+   * without it pairing links follow the address each device used, and passkeys are off.
+   */
+  publicUrl?: string;
+  /** Human login (device pairing): on by default; 'off' sets OMNI_LOGIN_ENABLED=false. */
+  login?: 'on' | 'off';
 }
 
 /** Valid config keys (top-level and dot-notation server.* keys) */
@@ -45,7 +60,10 @@ export type ConfigKey =
   | 'server.databaseUrl'
   | 'server.dataDir'
   | 'server.logLevel'
-  | 'server.nodeEnv';
+  | 'server.nodeEnv'
+  | 'server.natsHost'
+  | 'server.publicUrl'
+  | 'server.login';
 
 /**
  * A single named REMOTE target (an Omni API server the CLI talks to).
@@ -118,6 +136,7 @@ export const DEFAULT_SERVER_CONFIG: ServerConfig = {
   dataDir: join(homedir(), '.omni', 'data'),
   logLevel: 'info',
   nodeEnv: 'production',
+  natsHost: DEFAULT_NATS_HOST,
 };
 
 /** Valid config keys with descriptions */
@@ -148,6 +167,17 @@ export const CONFIG_KEYS: Record<ConfigKey, { description: string; values?: stri
   'server.nodeEnv': {
     description: 'Node environment',
     values: ['production', 'development'],
+  },
+  'server.natsHost': {
+    description: `Bind address of the managed NATS server (default: ${DEFAULT_NATS_HOST}; 0.0.0.0 or :: exposes NATS to the network; applied by omni start/install/update)`,
+  },
+  'server.publicUrl': {
+    description:
+      'Where people reach this Omni, http(s)://host with no path (OMNI_PUBLIC_URL). Optional; passkeys need it. Applied by omni start/install/update',
+  },
+  'server.login': {
+    description: 'Device pairing and the owner sign-in (default: on). Applied by omni start/install/update',
+    values: ['on', 'off'],
   },
 };
 
@@ -518,7 +548,8 @@ export function getConfigValue(key: ConfigKey): string | undefined {
       return String(config.server[field]);
     }
     // Return default if not explicitly set
-    return String(DEFAULT_SERVER_CONFIG[field]);
+    const fallback = DEFAULT_SERVER_CONFIG[field];
+    return fallback === undefined ? undefined : String(fallback);
   }
 
   return config[key as keyof Omit<Config, 'server' | 'servers'>];
@@ -535,6 +566,23 @@ function setServerField(config: Config, field: keyof ServerConfig, value: string
       throw new Error(`Invalid port value: ${value}. Must be a number between 1 and 65535.`);
     }
     config.server.port = numValue;
+  } else if (field === 'natsHost') {
+    const parsed = NatsHostSchema.safeParse(value);
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid natsHost value ${JSON.stringify(value)}: ${parsed.error.issues[0]?.message ?? 'is invalid'}.`,
+      );
+    }
+    config.server.natsHost = parsed.data;
+  } else if (field === 'publicUrl') {
+    const trimmed = value.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^/?#\s]+$/i.test(trimmed)) {
+      throw new Error(`Invalid publicUrl ${JSON.stringify(value)}: use http(s)://host[:port], with no path.`);
+    }
+    config.server.publicUrl = trimmed;
+  } else if (field === 'login') {
+    if (value !== 'on' && value !== 'off') throw new Error(`Invalid login value ${JSON.stringify(value)}: on or off.`);
+    config.server.login = value;
   } else {
     (config.server as Record<string, unknown>)[field] = value;
   }

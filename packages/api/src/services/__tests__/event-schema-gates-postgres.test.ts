@@ -1,3 +1,4 @@
+import type { ConnectorEventPublisher, EventBus } from '@omni/core';
 /**
  * Event schema registry gates over real PostgreSQL (issue #959, RFC #925 G1).
  *
@@ -20,43 +21,28 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import type { EventBus } from '@omni/core';
 import { executeAction } from '@omni/core';
-import { type Database, createDbHandle, deadLetterEvents } from '@omni/db';
-import { provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { type Database, createDbHandle, deadLetterEvents, instances, omniEvents, tenants } from '@omni/db';
+import { pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
+import { eq } from 'drizzle-orm';
+import { Hono } from 'hono';
+import { authMiddleware } from '../../middleware/auth';
+import { errorHandler } from '../../middleware/error';
+import { scopeEnforcerMiddleware } from '../../middleware/scope-enforcer';
+import { tenancyMiddleware } from '../../middleware/tenancy';
 import { buildAutomationEngineDeps } from '../../plugins/automation-actions';
+import { webhooksRoutes } from '../../routes/v2/webhooks';
+import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
+import type { AppVariables } from '../../types';
 import { DeadLetterService } from '../dead-letters';
 import { EventSchemaService } from '../event-schemas';
-import type { Services } from '../index';
+import { type Services, createServices } from '../index';
 import { WebhookService } from '../webhooks';
 
 const superUrl = process.env.OMNI_G1_POSTGRES_URL ?? '';
 const postgresDescribe = superUrl.length > 0 ? describe : describe.skip;
 const psqlBin = process.env.OMNI_G1_PSQL_BIN ?? 'psql';
-
-function runSqlOn(url: string, script: string): { exitCode: number; stderr: string } {
-  const file = join(tmpdir(), `omni-959-registry-${crypto.randomUUID()}.sql`);
-  writeFileSync(file, script);
-  try {
-    const result = Bun.spawnSync({
-      cmd: [psqlBin, '-X', '--no-psqlrc', '-A', '-t', '--set', 'ON_ERROR_STOP=1', '--dbname', url, '-f', file],
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    return { exitCode: result.exitCode, stderr: result.stderr.toString() };
-  } finally {
-    rmSync(file, { force: true });
-  }
-}
-
-function urlFor(base: string, database: string): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  return url.toString();
-}
 
 interface PublishedEvent {
   type: string;
@@ -64,13 +50,27 @@ interface PublishedEvent {
 }
 
 /** An EventBus fake that records publishes — the journal, for assertions. */
-function recordingBus(events: PublishedEvent[]): EventBus {
+function recordingBus(events: PublishedEvent[]): EventBus & ConnectorEventPublisher {
   return {
+    connect: async () => {},
+    close: async () => {},
+    isConnected: () => true,
+    publish: async () => {
+      throw new Error('unexpected core publish');
+    },
+    publishConnector: async () => {
+      throw new Error('unexpected connector publish');
+    },
+    subscribe: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribePattern: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeMany: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+    subscribeAll: async () => ({ id: 'sub', pattern: '', unsubscribe: async () => {} }),
+
     publishGeneric: async (type: string, payload: Record<string, unknown>) => {
       events.push({ type, payload });
-      return { id: crypto.randomUUID(), ok: true };
+      return { id: crypto.randomUUID(), sequence: 0, stream: 'memory' };
     },
-  } as unknown as EventBus;
+  };
 }
 
 /** The schema every custom.github.push payload must satisfy in this suite. */
@@ -104,7 +104,7 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const dbUrl = urlFor(superUrl, dbName);
+    const dbUrl = pgRoleUrl(superUrl, dbName);
 
     const handle = createDbHandle({ url: dbUrl, maxConnections: 3 });
     closers.push(() => handle.close().catch(() => undefined));
@@ -125,7 +125,7 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('registering a schema inserts at version 1', async () => {
@@ -286,4 +286,88 @@ postgresDescribe('event schema registry gates (real PostgreSQL)', () => {
       eventSchemas.register({ eventType: 'custom.broken.type', schema: { type: 'string', pattern: '[' } }),
     ).rejects.toThrow(/not a valid JSON Schema/);
   });
+
+  test.each(['correlationId', 'causationId'] as const)(
+    'legacy-key schema refusal keeps an independent unowned event ID with %s',
+    async (field) => {
+      const previousFlag = process.env[MULTITENANCY_FLAG_ENV];
+      process.env[MULTITENANCY_FLAG_ENV] = 'true';
+      try {
+        const services = createServices(db, recordingBus(journal));
+        const { plainTextKey } = await services.apiKeys.create({ name: `refusal-${field}`, scopes: ['*'] });
+        const [tenant] = await db
+          .insert(tenants)
+          .values({
+            slug: `refusal-${field.toLowerCase()}`,
+            displayName: 'Foreign owner',
+            maxKeyTtlSeconds: 3600,
+            maxKeyRateLimit: 100,
+            maxKeyBudget: 100,
+          })
+          .returning();
+        if (!tenant) throw new Error('missing foreign tenant');
+        const [instance] = await db
+          .insert(instances)
+          .values({ name: `refusal-${field}`, channel: 'internal', tenantId: tenant.id })
+          .returning();
+        if (!instance) throw new Error('missing foreign instance');
+        const foreignId = crypto.randomUUID();
+        await db.insert(omniEvents).values({
+          id: foreignId,
+          instanceId: instance.id,
+          channel: 'internal',
+          direction: 'internal',
+          eventType: 'custom.foreign-parent',
+          metadata: { correlationId: foreignId },
+        });
+        const [foreign] = await db.select().from(omniEvents).where(eq(omniEvents.id, foreignId));
+        expect(foreign?.tenantId).toBe(tenant.id);
+        // Runtime callers may still carry an extra source ID; the service must ignore it.
+        const refusalInput = {
+          eventId: foreignId,
+          eventType: `custom.refusal-service-${field.toLowerCase()}`,
+          subject: 'schema-refusal',
+          payload: {},
+          errors: ['invalid schema'],
+        };
+        const directRefusal = await services.deadLetters.createSchemaValidationFailure(refusalInput);
+        expect(directRefusal.eventId).not.toBe(foreignId);
+        expect(directRefusal.tenantId).toBeNull();
+        expect(directRefusal.nextAutoRetryAt).toBeNull();
+        const [storedRefusal] = await db
+          .select()
+          .from(deadLetterEvents)
+          .where(eq(deadLetterEvents.id, directRefusal.id));
+        expect(storedRefusal?.eventId).toBe(directRefusal.eventId);
+        expect(storedRefusal?.tenantId).toBeNull();
+        const eventType = `custom.refusal-${field.toLowerCase()}` as const;
+        await services.eventSchemas.register({ eventType, schema: { type: 'object', required: ['requiredValue'] } });
+        const app = new Hono<{ Variables: AppVariables }>();
+        app.onError(errorHandler);
+        app.use('*', async (c, next) => {
+          c.set('db', db);
+          c.set('services', services);
+          await next();
+        });
+        app.use('*', tenancyMiddleware);
+        app.use('*', authMiddleware);
+        app.use('*', scopeEnforcerMiddleware);
+        app.route('/api/v2', webhooksRoutes);
+        const response = await app.request('/api/v2/events/trigger', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': plainTextKey },
+          body: JSON.stringify({ eventType, payload: {}, [field]: foreignId }),
+        });
+        expect(response.status).toBe(400);
+        const rows = await db.select().from(deadLetterEvents).where(eq(deadLetterEvents.eventType, eventType));
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.eventId).not.toBe(foreignId);
+        expect(rows[0]?.tenantId).toBeNull();
+        expect(journalOf(eventType)).toEqual([]);
+      } finally {
+        if (previousFlag === undefined) Reflect.deleteProperty(process.env, MULTITENANCY_FLAG_ENV);
+        else process.env[MULTITENANCY_FLAG_ENV] = previousFlag;
+      }
+    },
+  );
 });

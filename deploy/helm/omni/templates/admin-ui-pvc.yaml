@@ -1,0 +1,18 @@
+{{- if and .Values.adminUi.enabled .Values.adminUi.persistence.enabled (not .Values.adminUi.persistence.existingClaim) }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "omni.adminUi.fullname" . }}-data
+  labels:
+    {{- include "omni.labels" . | nindent 4 }}
+    app.kubernetes.io/component: admin-ui
+spec:
+  accessModes:
+    {{- toYaml .Values.adminUi.persistence.accessModes | nindent 4 }}
+  {{- with .Values.adminUi.persistence.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.adminUi.persistence.size }}
+{{- end }}

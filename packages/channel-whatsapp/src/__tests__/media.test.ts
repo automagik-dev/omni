@@ -19,36 +19,17 @@ import { getExtension, getWhatsAppMediaDownloadMaxBytes, writeMediaStreamToFile 
 
 describe('Media Utilities', () => {
   describe('getExtension', () => {
-    it('returns .jpg for image/jpeg', () => {
-      expect(getExtension('image/jpeg')).toBe('.jpg');
-    });
-
-    it('returns .png for image/png', () => {
-      expect(getExtension('image/png')).toBe('.png');
-    });
-
-    it('returns .webp for image/webp', () => {
-      expect(getExtension('image/webp')).toBe('.webp');
-    });
-
-    it('returns .ogg for audio/ogg', () => {
-      expect(getExtension('audio/ogg')).toBe('.ogg');
-    });
-
-    it('returns .ogg for audio/ogg; codecs=opus', () => {
-      expect(getExtension('audio/ogg; codecs=opus')).toBe('.ogg');
-    });
-
-    it('returns .mp4 for video/mp4', () => {
-      expect(getExtension('video/mp4')).toBe('.mp4');
-    });
-
-    it('returns .pdf for application/pdf', () => {
-      expect(getExtension('application/pdf')).toBe('.pdf');
-    });
-
-    it('returns .bin for unknown types', () => {
-      expect(getExtension('application/x-custom')).toBe('.bin');
+    it.each([
+      ['image/jpeg', '.jpg'],
+      ['image/png', '.png'],
+      ['image/webp', '.webp'],
+      ['audio/ogg', '.ogg'],
+      ['audio/ogg; codecs=opus', '.ogg'],
+      ['video/mp4', '.mp4'],
+      ['application/pdf', '.pdf'],
+      ['application/x-custom', '.bin'],
+    ])('returns the extension for %s', (mime, extension) => {
+      expect(getExtension(mime)).toBe(extension);
     });
   });
 
@@ -63,7 +44,7 @@ describe('Media Utilities', () => {
       try {
         expect(getWhatsAppMediaDownloadMaxBytes()).toBe(512 * 1024 * 1024);
       } finally {
-        if (original === undefined) process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = undefined;
+        if (original === undefined) Reflect.deleteProperty(process.env, 'OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB');
         else process.env.OMNI_WHATSAPP_MEDIA_MAX_DOWNLOAD_MB = original;
       }
     });

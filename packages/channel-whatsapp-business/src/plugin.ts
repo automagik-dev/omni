@@ -24,7 +24,7 @@ import type {
   SendResult,
 } from '@omni/channel-sdk';
 import type { Logger } from '@omni/core';
-import { markdownToWhatsApp } from '@omni/core';
+import { ERROR_CODES, OmniError, markdownToWhatsApp } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
 import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
@@ -36,6 +36,7 @@ import { FlowResolverRegistry } from './flows/resolver';
 import { handleFlowDataRequest } from './handlers/flow-data';
 import { handleMetaWebhook } from './handlers/webhook';
 import {
+  type MetaMediaSource,
   type SendTemplateButton,
   type SendTemplateHeaderMedia,
   sendContact,
@@ -297,11 +298,21 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
         // id inbound `from` and status `recipient_id` carry (#1279).
         chatId: response.contacts?.[0]?.wa_id ?? toWaId(to),
         to,
+        // Media fields mirror the Baileys channel so persistence records the
+        // MIME type, filename and caption of a base64 send (#1278).
         content: {
           type: content.type,
-          text: content.text,
+          text: content.text ?? content.caption,
+          caption: content.caption,
           mediaUrl: content.mediaUrl,
+          mimeType: content.mimeType,
+          filename: content.filename,
         },
+        // Bytes sent as base64 have no URL: keep the Meta media id as the
+        // reference (persisted as mediaMetadata.source + rawPayload).
+        rawPayload: dispatched.uploadedMediaId
+          ? { mediaSource: 'meta-upload', metaMediaId: dispatched.uploadedMediaId }
+          : undefined,
         replyToId: replyTo,
         senderAgentId: metadata?.senderAgentId as string | undefined,
         systemNotice: metadata?.systemNotice as boolean | undefined,
@@ -471,6 +482,83 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
         instanceId,
         chatId,
         err: String(err),
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Read receipts (implements ChannelPlugin.markChatAsRead / markAsRead)
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Mark a chat read (#1278). Meta marks a message read by its wamid, and
+   * reading the newest one marks every earlier message of the conversation
+   * read too, so this sends one read for the newest remembered inbound wamid
+   * (the same memory `sendTyping` uses). No remembered wamid (nothing received
+   * since the plugin started) → no-op. `readReceiptMode: 'off'` sends nothing,
+   * like the other WhatsApp channels. Meta failures are thrown as
+   * CHANNEL_SEND_FAILED: the caller asked for this explicitly.
+   */
+  async markChatAsRead(
+    instanceId: string,
+    chatId: string,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    if (readReceiptMode === 'off') return;
+    const state = this.requireInstanceState(instanceId, 'markChatAsRead');
+    const wamid = state.lastInboundWamid.get(toWaId(chatId));
+    if (!wamid) {
+      this.logger.info('[whatsapp-business] markChatAsRead skipped — no inbound wamid remembered for chat', {
+        instanceId,
+        chatId,
+      });
+      return;
+    }
+    await this.sendReadReceipt(state.client, instanceId, wamid);
+  }
+
+  /**
+   * Mark specific inbound messages read by wamid. `['all']` (the API's
+   * whole-chat marker) behaves like {@link markChatAsRead}. Messages Omni sent
+   * (`isFromMe` in `messageData`) are skipped: Meta only accepts reads of
+   * messages the business received.
+   */
+  async markAsRead(
+    instanceId: string,
+    chatId: string,
+    messageIds: string[],
+    messageData?: Array<{ externalId: string; isFromMe?: boolean }>,
+    readReceiptMode?: 'on' | 'off' | 'exclude-self',
+  ): Promise<void> {
+    if (readReceiptMode === 'off') return;
+    if (messageIds.includes('all')) {
+      await this.markChatAsRead(instanceId, chatId, readReceiptMode);
+      return;
+    }
+    const state = this.requireInstanceState(instanceId, 'markAsRead');
+    const sentByUs = new Set((messageData ?? []).filter((m) => m.isFromMe).map((m) => m.externalId));
+    for (const wamid of messageIds) {
+      if (sentByUs.has(wamid)) continue;
+      await this.sendReadReceipt(state.client, instanceId, wamid);
+    }
+  }
+
+  /**
+   * Send one read receipt. A Graph API failure becomes CHANNEL_SEND_FAILED
+   * (502): `MetaApiError` carries a `META_*` code the API cannot map, which
+   * would surface as a generic 500.
+   */
+  private async sendReadReceipt(client: MetaWhatsAppClient, instanceId: string, wamid: string): Promise<void> {
+    try {
+      await client.markAsRead(wamid);
+    } catch (err) {
+      if (!(err instanceof MetaApiError)) throw err;
+      throw new OmniError({
+        code: ERROR_CODES.CHANNEL_SEND_FAILED,
+        message: `Meta rejected the read receipt: ${err.message}`,
+        context: { channelType: 'whatsapp-business', instanceId, metaCode: err.code },
+        recoverable: err.retryable,
+        cause: err,
       });
     }
   }
@@ -883,7 +971,31 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
 // for clarity. They're used by `sendMessage` and the inbound handlers.
 // ─────────────────────────────────────────────────────────────────────────
 
-type OutboundDispatchResult = { ok: true; response: MetaSendResponse } | { ok: false; error: string };
+type OutboundDispatchResult =
+  | { ok: true; response: MetaSendResponse; uploadedMediaId?: string }
+  | { ok: false; error: string };
+
+/**
+ * Where the media of an outgoing message comes from (#1278): a public URL is
+ * sent as `link`; file bytes (`metadata.base64`, as the API's send-media
+ * route and every other channel use) are uploaded first and sent by `id`.
+ * Returns null when the message carries neither, or base64 that decodes to
+ * no bytes (nothing worth uploading).
+ */
+async function resolveMediaSource(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+  mimeType: string | undefined,
+): Promise<MetaMediaSource | null> {
+  const { content, metadata } = message;
+  if (content.mediaUrl) return content.mediaUrl;
+
+  const base64 = metadata?.base64;
+  if (typeof base64 !== 'string' || base64.length === 0) return null;
+  const bytes = Buffer.from(base64, 'base64');
+  if (bytes.length === 0) return null;
+  return client.uploadMedia(bytes, mimeType ?? 'application/octet-stream', content.filename);
+}
 
 /**
  * Route an outgoing message to the matching sender by `content.type`.
@@ -904,18 +1016,7 @@ async function dispatchOutbound(
     return { ok: true, response: await dispatchOutboundText(client, message, logger) };
   }
   if (META_MEDIA_TYPES.has(content.type)) {
-    return {
-      ok: true,
-      response: await sendMedia(
-        client,
-        to,
-        content.mediaUrl ?? '',
-        content.mimeType,
-        content.caption ?? content.text,
-        content.filename,
-        replyTo,
-      ),
-    };
+    return dispatchOutboundMedia(client, message);
   }
   if (content.type === 'location' && content.location) {
     const { latitude, longitude, name, address } = content.location;
@@ -949,6 +1050,29 @@ async function dispatchOutbound(
     return dispatchOutboundFlow(client, message);
   }
   return { ok: false, error: `Unsupported content.type=${content.type} for whatsapp-business` };
+}
+
+/**
+ * Media by link or by uploaded id. With neither a URL nor non-empty bytes,
+ * `{ ok: false }` and no Graph API call; an upload reports its media id.
+ */
+async function dispatchOutboundMedia(
+  client: MetaWhatsAppClient,
+  message: OutgoingMessage,
+): Promise<OutboundDispatchResult> {
+  const { content, to, replyTo } = message;
+  // The sticker route sends no MIME type; WhatsApp stickers are WebP, and the
+  // MIME type is what makes Meta treat the media as a sticker, not a document.
+  const mimeType = content.mimeType ?? (content.type === 'sticker' ? 'image/webp' : undefined);
+  const source = await resolveMediaSource(client, message, mimeType);
+  if (!source) {
+    return { ok: false, error: 'Media requires a public URL or non-empty file bytes (base64)' };
+  }
+  return {
+    ok: true,
+    uploadedMediaId: typeof source === 'string' ? undefined : source.id,
+    response: await sendMedia(client, to, source, mimeType, content.caption ?? content.text, content.filename, replyTo),
+  };
 }
 
 /**

@@ -13,7 +13,7 @@ Verb commands for agents replying inside a conversation. In turn-based mode the 
 | `OMNI_INSTANCE` | Channel instance ID (which WhatsApp/Telegram account) |
 | `OMNI_CHAT` | Chat JID (the conversation) |
 | `OMNI_MESSAGE` | Inbound message ID that triggered this turn |
-| `OMNI_AGENT` | Your agent identifier |
+| `OMNI_TURN_ID` | Current turn ID, used by `omni done` to close the correct turn |
 
 Out-of-turn (cron, manual): set context first — `omni use <instance-id>`, `omni open <chat-jid>`; check with `omni where`.
 
@@ -48,7 +48,7 @@ REQUIRED as the last action of every turn; without it the turn hangs until serve
 3. Reply with verbs (`say`, `speak`, `imagine`, ...) for mid-turn updates.
 4. `omni done "<final>"` — always last.
 
-A message counts as sent when the command exits 0 — report delivery only after that.
+Exit 0 confirms the command succeeded; report channel delivery only when its receipt or an observed message confirms it. Use `omni turns --help` to inspect turn-management commands, not to bypass the assigned turn context.
 
 ## Send edge cases
 
@@ -63,6 +63,11 @@ omni send --poll "Which option?" --options "A,B,C" --to <chat>      # Discord
 omni send --sticker <url-or-base64> --to <chat>
 omni send --contact --name "Ana" --phone +5511888887777 --to <chat>
 omni send --reaction "❤️" --message <id>
+omni send --to <chat> --text "Reply" --reply-to <message-id>
+omni send --to <chat> --forward --message <message-id> --from-chat <source-chat>
+omni send --to <chat> --text "Update" --sent-by agent
+omni send --to <chat> --embed --title "Status" --description "Ready"  # Discord
+omni send --to <chat> --presence typing
 ```
 
 ## Messages and chats
@@ -76,4 +81,8 @@ omni chats get <id>
 omni chats messages <chatId> --json                # read any chat, not just the open one
 ```
 
-More via `omni messages --help` (`edit`, `delete`, `star`, `remove-reaction`) and `omni chats --help` (`archive`, `pin`, `mute`, `label`, `participants`, `read`).
+More via `omni messages --help` (`edit`, `delete`, `star`, `unstar`, `remove-reaction`, `close-contact`) and `omni chats --help` (`archive`, `pin`, `mute`, `label`, `participants`, `read`).
+
+`messages close-contact` records a terminal outcome or cooldown and may send a farewell: inspect `omni messages close-contact --help` and confirm the intended recipient/outcome before using it.
+
+For capabilities beyond these examples, discover options through `omni send --help`, `omni speak --help`, `omni film --help`, `omni music --help`, `omni schedule --help`, `omni voice --help`, `omni media --help`, `omni a2a --help`, or `omni slack --help`. Scheduled sends and other outbound actions need the same target/authorization checks as an immediate send. Use global `--server <name>` to select an existing credentialed server; see setup for registration and current keyless-login limitations.

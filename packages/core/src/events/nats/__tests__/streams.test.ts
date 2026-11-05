@@ -37,7 +37,7 @@ describe('streams', () => {
 
     test('CUSTOM stream captures custom.> subjects', () => {
       const config = STREAM_CONFIGS.CUSTOM;
-      expect(config.subjects).toEqual(['custom.>']);
+      expect(config.subjects).toEqual(['custom.>', 'connector.>']);
     });
 
     test('SYSTEM stream captures system/sync/batch-job/presence/chat/follow_up/flow/template/channel subjects', () => {
@@ -101,3 +101,21 @@ describe('streams', () => {
     });
   });
 });
+
+// Run the real transport in a child: other suites mock nats process-wide.
+test('connector publisher uses a durable connector.> stream on real NATS', async () => {
+  const child = Bun.spawn(['bun', `${import.meta.dir}/fixtures/connector-publisher.ts`], {
+    env: { ...process.env, LOG_LEVEL: 'silent' },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  const [stdout, stderr, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ]);
+  if (code !== 0) throw new Error(`connector publisher child failed: ${stderr}`);
+  const result = JSON.parse(stdout) as { published: Array<{ id: string; stream: string }>; delivered: string[] };
+  expect(result.published.map((event) => event.stream)).toEqual(['CUSTOM', 'CUSTOM']);
+  expect(result.delivered.sort()).toEqual(result.published.map((event) => event.id).sort());
+}, 20000);

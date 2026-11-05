@@ -80,6 +80,7 @@ describe('command allowlist', () => {
   });
 });
 
+// Real shell commands need scheduling headroom on a loaded host.
 describe('executePoll', () => {
   test('emits each JSON line, resets failures, schedules the next interval', async () => {
     const path = script('emit.sh', 'echo \'{"id":"a"}\'\necho\necho \'{"id":"b"}\'');
@@ -98,7 +99,7 @@ describe('executePoll', () => {
     expect(next.nextRunAt).toBe('2026-09-15T12:01:00.000Z');
     expect(next.lastRun).toMatchObject({ exitCode: 0, eventsEmitted: 2 });
     expect(next.lastRun?.stdoutTail).toContain('"b"');
-  });
+  }, 30_000);
 
   test('runs with PATH plus the stored env only', async () => {
     const path = script('env.sh', 'echo "{\\"id\\":\\"$TOKEN\\",\\"home\\":\\"$HOME\\"}"');
@@ -108,7 +109,7 @@ describe('executePoll', () => {
       return true;
     });
     expect(payload).toEqual({ id: 't1', home: '' });
-  });
+  }, 30_000);
 
   test('non-zero exit backs off and emits nothing', async () => {
     const path = script('fail.sh', 'echo \'{"id":"a"}\'\nexit 3');
@@ -126,14 +127,14 @@ describe('executePoll', () => {
     expect(next.consecutiveFailures).toBe(2);
     expect(next.nextRunAt).toBe('2026-09-15T12:04:00.000Z');
     expect(next.lastRun).toMatchObject({ exitCode: 3, eventsEmitted: 0 });
-  });
+  }, 30_000);
 
   test('a non-JSON line is a failed run with the error recorded', async () => {
     const path = script('garbage.sh', 'echo nope');
     const next = await executePoll(config(path), async () => true);
     expect(next.consecutiveFailures).toBe(1);
     expect(next.lastRun?.error).toBeDefined();
-  });
+  }, 30_000);
 
   test('a command outside the allowlist never runs and does not back off (#1240)', async () => {
     const now = new Date('2026-09-15T12:00:00Z');
@@ -170,5 +171,5 @@ describe('executePoll', () => {
     const next = await executePoll(config(path), async () => true);
     expect(next.consecutiveFailures).toBe(1);
     expect(next.lastRun).toMatchObject({ exitCode: 1, eventsEmitted: 0, stdoutTail: '' });
-  });
+  }, 30_000);
 });

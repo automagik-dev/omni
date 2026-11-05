@@ -274,3 +274,21 @@ describe('CustomEventSchemas', () => {
     expect(eventRegistry.has('custom.lid-mapping.batch')).toBe(true);
   });
 });
+
+describe('typed connector event registry boundary', () => {
+  test('accepts legacy and concrete provider names; refuses incomplete names and NATS wildcards', () => {
+    const registry = new EventRegistry();
+    for (const type of ['connector.event', 'connector.gitlab.merge_request.merged', 'connector.gitlab.push']) {
+      expect(registry.validate(type, { project: { id: 1 } }).success).toBe(true);
+    }
+    for (const type of [
+      'connector.',
+      'connector.gitlab',
+      'connector.gitlab.*',
+      'connector.gitlab.>',
+      'connector.gitlab..push',
+    ]) {
+      expect(registry.validate(type, {}).success).toBe(false);
+    }
+  });
+});

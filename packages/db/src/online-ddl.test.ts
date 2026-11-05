@@ -11,13 +11,20 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { Database } from './client';
 import { BLOCKING_INDEX_OVERRIDE_ENV_VAR, assertOnlineDdlPreflight } from './migrate';
-import { ONLINE_DDL_COMMAND, applyOnlineTenantDdl, checkOnlineDdlPreflight, onlineIndexStatements } from './online-ddl';
+import {
+  ONLINE_DDL_COMMAND,
+  applyOnlineTenantDdl,
+  checkOnlineDdlPreflight,
+  onlineDdlPreflightMessage,
+  onlineIndexStatements,
+} from './online-ddl';
+import { pairedAgentColumnStatements, pairedAgentIndexStatements } from './paired-agent-online-ddl';
 import { addColumnStatements, allIndexStatements } from './tenancy-ownership';
 
 const dialect = new PgDialect();
@@ -42,11 +49,15 @@ function stubDb(handler: (text: string) => Rows = () => []): { db: Database; exe
   return { db: db as unknown as Database, executed };
 }
 
-const HIGH_VOLUME_INDEXES = allIndexStatements()
-  .filter((s) => s.volume === 'high')
-  .map((s) => s.statement);
+const INDEX_PLAN = [
+  ...allIndexStatements(),
+  ...pairedAgentIndexStatements.map((statement) => ({ statement, volume: statement.volume })),
+];
+const COLUMN_PLAN = [...addColumnStatements(), ...pairedAgentColumnStatements];
 
-const ALL_INDEX_NAMES = allIndexStatements().map((s) => s.statement.name);
+const HIGH_VOLUME_INDEXES = INDEX_PLAN.filter((s) => s.volume === 'high').map((s) => s.statement);
+
+const ALL_INDEX_NAMES = INDEX_PLAN.map((s) => s.statement.name);
 
 /** Answers the preflight's two catalog queries. */
 function preflightHandler(options: {
@@ -80,7 +91,7 @@ describe('applyOnlineTenantDdl', () => {
     const { db, executed } = stubDb(preflightHandler({ usableIndexes: [], estimates: {} }));
     const report = await applyOnlineTenantDdl(db);
 
-    for (const statement of addColumnStatements()) expect(executed).toContain(statement);
+    for (const statement of COLUMN_PLAN) expect(executed).toContain(statement);
     expect(report.built).toEqual(ALL_INDEX_NAMES);
     expect(report.repaired).toEqual([]);
     // A blocking build inside this phase would defeat its entire purpose.
@@ -104,7 +115,7 @@ describe('applyOnlineTenantDdl', () => {
     const kinds: string[] = [];
     const { db } = stubDb();
     await applyOnlineTenantDdl(db, (step) => kinds.push(step.kind));
-    expect(kinds.filter((k) => k === 'column').length).toBe(addColumnStatements().length);
+    expect(kinds.filter((k) => k === 'column').length).toBe(COLUMN_PLAN.length);
     expect(kinds.filter((k) => k === 'index').length).toBe(ALL_INDEX_NAMES.length);
   });
 });
@@ -198,5 +209,62 @@ describe('db:online-ddl is a real command', () => {
     const generator = readFileSync(join(here, '..', 'scripts', 'generate-tenant-ownership-sql.ts'), 'utf-8');
     expect(generator).toContain('db:online-ddl');
     expect(ONLINE_DDL_COMMAND).toContain('db:online-ddl');
+  });
+});
+
+describe('paired-agent journal preparation contract', () => {
+  test('all four journal indexes are high volume and match the committed migration verbatim', () => {
+    const drizzle = join(here, '..', 'drizzle');
+    const files = readdirSync(drizzle).filter((name) => name.endsWith('_paired_agent_consumers.sql'));
+    expect(files).toHaveLength(1);
+    const file = files[0];
+    if (!file) throw new Error('paired-agent migration missing');
+    const migration = readFileSync(join(drizzle, file), 'utf-8');
+    expect(pairedAgentIndexStatements.map((index) => index.name)).toEqual([
+      'omni_events_instance_type_seq_idx',
+      'omni_events_source_type_seq_idx',
+      'omni_events_agent_type_seq_idx',
+      'omni_events_producing_key_idx',
+    ]);
+    for (const index of pairedAgentIndexStatements) {
+      expect(index.volume).toBe('high');
+      expect(index.table).toBe('omni_events');
+      expect(index.concurrent).toContain('CREATE INDEX CONCURRENTLY IF NOT EXISTS');
+      expect(migration).toContain(index.plain);
+      expect(onlineIndexStatements()).toContainEqual({
+        name: index.name,
+        table: index.table,
+        statement: index.concurrent,
+      });
+    }
+    for (const column of pairedAgentColumnStatements) expect(migration).toContain(column);
+    expect(migration).not.toContain('CONCURRENTLY');
+    expect(migration).toContain('0043/0044/0052 precedent');
+    expect(migration).toContain('docs/deployment/paired-agent-journal-indexes.md');
+  });
+
+  test('message names every pending index, the planner estimate and the candidate runbook', () => {
+    const message = onlineDdlPreflightMessage({
+      blocked: true,
+      threshold: 1_000_000,
+      blockers: [
+        {
+          table: 'omni_events',
+          estimatedRows: 1_000_000,
+          missingIndexes: pairedAgentIndexStatements.map((i) => i.name),
+        },
+        { table: 'messages', estimatedRows: 2_000_000, missingIndexes: ['messages_tenant_idx'] },
+      ],
+    });
+    for (const index of pairedAgentIndexStatements) expect(message).toContain(index.name);
+    expect(message).toContain('messages_tenant_idx');
+    expect(message).toContain('planner estimates');
+    expect(message).toContain('docs/deployment/paired-agent-journal-indexes.md');
+    expect(message).toContain('candidate checkout');
+    expect(message).toContain('packages/db');
+    expect(message).toContain(ONLINE_DDL_COMMAND);
+    expect(message).toContain('Operator-only');
+    expect(message).toContain('OMNI_ALLOW_BLOCKING_INDEX_BUILD=on');
+    expect(message).not.toContain('migration 0041 in-band');
   });
 });

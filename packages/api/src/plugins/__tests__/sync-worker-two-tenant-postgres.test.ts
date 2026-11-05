@@ -29,7 +29,8 @@ import {
   createDbHandle,
   omniGroups,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { scopedHandle } from '../../tenancy/tenant-scope';
 import { runInWorkerTenantScope } from '../../tenancy/worker-tenant-context';
@@ -73,16 +74,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 postgresDescribe('two-tenant sync-worker containment (real PostgreSQL)', () => {
   const dbName = `omni_g5_sync_${crypto.randomUUID().replaceAll('-', '')}`;
   const passwords = { ddl: password(), runtime: password(), authPlane: password() };
@@ -106,7 +97,7 @@ postgresDescribe('two-tenant sync-worker containment (real PostgreSQL)', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -144,12 +135,16 @@ postgresDescribe('two-tenant sync-worker containment (real PostgreSQL)', () => {
     // access (the un-converted state) would take the OTHER, so the pre-G5
     // failure surfaces as an RLS rejection rather than a single-connection
     // deadlock — a fast, deterministic RED.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 2);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      2,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
   }, 180_000);
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('upsertSyncedGroup writes a group only under its worker tenant; the other tenant cannot see it', async () => {

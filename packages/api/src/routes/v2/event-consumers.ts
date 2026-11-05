@@ -13,14 +13,17 @@
  * — same invariant as eventSchemasRoutes (#959).
  *
  * Every handler passes the caller's key (id + instance restriction, read
- * the same way as the /events routes) to the service. It only matters for
- * consumers created with `scoped: true`; unscoped consumers ignore it.
+ * the same way as the /events routes) to the service. Restricted keys need a
+ * scoped consumer to pull, stream, ack or delete; scoped streams apply their instance filter.
+ * A key with events:consume but not events:write reaches only the consumers it created.
+ * Tenant ownership always applies.
  */
 
 import { zValidator } from '@hono/zod-validator';
-import { createLogger } from '@omni/core';
+import { NotFoundError, ValidationError, createLogger } from '@omni/core';
 import { type Context, Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
+import { isAdminTierKey, resolveKeyAgent } from '../../lib/key-agent';
 import {
   AckConsumerSchema,
   CreateConsumerSchema,
@@ -28,6 +31,7 @@ import {
   StreamConsumerHeaderSchema,
   StreamConsumerQuerySchema,
 } from '../../schemas/openapi/event-consumers';
+import { ApiKeyService } from '../../services/api-keys';
 import {
   DEFAULT_STREAM_HEARTBEAT_MS,
   DEFAULT_STREAM_POLL_FALLBACK_MS,
@@ -42,18 +46,38 @@ import {
   runConsumerStream,
   wakePrefixesFor,
 } from '../../services/event-consumer-stream';
-import type { ConsumerCaller } from '../../services/event-consumers';
+import { type ConsumerCaller, resolveConsumerAgentId } from '../../services/event-consumers';
 import { currentTenantScope, runDetachedFromTenantScope } from '../../tenancy/tenant-scope';
-import type { AppVariables } from '../../types';
+import type { ApiKeyData, AppVariables } from '../../types';
 
 const log = createLogger('event-consumer-stream');
 
 const eventConsumersRoutes = new Hono<{ Variables: AppVariables }>();
 
-/** The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule). */
-function consumerCaller(c: Context<{ Variables: AppVariables }>): ConsumerCaller {
+/** A key with events:consume but not events:write is `ownOnly`: it reaches only its own consumers. */
+export function isOwnOnlyConsumerKey(apiKey: ApiKeyData | undefined): apiKey is ApiKeyData {
+  return (
+    !!apiKey &&
+    ApiKeyService.scopeAllows(apiKey.scopes, 'events:consume') &&
+    !ApiKeyService.scopeAllows(apiKey.scopes, 'events:write')
+  );
+}
+
+/**
+ * The request's key as the consumer access rules see it; no key = unrestricted (events.ts rule).
+ * Also used by GET /events/types, which lists consumer names (#1461).
+ */
+export async function consumerCaller(c: Context<{ Variables: AppVariables }>): Promise<ConsumerCaller> {
   const apiKey = c.get('apiKey');
-  return { keyId: apiKey?.id ?? null, instanceIds: apiKey?.instanceIds ?? null };
+  const principal = apiKey ? await resolveKeyAgent(c.get('services').db, apiKey.id) : undefined;
+  const ownOnly = isOwnOnlyConsumerKey(apiKey);
+  return {
+    keyId: apiKey?.id ?? null,
+    instanceIds: apiKey?.instanceIds ?? null,
+    tenantId: c.get('authContext')?.tenantId ?? null,
+    ...(principal ? { principal, admin: principal.kind !== 'unresolved' && !!apiKey && isAdminTierKey(apiKey) } : {}),
+    ...(ownOnly ? { ownOnly } : {}),
+  };
 }
 
 /**
@@ -61,7 +85,7 @@ function consumerCaller(c: Context<{ Variables: AppVariables }>): ConsumerCaller
  */
 eventConsumersRoutes.get('/events/consumers', async (c) => {
   const services = c.get('services');
-  const items = await services.eventConsumers.list(consumerCaller(c));
+  const items = await services.eventConsumers.list(await consumerCaller(c));
   return c.json({ items });
 });
 
@@ -71,7 +95,17 @@ eventConsumersRoutes.get('/events/consumers', async (c) => {
 eventConsumersRoutes.post('/events/consumers', zValidator('json', CreateConsumerSchema), async (c) => {
   const input = c.req.valid('json');
   const services = c.get('services');
-  const data = await services.eventConsumers.create(input, consumerCaller(c));
+  const caller = await consumerCaller(c);
+  const agentId = resolveConsumerAgentId(input, caller);
+  if (agentId !== null) {
+    try {
+      await services.agents.getById(agentId, { tenantId: caller.tenantId ?? null });
+    } catch (error) {
+      if (error instanceof NotFoundError) throw new ValidationError('agentId must name an existing agent');
+      throw error;
+    }
+  }
+  const data = await services.eventConsumers.create(input, caller);
   return c.json({ data }, 201);
 });
 
@@ -81,7 +115,7 @@ eventConsumersRoutes.post('/events/consumers', zValidator('json', CreateConsumer
 eventConsumersRoutes.get('/events/consumers/:name', async (c) => {
   const name = c.req.param('name');
   const services = c.get('services');
-  const data = await services.eventConsumers.inspect(name, consumerCaller(c));
+  const data = await services.eventConsumers.inspect(name, await consumerCaller(c));
   return c.json({ data });
 });
 
@@ -91,7 +125,7 @@ eventConsumersRoutes.get('/events/consumers/:name', async (c) => {
 eventConsumersRoutes.delete('/events/consumers/:name', async (c) => {
   const name = c.req.param('name');
   const services = c.get('services');
-  await services.eventConsumers.delete(name, consumerCaller(c));
+  await services.eventConsumers.delete(name, await consumerCaller(c));
   return c.json({ success: true });
 });
 
@@ -106,7 +140,7 @@ eventConsumersRoutes.post('/events/consumers/:name/pull', zValidator('query', Pu
   const name = c.req.param('name');
   const { limit, waitMs, leaseMs } = c.req.valid('query');
   const services = c.get('services');
-  const result = await services.eventConsumers.pull(name, { limit, waitMs, leaseMs }, consumerCaller(c));
+  const result = await services.eventConsumers.pull(name, { limit, waitMs, leaseMs }, await consumerCaller(c));
   return c.json(result);
 });
 
@@ -117,7 +151,7 @@ eventConsumersRoutes.post('/events/consumers/:name/ack', zValidator('json', AckC
   const name = c.req.param('name');
   const { cursor, leaseId } = c.req.valid('json');
   const services = c.get('services');
-  const data = await services.eventConsumers.ack(name, cursor ?? 0, leaseId, consumerCaller(c));
+  const data = await services.eventConsumers.ack(name, cursor ?? 0, leaseId, await consumerCaller(c));
   return c.json({ data });
 });
 
@@ -127,8 +161,8 @@ eventConsumersRoutes.post('/events/consumers/:name/ack', zValidator('json', AckC
  * Read-only w.r.t. the consumer: the position lives in memory, the stored
  * cursor is never written and no lease is taken (shared consumers are
  * refused). Clients keep acking with POST /events/consumers/:name/ack.
- * events:write like pull; an instance-restricted key only streams its own
- * instances' rows (the GET /events rule). Each stream lives at most
+ * events:consume like pull; an instance-restricted key needs a scoped consumer
+ * and only streams its own instances' rows. Each stream lives at most
  * EVENT_STREAM_MAX_LIFETIME_MS (the revocation ceiling), then asks the client
  * to reconnect, which re-authenticates.
  */
@@ -141,9 +175,9 @@ eventConsumersRoutes.get(
     const { after } = c.req.valid('query');
     const lastEventId = c.req.valid('header')['last-event-id'];
     const services = c.get('services');
-    const caller = consumerCaller(c);
-    // 404 (missing, or scoped and not visible to this key) / 400 (shared)
-    // while a JSON error can still be returned; resolved exactly as pull.
+    const caller = await consumerCaller(c);
+    // 403 (restricted key on unscoped) / 404 (missing or invisible) / 400 (shared)
+    // while a JSON error can still be returned. Streams never mutate the cursor.
     const consumer = await services.eventConsumers.getStreamable(name, caller);
     const start = resolveStreamStart({
       lastEventId: lastEventId === undefined ? undefined : Number(lastEventId),

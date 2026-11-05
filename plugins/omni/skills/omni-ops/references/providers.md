@@ -1,6 +1,10 @@
 # Providers — Agent Backends
 
-Providers define how Omni reaches an agent backend. Schemas: `nats-genie`, `claude-code`, `a2a`, `ag-ui`, `agno`, `openclaw`, `webhook`.
+Providers define how Omni reaches an agent backend. Schemas: `nats-genie`, `claude-code`, `a2a`, `ag-ui`, `agno`, `webhook`.
+
+## One-step agent setup
+
+`omni setup agent --help` wires provider + agent + instance binding and checks health. Inspect existing records first. A healthy provider does not prove a message was delivered. Use `omni agents manifest --help` for an agent's declared `accepts`/`publishes`; it is separate from provider connectivity. `omni a2a --help` covers A2A discovery/invocation.
 
 ## Commands
 
@@ -24,10 +28,9 @@ omni providers create --name a2a-svc --schema a2a --base-url https://a2a.example
 omni providers create --name agui-svc --schema ag-ui --base-url https://agui.example.com --api-key <key> --stream --json
 omni providers create --name agno-prod --schema agno --base-url https://app.agno.com/v1/playground/agents --api-key <key> --json
 omni providers create --name my-webhook --schema webhook --base-url https://api.example.com/chat --api-key <key> --json
-omni providers create --name oc-gw --schema openclaw --base-url wss://gw.example --default-agent-id <agentId> --json
 ```
 
-Schema-specific flags: `--team-name` supports `{chat_id}`, `{thread_id}`, `{sender_id}` (nats-genie); `--model` and `--system-prompt` (claude-code); `--default-agent-id` is required for openclaw; `--base-url` takes `ws://`/`wss://` for openclaw.
+Schema-specific flags: `--team-name` supports `{chat_id}`, `{thread_id}`, `{sender_id}` (nats-genie); `--model` and `--system-prompt` (claude-code).
 
 ## Agno-backed discovery
 
@@ -36,14 +39,6 @@ omni providers agents <id>       # agents exposed by an Agno provider
 omni providers teams <id>
 omni providers workflows <id>
 ```
-
-## Setup wizards
-
-```bash
-omni providers setup openclaw --non-interactive --gateway-url wss://gw.example --gateway-token <tok> --agent-id <agentId>
-```
-
-`omni providers setup genie` is DEPRECATED — use `omni connect <instance-id> <agent-name>` instead (canonical flow in the omni-setup skill).
 
 ## Pattern
 

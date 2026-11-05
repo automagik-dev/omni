@@ -19,6 +19,7 @@ import { batchJobsRoutes } from './batch-jobs';
 import { harnessRoutes } from './channel-harness';
 import { channelsRoutes } from './channels';
 import { chatsRoutes } from './chats';
+import { connectorRoutes } from './connectors';
 import { contextRoutes } from './context';
 import { conversationsRoutes } from './conversations';
 import { deadLettersRoutes } from './dead-letters';
@@ -35,6 +36,7 @@ import { logsRoutes } from './logs';
 import { mediaRoutes } from './media';
 import { messagesRoutes } from './messages';
 import { metricsRoutes } from './metrics';
+import { ownerRoutes } from './owner';
 import { payloadsRoutes } from './payloads';
 import { personsRoutes } from './persons';
 import { processedEventsRoutes } from './processed-events';
@@ -42,6 +44,7 @@ import { providersRoutes } from './providers';
 import { scheduledMessagesRoutes } from './scheduled-messages';
 import { settingsRoutes } from './settings';
 import { slackRoutes } from './slack';
+import { systemRoutes } from './system';
 import { templatesRoutes } from './templates';
 import { trustRoutes } from './trust';
 import { turnsRoutes } from './turns';
@@ -71,7 +74,10 @@ v2Routes.route('/journeys', journeysRoutes); // Journey tracing endpoints
 v2Routes.route('/persons', personsRoutes);
 v2Routes.route('/access', accessRoutes);
 v2Routes.route('/settings', settingsRoutes);
+v2Routes.route('/owner', ownerRoutes); // The operator's way in: omni claim, omni approve, omni connect
+v2Routes.route('/system', systemRoutes); // This Omni's version and the updates its owner confirms
 v2Routes.route('/providers', providersRoutes);
+v2Routes.route('/connectors', connectorRoutes); // Integration accounts — must be above the root /:id catch-all (issue #496)
 v2Routes.route('/dead-letters', deadLettersRoutes);
 v2Routes.route('/event-ops', eventOpsRoutes);
 v2Routes.route('/processed-events', processedEventsRoutes); // Placeholder until #411 lands - must be before root /:id catch-all (issue #496)

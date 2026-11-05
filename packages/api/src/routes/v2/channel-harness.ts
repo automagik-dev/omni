@@ -87,7 +87,7 @@ async function getHarnessPlugin(
   const instance = await services.instances.getById(instanceId);
 
   if (instance.channel !== 'harness') {
-    // VALIDATION (→ 400): CAPABILITY_NOT_SUPPORTED has no ERROR_STATUS_MAP entry and would 500.
+    // VALIDATION (→ 400): the instance is the wrong kind for these endpoints.
     throw new OmniError({
       code: ERROR_CODES.VALIDATION,
       message: `Instance ${instanceId} is a ${instance.channel} instance; these endpoints are harness-only`,

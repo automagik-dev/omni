@@ -82,7 +82,10 @@ export const FlowMutationResponseSchema = z.object({
 });
 
 export const SendFlowRequestSchema = z.object({
-  to: z.string().min(1).openapi({ description: 'Recipient phone (E.164 or digits)' }),
+  to: z.string().min(1).openapi({
+    description:
+      'whatsapp-business: recipient phone (E.164 or digits). asc-flow: the cod_atendimento of the open conversation (digits), not a phone',
+  }),
   flowId: z.string().optional().openapi({ description: 'Meta flow id (exactly one of flowId/flowName)' }),
   flowName: z.string().optional(),
   cta: z.string().min(1).max(30).openapi({ description: 'Button label that opens the flow' }),
@@ -284,7 +287,7 @@ export function registerWhatsappFlowsSchemas(registry: OpenAPIRegistry): void {
     tags: ['WhatsApp Flows'],
     summary: 'Send flow message',
     description:
-      "Send an interactive flow message through the channel plugin. Returns the flowToken echoed back on the completion webhook (nfm_reply). Use flowAction 'data_exchange' for endpoint-backed flows.",
+      "Send an interactive flow message through the channel plugin. Returns the flowToken echoed back on the completion webhook (nfm_reply). Use flowAction 'data_exchange' for endpoint-backed flows. On an asc-flow instance the flow goes out as msg_interativa_parametros.tipo 5 by flowId only, passed through as fluxo_id; screen, flowAction and draft are not carried, and the completion is not correlated by flowToken.",
     request: { params: idParam, body: { content: { 'application/json': { schema: SendFlowRequestSchema } } } },
     responses: {
       201: {

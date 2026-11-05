@@ -83,6 +83,7 @@ const EGRESS_SCAN_ROOTS = [
   'packages/channel-twilio-whatsapp/src',
   'packages/channel-whatsapp/src',
   'packages/channel-sdk/src',
+  'packages/connector-clickup/src',
 ] as const;
 
 function isTestFile(path: string): boolean {
@@ -276,14 +277,6 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
       'tenant-configured `config.baseUrl`, and one path fetches a request-supplied `file.url`. Pending broker routing.',
   },
   {
-    file: 'packages/core/src/providers/openclaw/client.ts',
-    class: 'pending-egress-broker',
-    sites: 1,
-    justification:
-      'ADR-0009 tenant-controlled egress: a `new WebSocket(config.url)` to the tenant-configured Openclaw endpoint. ' +
-      'A long-lived socket rather than a fetch; broker WebSocket support is pending.',
-  },
-  {
     file: 'packages/api/src/services/providers.ts',
     class: 'pending-egress-broker',
     sites: 1,
@@ -456,5 +449,13 @@ export const REGISTERED_EGRESS: readonly RegisteredEgress[] = [
     sites: 1,
     justification:
       'The Bun server INBOUND request handler (`fetch(req, server)`), not an outbound call. No tenant-influenced destination.',
+  },
+  {
+    file: 'packages/api/src/login/pages.ts',
+    class: 'infra',
+    sites: 1,
+    justification:
+      'Browser script inside the login pages (`fetch(path, …)` in a template string). It runs in the visitor’s ' +
+      'browser and calls only same-origin relative paths (/api/auth, /api/v2/login); the server makes no request.',
   },
 ];

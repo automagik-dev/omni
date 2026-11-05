@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 /**
- * Online DDL phase for the G2 additive ownership schema
+ * Online DDL phase for G2 ownership and paired-agents slice 2 journal indexes
  * (wish: omni-full-multitenancy, Group G2).
  *
  * This is the `db:online-ddl` command that migration 0041 and
  * `generate-tenant-ownership-sql.ts` tell the operator to run FIRST on a large
- * database. It adds the nullable `tenant_id` columns (catalog-only, instant) and
- * builds every G2 index with `CREATE INDEX CONCURRENTLY` — no long lock, and
+ * database. It adds nullable tenant/provenance columns (catalog-only) and
+ * builds every ownership and journal index with `CREATE INDEX CONCURRENTLY` — no long lock, and
  * resumable, because an INVALID index left by an interrupted build is dropped
  * and rebuilt rather than skipped forever by `IF NOT EXISTS`.
  *
@@ -17,9 +17,10 @@
  *            read: index builds against "whatever was in the environment" is
  *            not an accident worth enabling.
  *   --check  Report the preflight (which high-volume tables still need indexes,
- *            and how big they are) and exit without changing anything.
+ *            and estimated size) without changes. Exit 3 when blocked, 0 when clear.
+ *            Missing --url exits 2. See docs/deployment/paired-agent-journal-indexes.md.
  *
- * Afterwards run `bun run db:migrate`: 0041 finds every column and index present
+ * Afterwards run `bun run db:migrate`: the pending migrations find every column and index present
  * and only adds the `NOT VALID` constraints and triggers, taking no long lock.
  * On a fresh or small install this phase is unnecessary — the migration alone
  * creates everything and this runner is then a no-op.
@@ -62,7 +63,7 @@ try {
     );
   }
 
-  if (flag('check')) process.exit(0);
+  if (flag('check')) process.exit(preflight.blocked ? 3 : 0);
 
   const report = await applyOnlineTenantDdl(handle.db, (step) => {
     process.stdout.write(`  ${step.kind}: ${step.name}\n`);

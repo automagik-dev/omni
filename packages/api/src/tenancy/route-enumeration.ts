@@ -19,7 +19,7 @@
  * told apart by arity: Hono middleware is `(c, next)` and a terminal handler is
  * `(c)`. Only `ALL`-method entries need the test — every other method is a real
  * route — so a two-argument `ALL` entry is skipped and a one-argument one (the
- * A2A-disabled 503 stub, the SPA fallback) is kept and must be declared.
+ * A2A-disabled 503 stub) is kept and must be declared.
  */
 
 import { createApp } from '../app';
@@ -27,17 +27,12 @@ import type { RouteKey } from './route-ownership';
 
 /**
  * Flag combinations that change the registered route set.
- *
- * OMNI_FORCE_UI_ROUTES is pinned on in every combination: the UI static routes
- * normally register only when apps/ui/dist exists on disk, and the enumerated
- * surface must be the union -- independent of whether the UI bundle happens to
- * be built in this checkout (CI's typecheck builds it; a bare checkout has not).
  */
 const FLAG_COMBINATIONS: readonly Record<string, string>[] = [
-  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: 'true', OMNI_FORCE_UI_ROUTES: 'true' },
-  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: '', OMNI_FORCE_UI_ROUTES: 'true' },
-  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: 'true', OMNI_FORCE_UI_ROUTES: 'true' },
-  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: '', OMNI_FORCE_UI_ROUTES: 'true' },
+  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: 'true' },
+  { A2A_ENABLED: 'true', OMNI_MULTITENANCY_ENABLED: '' },
+  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: 'true' },
+  { A2A_ENABLED: '', OMNI_MULTITENANCY_ENABLED: '' },
 ];
 
 /**
@@ -54,7 +49,6 @@ export function enumerateRegisteredRoutes(
   const restore = {
     A2A_ENABLED: process.env.A2A_ENABLED,
     OMNI_MULTITENANCY_ENABLED: process.env.OMNI_MULTITENANCY_ENABLED,
-    OMNI_FORCE_UI_ROUTES: process.env.OMNI_FORCE_UI_ROUTES,
   };
   try {
     for (const combo of FLAG_COMBINATIONS) {

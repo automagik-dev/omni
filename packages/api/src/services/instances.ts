@@ -172,6 +172,11 @@ export class InstanceService {
     private eventBus: EventBus | null,
   ) {}
 
+  /** Bind ownership reads to the connection already held by a caller's lock. */
+  withDatabase(db: Database): InstanceService {
+    return new InstanceService(db, this.eventBus);
+  }
+
   /**
    * List instances with filtering
    */

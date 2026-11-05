@@ -5,7 +5,7 @@
  * THE COLLISION
  * -------------
  * Assigning an agent to an instance auto-provisions a scoped API key addressed
- * by NAME, and finds it again with `ApiKeyService.findByName` — a name-only
+ * by NAME, and finds it again with `ApiKeyService.findAgentKeyByName` — an active system-key
  * predicate over `api_keys`, a legacy table with no `tenant_id` column and no
  * RLS. The name was `agent:<agentName>`, a single global namespace.
  *
@@ -29,6 +29,7 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
+import { agentRoutes, agents, instances } from '@omni/db';
 import { Hono } from 'hono';
 import { type TenantAuthContext, freezeContext } from '../../../tenancy/auth-context';
 import type { AppVariables } from '../../../types';
@@ -48,6 +49,7 @@ interface ExistingKey {
   id: string;
   name: string;
   instanceIds: string[] | null;
+  status?: 'active' | 'revoked';
 }
 
 interface Harness {
@@ -56,6 +58,7 @@ interface Harness {
   lookups: string[];
   created: { name: string; instanceIds: string[] }[];
   updated: { id: string; instanceIds: string[] | null }[];
+  revoked: string[];
 }
 
 function tenantContext(tenantId: string): TenantAuthContext {
@@ -89,28 +92,99 @@ function harness(options: {
   authContext?: TenantAuthContext;
   existingKeys?: ExistingKey[];
   agentName?: string;
+  agentNames?: Record<string, string>;
+  agentAssignments?: [string, string][];
+  instanceTenantId?: string | null;
+  instanceTenants?: Record<string, string | null>;
+  revokeFails?: boolean;
+  routedAgents?: Record<string, string[]>;
 }): Harness {
   const keys: ExistingKey[] = options.existingKeys ?? [];
   const lookups: string[] = [];
   const created: { name: string; instanceIds: string[] }[] = [];
   const updated: { id: string; instanceIds: string[] | null }[] = [];
   const agentName = options.agentName ?? SHARED_AGENT_NAME;
+  const assignments = new Map(options.agentAssignments);
+  const revoked: string[] = [];
+  const tenantId =
+    options.instanceTenantId !== undefined ? options.instanceTenantId : (options.authContext?.tenantId ?? null);
+
+  const knownInstances = new Set([
+    ...keys.flatMap((key) => key.instanceIds ?? []),
+    ...assignments.keys(),
+    ...Object.keys(options.routedAgents ?? {}),
+  ]);
+  const graphDb = {
+    select: () => ({
+      from: async (table: unknown) => {
+        if (table === instances)
+          return [...knownInstances].map((id) => ({
+            id,
+            agentId: assignments.get(id) ?? null,
+            tenantId: options.instanceTenants?.[id] ?? tenantId,
+          }));
+        if (table === agents)
+          return [...new Set([...assignments.values(), ...Object.values(options.routedAgents ?? {}).flat()])].map(
+            (id) => ({ id, name: options.agentNames?.[id] ?? agentName, tenantId, metadata: null, isActive: true }),
+          );
+        if (table === agentRoutes)
+          return Object.entries(options.routedAgents ?? {}).flatMap(([instanceId, ids]) =>
+            ids.map((agentId) => ({ instanceId, agentId })),
+          );
+        throw new Error('unexpected graph table');
+      },
+    }),
+  };
 
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     if (options.authContext) c.set('authContext', options.authContext);
     c.set('services', {
+      routes: {
+        withDatabase() {
+          return this;
+        },
+        list: mock(async (id: string) => (options.routedAgents?.[id] ?? []).map((agentId) => ({ agentId }))),
+      },
       instances: {
-        getById: mock(async (id: string) => ({ id, agentId: null, agentReplyFilter: null })),
-        update: mock(async (id: string) => ({ id, channel: 'whatsapp-baileys' })),
+        withDatabase() {
+          return this;
+        },
+        create: mock(async (data: { agentId?: string }) => {
+          knownInstances.add(INSTANCE_B);
+          if (data.agentId) assignments.set(INSTANCE_B, data.agentId);
+          return { ...data, id: INSTANCE_B, tenantId };
+        }),
+        getById: mock(async (id: string) => ({
+          id,
+          agentId: assignments.get(id) ?? null,
+          agentReplyFilter: null,
+          tenantId: options.instanceTenants?.[id] ?? tenantId,
+        })),
+        update: mock(async (id: string, patch: { agentId?: string | null }) => {
+          knownInstances.add(id);
+          if (patch.agentId === null) assignments.delete(id);
+          else if (patch.agentId !== undefined) assignments.set(id, patch.agentId);
+          return { id, channel: 'whatsapp-baileys', tenantId };
+        }),
       },
       agents: {
-        getById: mock(async (id: string) => ({ id, name: agentName, metadata: null })),
+        withDatabase() {
+          return this;
+        },
+        getById: mock(async (id: string) => ({ id, name: options.agentNames?.[id] ?? agentName, metadata: null })),
       },
       apiKeys: {
-        findByName: mock(async (name: string) => {
+        async withAgentKeyLock(_ids: string[], fn: (keys: unknown, db: unknown) => Promise<unknown>) {
+          return fn(this, graphDb);
+        },
+        findAgentKeyByName: mock(async (name: string) => {
           lookups.push(name);
-          return keys.find((k) => k.name === name) ?? null;
+          return keys.find((k) => k.name === name && k.status !== 'revoked') ?? null;
+        }),
+        findAgentKeysByNames: mock(async (names: string[]) => {
+          lookups.push(...names);
+          return keys.filter((key) => names.includes(key.name) && key.status !== 'revoked');
         }),
         update: mock(async (id: string, patch: { instanceIds: string[] | null }) => {
           updated.push({ id, instanceIds: patch.instanceIds });
@@ -118,10 +192,18 @@ function harness(options: {
           if (row) row.instanceIds = patch.instanceIds;
           return row;
         }),
+        revoke: mock(async (id: string) => {
+          if (options.revokeFails) throw new Error('revoke failed');
+          revoked.push(id);
+          const row = keys.find((key) => key.id === id);
+          if (row) row.status = 'revoked';
+          return row ?? null;
+        }),
         create: mock(async (opts: { name: string; instanceIds: string[] }) => {
           created.push({ name: opts.name, instanceIds: opts.instanceIds });
-          keys.push({ id: `k_${keys.length + 1}`, name: opts.name, instanceIds: opts.instanceIds });
-          return { key: { id: `k_${keys.length}` } };
+          const key = { id: `k_${keys.length + 1}`, name: opts.name, instanceIds: opts.instanceIds };
+          keys.push(key);
+          return { key };
         }),
       },
     } as never);
@@ -130,10 +212,10 @@ function harness(options: {
   });
   app.route('/instances', instancesRoutes);
 
-  return { app, keys, lookups, created, updated };
+  return { app, keys, lookups, created, updated, revoked };
 }
 
-function assignAgent(h: Harness, instanceId: string, agentId: string): Promise<Response> {
+function assignAgent(h: Harness, instanceId: string, agentId: string | null): Promise<Response> {
   return h.app.request(`/instances/${instanceId}`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
@@ -142,6 +224,24 @@ function assignAgent(h: Harness, instanceId: string, agentId: string): Promise<R
 }
 
 describe('agent key provisioning is tenant-scoped', () => {
+  test('unbinding retains the key while a route on the instance still names the old agent', async () => {
+    const key: ExistingKey = {
+      id: 'routed',
+      name: `agent:${TENANT_A}:${SHARED_AGENT_NAME}`,
+      instanceIds: [INSTANCE_A],
+    };
+    const h = harness({
+      authContext: tenantContext(TENANT_A),
+      existingKeys: [key],
+      agentAssignments: [[INSTANCE_A, AGENT_A]],
+      routedAgents: { [INSTANCE_A]: [AGENT_A] },
+    });
+    expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+    expect(h.revoked).toEqual([]);
+    expect(h.updated).toEqual([]);
+    expect(key.instanceIds).toEqual([INSTANCE_A]);
+  });
+
   test("tenant B naming an agent like tenant A's does not touch tenant A's key", async () => {
     // Tenant A is already provisioned, under A's qualified name.
     const aKey: ExistingKey = {
@@ -155,7 +255,7 @@ describe('agent key provisioning is tenant-scoped', () => {
     expect(res.status).toBe(200);
 
     // B looked up its OWN name and found nothing, so it minted its own key.
-    expect(h.lookups).toEqual([`agent:${TENANT_B}:${SHARED_AGENT_NAME}`]);
+    expect(h.lookups).toContain(`agent:${TENANT_B}:${SHARED_AGENT_NAME}`);
     expect(h.created).toEqual([{ name: `agent:${TENANT_B}:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
 
     // The bug, stated as an assertion: A's key is untouched and never acquired
@@ -168,11 +268,16 @@ describe('agent key provisioning is tenant-scoped', () => {
     // The pre-qualification world: A's key still carries the legacy bare name.
     // B must not find it — a legacy row is not B's to extend.
     const legacyKey: ExistingKey = { id: 'k_legacy', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
-    const h = harness({ authContext: tenantContext(TENANT_B), existingKeys: [legacyKey] });
+    const h = harness({
+      authContext: tenantContext(TENANT_B),
+      existingKeys: [legacyKey],
+      instanceTenants: { [INSTANCE_A]: TENANT_A },
+    });
 
     await assignAgent(h, INSTANCE_B, AGENT_B);
 
-    expect(h.lookups).not.toContain(`agent:${SHARED_AGENT_NAME}`);
+    expect(h.updated).toEqual([]);
+    expect(h.revoked).toEqual([]);
     expect(legacyKey.instanceIds).toEqual([INSTANCE_A]);
     expect(h.created).toEqual([{ name: `agent:${TENANT_B}:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
   });
@@ -183,7 +288,11 @@ describe('agent key provisioning is tenant-scoped', () => {
       name: `agent:${TENANT_A}:${SHARED_AGENT_NAME}`,
       instanceIds: [INSTANCE_A],
     };
-    const h = harness({ authContext: tenantContext(TENANT_A), existingKeys: [ownKey] });
+    const h = harness({
+      authContext: tenantContext(TENANT_A),
+      existingKeys: [ownKey],
+      agentAssignments: [[INSTANCE_A, AGENT_A]],
+    });
 
     const second = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
     await assignAgent(h, second, AGENT_A);
@@ -202,15 +311,153 @@ describe('legacy invariance', () => {
     expect(h.created).toEqual([{ name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] }]);
   });
 
+  for (const [label, agentId, tenantId] of [
+    ['foreign tenant', AGENT_A, TENANT_A],
+    ['other agent', AGENT_B, null],
+    ['unbound', null, null],
+  ] as const) {
+    test(`no-tenant PATCH does not extend a bare key with ${label} grants`, async () => {
+      const existing: ExistingKey = { id: 'ambiguous', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
+      const h = harness({
+        existingKeys: [existing],
+        instanceTenants: { [INSTANCE_A]: tenantId },
+        agentAssignments: agentId ? [[INSTANCE_A, agentId]] : [],
+      });
+      expect((await assignAgent(h, INSTANCE_B, AGENT_A)).status).toBe(200);
+      expect(h.updated).toEqual([]);
+      expect(existing.instanceIds).toEqual([INSTANCE_A]);
+      expect(h.revoked).toEqual(label === 'unbound' ? ['ambiguous'] : []);
+      expect(h.created).toEqual([{ name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_B] }]);
+    });
+  }
+
   test('a legacy request still finds and extends a pre-existing bare-named key', async () => {
     // The upgrade case: keys provisioned before this change must keep working
     // on a deployment that never turns multitenancy on.
     const existing: ExistingKey = { id: 'k_old', name: `agent:${SHARED_AGENT_NAME}`, instanceIds: [INSTANCE_A] };
-    const h = harness({ existingKeys: [existing] });
+    const h = harness({ existingKeys: [existing], agentAssignments: [[INSTANCE_A, AGENT_A]] });
 
     await assignAgent(h, INSTANCE_B, AGENT_A);
 
     expect(h.created).toEqual([]);
     expect(h.updated).toEqual([{ id: 'k_old', instanceIds: [INSTANCE_A, INSTANCE_B] }]);
   });
+});
+
+for (const [label, context, keyName] of [
+  ['legacy', undefined, `agent:${SHARED_AGENT_NAME}`],
+  ['tenant', tenantContext(TENANT_A), `agent:${TENANT_A}:${SHARED_AGENT_NAME}`],
+] as const) {
+  describe(`${label} agent key removal never widens authority`, () => {
+    test('POST with an agent provisions a new scoped key', async () => {
+      const h = harness({ authContext: context });
+      const res = await h.app.request('/instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'first', channel: 'whatsapp-baileys', agentId: AGENT_A }),
+      });
+      expect(res.status).toBe(201);
+      expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_B] }]);
+    });
+
+    test('POST binds a second instance before PATCH unbinds the first, preserving the second key grant', async () => {
+      const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
+      const h = harness({ authContext: context, existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]] });
+      const created = await h.app.request('/instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'second', channel: 'whatsapp-baileys', agentId: AGENT_A }),
+      });
+      expect(created.status).toBe(201);
+      expect(key.instanceIds).toEqual([INSTANCE_A, INSTANCE_B]);
+      expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+      expect(h.revoked).toEqual([]);
+      expect(key.instanceIds).toEqual([INSTANCE_B]);
+    });
+
+    test('unbinding the last instance revokes the key without writing null or an empty list', async () => {
+      const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
+      const h = harness({ authContext: context, existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]] });
+      expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+      expect(h.revoked).toEqual(['old']);
+      expect(h.updated).toEqual([]);
+      expect(key.instanceIds).toEqual([INSTANCE_A]);
+      expect(key.status).toBe('revoked');
+    });
+
+    test('reassignment removes only that instance from the old key and provisions the new agent', async () => {
+      const key: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A, INSTANCE_B] };
+      const h = harness({
+        authContext: context,
+        existingKeys: [key],
+        agentAssignments: [[INSTANCE_A, AGENT_A]],
+        agentNames: { [AGENT_B]: 'replacement' },
+      });
+      expect((await assignAgent(h, INSTANCE_A, AGENT_B)).status).toBe(200);
+      expect(h.revoked).toEqual([]);
+      expect(h.updated).toEqual([{ id: 'old', instanceIds: [INSTANCE_B] }]);
+      expect(h.created).toEqual([
+        { name: keyName.replace(SHARED_AGENT_NAME, 'replacement'), instanceIds: [INSTANCE_A] },
+      ]);
+    });
+
+    test('a later bind creates a fresh key and further binds extend that active key', async () => {
+      const old: ExistingKey = { id: 'old', name: keyName, instanceIds: [INSTANCE_A] };
+      const h = harness({ authContext: context, existingKeys: [old], agentAssignments: [[INSTANCE_A, AGENT_A]] });
+      expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+      expect((await assignAgent(h, INSTANCE_A, AGENT_A)).status).toBe(200);
+      expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_A] }]);
+      const fresh = h.keys.find((key) => key.id !== old.id);
+      if (!fresh) throw new Error('fresh key was not provisioned');
+      expect(fresh.id).not.toBe(old.id);
+      expect(old.status).toBe('revoked');
+      expect((await assignAgent(h, INSTANCE_B, AGENT_A)).status).toBe(200);
+      expect(h.created).toHaveLength(1);
+      expect(h.updated).toEqual([{ id: fresh.id, instanceIds: [INSTANCE_A, INSTANCE_B] }]);
+      expect(old.instanceIds).toEqual([INSTANCE_A]);
+    });
+  });
+}
+
+for (const context of [undefined, tenantContext(TENANT_B)]) {
+  test(`instance tenant controls bind and unbind naming for ${context ? 'foreign tenant' : 'legacy'} credentials`, async () => {
+    const keyName = `agent:${TENANT_A}:${SHARED_AGENT_NAME}`;
+    const h = harness({ authContext: context, instanceTenantId: TENANT_A });
+    expect((await assignAgent(h, INSTANCE_A, AGENT_A)).status).toBe(200);
+    expect(h.created).toEqual([{ name: keyName, instanceIds: [INSTANCE_A] }]);
+    expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+    expect(h.lookups).toEqual([keyName, `agent:${SHARED_AGENT_NAME}`, keyName, `agent:${SHARED_AGENT_NAME}`]);
+    expect(h.revoked).toEqual(['k_1']);
+  });
+}
+
+test('a failed revoke remains best effort and the PATCH returns 200', async () => {
+  const key: ExistingKey = {
+    id: 'old',
+    name: `agent:${SHARED_AGENT_NAME}`,
+    instanceIds: [INSTANCE_A],
+    status: 'active',
+  };
+  const h = harness({ existingKeys: [key], agentAssignments: [[INSTANCE_A, AGENT_A]], revokeFails: true });
+  expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+  expect(key.status).toBe('active');
+  expect(key.instanceIds).toEqual([INSTANCE_A]);
+});
+
+test('unbind removes the instance from every canonical and legacy system key that lists it', async () => {
+  const qualified = `agent:${TENANT_A}:${SHARED_AGENT_NAME}`;
+  const bare = `agent:${SHARED_AGENT_NAME}`;
+  const keys: ExistingKey[] = [
+    { id: 'qualified', name: qualified, instanceIds: [INSTANCE_A] },
+    { id: 'legacy', name: bare, instanceIds: [INSTANCE_A, INSTANCE_B] },
+    { id: 'duplicate', name: bare, instanceIds: [INSTANCE_A] },
+    { id: 'unrelated', name: bare, instanceIds: [INSTANCE_B] },
+    { id: 'widened', name: bare, instanceIds: null },
+  ];
+  const h = harness({ instanceTenantId: TENANT_A, existingKeys: keys, agentAssignments: [[INSTANCE_A, AGENT_A]] });
+  expect((await assignAgent(h, INSTANCE_A, null)).status).toBe(200);
+  expect(h.revoked).toEqual(['qualified', 'duplicate']);
+  expect(h.updated).toEqual([{ id: 'legacy', instanceIds: [INSTANCE_B] }]);
+  expect(keys[3]?.instanceIds).toEqual([INSTANCE_B]);
+  expect(keys[4]?.instanceIds).toBeNull();
 });

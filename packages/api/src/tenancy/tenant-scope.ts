@@ -11,7 +11,7 @@
  *
  * The services in this package are long-lived singletons constructed once with
  * a `Database` (`services/index.ts`), and their methods are called from ~150
- * places per service: route handlers, the tRPC router, channel plugins, the
+ * places per service: route handlers, channel plugins, the
  * scheduler, and the CLI. Threading a transaction handle down as a new first
  * parameter would mean editing every one of those call sites for every service.
  * That is a diff whose size is itself a security problem: a reviewer cannot

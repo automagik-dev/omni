@@ -171,6 +171,78 @@ async function isReenvioDoFlow(
   return plugin.isStaleFlowReplay(instanceId, turn);
 }
 
+/** The body fields the flow's `api_rest` node is expected to send. */
+const KNOWN_INBOUND_FIELDS = new Set([
+  'codAtendimento',
+  'cod_atendimento',
+  'chatInput',
+  'message',
+  'phone',
+  'telefone',
+  'messageId',
+  'idMensagem',
+]);
+
+/** What a flow field name looks like (`flow_token`, `screen_0_TextInput_0`). */
+const FIELD_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/;
+
+/** Top-level keys of a JSON object string, or `null` when it is not one. */
+function jsonObjectKeys(value: unknown): string[] | null {
+  if (typeof value !== 'string' || !value.trim().startsWith('{')) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? Object.keys(parsed) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a Meta WhatsApp Flow answer looks like when the platform hands it to the
+ * flow, as KEY NAMES only — values can carry personal data and never reach the
+ * log.
+ *
+ * The platform does not document where a flow completion (Meta's `nfm_reply`
+ * with its `response_json`) lands: in `{#entrada}` as the JSON string, in a
+ * variable of its own, or nowhere. Until it is measured, the text goes to the
+ * agent unchanged and this line records the shape, plus the names of any body
+ * fields beyond the known ones. `null` for an ordinary turn, so nothing is
+ * logged for it.
+ */
+export function inboundShapeOf(body: Record<string, unknown>): Record<string, unknown> | null {
+  const chatInputKeys = jsonObjectKeys(body.chatInput);
+  const messageKeys = jsonObjectKeys(body.message);
+  // Only a JSON-shaped input is logged: the extra fields alone are whatever the
+  // flow designer added, and logging them would fire on every turn.
+  if (!chatInputKeys && !messageKeys) return null;
+  // A key is only NAMED when it looks like a field name. `chatInput` is what
+  // the person typed, so a key can be an e-mail, a phone or a name: those are
+  // counted, never written. The redactor would not catch them — it masks
+  // tokens, not personal data.
+  let unnamedKeys = 0;
+  const named = (keys: string[]): string[] => {
+    const ok = keys.filter((k) => FIELD_NAME.test(k));
+    unnamedKeys += keys.length - ok.length;
+    return ok;
+  };
+  const extraFields = named(Object.keys(body).filter((k) => !KNOWN_INBOUND_FIELDS.has(k)));
+  return {
+    extraFields,
+    ...(chatInputKeys ? { chatInputKeys: named(chatInputKeys) } : {}),
+    ...(messageKeys ? { messageKeys: named(messageKeys) } : {}),
+    ...(unnamedKeys > 0 ? { unnamedKeys } : {}),
+  };
+}
+
+function logStructuredInput(
+  logger: ReturnType<AscFlowPlugin['getLogger']>,
+  instanceId: string,
+  body: Record<string, unknown>,
+): void {
+  const shape = inboundShapeOf(body);
+  if (shape) logger.info('[asc-flow] inbound carries structured input — shape only', { instanceId, ...shape });
+}
+
 /**
  * Full HTTP entry point used by `plugin.handleWebhook`.
  */
@@ -225,6 +297,8 @@ export async function handleAscFlowWebhookRequest(
     logger.warn('[asc-flow] webhook body is not a JSON object', { instanceId });
     return pending();
   }
+
+  logStructuredInput(logger, instanceId, parsedJson as Record<string, unknown>);
 
   const turn = parseInboundTurn(parsedJson as AscFlowInboundBody);
   if (!turn) {

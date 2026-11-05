@@ -10,21 +10,20 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
   CONFIG_KEYS,
   type Config,
-  type ConfigKey,
   DEFAULT_SERVER_CONFIG,
   DEFAULT_SERVER_NAME,
-  type ServerConfig,
   clearRuntimeServer,
   deleteConfigValue,
   describeActiveServer,
   getConfigPath,
+  getConfigValue,
   isServersConfigKey,
   isValidConfigKey,
   loadConfig,
@@ -131,14 +130,6 @@ describe('Config Validation', () => {
   });
 
   describe('CONFIG_KEYS', () => {
-    test('has all expected keys', () => {
-      const keys = Object.keys(CONFIG_KEYS);
-      expect(keys).toContain('apiUrl');
-      expect(keys).toContain('apiKey');
-      expect(keys).toContain('defaultInstance');
-      expect(keys).toContain('format');
-    });
-
     test('has descriptions for all keys', () => {
       for (const [_key, meta] of Object.entries(CONFIG_KEYS)) {
         expect(meta.description).toBeDefined();
@@ -162,34 +153,10 @@ describe('Config Validation', () => {
   });
 });
 
-describe('Config Key Types', () => {
-  test('ConfigKey type includes all valid keys', () => {
-    // This is a compile-time check - if it compiles, it passes
-    const validKeys: ConfigKey[] = ['apiUrl', 'apiKey', 'defaultInstance', 'format'];
-    expect(validKeys.length).toBe(4);
-  });
-});
-
 describe('ServerConfig', () => {
   // `loadServerConfig()` below hits the filesystem — sandbox it so it never
   // reads the developer's real ~/.omni/config.json.
   withSandbox();
-
-  test('ServerConfig type has all required fields', () => {
-    // Compile-time check - if it compiles, the type is correct
-    const config: ServerConfig = {
-      port: 8882,
-      databaseUrl: 'postgresql://localhost/test',
-      dataDir: '/tmp/data',
-      logLevel: 'info',
-      nodeEnv: 'production',
-    };
-    expect(config.port).toBe(8882);
-    expect(config.databaseUrl).toBe('postgresql://localhost/test');
-    expect(config.dataDir).toBe('/tmp/data');
-    expect(config.logLevel).toBe('info');
-    expect(config.nodeEnv).toBe('production');
-  });
 
   test('DEFAULT_SERVER_CONFIG has correct production defaults', () => {
     expect(DEFAULT_SERVER_CONFIG.port).toBe(8882);
@@ -212,29 +179,84 @@ describe('ServerConfig', () => {
 });
 
 describe('Server Config Keys', () => {
-  test('server.* keys are in CONFIG_KEYS', () => {
-    expect(CONFIG_KEYS['server.port' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.databaseUrl' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.dataDir' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.logLevel' as ConfigKey]).toBeDefined();
-    expect(CONFIG_KEYS['server.nodeEnv' as ConfigKey]).toBeDefined();
+  test.each(['server.port', 'server.databaseUrl', 'server.dataDir', 'server.logLevel', 'server.nodeEnv'] as const)(
+    '%s is a valid config key',
+    (key) => {
+      expect(CONFIG_KEYS[key]).toBeDefined();
+      expect(isValidConfigKey(key)).toBe(true);
+    },
+  );
+});
+
+describe('server.natsHost', () => {
+  withSandbox();
+
+  test('is a documented config key that mentions the loopback default', () => {
+    expect(isValidConfigKey('server.natsHost')).toBe(true);
+    expect(CONFIG_KEYS['server.natsHost'].description).toContain('127.0.0.1');
+    expect(CONFIG_KEYS['server.natsHost'].values).toBeUndefined();
   });
 
-  test('server.* keys have descriptions', () => {
-    for (const key of ['server.port', 'server.databaseUrl', 'server.dataDir', 'server.logLevel', 'server.nodeEnv']) {
-      const meta = CONFIG_KEYS[key as ConfigKey];
-      expect(meta.description).toBeDefined();
-      expect(typeof meta.description).toBe('string');
-      expect(meta.description.length).toBeGreaterThan(0);
+  test('defaults to 127.0.0.1 when unset', () => {
+    expect(DEFAULT_SERVER_CONFIG.natsHost).toBe('127.0.0.1');
+    expect(getConfigValue('server.natsHost')).toBe('127.0.0.1');
+    expect(loadServerConfig().natsHost).toBe('127.0.0.1');
+  });
+
+  test('older configs without the field still resolve to the default', () => {
+    writeRawConfig({ server: { port: 9000 } });
+    expect(getConfigValue('server.natsHost')).toBe('127.0.0.1');
+    expect(loadServerConfig().natsHost).toBe('127.0.0.1');
+  });
+
+  test('set/get round trip for IPv4, wildcard, IPv6 and hostname', () => {
+    for (const host of ['10.0.0.5', '0.0.0.0', '::', 'nats.internal']) {
+      setConfigValue('server.natsHost', host);
+      expect(getConfigValue('server.natsHost')).toBe(host);
+      expect(loadServerConfig().natsHost).toBe(host);
     }
+    const raw = readRawConfigFile() as { server?: { natsHost?: string } };
+    expect(raw.server?.natsHost).toBe('nats.internal');
   });
 
-  test('isValidConfigKey returns true for server.* keys', () => {
-    expect(isValidConfigKey('server.port')).toBe(true);
-    expect(isValidConfigKey('server.databaseUrl')).toBe(true);
-    expect(isValidConfigKey('server.dataDir')).toBe(true);
-    expect(isValidConfigKey('server.logLevel')).toBe(true);
-    expect(isValidConfigKey('server.nodeEnv')).toBe(true);
+  test('rejects invalid values and leaves the stored value untouched', () => {
+    setConfigValue('server.natsHost', '0.0.0.0');
+    for (const bad of ['', ' ', '127.0.0.1 -p 1', '$(id)', '"::"', '999.1.1.1', '-js']) {
+      expect(() => setConfigValue('server.natsHost', bad)).toThrow(/Invalid natsHost value/);
+    }
+    expect(getConfigValue('server.natsHost')).toBe('0.0.0.0');
+  });
+
+  test('unset reverts to the default', () => {
+    setConfigValue('server.natsHost', '0.0.0.0');
+    deleteConfigValue('server.natsHost');
+    expect(getConfigValue('server.natsHost')).toBe('127.0.0.1');
+  });
+});
+
+describe('server.publicUrl and server.login', () => {
+  withSandbox();
+
+  test('are unset by default: pairing stays on and links follow the address devices use', () => {
+    expect(getConfigValue('server.publicUrl')).toBeUndefined();
+    expect(getConfigValue('server.login')).toBeUndefined();
+  });
+
+  test('publicUrl takes http(s)://host[:port], drops a trailing slash, and refuses a path', () => {
+    setConfigValue('server.publicUrl', 'https://omni.example.com/');
+    expect(loadServerConfig().publicUrl).toBe('https://omni.example.com');
+    setConfigValue('server.publicUrl', 'http://omni-box.tail.ts.net:8882');
+    expect(getConfigValue('server.publicUrl')).toBe('http://omni-box.tail.ts.net:8882');
+    for (const bad of ['omni.example.com', 'https://omni.example.com/app', 'ftp://x', 'https://a b']) {
+      expect(() => setConfigValue('server.publicUrl', bad)).toThrow(/Invalid publicUrl/);
+    }
+    expect(getConfigValue('server.publicUrl')).toBe('http://omni-box.tail.ts.net:8882');
+  });
+
+  test('login is on or off', () => {
+    setConfigValue('server.login', 'off');
+    expect(loadServerConfig().login).toBe('off');
+    expect(() => setConfigValue('server.login', 'maybe')).toThrow();
   });
 });
 
@@ -368,6 +390,13 @@ describe('Server registry resolution', () => {
     expect(active.url).toBe('https://omni.example.com');
     expect(active.maskedKey).not.toBe(REMOTE_KEY);
     expect(active.maskedKey).toBe(`${REMOTE_KEY.slice(0, 12)}...`);
+  });
+
+  test('saveConfig creates the config file readable by its owner only (0o600)', () => {
+    // The file holds API keys. `mode` only applies when the file is created, so
+    // saveConfig must be the first writer in the empty sandbox.
+    saveConfig(loadConfig());
+    expect(statSync(getConfigPath()).mode & 0o777).toBe(0o600);
   });
 });
 

@@ -1,23 +1,15 @@
 /**
- * Bolt.js client initialization with Socket Mode and HTTP Receiver support
- *
- * Handles:
- * - App-Level Token + Bot Token configuration (Socket Mode)
- * - HTTPReceiver with signing secret validation (HTTP mode)
- * - Body-limit guard for HTTP mode (1 MB max)
- * - Health check endpoint
- * - Reconnection handling with structured logging
- * - Rate limiting with exponential backoff
+ * Slack connection identity, socket lifecycle, health and HTTP body-limit helpers.
  */
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Logger } from '@omni/channel-sdk';
-import { App, type AppOptions, HTTPReceiver, SocketModeReceiver } from '@slack/bolt';
+import type { App, SocketModeReceiver } from '@slack/bolt';
 import { WebClient } from '@slack/web-api';
 import type { SlackConnectionOptions } from '../types';
 import { SlackError, SlackErrorCode } from '../types';
 
-/** Maximum body size for HTTP mode (1 MB, aligned with OpenClaw) */
+/** Maximum body size for HTTP mode (1 MB) */
 const HTTP_MAX_BODY_BYTES = 1024 * 1024;
 
 /**
@@ -108,8 +100,8 @@ export interface BoltConnection {
   /** Connection mode: 'socket' (default) or 'http' */
   mode?: 'socket' | 'http';
   /**
-   * Port for HTTP receiver mode. When mode is 'http', startBoltConnection()
-   * calls app.start(httpPort) to start Bolt's built-in HTTP server.
+   * Port for HTTP receiver mode. The shared receiver calls app.start(httpPort)
+   * to start Bolt's built-in HTTP server.
    * Defaults to 3001 if not provided.
    */
   httpPort?: number;
@@ -130,7 +122,7 @@ export interface BoltConnection {
   /**
    * Hook invoked on every Socket Mode lifecycle transition. plugin.ts assigns
    * it after a verified start so a socket dying later drives a real instance
-   * status change (#941). Cleared by destroyBoltConnection so a deliberate
+   * status change (#941). Cleared by the shared receiver on stop so a deliberate
    * stop is not reported as a lost socket.
    */
   onSocketStateChange?: (state: SocketConnectionState) => void;
@@ -140,88 +132,6 @@ export interface BoltConnection {
   socketStaleAfterMs?: number;
   /** Bound for the post-start WebSocket verification (default 10s). */
   socketConnectTimeoutMs?: number;
-}
-
-/** Connection options of a per-instance App, which always carries a bot token. */
-type BotConnectionOptions = SlackConnectionOptions & { botToken: string };
-
-/**
- * Create a Bolt.js App configured for Socket Mode (but NOT started yet).
- *
- * Handlers MUST be registered on the returned app BEFORE calling startBoltConnection().
- * This is required because Bolt.js Socket Mode starts receiving events immediately
- * after start(), and any events arriving before handlers are registered will be dropped.
- *
- * For HTTP mode, creates an HTTPReceiver. After calling startBoltConnection(),
- * Bolt's built-in HTTP server starts on connection.httpPort (default 3001).
- * The returned BoltConnection.httpHandler is also available for external-server integration.
- */
-export function createBoltApp(options: SlackConnectionOptions, logger: Logger): BoltConnection {
-  // A per-instance App authenticates with its `token`, so it needs a bot
-  // token; a bot-less user-mode instance runs behind the shared receiver only.
-  const botToken = options.botToken;
-  if (!botToken) {
-    throw new SlackError(SlackErrorCode.INVALID_TOKEN, 'botToken (xoxb-...) is required for a per-instance Bolt app');
-  }
-  const mode = options.mode ?? 'socket';
-
-  if (mode === 'http') {
-    return createHttpBoltApp({ ...options, botToken }, logger);
-  }
-  return createSocketBoltApp({ ...options, botToken }, logger);
-}
-
-/**
- * Create a Bolt.js App in Socket Mode
- */
-function createSocketBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
-  logger.info('Creating Bolt.js app with Socket Mode (not started yet)');
-
-  if (!options.appToken) {
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'appToken (xapp-...) is required for Socket Mode');
-  }
-
-  // Construct the receiver explicitly (instead of letting `socketMode: true`
-  // build one inside App) so the SocketModeClient is reachable in a typed way —
-  // the startup assertion and health check need its real WebSocket state (#941).
-  const receiver = new SocketModeReceiver({ appToken: options.appToken });
-
-  const appOptions: AppOptions = {
-    token: options.botToken,
-    receiver,
-    socketMode: true,
-    clientOptions: {
-      retryConfig: {
-        retries: options.retryConfig?.retries ?? 2,
-        factor: options.retryConfig?.factor ?? 2,
-        minTimeout: options.retryConfig?.baseDelayMs ?? 500,
-        maxTimeout: options.retryConfig?.maxDelayMs ?? 3000,
-        randomize: true,
-      },
-    },
-  };
-
-  const app = new App(appOptions);
-
-  // Register global error handler to surface Socket Mode issues
-  app.error(async (error) => {
-    logger.error('Bolt.js global error', { error: String(error) });
-  });
-
-  const connection: BoltConnection = {
-    app,
-    client: app.client,
-    ...buildActingClients(options, app.client),
-    botToken: options.botToken,
-    mode: 'socket',
-    socketClient: receiver.client,
-    socketState: 'pending',
-    socketConnectTimeoutMs: options.socketConnectTimeoutMs,
-  };
-
-  watchSocketLifecycle(connection, logger);
-
-  return connection;
 }
 
 /**
@@ -273,60 +183,10 @@ export function watchSocketLifecycle(connection: BoltConnection, logger: Logger)
 }
 
 /**
- * Create a Bolt.js App in HTTP mode using HTTPReceiver.
- *
- * The receiver handles Slack signing secret verification automatically.
- * The returned BoltConnection.httpHandler wraps the receiver with a 1 MB body-limit guard.
- */
-function createHttpBoltApp(options: BotConnectionOptions, logger: Logger): BoltConnection {
-  if (!options.signingSecret) {
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, 'signingSecret is required for HTTP mode');
-  }
-
-  logger.info('Creating Bolt.js app with HTTP receiver (not started yet)');
-
-  const receiver = new HTTPReceiver({
-    signingSecret: options.signingSecret,
-  });
-
-  const clientRetryConfig = {
-    retries: options.retryConfig?.retries ?? 2,
-    factor: options.retryConfig?.factor ?? 2,
-    minTimeout: options.retryConfig?.baseDelayMs ?? 500,
-    maxTimeout: options.retryConfig?.maxDelayMs ?? 3000,
-    randomize: true,
-  };
-
-  const app = new App({
-    token: options.botToken,
-    receiver,
-    clientOptions: { retryConfig: clientRetryConfig },
-  });
-
-  app.error(async (error) => {
-    logger.error('Bolt.js HTTP receiver error', { error: String(error) });
-  });
-
-  // Wrap the receiver's requestListener with a body-limit guard
-  const httpHandler = withBodyLimit(receiver.requestListener, logger);
-
-  return {
-    app,
-    client: app.client,
-    ...buildActingClients(options, app.client),
-    botToken: options.botToken,
-    mode: 'http',
-    httpPort: options.httpPort,
-    httpHandler,
-  };
-}
-
-/**
  * Wrap a Slack HTTP request listener with the 1 MB body-limit guard.
  *
- * Shared by both HTTP transports — the per-instance app above and the pooled
- * receiver in app-receiver.ts. An oversized body has to be refused with 413
- * before Bolt buffers it, whichever of the two is serving the request.
+ * Used by the pooled receiver in app-receiver.ts. An oversized body is refused
+ * with 413 before Bolt buffers it.
  */
 export function withBodyLimit(
   listener: (req: IncomingMessage, res: ServerResponse) => void,
@@ -421,112 +281,12 @@ function buildBodyLimitHandler(
 }
 
 /**
- * Start a previously created Bolt.js app.
- *
- * - Socket Mode: connects via WebSocket. Call AFTER all handlers are registered.
- * - HTTP mode: starts Bolt's built-in HTTP server on connection.httpPort (default 3001).
- *   Slack must be configured to send events to that port. The httpHandler field is also
- *   available for external-server integration if preferred.
- */
-export async function startBoltConnection(connection: BoltConnection, logger: Logger): Promise<BoltConnection> {
-  await resolveIdentities(connection, logger);
-
-  // User mode (#889) MUST NOT start without a resolved acting-user id. Self-
-  // filtering compares the human's own typing against actingUserId; when it is
-  // undefined the check in shouldSkipMessage silently no-ops and the agent
-  // answers the operator's OWN messages. Fail fast rather than start broken.
-  if (connection.userClient && !connection.actingUserId) {
-    throw new SlackError(
-      SlackErrorCode.CONNECTION_FAILED,
-      'User mode requires a resolved acting user id, but it could not be determined from the user token. Refusing to start.',
-    );
-  }
-
-  if (connection.mode === 'http') {
-    // HTTP mode: start Bolt's built-in HTTP server so inbound Slack events are received.
-    // Bolt's HTTPReceiver listens on the given port and routes requests to registered handlers.
-    const port = connection.httpPort ?? 3001;
-    try {
-      await connection.app.start(port);
-      logger.info('Bolt.js HTTP receiver started', { port });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error('Failed to start Bolt.js HTTP receiver', { error: message, port });
-      throw new SlackError(
-        SlackErrorCode.CONNECTION_FAILED,
-        `Failed to start Slack HTTP listener on port ${port}: ${message}`,
-      );
-    }
-    return connection;
-  }
-
-  // Socket Mode: connect via WebSocket, then VERIFY the socket really opened.
-  // `app.start()` resolving is not proof of a live connection (#941): an
-  // instance produced the full success log sequence with zero TCP connections
-  // to Slack. Success is only logged once the WebSocket state confirms it.
-  try {
-    await connection.app.start();
-    await waitForSocketOpen(connection);
-    logger.info('Bolt.js app started in Socket Mode (WebSocket verified open)');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error('Failed to start Bolt.js app', { error: message });
-    if (error instanceof SlackError) throw error;
-    throw new SlackError(SlackErrorCode.CONNECTION_FAILED, `Failed to start Slack connection: ${message}`);
-  }
-
-  return connection;
-}
-
-/**
- * Resolve bot identity first to avoid race conditions in Socket Mode where
- * messages can arrive before botUserId is set (self-message filtering requires
- * it). Failures are logged, not thrown — startBoltConnection enforces the one
- * hard invariant (user mode without a resolved acting-user id) itself.
- */
-async function resolveIdentities(connection: BoltConnection, logger: Logger): Promise<void> {
-  try {
-    const authResult = await connection.app.client.auth.test();
-    connection.botUserId = authResult.user_id ?? undefined;
-    connection.botId = (authResult.bot_id as string | undefined) ?? undefined;
-    connection.botName = authResult.user ?? undefined;
-    connection.teamId = authResult.team_id ?? undefined;
-    connection.teamName = authResult.team ?? undefined;
-    logger.info('Bot identity resolved', {
-      botUserId: connection.botUserId,
-      botName: connection.botName,
-      teamId: connection.teamId,
-      teamName: connection.teamName,
-    });
-
-    // In user mode, resolve the authorizing human too (#889). Self-filtering
-    // needs it: a message that person types themselves carries no bot_id and
-    // their own user id, so comparing only against botUserId would let the
-    // agent answer on their behalf in their own conversation.
-    if (connection.userClient) {
-      const userAuth = await connection.userClient.auth.test();
-      connection.actingUserId = (userAuth.user_id as string | undefined) ?? undefined;
-      logger.info('Acting user identity resolved', {
-        actingUserId: connection.actingUserId,
-        actingUser: userAuth.user,
-      });
-    }
-  } catch (error) {
-    logger.warn('Failed to resolve bot identity before start — self-message filtering may be unreliable', {
-      error: String(error),
-    });
-  }
-}
-
-/**
  * Resolve a workspace's bot identity from a bot-token `WebClient`.
  *
  * The shared receiver (app-receiver.ts) builds its Bolt `App` with `authorize`
- * and no `token`, so `app.client` carries no token and the
- * `connection.app.client.auth.test()` path above cannot serve it. Callers that
- * hold a workspace bot client resolve identity here instead. Unlike
- * {@link resolveIdentities}, a partial answer is an error: every field is
- * required by `authorize` (botId, botUserId), by the attachment map (teamId)
+ * and no `token`, so `app.client` carries no token. Callers that hold a
+ * workspace bot client resolve identity here instead. A partial answer is an
+ * error: every field is required by `authorize` (botId, botUserId), by the attachment map (teamId)
  * and by the connected-event metadata (botName).
  */
 export async function resolveWorkspaceIdentity(
@@ -670,36 +430,4 @@ export function isSocketStale(connection: BoltConnection, now = Date.now()): boo
   const last = connection.lastSocketActivityAt;
   if (last === undefined) return false;
   return now - last > (connection.socketStaleAfterMs ?? SOCKET_STALE_AFTER_MS);
-}
-
-/**
- * Stop and disconnect a Bolt.js App
- */
-export async function destroyBoltConnection(connection: BoltConnection, logger: Logger): Promise<void> {
-  // A deliberate stop must not be reported as a lost socket (#941).
-  connection.onSocketStateChange = undefined;
-  try {
-    await connection.app.stop();
-    logger.info('Bolt.js connection stopped');
-  } catch (error) {
-    logger.warn('Error stopping Bolt.js connection', { error: String(error) });
-  }
-}
-
-/**
- * Check if a Bolt.js connection is healthy.
- *
- * auth.test() only proves the Web API (HTTPS) is reachable; in socket mode the
- * events transport is the WSS connection, so a deaf socket must fail the check
- * even while auth.test() succeeds (#941) — otherwise connect() answers
- * 'already connected' and there is no recovery path from the CLI.
- */
-export async function checkBoltHealth(connection: BoltConnection): Promise<boolean> {
-  if (!isSocketOpen(connection)) return false;
-  try {
-    const result = await connection.client.auth.test();
-    return result.ok === true;
-  } catch {
-    return false;
-  }
 }

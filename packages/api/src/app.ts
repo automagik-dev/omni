@@ -2,16 +2,20 @@
  * Hono application setup
  */
 
-import { existsSync } from 'node:fs';
-import path from 'node:path';
 import type { ChannelRegistry } from '@omni/channel-sdk';
 import type { WhatsAppBusinessPlugin } from '@omni/channel-whatsapp-business';
-import { type EventBus, NotFoundError, OmniError, ValidationError, createLogger } from '@omni/core';
+import {
+  type ConnectorEventPublisher,
+  type EventBus,
+  NotFoundError,
+  OmniError,
+  ValidationError,
+  createLogger,
+} from '@omni/core';
 import { type Database, type Instance, whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Context } from 'hono';
-import { serveStatic } from 'hono/bun';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 import { timing } from 'hono/timing';
@@ -75,7 +79,14 @@ import { requireSignedInstanceMiddleware } from './middleware/require-signed-ins
 import { scopeEnforcerMiddleware } from './middleware/scope-enforcer';
 import { tenancyMiddleware } from './middleware/tenancy';
 
+import automagikPin from '../../../apps/automagik.json';
+import packageJson from '../package.json';
 import { SLACK_OAUTH_CALLBACK_PATH } from './constants/slack-app';
+import { type Login, createLogin } from './login';
+import type { LoginDefaults } from './login/config';
+import { type PluginLane, createPluginLane, readPluginLaneDir, readPluginLaneUrl } from './market/lane';
+import { marketPageRoutes, marketRoutes } from './market/routes';
+import { createMarket, readMarketPublicUrl } from './market/service';
 import { createContextMiddleware } from './middleware/context';
 import { errorHandler } from './middleware/error';
 import { rateLimitMiddleware, webhookIngressRateLimitMiddleware } from './middleware/rate-limit';
@@ -85,10 +96,12 @@ import { createWebhookAuthMiddleware } from './middleware/webhook-auth';
 import { getHealth, healthRoutes } from './routes/health';
 import { openapiRoutes } from './routes/openapi';
 import { v2Routes } from './routes/v2';
+import { landingRoutes, loginApiRoutes, loginAuthRoutes, loginPageRoutes } from './routes/v2/login';
 import { platformTenantRoutes } from './routes/v2/platform-tenants';
 import { slackOAuthCallback } from './routes/v2/slack';
 import type { Services } from './services';
 import { resolveA2AAgentCard } from './services/a2a-discovery';
+import { type SystemUpdater, createSystemUpdater } from './system/update';
 import { isMultitenancyEnabled } from './tenancy/feature-flag';
 import type { AppVariables } from './types';
 import { parseJsonObjectBody } from './utils/json-body';
@@ -112,6 +125,7 @@ const TIMEOUT_EXEMPT_PATHS: readonly string[] = [SLACK_OAUTH_CALLBACK_PATH];
  * mutexes and corrupting state (see #72 / #70). So only GET/HEAD is timed out
  * — minus the enumerated GETs that write.
  */
+
 export function shouldTimeoutRequest(method: string, path: string): boolean {
   if (method !== 'GET' && method !== 'HEAD') return false;
   return !TIMEOUT_EXEMPT_PATHS.includes(path);
@@ -123,23 +137,41 @@ export function shouldTimeoutRequest(method: string, path: string): boolean {
 export interface CreateAppResult {
   app: Hono<{ Variables: AppVariables }>;
   services: Services;
+  login: Login | null;
+  /** Updates the owner confirms; off unless the operator set OMNI_UPDATE_COMMAND. */
+  updater: SystemUpdater;
+  /** Automagik's plugin lane for the market; null when OMNI_PLUGIN_LANE=off. The server starts it. */
+  pluginLane: PluginLane | null;
 }
 
+/** The JSON 404 every unknown path answers. */
+const endpointNotFound = (c: Context) =>
+  c.json({ error: { code: 'NOT_FOUND', message: `Endpoint not found: ${c.req.method} ${c.req.path}` } }, 404);
 /**
  * Create the Hono application
  */
 export function createApp(
   db: Database,
-  eventBus: EventBus | null = null,
+  eventBus: (EventBus & ConnectorEventPublisher) | null = null,
   channelRegistry: ChannelRegistry | null = null,
+  givenLogin?: Login | null,
+  loginDefaults: LoginDefaults = {},
 ): CreateAppResult {
   const app = new Hono<{ Variables: AppVariables }>();
 
   // Create context middleware and get services
   const { middleware: contextMiddleware, services } = createContextMiddleware(db, eventBus, channelRegistry);
+  // Human login (Better Auth); null when OMNI_LOGIN_ENABLED=false or multitenancy is on.
+  // `loginDefaults` are what index.ts resolved at boot (login/secret.ts).
+  const login = givenLogin === undefined ? createLogin(db, services, eventBus, undefined, loginDefaults) : givenLogin;
+  const updater = createSystemUpdater({ version: packageJson.version, login, eventBus });
 
   // Global middleware
   app.use('*', timing());
+  app.use('/api/v2/channels/whatsapp-business/webhook-setup', async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    await next();
+  });
 
   // Request safety: timeout and body size limits
   app.use('*', async (c, next) => {
@@ -384,6 +416,18 @@ export function createApp(
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
 
+  // PROTOTYPE public webchat endpoints — auth-exempt (an anonymous site visitor
+  // has no API key). widget (GET demo page), events (GET Server-Sent Events),
+  // messages (POST visitor text). The plugin routes by path and refuses unknown
+  // or disconnected instances.
+  app.on(['GET', 'POST'], '/api/v2/channels/webchat/:instanceId/:action', async (c) => {
+    const plugin = c.get('channelRegistry')?.get('webchat');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Webchat plugin not loaded' } }, 503);
+    }
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // Public WhatsApp Business API (Meta) webhook endpoint — auth-exempt, signed by Meta with HMAC-SHA256.
   // Unlike Gupshup/Twilio, the URL is GLOBAL (no :instanceId in path): instance resolution
   // happens inside the plugin via `metadata.phone_number_id` from the payload.
@@ -537,7 +581,7 @@ export function createApp(
     }
 
     try {
-      const result = await services.webhooks.receive(sourceName, payload, headers, {
+      const result = await services.webhooks.receivePublic(sourceName, payload, headers, {
         autoCreate: false,
         rawBody,
         requireSignature: true,
@@ -555,6 +599,33 @@ export function createApp(
     }
   });
 
+  // Public connector event ingress — auth-exempt, verified EXCLUSIVELY by the
+  // subscription's sealed provider secret over the raw body BEFORE anything is
+  // journaled or published (connectors-first-slice-clickup, D8). Unknown
+  // subscription, unopenable secret and bad signature collapse into one 401 so
+  // the endpoint is not an existence oracle. Paused subscriptions verify first,
+  // then ack 202 ignored. Must be mounted before protectedApp so the
+  // authenticated `/connectors/:id` match cannot shadow it. Declared
+  // `public-by-contract` in tenancy/route-ownership.ts.
+  app.post('/api/v2/connectors/events/:subscriptionId', webhookIngressRateLimitMiddleware, async (c) => {
+    const services = c.get('services');
+    const rawBody = await c.req.text();
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(c.req.header())) headers[key.toLowerCase()] = value ?? '';
+    const outcome = await services.connectors.receive(c.req.param('subscriptionId'), rawBody, headers);
+    return c.json(outcome.body, outcome.status);
+  });
+
+  // Public provider hook: the connector's sealed secret is its credential.
+  app.post('/api/v2/connectors/hooks/:connectorId', webhookIngressRateLimitMiddleware, async (c) => {
+    const services = c.get('services');
+    const rawBody = await c.req.text();
+    const headers: Record<string, string> = {};
+    for (const [key, value] of Object.entries(c.req.header())) headers[key.toLowerCase()] = value ?? '';
+    const outcome = await services.connectors.receiveForConnector(c.req.param('connectorId'), rawBody, headers);
+    return c.json(outcome.body, outcome.status);
+  });
+
   // Slack OAuth redirect target (wish: slack-personal-oauth). Auth-exempt
   // because Slack's redirect carries no Omni credential; rate-limited by IP
   // like the generic ingress above. The handler verifies the HMAC-signed
@@ -564,6 +635,40 @@ export function createApp(
   // (or a fixed page for the CLI entry). Declared `public-by-contract` in
   // tenancy/route-ownership.ts. Must be mounted before protectedApp.
   app.get('/api/v2/slack/oauth/callback', webhookIngressRateLimitMiddleware, slackOAuthCallback);
+
+  // Human login (wish: omni-labs-distribution): Better Auth at /api/auth, Omni's
+  // claim / owner-code / device-key endpoints at /api/v2/login, and the claim and
+  // device-approval pages at /login. Auth-exempt by contract: this is how a person
+  // and their devices get in. Always mounted so that, with OMNI_LOGIN_ENABLED off,
+  // the routes answer 404 themselves instead of falling through to the bearer auth
+  // below (401 would reveal the surface). Declared `public-by-contract` in
+  // tenancy/route-ownership.ts. Must be mounted before protectedApp and the UI.
+  app.route('/api/auth', loginAuthRoutes(login));
+  app.route('/api/v2/login', loginApiRoutes(login));
+  app.route('/api/login', loginPageRoutes(login));
+  // What a browser sees at this Omni's own address (and /api): what this is and how to get in.
+  // Everything else asking there keeps the plain JSON 404 below. Declared `public-by-contract`.
+  app.route('/', landingRoutes(login, endpointNotFound));
+
+  // The Automagik marketplace: this release's DSH plugins as a DSH market index and an npm
+  // registry under /api/market, with Automagik's plugins it was tested with, and its page for a person
+  // at /market. Public by contract, read-only, the same for every caller: no tenant, instance or
+  // user data. Declared `public-by-contract` in tenancy/route-ownership.ts. Must be mounted
+  // before protectedApp and the UI.
+  // Automagik's plugin lane: newer Bot team releases than this one bundled, without a new Omni.
+  // apps/automagik.json is the floor. Nothing is asked of the network until index.ts starts it.
+  const laneUrl = readPluginLaneUrl();
+  const pluginLane = laneUrl
+    ? createPluginLane({
+        url: laneUrl,
+        floor: Object.fromEntries(Object.entries(automagikPin.packages).map(([name, pkg]) => [name, pkg.version])),
+        dir: readPluginLaneDir(),
+        eventBus,
+      })
+    : null;
+  const market = createMarket({ publicUrl: login?.config.publicUrl ?? readMarketPublicUrl(), lane: pluginLane });
+  app.route('/api/market', marketRoutes(market));
+  app.route('/market', marketPageRoutes(market));
 
   // ── Multitenancy control plane — feature-flagged, OFF by default ────────────
   // Mounted ONLY when OMNI_MULTITENANCY_ENABLED === "true". When off, this
@@ -601,86 +706,21 @@ export function createApp(
   protectedApp.use('*', outputRedactorMiddleware);
   protectedApp.use('*', rateLimitMiddleware);
 
+  // This Omni's version and the updates its owner confirms on WhatsApp (routes/v2/system.ts)
+  protectedApp.use('*', async (c, next) => {
+    c.set('updater', updater);
+    c.set('login', login);
+    await next();
+  });
   // Mount v2 routes
   protectedApp.route('/', v2Routes);
 
   app.route('/api/v2', protectedApp);
 
-  // ============================================
-  // UI Static Files (production only)
-  // ============================================
-  // Serve built UI from apps/ui/dist when available
-  // In dev, use Vite on :5173 instead
-  // Try cwd first (works for worktrees), then fall back to OMNI_PACKAGES_DIR
-  const cwdUiPath = path.resolve(process.cwd(), 'apps/ui/dist');
-  const packagesUiPath = process.env.OMNI_PACKAGES_DIR
-    ? path.resolve(process.env.OMNI_PACKAGES_DIR, '..', 'apps/ui/dist')
-    : null;
+  // 404 handler
+  app.notFound(endpointNotFound);
 
-  const uiDistPath = existsSync(cwdUiPath)
-    ? cwdUiPath
-    : packagesUiPath && existsSync(packagesUiPath)
-      ? packagesUiPath
-      : cwdUiPath; // fallback to cwd path even if not exists
-  // OMNI_FORCE_UI_ROUTES makes registration independent of the filesystem so the
-  // route-ownership gate enumerates the same surface whether or not the UI bundle
-  // has been built. Enumeration-only: it is set (and restored) inside
-  // enumerateRegisteredRoutes, never in a serving configuration.
-  const serveUI = process.env.OMNI_FORCE_UI_ROUTES === 'true' || existsSync(uiDistPath);
-
-  if (serveUI) {
-    httpLog.info('Serving UI from apps/ui/dist');
-
-    // Serve static assets (JS, CSS, images, fonts)
-    app.use(
-      '/assets/*',
-      serveStatic({
-        root: uiDistPath,
-        rewriteRequestPath: (p) => p.replace(/^\/assets/, '/assets'),
-      }),
-    );
-
-    // Serve other static files (favicon, etc.)
-    app.get('/favicon.svg', serveStatic({ path: `${uiDistPath}/favicon.svg` }));
-    app.get('/favicon.ico', serveStatic({ path: `${uiDistPath}/favicon.ico` }));
-
-    // SPA fallback - serve index.html for non-API routes
-    app.get('*', async (c) => {
-      // Don't catch API routes
-      if (c.req.path.startsWith('/api')) {
-        return c.json(
-          {
-            error: {
-              code: 'NOT_FOUND',
-              message: `Endpoint not found: ${c.req.method} ${c.req.path}`,
-            },
-          },
-          404,
-        );
-      }
-      // Serve index.html for client-side routing
-      const indexPath = `${uiDistPath}/index.html`;
-      const file = Bun.file(indexPath);
-      return new Response(file, {
-        headers: { 'Content-Type': 'text/html' },
-      });
-    });
-  }
-
-  // 404 handler (only for API routes when UI is served, or all routes when not)
-  app.notFound((c) => {
-    return c.json(
-      {
-        error: {
-          code: 'NOT_FOUND',
-          message: `Endpoint not found: ${c.req.method} ${c.req.path}`,
-        },
-      },
-      404,
-    );
-  });
-
-  return { app, services };
+  return { app, services, login, updater, pluginLane };
 }
 
 export type App = Hono<{ Variables: AppVariables }>;

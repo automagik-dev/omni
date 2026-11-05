@@ -30,6 +30,8 @@ export const GUPSHUP_CAPABILITIES: ChannelCapabilities = {
   canHandleBroadcast: false,
   canHandleDMs: true,
   canStreamResponse: false,
+  hasMessagingWindow: true,
+  messagingWindowMs: 24 * 60 * 60 * 1000,
   maxMessageLength: 4096,
   maxFileSize: 100 * 1024 * 1024,
   supportedMediaTypes: [

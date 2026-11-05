@@ -1,7 +1,7 @@
 /**
  * Server Commands — manage the REMOTE server registry.
  *
- *   omni server add <name> <url> [--api-key <key>]   Register a server
+ *   omni server add <name> <url> [--api-key <key>]   Register a server (no key: sign in by device code)
  *   omni server list [--reveal]                      List registered servers
  *   omni server use <name>                           Switch the active server
  *   omni server remove <name> [--force]              Drop a server
@@ -30,8 +30,11 @@ import {
   maskConfigApiKey,
   saveServers,
 } from '../config.js';
+import { type DeviceKey, deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import * as output from '../output.js';
 import { normalizeServerUrl } from '../signing.js';
+import { quoteShellArg } from '../utils/shell.js';
+import { stripTerminalControls } from '../utils/terminal.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -134,13 +137,32 @@ async function verifyServer(url: string, apiKey: string | undefined): Promise<Ve
 
 /** Abort with a message that distinguishes "wrong URL" from "wrong key". */
 function exitVerificationFailed(name: string, url: string, failure: Extract<VerifyResult, { ok: false }>): never {
+  const detail = stripTerminalControls(failure.detail);
   const message =
     failure.kind === 'unreachable'
-      ? `Server '${name}' is unreachable at ${url}: ${failure.detail}`
-      : `Server '${name}' rejected the API key (unauthorized): ${failure.detail}`;
+      ? `Server '${name}' is unreachable at ${url}: ${detail}`
+      : `Server '${name}' rejected the API key (unauthorized): ${detail}`;
   return output.error(message, {
     hint: 'Fix the value, or pass --skip-verify to register the entry anyway.',
   });
+}
+
+/**
+ * Sign this CLI in to `url` with the server's device flow (#1461), for an `add` without a
+ * key. Null when the server has no device sign-in (login off, or older), so the entry is
+ * saved keyless as before; any other outcome but approval exits, with nothing saved.
+ */
+async function signInByDevice(url: string): Promise<DeviceKey | null> {
+  const result = await runDeviceLoginWithInterrupt({
+    url,
+    onPrompt: (prompt) => {
+      for (const line of devicePromptLines(prompt)) output.info(line);
+    },
+  });
+  if (result.status === 'approved') return result.key;
+  if (result.status === 'unavailable') return null;
+  const failure = deviceLoginFailure(result);
+  return output.error(failure.message, undefined, failure.exitCode);
 }
 
 // ============================================================================
@@ -162,6 +184,13 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
     output.error('Server name must not be empty');
   }
 
+  if (!options.apiKey && !options.skipVerify && !process.stdin.isTTY) {
+    output.error(
+      'Device sign-in requires an interactive terminal. Provide --api-key, or use --skip-verify to register without signing in.',
+      undefined,
+      2,
+    );
+  }
   const servers = loadServers();
   const normalized = normalizeServerUrl(url);
 
@@ -174,6 +203,16 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
 
   const entry: ServerEntry = { url: normalized };
   if (options.apiKey) entry.apiKey = options.apiKey;
+  // No key and a verified server: sign in by device code instead of saving it keyless.
+  const signedIn = !options.apiKey && !options.skipVerify ? await signInByDevice(normalized) : null;
+  if (signedIn) entry.apiKey = signedIn.apiKey;
+  if (!entry.apiKey && !options.skipVerify && servers.list[name]?.apiKey) {
+    output.error(
+      `This server does not offer device sign-in. Existing entry '${name}' is unchanged; provide --api-key to replace it.`,
+      undefined,
+      2,
+    );
+  }
 
   const existed = servers.list[name] !== undefined;
   const next: ServersConfig = {
@@ -182,8 +221,11 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
   };
   saveServers(next);
 
-  if (!options.apiKey) {
-    output.warn(`No API key stored for '${name}'. Run: omni auth login --server ${name} --api-key <key>`);
+  if (!entry.apiKey) {
+    const serverArg = quoteShellArg(name);
+    output.warn(
+      `No API key stored for '${name}'.\nSign in interactively: omni auth login --server ${serverArg}\nOr read a key from stdin: omni auth login --server ${serverArg} --api-key-stdin < /secure/path/omni-api-key`,
+    );
   }
 
   output.success(existed ? `Updated server '${name}'` : `Added server '${name}'`, {
@@ -192,6 +234,7 @@ async function handleAdd(rawName: string, url: string, options: AddOptions): Pro
     apiKey: maskConfigApiKey(entry.apiKey),
     verified: options.skipVerify !== true,
     active: next.active === name,
+    ...(signedIn ? { signedIn: true, keyId: signedIn.keyId, scopes: signedIn.scopes } : {}),
   });
 }
 
@@ -238,7 +281,7 @@ function handleRemove(name: string, options: { force?: boolean }): void {
   // every command. Refuse instead — `omni server add` can replace it in place.
   if (Object.keys(remaining).length === 0) {
     output.error(`Cannot remove '${name}': it is the only registered server`, {
-      hint: `Point it somewhere else instead: omni server add ${name} <url>`,
+      hint: `Point it somewhere else instead: omni server add ${quoteShellArg(name)} <url>`,
     });
   }
 
@@ -291,9 +334,9 @@ Target one entry for a single command with the global flag:
 
   server
     .command('add <name> <url>')
-    .description('Register a server (verifies reachability and key before saving)')
-    .option('--api-key <key>', 'API key for this server')
-    .option('--skip-verify', 'Save the entry without probing the server first')
+    .description('Register a server (verifies reachability and key; without a key, signs in by device code)')
+    .option('--api-key <key>', 'API key for this server (omit it for device sign-in in an interactive terminal)')
+    .option('--skip-verify', 'Save the entry without probing the server first (and without signing in)')
     .option('--use', 'Also make this the active server')
     .action(handleAdd);
 

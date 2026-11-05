@@ -17,7 +17,13 @@
  *   7. pm2-status              — omni-api and omni-nats both `online` in pm2
  *   8. pm2-max-restarts        — omni-api + omni-nats have bounded restarts
  *   9. pm2-logrotate-installed — pm2-logrotate module configured correctly
- *  10. port-canonical-owner    — canonical ports owned by pm2-managed PIDs
+ *  10. cli-signing-key-for-locked-instances — CLI identity for locked instances
+ *  11. pgserve-canonical        — canonical backbone configuration
+ *  12. port-canonical-owner     — canonical ports owned by pm2-managed PIDs
+ *  13. embedded-data-orphaned  — embedded data absent from the canonical database
+ *  14. nats-bind-address       — loopback NATS listener
+ *  15. connector-unmatched     — authenticated per-connector counters
+ *  16. paired-agents           — authenticated feature status and rollback guidance
  *
  * Each check returns OK / WARN / FAIL with a one-line detail. `--fix`
  * attempts repair for checks with a known repair path. The fix flow
@@ -47,8 +53,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createOmniClient } from '@omni/sdk';
+import { OmniApiError, type OmniClient, createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import {
   type Config,
   type ServerConfig,
@@ -58,7 +65,7 @@ import {
   saveServerConfig,
 } from '../config.js';
 import { getHealthCheckUrl } from '../health.js';
-import { PM2_LOGROTATE_SETTINGS } from '../install-helpers.js';
+import { PM2_LOGROTATE_SETTINGS, natsBindDriftWarning } from '../install-helpers.js';
 import {
   type EmbeddedDumpResult,
   dumpEmbeddedDb,
@@ -77,6 +84,7 @@ import { buildRuntimeEnv, resolvePgservePort } from '../runtime-env.js';
 import { getServerLauncherPath } from '../server-bundle.js';
 import { loadSigningContext } from '../signing.js';
 import { generateApiKey } from '../utils/keys.js';
+import { stripTerminalControls } from '../utils/terminal.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -100,7 +108,10 @@ export type CheckId =
   | 'cli-signing-key-for-locked-instances'
   | 'pgserve-canonical'
   | 'port-canonical-owner'
-  | 'embedded-data-orphaned';
+  | 'embedded-data-orphaned'
+  | 'nats-bind-address'
+  | 'connector-unmatched'
+  | 'paired-agents';
 
 export interface CheckResult {
   id: CheckId;
@@ -189,6 +200,14 @@ function readPm2EnvKey(entry: Pm2Entry, key: string): string | undefined {
 
 /** Shape injected by the test harness to mock slow/external inputs. */
 export interface DoctorDeps {
+  /** Authenticated status from the API, never inferred from the CLI environment. */
+  fetchPairedAgentsStatus: (
+    apiPort: number,
+  ) => Promise<{ enabled: boolean; reason: 'flag_unset' | 'multitenancy_enabled' | null } | { error: string }>;
+  /** Authenticated connectors list; counters must never come from public health. */
+  listConnectors: OmniClient['connectors']['list'];
+  /** Clock for the recent-unmatched window; defaults to Date.now. */
+  now?: () => number;
   /** Return all pm2 processes (or null on error). */
   getPm2Processes: () => Promise<Pm2Entry[] | null>;
   /** Return true if a TCP connect to localhost:port succeeds. */
@@ -294,6 +313,28 @@ export interface DoctorDeps {
 /** Default production deps — each is a thin shim around the real call. */
 function productionDeps(): DoctorDeps {
   return {
+    fetchPairedAgentsStatus: async (apiPort) => {
+      try {
+        const cliConfig = loadLocalRuntimeConfig();
+        if (!cliConfig.apiKey) return { error: 'Authenticated system:read access is required' };
+        const baseUrl = (cliConfig.apiUrl ?? `http://localhost:${apiPort}`).replace(/\/$/, '');
+        const response = await fetch(`${baseUrl}/api/v2/system/paired-agents`, {
+          headers: { 'x-api-key': cliConfig.apiKey, 'Accept-Encoding': 'identity' },
+          signal: AbortSignal.timeout(1500),
+        });
+        if (!response.ok) return { error: `Status read returned HTTP ${response.status} (requires system:read)` };
+        return PairedAgentsResponseSchema.parse(await response.json()).data.consumers;
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : 'Unknown status read error' };
+      }
+    },
+    listConnectors: async (params) => {
+      const cliConfig = loadLocalRuntimeConfig();
+      if (!cliConfig.apiKey)
+        throw new OmniApiError('Authenticated connectors:read is required', 'UNAUTHORIZED', undefined, 401);
+      const baseUrl = cliConfig.apiUrl ?? `http://localhost:${loadServerConfig().port}`;
+      return createOmniClient({ baseUrl, apiKey: cliConfig.apiKey, cliVersion: VERSION }).connectors.list(params);
+    },
     getPm2Processes,
     canConnect: async (port: number) => {
       try {
@@ -1241,9 +1282,112 @@ function checkPgserveCanonical(deps: DoctorDeps): CheckResult {
   };
 }
 
+/**
+ * WARN when omni-nats listens on a different address than `server.natsHost`.
+ * No fix handler on purpose: pm2 restart keeps the old address, and whether to
+ * recreate omni-nats (`omni stop && omni start`) is the user's call.
+ */
+async function checkNatsBindAddress(deps: DoctorDeps): Promise<CheckResult> {
+  const processes = await deps.getPm2Processes();
+  const nats = processes?.find((p) => p.name === PM2_PROCESSES.nats);
+  const drift = natsBindDriftWarning(nats?.pm2_env?.args, deps.loadState().serverConfig);
+  if (drift) return { id: 'nats-bind-address', level: 'WARN', detail: drift };
+  return { id: 'nats-bind-address', level: 'OK', detail: 'omni-nats bind address matches server.natsHost' };
+}
+
 // ============================================================================
 // MAIN
 // ============================================================================
+
+const UnmatchedConnectorSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  totalUnmatched: z.number().int().nonnegative(),
+  lastUnmatchedAt: z.string().datetime().nullable(),
+  lastUnmatchedEventType: z.string().transform(stripTerminalControls).nullable(),
+});
+
+/** One line per connector, including zero counts, through the authenticated list only. */
+export async function checkConnectorUnmatched(
+  deps: Pick<DoctorDeps, 'listConnectors' | 'now'>,
+): Promise<CheckResult[]> {
+  try {
+    const checks: CheckResult[] = [];
+    const now = (deps.now ?? Date.now)();
+    let cursor: string | undefined;
+    const seen = new Set<string>();
+    while (true) {
+      const page = await deps.listConnectors({ limit: 100, cursor });
+      for (const item of page.items) {
+        const connector = UnmatchedConnectorSchema.parse(item);
+        const age =
+          connector.lastUnmatchedAt === null ? Number.POSITIVE_INFINITY : now - Date.parse(connector.lastUnmatchedAt);
+        checks.push({
+          id: 'connector-unmatched',
+          level: connector.totalUnmatched > 0 && age <= 24 * 60 * 60 * 1000 ? 'WARN' : 'OK',
+          detail: `${connector.name} (${connector.id}): total_unmatched=${connector.totalUnmatched} last_unmatched_at=${connector.lastUnmatchedAt ?? '-'} last_unmatched_event_type=${connector.lastUnmatchedEventType ?? '-'}`,
+        });
+      }
+      if (!page.meta.hasMore) return checks;
+      if (!page.meta.cursor || seen.has(page.meta.cursor)) throw new Error('Invalid connector pagination cursor');
+      cursor = page.meta.cursor;
+      seen.add(cursor);
+    }
+  } catch (error) {
+    return [
+      {
+        id: 'connector-unmatched',
+        level: 'WARN',
+        detail: connectorCountersError(error),
+      },
+    ];
+  }
+}
+
+function connectorCountersError(error: unknown): string {
+  if (error instanceof OmniApiError && (error.status === 401 || error.status === 403)) {
+    return 'Connector counters unavailable; authenticated connectors:read access is required.';
+  }
+  const reason =
+    error instanceof z.ZodError
+      ? `Invalid connector response: ${error.issues[0]?.path.join('.')}: ${error.issues[0]?.message}`
+      : error instanceof Error
+        ? error.message
+        : 'Unknown error';
+  return `Connector counters unavailable: ${stripTerminalControls(reason).slice(0, 200).trim() || 'Unknown error'}`;
+}
+
+const PairedAgentsResponseSchema = z.object({
+  data: z.object({
+    consumers: z.object({
+      flag: z.literal('OMNI_PAIRED_AGENT_CONSUMERS'),
+      enabled: z.boolean(),
+      reason: z.enum(['flag_unset', 'multitenancy_enabled']).nullable(),
+    }),
+  }),
+});
+const PAIRED_AGENTS_ROLLBACK = 'docs/deployment/paired-agent-journal-indexes.md#rolling-back';
+
+async function checkPairedAgents(deps: DoctorDeps): Promise<CheckResult> {
+  try {
+    const status = await deps.fetchPairedAgentsStatus(deps.loadState().serverConfig.port);
+    if ('error' in status) throw new Error(status.error);
+    if (status.enabled)
+      return { id: 'paired-agents', level: 'OK', detail: 'paired agents ON (OMNI_PAIRED_AGENT_CONSUMERS=true)' };
+    return {
+      id: 'paired-agents',
+      level: status.reason === 'multitenancy_enabled' ? 'WARN' : 'OK',
+      detail: `paired agents OFF: ${status.reason} (OMNI_PAIRED_AGENT_CONSUMERS${status.reason === 'multitenancy_enabled' ? '; OMNI_MULTITENANCY_ENABLED=true' : ' is unset'}). Grants are forward-only; rows claimed while OFF are never grant-delivered. See ${PAIRED_AGENTS_ROLLBACK}`,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : 'Unknown status read error';
+    return {
+      id: 'paired-agents',
+      level: 'WARN',
+      detail: `Paired-agent status unavailable: ${stripTerminalControls(reason).slice(0, 200)}`,
+    };
+  }
+}
 
 /** Run the full check battery sequentially. */
 async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
@@ -1261,6 +1405,9 @@ async function runAllChecks(deps: DoctorDeps): Promise<CheckResult[]> {
     checkPgserveCanonical(deps),
     await checkPortCanonicalOwner(deps),
     await checkEmbeddedDataOrphaned(deps),
+    await checkNatsBindAddress(deps),
+    ...(await checkConnectorUnmatched(deps)),
+    await checkPairedAgents(deps),
   ];
 }
 
@@ -1426,6 +1573,8 @@ Checks:
   pm2-logrotate-installed  pm2-logrotate module installed with expected settings
   pgserve-canonical        using canonical pgserve@^2.1.0 (shared backbone) vs. embedded
   port-canonical-owner     canonical ports (NATS, API) owned by pm2-managed PIDs
+  connector-unmatched      per-connector unmatched counters (authenticated connectors:read)
+  paired-agents            effective flag status and rollback guidance (authenticated system:read)
 
 Safety:
   --fix NEVER touches ~/.omni/data/pgserve — it only operates on the pm2

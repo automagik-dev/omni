@@ -85,6 +85,8 @@ NODE_ENV=staging
 
 ### PM2 Ecosystem File
 
+The NATS apps take their port and bind address from `args` (`-p`, `-a`), not from the `.env` files — `NATS_PORT` / `NATS_HOST` there are not read by this template. Keep `-p` in sync with `NATS_URL`, and change `-a` (default `127.0.0.1`, loopback only) to `0.0.0.0` or a LAN IP only if other hosts must connect to that instance's NATS; protect it then (auth/TLS or a private network), and point remote clients' `NATS_URL` at that address.
+
 **`/opt/omni/ecosystem.config.cjs`**:
 
 ```javascript
@@ -110,7 +112,7 @@ module.exports = {
       name: 'omni-prod-nats',
       cwd: '/opt/omni/production',
       script: '/opt/omni/production/bin/nats-server',
-      args: '-js -p 4222',
+      args: '-js -p 4222 -a 127.0.0.1',
       env: { HOME: '/opt/omni/production' },
       max_memory_restart: '256M',
     },
@@ -136,7 +138,7 @@ module.exports = {
       name: 'omni-staging-nats',
       cwd: '/opt/omni/staging',
       script: '/opt/omni/staging/bin/nats-server',
-      args: '-js -p 4223',
+      args: '-js -p 4223 -a 127.0.0.1',
       env: { HOME: '/opt/omni/staging' },
       max_memory_restart: '256M',
     },
@@ -250,6 +252,7 @@ omni-prod routes list --instance <id>
 | `NATS_URL` | NATS server connection URL | `nats://localhost:4222` |
 | `NATS_MANAGED` | Let PM2 manage NATS server | `true` |
 | `NATS_PORT` | NATS server listen port | `4222` |
+| `NATS_HOST` | NATS server bind address, read only by the repo's own `ecosystem.config.cjs` (source checkout). The multi-instance template above sets it with `-a` in each NATS app's `args` instead — see [PM2 Ecosystem File](#pm2-ecosystem-file) | `127.0.0.1` |
 | `API_PORT` | Omni API listen port | `8882` |
 | `API_HOST` | Omni API bind address | `0.0.0.0` |
 | `API_MANAGED` | Let PM2 manage API server | `true` |
@@ -282,6 +285,13 @@ Each instance must use unique ports for `PGSERVE_PORT`, `NATS_PORT`, and `API_PO
 ```bash
 # Check for port conflicts before starting
 lsof -i :8432 -i :8433 -i :4222 -i :4223 -i :8882 -i :8883
+```
+
+Instances can share the NATS bind address (`127.0.0.1`); only the ports must differ. After changing a NATS port or bind address in `args`, delete and start that NATS process again — `pm2 restart` reuses the previous arguments, and `pm2 start` without `--only` would start every app in the file:
+
+```bash
+pm2 delete omni-staging-nats
+pm2 start /opt/omni/ecosystem.config.cjs --only omni-staging-nats
 ```
 
 ### Disk Space

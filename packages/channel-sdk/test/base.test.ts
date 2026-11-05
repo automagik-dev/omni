@@ -257,14 +257,6 @@ describe('BaseChannelPlugin', () => {
     );
   });
 
-  it('should initialize with context', async () => {
-    await plugin.initialize(context);
-
-    // Initialization should complete without error
-    // Logs are now handled at the loader level, not base plugin
-    expect(plugin.connectCalled).toBe(false); // Not connected yet
-  });
-
   it('should connect an instance and emit events', async () => {
     await plugin.initialize(context);
     await plugin.connect('wa-001', { instanceId: 'wa-001', credentials: {} });

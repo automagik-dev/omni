@@ -24,7 +24,7 @@ Three capabilities being added:
 3. **Internal routing** (`channel-internal`) — Agents can route responses to other agents within Omni. No external protocol needed.
 4. **AG-UI provider** — Implement the stubbed `ag-ui` provider (currently throws 501). Different from A2A: AG-UI is agent→UI streaming, A2A is agent→agent.
 
-**Hard constraint:** All existing providers (agno, webhook, openclaw, claude-code) and channels (whatsapp, discord, slack, telegram) must keep working exactly as before. No changes to `IAgentProvider` interface.
+**Hard constraint:** All existing providers (agno, webhook, claude-code) and channels (whatsapp, discord, slack, telegram) must keep working exactly as before. No changes to `IAgentProvider` interface.
 
 ---
 
@@ -262,7 +262,7 @@ app.post('/a2a/:instanceId', validateA2AAuth, handleJsonRpc);
 ### `packages/core/src/types/agent.ts`
 ```typescript
 export const PROVIDER_SCHEMAS = [
-  'agno', 'webhook', 'openclaw', 'ag-ui', 'claude-code',
+  'agno', 'webhook', 'ag-ui', 'claude-code',
   'a2a',  // ← ADD
 ] as const;
 ```
@@ -540,7 +540,7 @@ async function* parseAGUiStream(body: ReadableStream): AsyncGenerator<AGUiEvent>
 |---|---|
 | `IAgentProvider` interface | Unchanged |
 | `AgentTrigger` / `AgentTriggerResult` | Unchanged |
-| agno, webhook, openclaw, claude-code providers | Unchanged |
+| agno, webhook, claude-code providers | Unchanged |
 | WhatsApp, Discord, Slack, Telegram plugins | Unchanged |
 | Agent dispatcher core flow | Unchanged (extension only — new hook after sendResponseParts) |
 | All existing DB tables | Unchanged (only additive: agentCard column, chainToInstanceId on instances) |

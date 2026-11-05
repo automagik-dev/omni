@@ -15,7 +15,9 @@
  *     by `person-clone.ts`; declared here as strategy `clone`.
  *   * `dead_letter_events`, `event_payloads`, `processed_events` — the
  *     `events_jobs_backlogs` pattern: derive tenant from the OWNING event by
- *     joining the row's varchar `event_id` to `omni_events`. `processed_events`
+ *     joining the row's varchar `event_id` to `omni_events`. Schema/governance
+ *     refusals are excluded: their legacy ids do not prove an owning event.
+ *     `processed_events`
  *     additionally carries a G0 rule ("tenant in the idempotency/primary key")
  *     that needs a PRIMARY KEY rewrite; that rewrite is OUT of G6 (no schema
  *     changes), so tenant is assigned via the owning event and the PK-rewrite is
@@ -27,6 +29,7 @@
  *     the exact open question.
  */
 
+import { PUBLISH_NOT_DECLARED, SCHEMA_NOT_REGISTERED, SCHEMA_VALIDATION_FAILED } from '@omni/core';
 import { TENANT_OWNERSHIP_SPECS } from '../tenancy-ownership';
 import { type MappingResult, type OperatorRowMap, deriveComposite, operatorTenantFor } from './mapping-engine';
 
@@ -138,8 +141,25 @@ export const STOP_BLOCKED_TABLES: readonly string[] = UNOWNED_TABLE_RULES.filter
 export function classifyDeriveFromEvent(
   rule: UnownedTableRule,
   owningEventTenant: string | null | undefined,
+  row: Readonly<Record<string, unknown>> = {},
 ): MappingResult {
   const ruleLabel = `unowned:${rule.table} derive-from-owning-event (${rule.eventIdColumn} -> omni_events.id)`;
+  // Refusals were never journaled; legacy event_ids are not ownership evidence.
+  const error = typeof row.error === 'string' ? row.error : '';
+  if (
+    rule.table === 'dead_letter_events' &&
+    [SCHEMA_VALIDATION_FAILED, SCHEMA_NOT_REGISTERED, PUBLISH_NOT_DECLARED].some((reason) =>
+      error.startsWith(`${reason}:`),
+    )
+  ) {
+    return {
+      disposition: 'quarantine',
+      tenantId: null,
+      ambiguityState: 'quarantined',
+      rule: ruleLabel,
+      reason: 'schema/governance refusal has no provable owning event; leave unowned',
+    };
+  }
   if (owningEventTenant === undefined) {
     return {
       disposition: 'quarantine',

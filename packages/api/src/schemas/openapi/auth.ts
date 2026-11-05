@@ -108,7 +108,10 @@ export function registerAuthSchemas(registry: OpenAPIRegistry): void {
     operationId: 'validateApiKey',
     tags: ['Auth'],
     summary: 'Validate API key',
-    description: 'Validate the provided API key and return key information. Used by CLI login flow.',
+    description:
+      'Validate the provided API key and return key information about that key only. Used by CLI login flow. ' +
+      'Any authenticated credential may call it for itself, so the auth:validate scope is not required ' +
+      '(a device key may never carry auth:* scopes); revoked, expired and unknown keys get 401.',
     security: [{ ApiKeyAuth: [] }],
     responses: {
       200: {

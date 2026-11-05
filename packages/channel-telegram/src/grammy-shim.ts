@@ -92,7 +92,12 @@ export interface TelegramBotLike {
 
   api: {
     answerCallbackQuery: (id: string) => Promise<unknown>;
-    sendChatAction: (chatId: string, action: string) => Promise<unknown>;
+    sendChatAction: (
+      chatId: string,
+      action: string,
+      other?: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => Promise<unknown>;
 
     sendMessage: (chatId: string, text: string, options?: Record<string, unknown>) => Promise<{ message_id: number }>;
     sendPoll: (

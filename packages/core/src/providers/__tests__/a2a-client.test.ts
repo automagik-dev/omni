@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { A2AClient, createA2AClient } from '../a2a-client';
+import { A2AClient } from '../a2a-client';
 import { OMNI_EXECUTION_CONTEXT_EXTENSION_URI } from '../execution-context';
 import { ProviderError, type StreamChunk } from '../types';
 
@@ -55,11 +55,6 @@ describe('A2AClient', () => {
   describe('constructor', () => {
     it('strips trailing slash from baseUrl', () => {
       const client = new A2AClient({ ...CONFIG, baseUrl: 'http://a2a.example.com/' });
-      expect(client).toBeDefined();
-    });
-
-    it('uses default timeout when not specified', () => {
-      const client = new A2AClient({ baseUrl: 'http://a2a.example.com' });
       expect(client).toBeDefined();
     });
   });
@@ -447,12 +442,5 @@ describe('A2AClient', () => {
       expect(result.healthy).toBe(false);
       expect(result.error).toContain('DNS lookup failed');
     });
-  });
-});
-
-describe('createA2AClient', () => {
-  it('returns an A2AClient instance', () => {
-    const client = createA2AClient({ baseUrl: 'http://example.com' });
-    expect(client).toBeInstanceOf(A2AClient);
   });
 });

@@ -52,6 +52,8 @@ export interface WriteSite {
 export type WriterCoverage =
   /** Ownership derived in-database from FK-covered parents (0041 trigger). */
   | 'db-derived'
+  /** 0093 trigger: authenticated scope, then visible persisted event, otherwise NULL. */
+  | 'db-context-or-event'
   /** Ownership forced NULL in-database: G0 authorises no source for this table in G2. */
   | 'db-unowned'
   /** Ownership root: trusted auth-plane context via tenancy-dual-write.ts. */
@@ -99,6 +101,7 @@ export function scanWriteSites(packagesDir: string, repoRoot: string): WriteSite
 export function coverageFor(table: string): WriterCoverage {
   const spec = getOwnershipSpec(table);
   if (!spec) throw new Error(`${table} is not a G2 tenant table`);
+  if (spec.insertOwnership === 'context-or-event') return 'db-context-or-event';
   if (spec.derivation === 'root') return 'trusted-root';
   return spec.derivation === 'derived' ? 'db-derived' : 'db-unowned';
 }
@@ -171,7 +174,7 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/api/src/services/chats.ts', table: 'chat_participants', coverage: 'db-derived' },
   { file: 'packages/api/src/services/chats.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/api/src/services/conversations.ts', table: 'conversations', coverage: 'db-unowned' },
-  { file: 'packages/api/src/services/dead-letters.ts', table: 'dead_letter_events', coverage: 'db-unowned' },
+  { file: 'packages/api/src/services/dead-letters.ts', table: 'dead_letter_events', coverage: 'db-context-or-event' },
   { file: 'packages/api/src/services/follow-up-lifecycle.ts', table: 'chat_follow_up_state', coverage: 'db-derived' },
   { file: 'packages/api/src/services/follow-up-sweeper.ts', table: 'chat_follow_up_state', coverage: 'db-derived' },
   { file: 'packages/api/src/services/instances.ts', table: 'instances', coverage: 'trusted-root' },
@@ -200,4 +203,6 @@ export const REGISTERED_WRITERS: readonly RegisteredWriter[] = [
   { file: 'packages/db/scripts/consolidate-lid-chats.ts', table: 'chat_participants', coverage: 'db-derived' },
   { file: 'packages/db/scripts/consolidate-lid-chats.ts', table: 'chats', coverage: 'db-derived' },
   { file: 'packages/db/scripts/consolidate-lid-chats.ts', table: 'messages', coverage: 'db-derived' },
+  // Connectors: the delivery claim IS the journal row (same pattern as webhook ingress).
+  { file: 'packages/api/src/services/connectors.ts', table: 'omni_events', coverage: 'db-derived' },
 ];

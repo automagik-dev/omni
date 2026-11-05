@@ -51,7 +51,7 @@ export const DEFAULT_TYPING_INDICATOR_MS = 2500;
  * (personal WhatsApp) has no such restriction imposed by Meta — the account
  * can message freely.
  */
-const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>([
+export const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<ChannelType>([
   'whatsapp-business',
   'hermes',
   'asc',
@@ -59,6 +59,7 @@ const CHANNELS_WITH_MESSAGING_WINDOW: ReadonlySet<ChannelType> = new Set<Channel
   // ASC is a Meta BSP: the far end of the flow is WhatsApp, so Meta's window
   // applies exactly as it does to the other BSPs above.
   'asc-flow',
+  'gupshup',
 ]);
 
 /**

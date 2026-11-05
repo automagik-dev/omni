@@ -1,0 +1,19 @@
+{
+  "repository": "https://github.com/automagik-dev/automagik",
+  "version": "3.32.1",
+  "commit": "39fc1e18928d7ed9cc47799c2dfbfa666b4cf4a6",
+  "packages": {
+    "@automagik/bots-dsh": {
+      "version": "3.32.1",
+      "file": "automagik-bots-dsh-3.32.1.tgz",
+      "integrity": "sha512-gukgcted7eYYw2MAU2KjefxYGQRJjaqzyCK7puPhoBmvsGQwLcvKt13YAhMTG0z34Ndv1cDs0ZG25TO29VFnLA==",
+      "size": 3318703
+    },
+    "@automagik/welcome-dsh": {
+      "version": "3.32.1",
+      "file": "automagik-welcome-dsh-3.32.1.tgz",
+      "integrity": "sha512-FUinoCg9SCAwuSqkLmup7yHcN/9AuhozjIPtqlFnhcHBn/jhOFJioDY8Jt2vEdHFXGtrj8y6C8qxYRNyJtugFg==",
+      "size": 330166
+    }
+  }
+}

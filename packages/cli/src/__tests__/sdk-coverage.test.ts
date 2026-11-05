@@ -66,6 +66,24 @@ const CLI_COMMANDS: Record<string, string> = {
   'instances.getUserProfile': 'instances profile',
 
   // ============================================================================
+  // CONNECTORS
+  // ============================================================================
+  'connectors.list': 'connectors list',
+  'connectors.get': 'connectors get <id>',
+  'connectors.create': 'connectors create',
+  'connectors.update': 'connectors update <id>',
+  'connectors.delete': 'connectors delete <id>',
+  'connectors.providers': 'connectors providers',
+  'connectors.provider': 'connectors providers <provider>',
+  'connectors.invoke': 'connectors invoke <id> <action>',
+  'connectors.subscriptions.list': 'connectors subscriptions list <connector-id>',
+  'connectors.subscriptions.add': 'connectors subscriptions add <connector-id>',
+  'connectors.subscriptions.pause': 'connectors subscriptions pause <connector-id> <subscription-id>',
+  'connectors.subscriptions.resume': 'connectors subscriptions resume <connector-id> <subscription-id>',
+  'connectors.subscriptions.remove': 'connectors subscriptions rm <connector-id> <subscription-id>',
+  'connectors.subscriptions.test': 'connectors test <connector-id> <subscription-id>',
+
+  // ============================================================================
   // MESSAGES
   // ============================================================================
   'messages.get': 'messages get <id>',

@@ -35,7 +35,7 @@ const { GeminiImageGenProvider } = await import('./imagegen');
 describe('GeminiImageGenProvider', () => {
   afterEach(() => {
     generateContentCalls.length = 0;
-    if (originalGeminiImageModel === undefined) process.env.GEMINI_IMAGE_MODEL = undefined;
+    if (originalGeminiImageModel === undefined) Reflect.deleteProperty(process.env, 'GEMINI_IMAGE_MODEL');
     else process.env.GEMINI_IMAGE_MODEL = originalGeminiImageModel;
   });
 

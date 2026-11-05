@@ -85,3 +85,20 @@ describe('POST /keys — admin profile guard', () => {
     expect(status).not.toBe(403);
   });
 });
+
+describe('agent key namespace is reserved for system provisioning', () => {
+  for (const [method, path] of [
+    ['POST', '/keys'],
+    ['PATCH', '/keys/key-id'],
+  ] as const) {
+    test(`${method} rejects a caller-supplied agent: name before service writes`, async () => {
+      const res = await mountKeysRoutes().request(path, {
+        method,
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'agent:tenant:support', scopes: ['messages:read'] }),
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain('reserved for system-provisioned keys');
+    });
+  }
+});

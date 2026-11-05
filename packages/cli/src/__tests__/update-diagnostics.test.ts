@@ -22,7 +22,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  UPDATE_DIAGNOSTICS_SCHEMA_VERSION,
   collectRecentLogSignals,
   createDiagnostics,
   getDiagnosticsDir,
@@ -45,12 +44,6 @@ afterEach(() => {
   if (originalConfigDir === undefined) delete process.env.OMNI_CONFIG_DIR;
   else process.env.OMNI_CONFIG_DIR = originalConfigDir;
   rmSync(tmpHome, { recursive: true, force: true });
-});
-
-describe('UPDATE_DIAGNOSTICS_SCHEMA_VERSION', () => {
-  test('is exactly 1 (omni starts at v1; genie at v2 — intentional asymmetry)', () => {
-    expect(UPDATE_DIAGNOSTICS_SCHEMA_VERSION).toBe(1);
-  });
 });
 
 describe('createDiagnostics', () => {

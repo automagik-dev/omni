@@ -804,7 +804,7 @@ Omni's `channel-sdk` could have an OpenClaw plugin that:
 |-------------|---------------------|-------------|
 | Event Bus (NATS) | System Events (`enqueueSystemEvent`) | Bridge NATS → OpenClaw events |
 | Channel Plugin SDK | ChannelPlugin interface | Implement OpenClaw's interface in Omni |
-| tRPC API | Gateway server methods | HTTP bridge between systems |
+| REST + OpenAPI | Gateway server methods | HTTP bridge between systems |
 | Message schema (Zod) | Message context (MsgContext) | Schema mapping layer |
 | Instance (account) | AccountId | 1:1 mapping |
 | Contact/Conversation | Peer/Session | Map Omni contacts to OpenClaw peers |
@@ -832,7 +832,7 @@ Omni's `channel-sdk` could have an OpenClaw plugin that:
 | Channel model | Plugin (in-process) | Package (separate process possible) |
 | Config | YAML/JSON5 file | PostgreSQL + env |
 | Event system | In-memory + system events | NATS JetStream |
-| API style | Gateway server methods | tRPC + Hono REST |
+| API style | Gateway server methods | Hono REST + OpenAPI |
 | Bot framework | grammY (Telegram) | Custom (via channel-sdk) |
 | State | File-based sessions | Database (Drizzle) |
 | Auth | Pairing codes | API keys + instance binding |

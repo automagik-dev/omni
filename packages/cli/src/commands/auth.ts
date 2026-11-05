@@ -1,7 +1,7 @@
 /**
  * Auth Commands
  *
- * omni auth login --api-key <key> [--api-url <url>]
+ * omni auth login [--api-key-stdin | --api-key <key>] [--api-url <url>] (or OMNI_CLI_API_KEY; none: device code)
  * omni auth status
  * omni auth logout
  * omni auth recover
@@ -9,6 +9,7 @@
 
 import { createOmniClient } from '@omni/sdk';
 import { Command } from 'commander';
+import { z } from 'zod';
 import {
   deleteConfigValue,
   getConfigDir,
@@ -20,11 +21,13 @@ import {
   saveConfig,
   saveLocalRuntimeConfig,
 } from '../config.js';
+import { deviceLoginFailure, devicePromptLines, runDeviceLoginWithInterrupt } from '../device-login.js';
 import { credentialStatusFields, serverPostureFields } from '../lib/credential-status.js';
 import * as output from '../output.js';
 import { PM2_PROCESSES, capturePm2, isPm2Available, runPm2 } from '../pm2.js';
 import { buildRuntimeEnv } from '../runtime-env.js';
 import { generateApiKey, maskApiKey } from '../utils/keys.js';
+import { quoteShellArg } from '../utils/shell.js';
 import { VERSION } from '../version.js';
 
 // ============================================================================
@@ -118,7 +121,12 @@ async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean;
     // Persist the key via `pm2 set` and bounce the process. We intentionally
     // do NOT ask pm2 to re-read the shell env — the env we pass via `runPm2`
     // is already hermetic and derived from config.
-    await runPm2(['set', `${name}:OMNI_API_KEY`, newKey]);
+    // PM2 echoes configured values on both streams; never forward its output.
+    const persisted = await capturePm2('set', `${name}:OMNI_API_KEY`, newKey).catch(() => ({ code: 1 }));
+    if (persisted.code !== 0) {
+      output.warn(`Could not save the PM2 key (${maskApiKey(newKey)}).`);
+      return { success: false, processName: name };
+    }
     const restartCode = await runPm2(['restart', name], runtimeEnv);
 
     return { success: restartCode === 0, processName: name };
@@ -130,6 +138,103 @@ async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean;
 // ============================================================================
 // HELPERS - VALIDATION
 // ============================================================================
+
+interface LoginOptions {
+  apiKey?: string;
+  apiKeyStdin?: boolean;
+  apiUrl?: string;
+}
+
+interface LoginCredential {
+  key: string;
+  source: 'flag' | 'stdin' | 'env';
+}
+
+const MAX_LOGIN_STDIN_BYTES = 8 * 1024;
+
+/** Bound the read itself, including the optional newline, instead of buffering until EOF. */
+async function readLoginStdin(): Promise<string> {
+  if (process.stdin.isTTY) throw new Error('--api-key-stdin requires piped stdin');
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > MAX_LOGIN_STDIN_BYTES) throw new Error('--api-key-stdin exceeds the 8 KB limit');
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks, size)
+    .toString('utf8')
+    .replace(/\r?\n$/, '');
+}
+
+/** Explicit input overrides CLI credentials; the server's OMNI_API_KEY must never be used here. */
+async function readLoginApiKey(options: LoginOptions): Promise<LoginCredential> {
+  if (options.apiKey !== undefined && options.apiKeyStdin) {
+    throw new Error('Use only one login input flag: --api-key-stdin or --api-key');
+  }
+  let key = options.apiKey ?? process.env.OMNI_CLI_API_KEY;
+  if (options.apiKeyStdin) key = await readLoginStdin();
+  const parsed = z.string().min(1).regex(/^\S+$/).safeParse(key);
+  if (!parsed.success) {
+    throw new Error('Provide one non-empty API key via --api-key-stdin, OMNI_CLI_API_KEY, or --api-key');
+  }
+  return {
+    key: parsed.data,
+    source: options.apiKeyStdin ? 'stdin' : options.apiKey !== undefined ? 'flag' : 'env',
+  };
+}
+
+/** No key given at all (no flag, no stdin, no OMNI_CLI_API_KEY): sign in by device code instead. */
+function wantsDeviceLogin(options: LoginOptions): boolean {
+  return options.apiKey === undefined && !options.apiKeyStdin && process.env.OMNI_CLI_API_KEY === undefined;
+}
+
+/**
+ * `auth login` without a key (#1461): the server's device flow for client omni-cli. The
+ * minted key is saved into the targeted server entry; the key itself is never printed.
+ * Denied, expired, Ctrl+C or a malformed reply exits with nothing saved.
+ */
+async function deviceLogin(options: LoginOptions): Promise<void> {
+  if (!process.stdin.isTTY) {
+    output.error(
+      'Device sign-in requires an interactive terminal. Provide --api-key-stdin, OMNI_CLI_API_KEY, or --api-key.',
+      undefined,
+      2,
+    );
+  }
+  const config = loadConfig();
+  const serverName = getTargetServerName();
+  if (options.apiUrl) config.apiUrl = options.apiUrl;
+  const apiUrl = (config.apiUrl ?? 'http://localhost:8882').replace(/\/+$/, '');
+  const result = await runDeviceLoginWithInterrupt({
+    url: apiUrl,
+    onPrompt: (prompt) => {
+      for (const line of devicePromptLines(prompt)) output.info(line);
+    },
+  });
+  if (result.status !== 'approved') {
+    // Exit 2 as every other login refusal does (130 for Ctrl+C), naming the key inputs.
+    const failure = deviceLoginFailure(result);
+    output.error(
+      `${failure.message} To log in with a key instead, provide one via --api-key-stdin, OMNI_CLI_API_KEY, or --api-key.`,
+      undefined,
+      failure.exitCode === 130 ? 130 : 2,
+    );
+  }
+  config.apiUrl = apiUrl;
+  config.apiKey = result.key.apiKey;
+  saveConfig(config);
+  output.success(`Logged in successfully (server: ${serverName})`, {
+    server: serverName,
+    keySource: 'device',
+    apiUrl,
+    keyId: result.key.keyId,
+    scopes: result.key.scopes,
+    keyExpiresAt: result.key.keyExpiresAt,
+    configPath: getConfigPath(),
+  });
+}
 
 /** Validate an API key against the API. Returns true if valid. */
 async function validateKey(apiUrl: string, apiKey: string): Promise<boolean> {
@@ -163,7 +268,6 @@ function updateLocalConfig(apiKey: string, apiUrl?: string): void {
 
 /** Print manual recovery instructions when automation fails. */
 function printManualInstructions(newKey?: string): void {
-  const key = newKey ?? '<your-new-key>';
   output.raw('');
   output.raw('  Manual recovery steps:');
   output.raw('');
@@ -172,13 +276,20 @@ function printManualInstructions(newKey?: string): void {
   output.raw('       cat ~/.pm2/dump.pm2 | grep OMNI_API_KEY');
   output.raw('');
   output.raw('  2. Update CLI config:');
-  output.raw(`       omni auth login --api-key ${key}`);
+  output.raw('       Sign in interactively: omni auth login --server default');
+  output.raw(
+    '       Or read a key from stdin: omni auth login --server default --api-key-stdin < /secure/path/omni-api-key',
+  );
   output.raw('');
   output.raw('  3. Or to rotate to a new key:');
   output.raw('     a. Stop the API:  omni stop');
   output.raw('     b. Delete primary key from DB manually');
-  output.raw(`     c. Restart:       OMNI_API_KEY=${key} omni start`);
-  output.raw(`     d. Login:         omni auth login --api-key ${key}`);
+  output.raw('     c. Restart:       OMNI_API_KEY=<your-new-key> omni start');
+  output.raw('     d. Sign in interactively: omni auth login --server default');
+  output.raw(
+    '        Or read a key from stdin: omni auth login --server default --api-key-stdin < /secure/path/omni-api-key',
+  );
+  if (newKey) output.raw('  View the saved key: omni server list --reveal');
   output.raw('');
 }
 
@@ -226,8 +337,8 @@ function handleRotationFailure(newKey: string, processName: string | null, apiUr
   } else {
     output.warn(`Failed to restart ${processName} with new key.`);
   }
-  printManualInstructions(newKey);
   updateLocalConfig(newKey, apiUrlOverride);
+  printManualInstructions(newKey);
   output.warn(`Config updated with new key (${maskApiKey(newKey)}) but API restart failed.`);
   output.raw('  After fixing the DB and restarting the API, run: omni status');
   output.raw('');
@@ -275,8 +386,8 @@ async function handleRotationSuccess(
   output.raw('  Or diagnose with: omni doctor --fix');
   output.raw('  Then verify with: omni status');
   output.raw('');
-  // biome-ignore lint/suspicious/noConsole: CLI output — key shown once for manual use
-  console.log(`  New key (save this): ${newKey}`);
+  output.raw(`  Saved new key: ${maskApiKey(newKey)}`);
+  output.raw('  View the saved key in the default row: omni server list --reveal');
   output.raw('');
 }
 
@@ -312,24 +423,48 @@ export function createAuthCommand(): Command {
   auth
     .command('login')
     .description('Save API credentials into the targeted server entry')
-    .requiredOption('--api-key <key>', 'API key for authentication')
+    .option('--api-key <key>', 'API key (visible in history/process lists; prefer --api-key-stdin or OMNI_CLI_API_KEY)')
+    .option('--api-key-stdin', 'Read one API key from piped stdin (8 KB maximum including trailing newline)')
     .option('--api-url <url>', 'API base URL (default: the targeted server entry URL)')
     .addHelpText(
       'after',
       `
 Credentials are written to the server entry this command targets — the active
 one, or the entry named by the global flag:
-  omni auth login --server prod --api-key <key>
+  omni auth login --server prod --api-key-stdin < /secure/path/omni-api-key
+
+Or supply OMNI_CLI_API_KEY securely through the environment and run:
+  omni auth login --server prod
+
+With no key at all (no flag, no stdin, no OMNI_CLI_API_KEY), an interactive login signs this
+CLI in by device code: it prints a code and a link, waits for the owner to
+approve it (the link, omni approve <code> on the server, or WhatsApp), and saves
+the new device key into the targeted server entry. Ctrl+C cancels; nothing is saved.
+Without an interactive terminal, supply one of the key inputs above; otherwise login exits 2.
+
+Explicit input flags override OMNI_CLI_API_KEY; do not combine the two login
+input flags. Prefer a secret-manager pipe or protected file over pasting a key
+into shell history or chat. The legacy key flag remains supported. OMNI_API_KEY
+configures the API server primary key and is ignored by login. Stdin is limited
+to 8 KB including the optional trailing LF/CRLF. Successful login reports keySource (device/flag/stdin/env).
 `,
     )
-    .action(async (options: { apiKey: string; apiUrl?: string }) => {
+    .action(async (options: LoginOptions) => {
+      if (wantsDeviceLogin(options)) return deviceLogin(options);
+      let credential: LoginCredential;
+      try {
+        credential = await readLoginApiKey(options);
+      } catch (err) {
+        output.error(err instanceof Error ? err.message : 'Could not read API key input', undefined, 2);
+        return;
+      }
       // `loadConfig()` has already resolved the targeted entry (active, or the
       // one named by the global `--server` flag) into apiUrl/apiKey, and
       // `saveConfig()` writes back into that same entry — so login is
       // multi-server aware without any explicit plumbing here.
       const config = loadConfig();
       const serverName = getTargetServerName();
-      config.apiKey = options.apiKey;
+      config.apiKey = credential.key;
 
       if (options.apiUrl) {
         config.apiUrl = options.apiUrl;
@@ -354,6 +489,7 @@ one, or the entry named by the global flag:
 
         output.success(`Logged in successfully (server: ${serverName})`, {
           server: serverName,
+          keySource: credential.source,
           apiUrl: config.apiUrl,
           keyName: result.keyName,
           keyPrefix: result.keyPrefix,
@@ -376,7 +512,7 @@ one, or the entry named by the global flag:
 
       if (!config.apiKey) {
         output.error(
-          `Not logged in for server "${serverName}". Run: omni auth login --server ${serverName} --api-key <key>`,
+          `Not logged in for server "${serverName}". Run: omni auth login --server ${quoteShellArg(serverName)} --api-key-stdin < /secure/path/omni-api-key`,
           undefined,
           2,
         );

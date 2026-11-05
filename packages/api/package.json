@@ -1,6 +1,6 @@
 {
   "name": "@omni/api",
-  "version": "2.261019.7",
+  "version": "2.261104.23",
   "private": true,
   "type": "module",
   "exports": {
@@ -11,10 +11,6 @@
     "./app": {
       "types": "./src/app.ts",
       "default": "./src/app.ts"
-    },
-    "./trpc": {
-      "types": "./src/trpc/index.ts",
-      "default": "./src/trpc/index.ts"
     },
     "./admin": {
       "types": "./src/admin.ts",
@@ -30,12 +26,15 @@
     "postinstall": "node ../../scripts/ensure-libicu-symlinks.cjs"
   },
   "dependencies": {
+    "@better-auth/passkey": "1.7.7",
     "@google/genai": "^1.0.0",
     "@hono/swagger-ui": "^0.4.1",
     "@hono/zod-validator": "^0.4.3",
     "@omni/channel-sdk": "workspace:*",
     "@omni/channel-slack": "workspace:*",
     "@omni/channel-whatsapp-business": "workspace:*",
+    "@omni/connector-clickup": "workspace:*",
+    "@omni/connector-sdk": "workspace:*",
     "@omni/core": "workspace:*",
     "@omni/db": "workspace:*",
     "@omni/media-processing": "workspace:*",
@@ -47,11 +46,12 @@
     "@opentelemetry/sdk-node": "^0.217.0",
     "@opentelemetry/semantic-conventions": "^1.37.0",
     "@sentry/bun": "^10.43.0",
-    "@trpc/server": "^11.0.0-rc.608",
+    "better-auth": "1.7.7",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.6.17",
     "lru-cache": "^11.2.6",
     "nats": "^2.29.3",
+    "reflect-metadata": "0.2.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
@@ -59,7 +59,7 @@
     "@omni/channel-harness": "workspace:*",
     "@asteasolutions/zod-to-openapi": "7.3.4",
     "@types/qrcode-terminal": "^0.12.2",
-    "@types/bun": "1.3.14",
+    "@types/bun": "1.4.4",
     "baileys": "file:../channel-whatsapp/vendor/baileys-v7.0.0-rc14.tgz",
     "openapi3-ts": "^4.5.0",
     "qrcode-terminal": "^0.12.0",

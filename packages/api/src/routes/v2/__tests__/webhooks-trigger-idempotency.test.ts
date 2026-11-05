@@ -95,3 +95,12 @@ describe('POST /api/v2/events/trigger idempotencyKey (#1109)', () => {
     expect(triggered).toHaveLength(0);
   });
 });
+
+test('events trigger refuses every connector namespace before the service', async () => {
+  const { app, triggered } = buildApp();
+  for (const eventType of ['connector.event', 'connector.gitlab.merge_request.merged']) {
+    const response = await trigger(app, { eventType, payload: { targetAutomationIds: ['other-tenant-automation'] } });
+    expect(response.status).toBe(400);
+  }
+  expect(triggered).toEqual([]);
+});

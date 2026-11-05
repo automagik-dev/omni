@@ -38,7 +38,8 @@ import {
   createDbHandle,
   instances,
 } from '@omni/db';
-import { driverRejection, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { assertPgTestRole, driverRejection, pgRoleUrl, provisionMigratedDatabase } from '@omni/db/pg-migrated-template';
+import { dropDatabaseOrThrow } from '@omni/db/pg-testing';
 import { eq } from 'drizzle-orm';
 import { MULTITENANCY_FLAG_ENV } from '../../tenancy/feature-flag';
 import { __resetInstanceOwnerRegistry, rememberInstanceOwners } from '../../tenancy/instance-owner-registry';
@@ -78,16 +79,6 @@ function runSqlOn(url: string, script: string): { exitCode: number; stderr: stri
   }
 }
 
-function urlFor(base: string, database: string, user?: { name: string; password: string }): string {
-  const url = new URL(base);
-  url.pathname = `/${database}`;
-  if (user) {
-    url.username = user.name;
-    url.password = user.password;
-  }
-  return url.toString();
-}
-
 /** A registry that reports every instance healthy and records what it was asked about. */
 function makeRegistry(probed: string[], connected: string[]): ChannelRegistry {
   return {
@@ -118,7 +109,7 @@ postgresDescribe('instance-monitor sweeps under real RLS enforcement', () => {
 
   beforeAll(async () => {
     provisionMigratedDatabase({ superUrl, psqlBin }, dbName);
-    const superDbUrl = urlFor(superUrl, dbName);
+    const superDbUrl = pgRoleUrl(superUrl, dbName);
 
     const seeded = runSqlOn(
       superDbUrl,
@@ -142,11 +133,15 @@ postgresDescribe('instance-monitor sweeps under real RLS enforcement', () => {
     // ambient pool from INSIDE a worker transaction would deadlock on a
     // single-connection pool (waiting for the connection the transaction holds)
     // instead of failing, and a hang is a much worse gate than an assertion.
-    runtimeDb = openDb(urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }), 5);
+    runtimeDb = openDb(
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.runtime, password: passwords.runtime }),
+      5,
+    );
+    await assertPgTestRole(runtimeDb, DEFAULT_ROLE_NAMES.runtime);
     // ADR-0003: the auth plane is the only runtime-process identity that may
     // enumerate `tenants`, which is what the fan-out needs.
     authPlaneDb = openDb(
-      urlFor(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
+      pgRoleUrl(superUrl, dbName, { name: DEFAULT_ROLE_NAMES.authPlane, password: passwords.authPlane }),
       2,
     );
   }, 180_000);
@@ -155,7 +150,7 @@ postgresDescribe('instance-monitor sweeps under real RLS enforcement', () => {
 
   afterAll(async () => {
     for (const close of closers) await close();
-    runSqlOn(superUrl, `DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE);`);
+    dropDatabaseOrThrow({ superUrl, psqlBin }, dbName);
   });
 
   test('the CONTROL: an unscoped whole-table instances read is refused, not empty', async () => {
