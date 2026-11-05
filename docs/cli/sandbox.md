@@ -139,6 +139,85 @@ update recorded by an older Omni), the message stays the plain one.
 The update only takes a version npm publishes on the sandbox's channel (`latest`, or `next` for a
 prerelease), and only one update runs at a time.
 
+## External system service (Linux)
+
+A system unit can run a sandbox without a systemd user manager. Install it once with
+`omni install --sandbox --home /var/lib/omni/sandbox --no-start`, as its service user,
+and keep `atLogin=false`. An administrator can install this unit; updates themselves
+run as `omni`, without root or permission to stop/start system units:
+
+```ini
+[Unit]
+Description=Omni sandbox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=omni
+WorkingDirectory=/var/lib/omni/sandbox
+Environment=HOME=/var/lib/omni
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/bun /var/lib/omni/sandbox/runtime/node_modules/@automagik/omni/bin/omni sandbox run --home /var/lib/omni/sandbox
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=300
+RuntimeMaxSec=infinity
+WatchdogSec=0
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Use the actual pinned Bun path and a home writable only by the service user.
+`Type=exec` also works. The unit must run the supervisor as its main PID, use
+`Restart=always`, and have no watchdog or runtime deadline. `ExitType`, on systemd
+versions that support it, must remain `main`. Do not use `--at-login` with an external
+system unit. The service user must be able to read its supervisor's `/proc/<pid>/cgroup`
+and query the unit with `systemctl show`; neither requires root in a normal systemd setup.
+
+The update detects the supervisor's system-service cgroup, including a system unit
+whose name happens to equal Omni's user-unit name. It checks the unit settings and
+the running supervisor's update protocol before doing anything destructive. Unsupported
+settings, an unreadable cgroup, an incompatible supervisor, an existing recovery backup,
+or absolute install symlinks or links outside the protected install directories cause an immediate refusal:
+"In-app update is unavailable for this system service; update it manually first."
+No installer is detached into the unit and no 15-minute wait is needed for this refusal.
+
+The compatible supervisor accepts the request, stops API, NATS and Postgres in order,
+and keeps its own PID alive. This keeps the unit active: systemd neither kills the
+installer's cgroup nor races the install by restarting an old runtime. Once all children
+have exited, the supervisor preserves independent copies under `<home>/.update-backup`
+(without sharing Bun cache hardlinks), and runs the target CLI's install with `--no-start`. Runtime,
+autopg, pgserve tooling, NATS, config and sandbox state are protected; the data directory
+is never replaced. New concurrent sandbox start/stop/install commands are refused during
+this maintenance window. Allow enough free disk space for another copy of the install.
+
+If install fails, the originals are restored before the same supervisor restarts the old
+Postgres, NATS and API. The owner gets a fixed mapped reason: "The install failed; the
+previous runtime was restored." On success the supervisor exits as its final step, and
+the external unit starts the new runtime. Migrations run on the new API's boot, after the
+install. The new supervisor removes the backup only after its API's health endpoint
+succeeds. If boot never becomes healthy, the backup stays and `logs/update.log` records
+"The new sandbox did not become healthy; its rollback backup was kept."
+
+An operator can then stop the unit, restore the install components listed in
+`.update-backup/manifest.json` from that directory to their corresponding paths directly
+under the home, archive/remove the now-consumed backup directory, and start the unit.
+Keep `data/` intact. Database migrations are not reversed. An interrupted install or
+invalid recovery manifest is refused at supervisor startup so the saved originals can
+be recovered deliberately. Do not manually stop or kill the unit during an update;
+a host crash, forced service stop, or filesystem failure still needs operator recovery.
+
+**One manual upgrade is required for supervisors predating this protocol**, including
+the lembr incident's `2.261104.23`. Stop the external unit, install a release containing
+this fix as the service user with `--no-start`, then start the unit. The updated handoff
+refuses an older running supervisor with the fixed reason above. An entirely old runtime
+still runs its old handoff code; this change cannot retroactively add that refusal before
+the manual upgrade. Do not retry its in-app update as a substitute for that upgrade.
+
 ## Embedded in an app
 
 An app that ships Omni inside itself runs the supervisor with `omni sandbox run --embedded

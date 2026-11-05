@@ -59,6 +59,15 @@ const MAX_REASON_LENGTH = 80;
 /** One short line for the owner: a known error in fixed words, anything else only where to look. */
 export function updateFailureReason(error: string, logPath: string): string {
   const generic = `The install failed; see ${logPath} on the server.`;
+  const sandboxReasons: Record<string, string> = {
+    'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.':
+      'In-app update is unavailable for this system service; update it manually first.',
+    'Sandbox install failed; the previous runtime was restored.':
+      'The install failed; the previous runtime was restored.',
+    'Sandbox update did not become healthy; the rollback backup was kept.':
+      'The new sandbox did not become healthy; its rollback backup was kept.',
+  };
+  if (Object.hasOwn(sandboxReasons, error)) return sandboxReasons[error] ?? generic;
   const bun = BUN_MISMATCH.exec(error);
   const [needs, has] = [bun?.[1] ?? '', bun?.[2] ?? ''];
   if (!bun || needs.length > MAX_VERSION_LENGTH || has.length > MAX_VERSION_LENGTH) return generic;

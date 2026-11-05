@@ -37,6 +37,7 @@
 import { type SpawnOptions, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   chmodSync,
   closeSync,
   existsSync,
@@ -51,6 +52,15 @@ import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
+import {
+  SANDBOX_EXTERNAL_UPDATE_REFUSAL,
+  SANDBOX_UPDATE_ROLLED_BACK,
+  SANDBOX_UPDATE_UNHEALTHY,
+  assertSandboxRollbackSafe,
+  beginSandboxUpdateTransaction,
+  hasPendingSandboxUpdate,
+} from './sandbox-update-transaction.js';
+
 import {
   AUTOPG_PIN,
   type AutopgPaths,
@@ -644,6 +654,7 @@ export interface SandboxDeps {
   health(apiUrl: string, timeoutMs: number): Promise<boolean>;
   /** Installs the pinned nats-server at `target`, or keeps the one there when it is the pin. */
   installNats(target: string): Promise<NatsInstall>;
+  readCgroup(pid: number): string | null;
   isAlive(pid: number): boolean;
   kill(pid: number, signal: NodeJS.Signals): void;
   now(): Date;
@@ -739,6 +750,13 @@ function defaultSandboxDeps(): SandboxDeps {
     isPortFree: isLoopbackPortFree,
     health: pollHealth,
     installNats: installNatsBinary,
+    readCgroup: (pid) => {
+      try {
+        return readFileSync(`/proc/${pid}/cgroup`, 'utf8');
+      } catch {
+        return null;
+      }
+    },
     isAlive: processAlive,
     kill: (pid, signal) => process.kill(pid, signal),
     now: () => new Date(),
@@ -1144,6 +1162,7 @@ export async function startSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
+  assertNoSandboxUpdate(layout, deps);
   const state = requireState(layout);
   const defaultHome = unitDefaultHome(state, opts.defaultHome);
   if (livePid(layout, deps) === null) {
@@ -1183,6 +1202,7 @@ export async function stopSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
+  assertNoSandboxUpdate(layout, deps);
   const state = requireState(layout);
   const env = serviceManagerEnv(deps);
   const names = sandboxUnitNames(layout.home, unitDefaultHome(state, opts.defaultHome));
@@ -1285,6 +1305,7 @@ export async function installSandbox(
     );
   }
   const layout = sandboxLayout(opts.home);
+  assertNoSandboxUpdate(layout, deps, opts.start === false);
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
   const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
@@ -1375,8 +1396,178 @@ export async function uninstallSandbox(
   return report(layout, deps, 0);
 }
 
+/** Files of the supervisor-owned update protocol. Neither carries credentials. */
+export const sandboxUpdateFiles = (layout: SandboxLayout) => ({
+  request: join(layout.runDir, 'update-request.json'),
+  owner: join(layout.runDir, 'update-owner.json'),
+});
+const UpdateOwnerSchema = z.object({ pid: z.number().int().positive() });
+
+export function sandboxUpdateOwner(layout: SandboxLayout): number | null {
+  try {
+    return UpdateOwnerSchema.parse(JSON.parse(readFileSync(sandboxUpdateFiles(layout).owner, 'utf8'))).pid;
+  } catch {
+    return null;
+  }
+}
+
+function assertNoSandboxUpdate(layout: SandboxLayout, deps: SandboxDeps, noStartInstall = false): void {
+  const owner = sandboxUpdateOwner(layout);
+  if (
+    owner !== null &&
+    deps.isAlive(owner) &&
+    !(noStartInstall && deps.env.OMNI_SANDBOX_UPDATE_PID === String(owner))
+  ) {
+    throw new SandboxError('A supervisor-owned sandbox update is in progress.');
+  }
+}
+
 /** A version `omni sandbox update` takes: what npm publishes, never a range or a tag. */
 const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+const UpdateRequestSchema = z.object({ version: z.string().regex(SANDBOX_UPDATE_VERSION) }).strict();
+export function readSandboxUpdateRequest(layout: SandboxLayout): string | null {
+  try {
+    return UpdateRequestSchema.parse(JSON.parse(readFileSync(sandboxUpdateFiles(layout).request, 'utf8'))).version;
+  } catch {
+    return null;
+  }
+}
+
+const UpdateSupervisorSchema = z.object({
+  pid: z.number().int().positive(),
+  updateProtocol: z.literal(1),
+  updating: z.literal(false).optional(),
+  children: z.object({ api: z.object({ state: z.literal('ready') }) }),
+});
+const SystemUnitSchema = z.object({
+  MainPID: z.string(),
+  Restart: z.literal('always'),
+  Type: z.enum(['simple', 'exec']),
+  WatchdogUSec: z.literal('0'),
+  RuntimeMaxUSec: z.literal('infinity'),
+  RemainAfterExit: z.literal('no'),
+  ExitType: z.literal('main').optional(),
+});
+
+/** system.slice is the boundary: even a unit named like our user unit is external here. */
+function externalSystemUnit(cgroup: string): string | null {
+  return /(?:^|\/)system\.slice\/([^/\n]+\.service)(?:\/|$)/m.exec(cgroup)?.[1] ?? null;
+}
+function refuseExternalUpdate(layout: SandboxLayout): never {
+  appendFileSync(
+    sandboxUpdateLogPath(layout),
+    `${JSON.stringify({ ok: false, error: SANDBOX_EXTERNAL_UPDATE_REFUSAL })}\n`,
+    { mode: 0o600 },
+  );
+  throw new SandboxError(SANDBOX_EXTERNAL_UPDATE_REFUSAL);
+}
+
+async function queueSupervisedUpdate(
+  layout: SandboxLayout,
+  state: SandboxState,
+  pid: number,
+  unit: string,
+  version: string,
+  deps: SandboxDeps,
+): Promise<void> {
+  try {
+    const status = UpdateSupervisorSchema.parse(JSON.parse(readFileSync(layout.statusPath, 'utf8')));
+    if (status.pid !== pid || state.atLogin) throw new Error('unsupported supervisor');
+    assertSandboxRollbackSafe(layout.home);
+    const shown = await deps.run(
+      [
+        'systemctl',
+        'show',
+        unit,
+        '--property=MainPID,Restart,Type,WatchdogUSec,RuntimeMaxUSec,RemainAfterExit,ExitType',
+      ],
+      { env: serviceManagerEnv(deps) },
+    );
+    if (shown.code !== 0) throw new Error('unit not visible');
+    const properties = SystemUnitSchema.parse(
+      Object.fromEntries(
+        shown.stdout
+          .trim()
+          .split('\n')
+          .map((line) => {
+            const split = line.indexOf('=');
+            return [line.slice(0, split), line.slice(split + 1)];
+          }),
+      ),
+    );
+    if (properties.MainPID !== String(pid)) throw new Error('not the main process');
+    writeFileSync(sandboxUpdateFiles(layout).request, JSON.stringify({ version }), { flag: 'wx', mode: 0o600 });
+  } catch {
+    return refuseExternalUpdate(layout);
+  }
+  try {
+    deps.kill(pid, 'SIGUSR2');
+  } catch {
+    rmSync(sandboxUpdateFiles(layout).request, { force: true });
+    return refuseExternalUpdate(layout);
+  }
+}
+
+/** Called only after every child is stopped, while the external unit's main PID is still alive. */
+export async function installSupervisedSandboxUpdate(
+  opts: { home: string; version: string; pid: number },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<void> {
+  const layout = sandboxLayout(opts.home);
+  const previous = requireState(layout);
+  if (
+    sandboxUpdateOwner(layout) !== opts.pid ||
+    readPid(layout) !== null ||
+    !deps.isAlive(opts.pid) ||
+    installedVersion(layout, '@automagik/omni') !== previous.version
+  ) {
+    return refuseExternalUpdate(layout);
+  }
+  let transaction: ReturnType<typeof beginSandboxUpdateTransaction> | undefined;
+  try {
+    transaction = beginSandboxUpdateTransaction(layout.home, previous.version, opts.version);
+    const result = await deps.run(
+      [
+        previous.bun,
+        'x',
+        '--bun',
+        `@automagik/omni@${opts.version}`,
+        'install',
+        '--sandbox',
+        '--home',
+        layout.home,
+        '--no-start',
+        '--json',
+      ],
+      {
+        cwd: layout.home,
+        env: { ...sandboxBaseEnv(layout, deps.env), OMNI_SANDBOX_UPDATE_PID: String(opts.pid) },
+      },
+    );
+    appendFileSync(sandboxUpdateLogPath(layout), `${result.stdout}\n${result.stderr}\n`, { mode: 0o600 });
+    if (
+      result.code !== 0 ||
+      readSandboxState(layout)?.version !== opts.version ||
+      installedVersion(layout, '@automagik/omni') !== opts.version
+    )
+      throw new Error('install failed');
+    transaction.commit(); // The next supervisor retires the backup only after its API is healthy.
+  } catch {
+    try {
+      transaction?.rollback();
+    } catch {
+      /* Keep the remaining backup for operator recovery. */
+    }
+    const restored =
+      !hasPendingSandboxUpdate(layout.home) &&
+      readSandboxState(layout)?.version === previous.version &&
+      installedVersion(layout, '@automagik/omni') === previous.version;
+    const error = restored ? SANDBOX_UPDATE_ROLLED_BACK : SANDBOX_UPDATE_UNHEALTHY;
+    appendFileSync(sandboxUpdateLogPath(layout), `${JSON.stringify({ ok: false, error })}\n`, { mode: 0o600 });
+    throw new SandboxError(error);
+  }
+}
 
 /**
  * Updates the sandbox to `version` from outside it. The sandbox's own API runs this when the
@@ -1390,12 +1581,24 @@ const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 export async function handOffSandboxUpdate(
   opts: { home: string; defaultHome: string; version: string },
   deps: SandboxDeps = defaultSandboxDeps(),
-): Promise<{ via: 'systemd' | 'detached'; logPath: string; version: string }> {
+): Promise<{ via: 'systemd' | 'detached' | 'supervisor'; logPath: string; version: string }> {
   if (!SANDBOX_UPDATE_VERSION.test(opts.version)) {
     throw new SandboxError(`Not a release version: '${opts.version}'`);
   }
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
+  if (deps.platform === 'linux') {
+    const pid = livePid(layout, deps);
+    if (pid !== null) {
+      const cgroup = deps.readCgroup(pid);
+      if (cgroup === null) return refuseExternalUpdate(layout);
+      const unit = externalSystemUnit(cgroup);
+      if (unit) {
+        await queueSupervisedUpdate(layout, state, pid, unit, opts.version, deps);
+        return { via: 'supervisor', logPath: sandboxUpdateLogPath(layout), version: opts.version };
+      }
+    }
+  }
   const cmd = [
     state.bun,
     'x',

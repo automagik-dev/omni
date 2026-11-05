@@ -512,6 +512,33 @@ describe('why an update did not complete, from the sandbox update log', () => {
     expect(await setup(env(), { clock }).updater.reconcile()).toBe('not-completed');
   }
 
+  test('an external-service refusal settles immediately on command exit with its fixed reason', async () => {
+    const { updater } = setup(env());
+    await updater.request(LATEST, 'key-1');
+    appendFileSync(
+      updateLog(),
+      `${JSON.stringify({ ok: false, error: 'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.' })}\n`,
+    );
+    spawned[0]?.child.exitListener?.(1, null);
+    await waitForFailedUpdate();
+    const reason = 'In-app update is unavailable for this system service; update it manually first.';
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${reason}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([reason]);
+  });
+
+  test('the restored old API reports the failed install at boot without waiting for the grace period', async () => {
+    const clock = { at: Date.now() };
+    await setup(env(), { clock }).updater.request(LATEST, 'key-1');
+    appendFileSync(
+      updateLog(),
+      `${JSON.stringify({ ok: false, error: 'Sandbox install failed; the previous runtime was restored.' })}\n`,
+    );
+    expect(await setup(env(), { clock }).updater.reconcile()).toBe('not-completed');
+    const reason = 'The install failed; the previous runtime was restored.';
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${reason}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([reason]);
+  });
+
   test('a Bun mismatch says which Bun the new version needs and which this computer has', async () => {
     writeFileSync(updateLog(), 'Resolving dependencies\n');
     await failAfterGrace(`bun x: installing\n${BUN_MISMATCH}\n`);
@@ -648,4 +675,24 @@ describe('the confirmation message', () => {
     expect(updateCodeInMessage('update K7QM20')).toBeNull();
     expect(updateCodeInMessage('update')).toBeNull();
   });
+});
+
+test('sandbox external-service refusals and recovery use only allow-listed owner-facing reasons', () => {
+  for (const [error, reason] of [
+    [
+      'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.',
+      'In-app update is unavailable for this system service; update it manually first.',
+    ],
+    [
+      'Sandbox install failed; the previous runtime was restored.',
+      'The install failed; the previous runtime was restored.',
+    ],
+    [
+      'Sandbox update did not become healthy; the rollback backup was kept.',
+      'The new sandbox did not become healthy; its rollback backup was kept.',
+    ],
+  ]) {
+    expect(updateFailureReason(error ?? '', '/log')).toBe(reason ?? '');
+    expect(updateFailureReason(`${error} remote secret`, '/log')).toBe('The install failed; see /log on the server.');
+  }
 });

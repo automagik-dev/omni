@@ -44,6 +44,7 @@ import {
   buildSystemdUserUnit,
   handOffSandboxUpdate,
   installSandbox,
+  installSupervisedSandboxUpdate,
   leftoverChildPids,
   readSandboxApiKey,
   readSandboxState,
@@ -59,6 +60,13 @@ import {
   supervisorCommand,
   uninstallSandbox,
 } from '../sandbox.js';
+
+import {
+  SANDBOX_UPDATE_ROLLED_BACK,
+  SANDBOX_UPDATE_UNHEALTHY,
+  beginSandboxUpdateTransaction,
+  finishSandboxUpdateTransaction,
+} from '../sandbox-update-transaction.js';
 
 const BUN = '/opt/bun/bin/bun';
 /** Variables a careless sandbox would pick up from the caller's shell. */
@@ -126,6 +134,7 @@ function fakeDeps(overrides: Partial<SandboxDeps> = {}, { serviceManager = false
     bun: BUN,
     bunVersion: SANDBOX_BUN_VERSION,
     env: LEAKY_ENV,
+    readCgroup: () => '0::/\n',
     run: async (cmd, opts) => {
       runs.push({ cmd, cwd: opts.cwd, env: opts.env });
       if (asksIsActive(cmd)) return isActiveAnswer(serviceManager);
@@ -169,7 +178,7 @@ function fakeDeps(overrides: Partial<SandboxDeps> = {}, { serviceManager = false
     isAlive: (pid) => alive.has(pid),
     kill: (pid, signal) => {
       kills.push([pid, signal]);
-      alive.delete(pid);
+      if (signal !== 'SIGUSR2') alive.delete(pid);
     },
     now: () => new Date(Date.UTC(2026, 9, 23) + clock++),
     sleep: async () => {},
@@ -982,6 +991,190 @@ describe('updates from the app: omni sandbox update hands the install off', () =
     expect(runs.some((call) => call.cmd.includes('is-active'))).toBe(true);
   });
 
+  test('external system unit: never detaches an updater into the cgroup that its install would stop', async () => {
+    const { deps, detached, kills } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    deps.readCgroup = () => '0::/system.slice/omni-sandbox.service\n';
+    detached.length = 0;
+    await expect(handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps)).rejects.toThrow(
+      'Sandbox external service update is unavailable',
+    );
+    expect(detached).toHaveLength(0);
+    expect(kills).toHaveLength(0);
+    expect(readFileSync(sandboxUpdateLogPath(sandboxLayout(home)), 'utf8')).toContain('"ok":false');
+  });
+
+  test('external system unit: hands a validated request to its compatible supervisor without stopping the unit', async () => {
+    const { deps, runs, detached, kills } = fakeDeps();
+    await installSandbox({ home, defaultHome }, deps);
+    const layout = sandboxLayout(home);
+    deps.readCgroup = () => '0::/system.slice/omni-sandbox.service\n';
+    writeFileSync(
+      layout.statusPath,
+      JSON.stringify({ pid: 4242, updateProtocol: 1, children: { api: { state: 'ready' } } }),
+    );
+    const run = deps.run;
+    deps.run = async (cmd, opts) =>
+      cmd[0] === 'systemctl' && cmd[1] === 'show'
+        ? {
+            code: 0,
+            stdout:
+              'MainPID=4242\nRestart=always\nType=simple\nWatchdogUSec=0\nRuntimeMaxUSec=infinity\nRemainAfterExit=no\nExitType=main\n',
+            stderr: '',
+          }
+        : run(cmd, opts);
+    runs.length = 0;
+    detached.length = 0;
+    const handed = await handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps);
+    expect(handed.via).toBe('supervisor');
+    expect(kills).toEqual([[4242, 'SIGUSR2']]);
+    expect(detached).toHaveLength(0);
+    expect(runs).toHaveLength(0);
+    expect(JSON.parse(readFileSync(join(layout.runDir, 'update-request.json'), 'utf8'))).toEqual({
+      version: '2.261026.1',
+    });
+  });
+
+  for (const badProperty of [
+    'Restart=no',
+    'Type=forking',
+    'WatchdogUSec=10s',
+    'RuntimeMaxUSec=15min',
+    'MainPID=999',
+    'RemainAfterExit=yes',
+    'ExitType=cgroup',
+  ]) {
+    test(`external system unit: refuses ${badProperty} before signal or spawn`, async () => {
+      const { deps, detached, kills } = fakeDeps();
+      await installSandbox({ home, defaultHome }, deps);
+      const layout = sandboxLayout(home);
+      deps.readCgroup = () => '0::/system.slice/omni-sandbox.service\n';
+      writeFileSync(
+        layout.statusPath,
+        JSON.stringify({ pid: 4242, updateProtocol: 1, children: { api: { state: 'ready' } } }),
+      );
+      const property = badProperty.split('=')[0];
+      const settings = [
+        'MainPID=4242',
+        'Restart=always',
+        'Type=simple',
+        'WatchdogUSec=0',
+        'RuntimeMaxUSec=infinity',
+        'RemainAfterExit=no',
+        'ExitType=main',
+      ];
+      deps.run = async () => ({
+        code: 0,
+        stdout: settings.map((setting) => (setting.startsWith(`${property}=`) ? badProperty : setting)).join('\n'),
+        stderr: '',
+      });
+      detached.length = 0;
+      await expect(handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps)).rejects.toThrow(
+        'Sandbox external service update is unavailable',
+      );
+      expect(detached).toHaveLength(0);
+      expect(kills).toHaveLength(0);
+      expect(existsSync(join(layout.runDir, 'update-request.json'))).toBe(false);
+    });
+  }
+
+  test('supervised install rolls back mid-install corruption of every protected component; data stays untouched', async () => {
+    const { deps, alive } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, deps);
+    const layout = sandboxLayout(home);
+    alive.add(99);
+    writeFileSync(join(layout.runDir, 'update-owner.json'), JSON.stringify({ pid: 99 }));
+    for (const part of ['autopg', 'pgserve', 'bin', 'config', 'runtime']) {
+      mkdirSync(join(home, part), { recursive: true });
+      writeFileSync(join(home, part, 'keep'), `original ${part}`);
+    }
+    writeFileSync(join(layout.pgDataDir, 'keep'), 'database bytes');
+    const oldState = readFileSync(layout.statePath, 'utf8');
+    const oldVersion = readSandboxState(layout)?.version;
+    const run = deps.run;
+    let command: string[] = [];
+    deps.run = async (cmd, opts) => {
+      if (cmd[1] !== 'x') return run(cmd, opts);
+      command = cmd;
+      expect(opts.env.OMNI_SANDBOX_UPDATE_PID).toBe('99');
+      expect(opts.env.DATABASE_URL).toBeUndefined();
+      expect(opts.cwd).toBe(home);
+      expect(statSync(join(home, '.update-backup/runtime/keep')).ino).not.toBe(
+        statSync(join(home, 'runtime/keep')).ino,
+      );
+      for (const part of ['autopg', 'pgserve', 'bin', 'config', 'runtime'])
+        writeFileSync(join(home, part, 'keep'), 'corrupted');
+      writeFileSync(layout.statePath, 'broken state');
+      return { code: 1, stdout: '', stderr: 'fixture network failure' };
+    };
+    await expect(installSupervisedSandboxUpdate({ home, version: '2.261026.1', pid: 99 }, deps)).rejects.toThrow(
+      SANDBOX_UPDATE_ROLLED_BACK,
+    );
+    expect(command).toEqual([
+      BUN,
+      'x',
+      '--bun',
+      '@automagik/omni@2.261026.1',
+      'install',
+      '--sandbox',
+      '--home',
+      home,
+      '--no-start',
+      '--json',
+    ]);
+    for (const part of ['autopg', 'pgserve', 'bin', 'config', 'runtime'])
+      expect(readFileSync(join(home, part, 'keep'), 'utf8')).toBe(`original ${part}`);
+    expect(readFileSync(layout.statePath, 'utf8')).toBe(oldState);
+    expect(readSandboxState(layout)?.version).toBe(oldVersion);
+    expect(readFileSync(join(layout.pgDataDir, 'keep'), 'utf8')).toBe('database bytes');
+    expect(existsSync(join(home, '.update-backup'))).toBe(false);
+    expect(readFileSync(sandboxUpdateLogPath(layout), 'utf8')).toContain(SANDBOX_UPDATE_ROLLED_BACK);
+  });
+
+  test('successful install retains originals until health on exactly the target version', async () => {
+    const { deps, alive } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, deps);
+    const layout = sandboxLayout(home);
+    alive.add(99);
+    writeFileSync(join(layout.runDir, 'update-owner.json'), JSON.stringify({ pid: 99 }));
+    const oldState = readFileSync(layout.statePath, 'utf8');
+    const run = deps.run;
+    deps.run = async (cmd, opts) => {
+      if (cmd[1] !== 'x') return run(cmd, opts);
+      writeFileSync(layout.statePath, JSON.stringify({ ...JSON.parse(oldState), version: '2.261026.1' }));
+      writeFileSync(
+        join(layout.runtimeDir, 'node_modules/@automagik/omni/package.json'),
+        JSON.stringify({ version: '2.261026.1' }),
+      );
+      return { code: 0, stdout: '{"ok":true}\n', stderr: '' };
+    };
+    await installSupervisedSandboxUpdate({ home, version: '2.261026.1', pid: 99 }, deps);
+    expect(readFileSync(join(home, '.update-backup', 'sandbox.json'), 'utf8')).toBe(oldState);
+    finishSandboxUpdateTransaction(home, 'wrong-version');
+    expect(existsSync(join(home, '.update-backup'))).toBe(true);
+    finishSandboxUpdateTransaction(home, '2.261026.1');
+    expect(existsSync(join(home, '.update-backup'))).toBe(false);
+  });
+
+  test('the maintenance owner excludes concurrent start, stop and install', async () => {
+    const { deps, alive, runs, kills, detached } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, deps);
+    const layout = sandboxLayout(home);
+    alive.add(99);
+    writeFileSync(join(layout.runDir, 'update-owner.json'), JSON.stringify({ pid: 99 }));
+    const before = runs.length;
+    for (const operation of [
+      () => startSandbox({ home, defaultHome }, deps),
+      () => stopSandbox({ home, defaultHome }, deps),
+      () => installSandbox({ home, defaultHome }, deps),
+    ]) {
+      await expect(operation()).rejects.toThrow('supervisor-owned sandbox update is in progress');
+    }
+    expect(runs).toHaveLength(before);
+    expect(kills).toHaveLength(0);
+    expect(detached).toHaveLength(0);
+  });
+
   test('takes only a release version, and only for a sandbox that exists', async () => {
     const { deps, runs, detached } = fakeDeps({}, { serviceManager: true });
     await expect(handOffSandboxUpdate({ home, defaultHome, version: '2.261026.1' }, deps)).rejects.toMatchObject({
@@ -1112,6 +1305,185 @@ describe('SandboxSupervisor', () => {
     expect(existsSync(layout.pidPath)).toBe(false);
     const status = JSON.parse(readFileSync(layout.statusPath, 'utf-8'));
     expect(status.children.api.state).toBe('stopped');
+  });
+
+  test('external update drains services but holds the unit alive until the no-start install finishes', async () => {
+    const { layout } = setup();
+    let finishInstall: () => void = () => {};
+    const installed = new Promise<void>((resolve) => {
+      finishInstall = resolve;
+    });
+    let installing = false;
+    const fake = supervisorDeps({
+      installUpdate: async (version) => {
+        expect(version).toBe('2.261026.1');
+        expect(existsSync(layout.pidPath)).toBe(false);
+        expect(JSON.parse(readFileSync(join(layout.runDir, 'update-owner.json'), 'utf8'))).toEqual({ pid: 99 });
+        fake.events.push('install --no-start');
+        installing = true;
+        await installed;
+      },
+    });
+    const supervisor = new SandboxSupervisor(layout, specsFor(layout), fake.deps);
+    let exited = false;
+    const done = supervisor.run().then((code) => {
+      exited = true;
+      return code;
+    });
+    try {
+      await Bun.sleep(0);
+      writeFileSync(join(layout.runDir, 'update-request.json'), JSON.stringify({ version: '2.261026.1' }));
+      fake.signal('SIGUSR2');
+      await Bun.sleep(0);
+      expect(installing).toBe(true);
+      expect(exited).toBe(false);
+      expect(fake.events.slice(-4)).toEqual([
+        'kill api SIGTERM',
+        'kill nats SIGTERM',
+        'kill pg SIGTERM',
+        'install --no-start',
+      ]);
+      finishInstall();
+      expect(await done).toBe(0);
+      expect(existsSync(join(layout.runDir, 'update-owner.json'))).toBe(false);
+      expect(existsSync(join(layout.runDir, 'update-request.json'))).toBe(false);
+    } finally {
+      finishInstall();
+      await supervisor.stop(0);
+      await done;
+    }
+  });
+
+  test('an install failure restores the runtime and restarts old API, NATS and PG without exiting the unit', async () => {
+    const { deps: installDeps, alive } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, installDeps);
+    const layout = sandboxLayout(home);
+    alive.add(99);
+    const oldState = readFileSync(layout.statePath, 'utf8');
+    const oldPackage = readFileSync(join(layout.runtimeDir, 'node_modules/@automagik/omni/package.json'), 'utf8');
+    const run = installDeps.run;
+    installDeps.run = async (cmd, opts) => {
+      if (cmd[1] !== 'x') return run(cmd, opts);
+      writeFileSync(layout.statePath, 'half-installed state');
+      writeFileSync(join(layout.runtimeDir, 'node_modules/@automagik/omni/package.json'), 'half-installed runtime');
+      return { code: 1, stdout: '', stderr: 'fixture failed halfway' };
+    };
+    const fake = supervisorDeps({
+      installUpdate: (version) => installSupervisedSandboxUpdate({ home, version, pid: 99 }, installDeps),
+    });
+    let exited = false;
+    const done = runSandboxSupervisor(home, fake.deps).then((code) => {
+      exited = true;
+      return code;
+    });
+    try {
+      await Bun.sleep(0);
+      writeFileSync(join(layout.runDir, 'update-request.json'), JSON.stringify({ version: '2.261026.1' }));
+      fake.signal('SIGUSR2');
+      await Bun.sleep(0);
+      expect(exited).toBe(false);
+      expect(fake.events.filter((event) => event.startsWith('spawn '))).toEqual([
+        'spawn pg',
+        'spawn nats',
+        'spawn api',
+        'spawn pg',
+        'spawn nats',
+        'spawn api',
+      ]);
+      expect(readFileSync(layout.statePath, 'utf8')).toBe(oldState);
+      expect(readFileSync(join(layout.runtimeDir, 'node_modules/@automagik/omni/package.json'), 'utf8')).toBe(
+        oldPackage,
+      );
+      expect(readFileSync(layout.pidPath, 'utf8').trim()).toBe('99');
+      expect(JSON.parse(readFileSync(layout.statusPath, 'utf8')).children.api.state).toBe('ready');
+      expect(existsSync(join(layout.runDir, 'update-owner.json'))).toBe(false);
+      expect(readFileSync(sandboxUpdateLogPath(layout), 'utf8')).toContain(SANDBOX_UPDATE_ROLLED_BACK);
+    } finally {
+      fake.signal('SIGTERM');
+      await done;
+    }
+  });
+
+  test('the target supervisor retains its backup while waiting for API health, then removes it', async () => {
+    const { deps: installDeps } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, installDeps);
+    const layout = sandboxLayout(home);
+    beginSandboxUpdateTransaction(home, 'old', readSandboxState(layout)?.version ?? '').commit();
+    let healthy: (value: boolean) => void = () => {};
+    const apiHealth = new Promise<boolean>((resolve) => {
+      healthy = resolve;
+    });
+    let waitingForApi = false;
+    const fake = supervisorDeps({
+      waitReady: async (spec) => {
+        if (spec.name !== 'api') return true;
+        waitingForApi = true;
+        return apiHealth;
+      },
+    });
+    const done = runSandboxSupervisor(home, fake.deps);
+    try {
+      await Bun.sleep(0);
+      expect(waitingForApi).toBe(true);
+      expect(existsSync(join(home, '.update-backup'))).toBe(true);
+      healthy(true);
+      await Bun.sleep(0);
+      expect(existsSync(join(home, '.update-backup'))).toBe(false);
+    } finally {
+      healthy(true);
+      fake.signal('SIGTERM');
+      await done;
+    }
+  });
+
+  test('a supervisor refuses an interrupted install before sweeping or starting any child', async () => {
+    const { deps: installDeps } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, installDeps);
+    beginSandboxUpdateTransaction(home, 'old', readSandboxState(sandboxLayout(home))?.version ?? '');
+    const fake = supervisorDeps({
+      sweepLeftovers: async () => {
+        throw new Error('must not sweep');
+      },
+    });
+    await expect(runSandboxSupervisor(home, fake.deps)).rejects.toThrow(SANDBOX_UPDATE_UNHEALTHY);
+    expect(fake.children).toHaveLength(0);
+    expect(existsSync(join(home, '.update-backup'))).toBe(true);
+  });
+
+  test('a replacement supervisor clears a stale unaccepted request but never an active maintenance lease', async () => {
+    const { deps: installDeps } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, installDeps);
+    const layout = sandboxLayout(home);
+    writeFileSync(join(layout.runDir, 'update-owner.json'), JSON.stringify({ pid: 777 }));
+    writeFileSync(join(layout.runDir, 'update-request.json'), JSON.stringify({ version: '2.261026.1' }));
+    const blocked = supervisorDeps({ isAlive: (pid) => pid === 777 });
+    await expect(runSandboxSupervisor(home, blocked.deps)).rejects.toThrow(
+      'supervisor-owned sandbox update is in progress',
+    );
+    expect(blocked.children).toHaveLength(0);
+    expect(existsSync(join(layout.runDir, 'update-request.json'))).toBe(true);
+    const fake = supervisorDeps();
+    const done = runSandboxSupervisor(home, fake.deps);
+    try {
+      await Bun.sleep(0);
+      expect(existsSync(join(layout.runDir, 'update-owner.json'))).toBe(false);
+      expect(existsSync(join(layout.runDir, 'update-request.json'))).toBe(false);
+      expect(fake.children).toHaveLength(3);
+    } finally {
+      fake.signal('SIGTERM');
+      await done;
+    }
+  });
+
+  test('a failed target boot keeps the rollback backup and a fixed owner-facing result', async () => {
+    const { deps: installDeps } = fakeDeps();
+    await installSandbox({ home, defaultHome, start: false }, installDeps);
+    const layout = sandboxLayout(home);
+    beginSandboxUpdateTransaction(home, 'old', readSandboxState(layout)?.version ?? '').commit();
+    const fake = supervisorDeps({ waitReady: async (spec) => spec.name !== 'api' });
+    expect(await runSandboxSupervisor(home, fake.deps)).toBe(1);
+    expect(existsSync(join(home, '.update-backup'))).toBe(true);
+    expect(readFileSync(sandboxUpdateLogPath(layout), 'utf8')).toContain(SANDBOX_UPDATE_UNHEALTHY);
   });
 
   test('restarts a child that exits, with backoff', async () => {
