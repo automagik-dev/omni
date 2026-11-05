@@ -59,6 +59,34 @@ const MAX_REASON_LENGTH = 80;
 /** One short line for the owner: a known error in fixed words, anything else only where to look. */
 export function updateFailureReason(error: string, logPath: string): string {
   const generic = `The install failed; see ${logPath} on the server.`;
+  const sandboxReasons: Record<string, string> = {
+    'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.':
+      'In-app update is unavailable for this system service; update it manually first.',
+    'A supervisor-owned sandbox update is in progress.': 'A sandbox update is already in progress.',
+    'Sandbox update lease expired or cannot be verified; stop the system unit and recover its lease.':
+      'The update lease needs recovery; stop the system unit and recover its lease.',
+    'Sandbox backup was interrupted; the previous install was left unchanged.':
+      'The backup was interrupted; the previous install was left unchanged.',
+    'Sandbox update stopped before installation; the previous install was left unchanged.':
+      'The update stopped before installation; the previous install is unchanged.',
+    'Sandbox install timed out; the previous runtime was restored.':
+      'The install timed out; the previous runtime was restored.',
+    'Sandbox install failed; the previous runtime was restored.':
+      'The install failed; the previous runtime was restored.',
+    'Sandbox update did not become healthy; the rollback backup was kept.':
+      'The new sandbox did not become healthy; its rollback backup was kept.',
+  };
+  if (Object.hasOwn(sandboxReasons, error)) return sandboxReasons[error] ?? generic;
+  const restored =
+    /^Sandbox install failed; the previous runtime was restored\. Requires Bun (\d{1,6}\.\d{1,6}\.\d{1,6}); running Bun (\d{1,6}\.\d{1,6}\.\d{1,6})\.$/.exec(
+      error,
+    );
+  if (restored) {
+    const reason = `Restored previous runtime. Needs Bun ${restored[1]}; running ${restored[2]}.`;
+    return reason.length <= MAX_REASON_LENGTH
+      ? reason
+      : (sandboxReasons['Sandbox install failed; the previous runtime was restored.'] ?? generic);
+  }
   const bun = BUN_MISMATCH.exec(error);
   const [needs, has] = [bun?.[1] ?? '', bun?.[2] ?? ''];
   if (!bun || needs.length > MAX_VERSION_LENGTH || has.length > MAX_VERSION_LENGTH) return generic;

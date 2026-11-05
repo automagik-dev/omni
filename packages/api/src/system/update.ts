@@ -509,6 +509,12 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
       await settle(record, true, 'running the new version', REPORT_WAIT_MS);
       return 'updated';
     }
+    // A supervisor can restore the old runtime after an install failure. Its terminal result
+    // is final: report it on that boot, rather than waiting out the detached-install grace.
+    if (await failureReason(record)) {
+      await settle(record, false, 'install failed', REPORT_WAIT_MS);
+      return 'not-completed';
+    }
     if (now() - Date.parse(record.startedAt) < UPDATE_GRACE_MS) {
       // Restarted mid-update (the command may still be at work): give it the rest of the grace period.
       settleLate(record);

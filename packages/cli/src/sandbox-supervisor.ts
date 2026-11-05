@@ -18,6 +18,21 @@ import { closeSync, fstatSync, openSync, renameSync, rmSync, writeFileSync, writ
 import { AUTOPG_PIN, type AutopgTarget, autopgTarget, detectLibc, readPgPasswordFile } from './autopg-runtime.js';
 import { ensureOmniDatabaseExists, waitForCanonicalReady } from './lib/canonical-pgserve.js';
 import {
+  SANDBOX_UPDATE_BUSY,
+  checkSandboxUpdateLease,
+  sandboxProcessIdentity,
+  writeSandboxUpdateLease,
+} from './sandbox-update-lease.js';
+import {
+  SANDBOX_UPDATE_COPY_INTERRUPTED,
+  SANDBOX_UPDATE_DRAIN_FAILED,
+  SANDBOX_UPDATE_UNHEALTHY,
+  appendSandboxUpdateFailure,
+  finishSandboxUpdateTransaction,
+  hasPendingSandboxUpdate,
+  sandboxUpdateNeedsRecovery,
+} from './sandbox-update-transaction.js';
+import {
   SANDBOX_CHANNEL_ENV_KEYS,
   SANDBOX_EXIT,
   type SandboxChildName,
@@ -25,14 +40,18 @@ import {
   SandboxError,
   type SandboxLayout,
   type SandboxRunOptions,
+  installSupervisedSandboxUpdate,
   isLoopbackPortFree,
   processAlive,
   readPid,
   readSandboxApiKey,
   readSandboxState,
+  readSandboxUpdateRequest,
   sandboxAutopgReady,
   sandboxChildSpecs,
   sandboxLayout,
+  sandboxUpdateFiles,
+  sandboxUpdateLogPath,
   sweepSandboxLeftovers,
 } from './sandbox.js';
 
@@ -96,7 +115,7 @@ export interface ChildHandle {
 
 export interface SupervisorDeps {
   spawnChild(spec: SandboxChildSpec): ChildHandle;
-  /** Resolves true once the child's loopback port answers. */
+  /** Port-answer readiness for every child, including an API returning HTTP 503. */
   waitReady(spec: SandboxChildSpec, timeoutMs: number): Promise<boolean>;
   /** Creates the `omni` database on the sandbox's Postgres if it is missing; `password` for a password-file cluster. */
   ensureDatabase(port: number, password?: string): Promise<boolean>;
@@ -108,6 +127,10 @@ export interface SupervisorDeps {
   pid: number;
   isAlive(pid: number): boolean;
   env: Record<string, string | undefined>;
+  installUpdate?(version: string): Promise<void>;
+  onHealthy?(): void;
+  apiHealthy?(spec: SandboxChildSpec): Promise<boolean>;
+  processIdentity(pid: number): string | null;
   onSignal(handler: (signal: NodeJS.Signals) => void): void;
   /** Stops children an earlier supervisor left running; resolves with how many. */
   sweepLeftovers?(layout: SandboxLayout): Promise<number>;
@@ -143,19 +166,37 @@ export function spawnChildProcess(spec: SandboxChildSpec): ChildHandle {
   return { pid: child.pid ?? -1, exited, kill: (signal) => child.kill(signal) };
 }
 
-async function waitPortAnswers(spec: SandboxChildSpec, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!(await isLoopbackPortFree(spec.readyPort))) return true;
-    await Bun.sleep(500);
+export async function waitPortAnswers(
+  spec: SandboxChildSpec,
+  timeoutMs: number,
+  effects = { now: Date.now, free: isLoopbackPortFree, sleep: (ms: number) => Bun.sleep(ms) },
+): Promise<boolean> {
+  const deadline = effects.now() + timeoutMs;
+  while (effects.now() < deadline) {
+    if (!(await effects.free(spec.readyPort))) return true;
+    await effects.sleep(500);
   }
   return false;
+}
+
+export async function sandboxApiHealthy(spec: SandboxChildSpec, request: typeof fetch = fetch): Promise<boolean> {
+  try {
+    return (
+      await request(`http://127.0.0.1:${spec.readyPort}/api/v2/health`, {
+        signal: AbortSignal.timeout(2000),
+      })
+    ).ok;
+  } catch {
+    return false;
+  }
 }
 
 function defaultSupervisorDeps(): SupervisorDeps {
   return {
     spawnChild: spawnChildProcess,
     waitReady: waitPortAnswers,
+    apiHealthy: sandboxApiHealthy,
+    processIdentity: sandboxProcessIdentity,
     ensureDatabase: async (port, password) =>
       (await waitForCanonicalReady(port, 60, password)) && ensureOmniDatabaseExists(port, password),
     autopgTarget: () =>
@@ -170,6 +211,7 @@ function defaultSupervisorDeps(): SupervisorDeps {
     onSignal: (handler) => {
       process.on('SIGTERM', () => handler('SIGTERM'));
       process.on('SIGINT', () => handler('SIGINT'));
+      process.on('SIGUSR2', () => handler('SIGUSR2'));
     },
     sweepLeftovers: (layout) => sweepSandboxLeftovers(layout, undefined, [process.pid]),
   };
@@ -179,6 +221,8 @@ export class SandboxSupervisor {
   private readonly children: ChildState[];
   private stopping = false;
   private stopped: Promise<number> | null = null;
+  private updating = false;
+  private stopRequested: number | null = null;
   private resolveDone: (code: number) => void = () => {};
   readonly done: Promise<number>;
 
@@ -197,22 +241,83 @@ export class SandboxSupervisor {
   async run(): Promise<number> {
     writeFileSync(this.layout.pidPath, `${this.deps.pid}\n`, { mode: 0o600 });
     this.deps.onSignal((signal) => {
-      this.deps.log(`received ${signal}, stopping`);
-      void this.stop(0);
+      if (signal === 'SIGUSR2') {
+        if (this.stopping || !this.deps.installUpdate) return;
+        const version = readSandboxUpdateRequest(this.layout);
+        if (version !== null) void this.update(version);
+      } else {
+        this.deps.log(`received ${signal}, stopping`);
+        void this.stop(0);
+      }
     });
+    await this.startChildren();
+    return this.done;
+  }
+
+  private async startChildren(): Promise<void> {
     for (const child of this.children) {
       if (this.stopping) break;
       if (!(await this.startChild(child))) {
+        if (hasPendingSandboxUpdate(this.layout.home)) this.updateFailure(SANDBOX_UPDATE_UNHEALTHY);
         await this.stop(SANDBOX_EXIT.failed);
         break;
       }
     }
-    return this.done;
+  }
+
+  private updateFailure(error: string, deduplicate = false): void {
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(this.layout), error, deduplicate);
+  }
+
+  /** Hold the system unit's main PID until install/rollback has finished. Never detach or stop the unit. */
+  private async update(version: string): Promise<void> {
+    this.updating = true;
+    this.stopping = true;
+    this.writeStatus();
+    const files = sandboxUpdateFiles(this.layout);
+    let drained = false;
+    try {
+      await this.drainChildren(true);
+      await this.deps.sweepLeftovers?.(this.layout);
+      drained = true;
+      // The installer must see a stopped sandbox; the separate lease still excludes other commands.
+      writeSandboxUpdateLease(files.owner, this.deps.pid, this.deps);
+      rmSync(this.layout.pidPath, { force: true });
+      await this.deps.installUpdate?.(version);
+      this.updating = false;
+      rmSync(files.owner, { force: true });
+      rmSync(files.request, { force: true });
+      await this.stop(0); // Only now may Restart=always start the target runtime.
+    } catch {
+      this.updating = false;
+      this.deps.log('supervised install failed');
+      rmSync(files.owner, { force: true });
+      rmSync(files.request, { force: true });
+      if (!drained || hasPendingSandboxUpdate(this.layout.home)) {
+        // No runtime was touched before drain, or rollback needs an operator. Keep any backup.
+        this.updateFailure(drained ? SANDBOX_UPDATE_UNHEALTHY : SANDBOX_UPDATE_DRAIN_FAILED);
+        await this.stop(SANDBOX_EXIT.failed);
+        return;
+      }
+      writeFileSync(this.layout.pidPath, `${this.deps.pid}\n`, { mode: 0o600 });
+      if (this.stopRequested !== null) {
+        await this.stop(this.stopRequested);
+        return;
+      }
+      // The installer restored the old files before rejecting: bring their services back ourselves.
+      this.stopping = false;
+      for (const child of this.children) {
+        child.fastCrashes = 0;
+        child.restarts = 0;
+      }
+      await this.startChildren();
+    }
   }
 
   private writeStatus(): void {
     const status = {
       pid: this.deps.pid,
+      ...(this.deps.installUpdate ? { updateProtocol: 1, updating: this.updating } : {}),
       updatedAt: new Date(this.deps.now()).toISOString(),
       children: Object.fromEntries(
         this.children.map((child) => [
@@ -253,7 +358,24 @@ export class SandboxSupervisor {
     child.state = 'ready';
     this.writeStatus();
     this.deps.log(`${spec.name} ready on 127.0.0.1:${spec.readyPort}`);
+    if (spec.name === 'api' && hasPendingSandboxUpdate(this.layout.home)) {
+      // Health only retires the backup. It must never gate startup or child restarts.
+      void this.checkUpdateHealth(child, handle).catch(() => this.deps.log('could not record sandbox update health'));
+    }
     return true;
+  }
+
+  private async checkUpdateHealth(child: ChildState, handle: ChildHandle): Promise<void> {
+    while (!this.stopping && child.handle === handle && hasPendingSandboxUpdate(this.layout.home)) {
+      const healthy = await this.deps.apiHealthy?.(child.spec);
+      if (this.stopping || child.handle !== handle) return;
+      if (healthy) {
+        this.deps.onHealthy?.();
+        return;
+      }
+      this.updateFailure(SANDBOX_UPDATE_UNHEALTHY, true);
+      await this.deps.sleep(5000);
+    }
   }
 
   private async onExit(child: ChildState, handle: ChildHandle, code: number, startedAt: number): Promise<void> {
@@ -284,28 +406,45 @@ export class SandboxSupervisor {
 
   /** Stops the API, NATS and Postgres in that order; idempotent. */
   stop(code: number): Promise<number> {
+    if (this.updating) {
+      this.stopRequested = code;
+      return this.done;
+    }
     if (this.stopped) return this.stopped;
     this.stopping = true;
     this.stopped = (async () => {
-      for (const child of [...this.children].reverse()) {
-        const handle = child.handle;
-        if (!handle) continue;
-        this.deps.log(`stopping ${child.spec.name}`);
-        handle.kill('SIGTERM');
-        const exited = await Promise.race([
-          handle.exited.then(() => true),
-          this.deps.sleep(CHILD_STOP_TIMEOUT_MS).then(() => false),
-        ]);
-        if (!exited) handle.kill('SIGKILL');
-        child.handle = null;
-        if (child.state !== 'failed') child.state = 'stopped';
-      }
+      await this.drainChildren(false);
       this.writeStatus();
       rmSync(this.layout.pidPath, { force: true });
       this.resolveDone(code);
       return code;
     })();
     return this.stopped;
+  }
+
+  private async drainChildren(strict: boolean): Promise<void> {
+    for (const child of [...this.children].reverse()) {
+      const handle = child.handle;
+      if (!handle) continue;
+      this.deps.log(`stopping ${child.spec.name}`);
+      handle.kill('SIGTERM');
+      let exited = await Promise.race([
+        handle.exited.then(() => true),
+        this.deps.sleep(CHILD_STOP_TIMEOUT_MS).then(() => false),
+      ]);
+      if (!exited) {
+        handle.kill('SIGKILL');
+        if (strict)
+          exited = await Promise.race([
+            handle.exited.then(() => true),
+            this.deps.sleep(CHILD_STOP_TIMEOUT_MS).then(() => false),
+          ]);
+      }
+      if (strict && !exited) throw new Error('child did not exit');
+      child.handle = null;
+      if (child.state !== 'failed') child.state = 'stopped';
+    }
+    this.writeStatus();
   }
 
   childState(name: SandboxChildName): ChildState['state'] | undefined {
@@ -323,10 +462,30 @@ export async function runSandboxSupervisor(
   const state = readSandboxState(layout);
   const apiKey = readSandboxApiKey(layout);
   if (!state || !apiKey) throw new SandboxError(`No sandboxed Omni at ${home}`, SANDBOX_EXIT.notInstalled);
+  try {
+    if (checkSandboxUpdateLease(sandboxUpdateFiles(layout).owner, deps)) throw new SandboxError(SANDBOX_UPDATE_BUSY);
+  } catch (error) {
+    appendSandboxUpdateFailure(
+      sandboxUpdateLogPath(layout),
+      error instanceof Error ? error.message : SANDBOX_UPDATE_BUSY,
+      true,
+    );
+    throw error;
+  }
+  const hadBackup = hasPendingSandboxUpdate(home);
+  if (sandboxUpdateNeedsRecovery(home, state.version)) {
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), SANDBOX_UPDATE_UNHEALTHY, true);
+    throw new SandboxError(SANDBOX_UPDATE_UNHEALTHY);
+  }
+  if (hadBackup && !hasPendingSandboxUpdate(home))
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), SANDBOX_UPDATE_COPY_INTERRUPTED);
   const running = readPid(layout);
   if (running !== null && running !== deps.pid && deps.isAlive(running)) {
     throw new SandboxError(`The sandbox at ${home} is already running (pid ${running})`);
   }
+  // A crash before accepting a queued request must not block all later updates with a stale file.
+  rmSync(sandboxUpdateFiles(layout).request, { force: true });
+  rmSync(sandboxUpdateFiles(layout).owner, { force: true });
   // A supervisor that died hard (SIGKILL, a crash) leaves its children holding the ports.
   const swept = (await deps.sweepLeftovers?.(layout)) ?? 0;
   if (swept > 0) deps.log(`stopped ${swept} process(es) an earlier run left behind`);
@@ -341,6 +500,18 @@ export async function runSandboxSupervisor(
   const apiEnv = specs.find((spec) => spec.name === 'api')?.env;
   const channelKeys = SANDBOX_CHANNEL_ENV_KEYS.filter((key) => Boolean(apiEnv?.[key]));
   deps.log(`API channel environment keys: ${channelKeys.length > 0 ? channelKeys.join(', ') : 'none'}`);
-  const supervisor = new SandboxSupervisor(layout, specs, deps);
+  const supervisor = new SandboxSupervisor(layout, specs, {
+    ...deps,
+    ...(!options.embedded
+      ? {
+          installUpdate:
+            deps.installUpdate ?? ((version) => installSupervisedSandboxUpdate({ home, version, pid: deps.pid })),
+          onHealthy: () => {
+            finishSandboxUpdateTransaction(home, state.version);
+            deps.onHealthy?.();
+          },
+        }
+      : {}),
+  });
   return supervisor.run();
 }
