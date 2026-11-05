@@ -30,10 +30,11 @@ function failedEvent(overrides: { id?: string; payload?: Record<string, unknown>
   } as unknown as TypedOmniEvent<'message.failed'>;
 }
 
-function servicesWith(options: { chat?: boolean; message?: boolean; markFails?: boolean } = {}) {
-  const { chat = true, message = true, markFails = false } = options;
+function servicesWith(options: { chat?: boolean; message?: boolean; markFails?: boolean; alias?: boolean } = {}) {
+  const { chat = true, message = true, markFails = false, alias = false } = options;
   const findChat = mock(async () => (chat ? { id: 'chat-uuid' } : null));
   const getMessage = mock(async () => (message ? { id: 'message-uuid', deliveryStatus: 'sent' } : null));
+  const findByProviderAlias = mock(async () => (alias ? { id: 'alias-message-uuid', deliveryStatus: 'sent' } : null));
   const markDeliveryFailed = mock(async () => {
     if (markFails) throw new Error('db down');
     return { id: 'message-uuid', deliveryStatus: 'failed' };
@@ -41,9 +42,9 @@ function servicesWith(options: { chat?: boolean; message?: boolean; markFails?: 
   const services = {
     db: { transaction: async <T>(cb: (tx: unknown) => Promise<T>) => cb({}) },
     chats: { findByExternalIdSmart: findChat },
-    messages: { getByExternalId: getMessage, markDeliveryFailed },
+    messages: { getByExternalId: getMessage, findByProviderAlias, markDeliveryFailed },
   } as never;
-  return { services, findChat, getMessage, markDeliveryFailed };
+  return { services, findChat, getMessage, findByProviderAlias, markDeliveryFailed };
 }
 
 describe('setupMessagePersistence (#1277)', () => {
@@ -102,6 +103,26 @@ describe('handleMessageFailed (#1277)', () => {
     const noMessage = servicesWith({ message: false });
     await handleMessageFailed(noMessage.services, failedEvent());
     expect(noMessage.markDeliveryFailed).not.toHaveBeenCalled();
+  });
+
+  test('falls back to the provider aliases of the receipt when the external id matches nothing', async () => {
+    const { services, findByProviderAlias, markDeliveryFailed } = servicesWith({ message: false, alias: true });
+
+    await handleMessageFailed(services, failedEvent({ payload: { providerAliases: ['wamid.HBgM', 'gs-123'] } }));
+
+    expect(findByProviderAlias).toHaveBeenCalledWith('chat-uuid', ['wamid.HBgM', 'gs-123']);
+    expect(markDeliveryFailed).toHaveBeenCalledWith('alias-message-uuid', EVENT_ID);
+  });
+
+  test('does not look up aliases when the external id already matched or no alias came with the receipt', async () => {
+    const matched = servicesWith({ alias: true });
+    await handleMessageFailed(matched.services, failedEvent({ payload: { providerAliases: ['gs-123'] } }));
+    expect(matched.findByProviderAlias).not.toHaveBeenCalled();
+
+    const bare = servicesWith({ message: false, alias: true });
+    await handleMessageFailed(bare.services, failedEvent());
+    expect(bare.findByProviderAlias).not.toHaveBeenCalled();
+    expect(bare.markDeliveryFailed).not.toHaveBeenCalled();
   });
 
   test('logs instead of throwing when the update fails', async () => {

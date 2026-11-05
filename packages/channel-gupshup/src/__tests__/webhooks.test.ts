@@ -384,17 +384,40 @@ function makeHandlerHarness() {
     child: () => logger,
   };
 
-  const statuses: Array<{ status: string; instanceId: string; externalId: string; to: string; reason?: string }> = [];
+  const statuses: Array<{
+    status: string;
+    instanceId: string;
+    externalId: string;
+    to: string;
+    reason?: string;
+    providerAliases?: string[];
+  }> = [];
 
   const plugin = {
     getLogger: () => logger,
-    handleMessageDelivered: async (params: { instanceId: string; externalId: string; to: string }) => {
+    handleMessageDelivered: async (params: {
+      instanceId: string;
+      externalId: string;
+      to: string;
+      providerAliases?: string[];
+    }) => {
       statuses.push({ status: 'delivered', ...params });
     },
-    handleMessageRead: async (params: { instanceId: string; externalId: string; to: string }) => {
+    handleMessageRead: async (params: {
+      instanceId: string;
+      externalId: string;
+      to: string;
+      providerAliases?: string[];
+    }) => {
       statuses.push({ status: 'read', ...params });
     },
-    handleMessageFailed: async (params: { instanceId: string; externalId: string; to: string; reason?: string }) => {
+    handleMessageFailed: async (params: {
+      instanceId: string;
+      externalId: string;
+      to: string;
+      reason?: string;
+      providerAliases?: string[];
+    }) => {
       statuses.push({ status: 'failed', ...params });
     },
     handleMessageReceived: async (params: {
@@ -546,6 +569,7 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
         status: 'delivered',
         instanceId: 'inst-gs-handler',
         externalId: 'wamid.TEST_DELIVERY_001',
+        providerAliases: ['wamid.TEST_DELIVERY_001'],
         to: '5511900000001',
       },
     ]);
@@ -566,12 +590,9 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
     expect(statuses.map((s) => s.status)).toEqual(['read']);
   });
 
-  it('message_event failure carries the reason', async () => {
+  it('message_event failure is reported without inventing a reason', async () => {
     const { plugin, statuses } = makeHandlerHarness();
-    const body = loadFixtureText('message_event-delivery.json').replace(
-      '"status": "delivered"',
-      '"status": "failed", "reason": "Message undeliverable"',
-    );
+    const body = loadFixtureText('message_event-delivery.json').replace('"status": "delivered"', '"status": "failed"');
 
     await handleGupshupWebhook(
       makeWebhookRequest(body),
@@ -583,7 +604,7 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
 
     expect(statuses).toHaveLength(1);
     expect(statuses[0]?.status).toBe('failed');
-    expect(statuses[0]?.reason).toBe('Message undeliverable');
+    expect(statuses[0]?.reason).toBeUndefined();
   });
 
   it('message_event with gsId prefers it over the WhatsApp id', async () => {
@@ -602,6 +623,7 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
     );
 
     expect(statuses[0]?.externalId).toBe('ee4a68a0-1203-4c85-8dc3-49d0b3226a35');
+    expect(statuses[0]?.providerAliases).toEqual(['ee4a68a0-1203-4c85-8dc3-49d0b3226a35', 'wamid.TEST_DELIVERY_001']);
   });
 
   it('message_event sent and enqueued stay ignored as before', async () => {
@@ -627,7 +649,7 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
     }
   });
 
-  it('native message-event callback marks the message delivered', async () => {
+  it('native message-event callback marks the message delivered by our gsId, not the wamid', async () => {
     const { plugin, statuses } = makeHandlerHarness();
     const native = {
       app: 'HapvidaApp',
@@ -635,7 +657,7 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
       version: 2,
       type: 'message-event',
       payload: {
-        id: 'ee4a68a0-1203-4c85-8dc3-49d0b3226a35',
+        id: 'wamid.HBgNNATIVE001',
         gsId: '59f8db94-0000-0000-0000-000000000000',
         type: 'delivered',
         destination: '5511900000001',
@@ -656,10 +678,98 @@ describe('handleGupshupWebhook — event_type routing against real fixtures (#50
       {
         status: 'delivered',
         instanceId: 'inst-gs-handler',
-        externalId: 'ee4a68a0-1203-4c85-8dc3-49d0b3226a35',
+        externalId: '59f8db94-0000-0000-0000-000000000000',
+        providerAliases: ['59f8db94-0000-0000-0000-000000000000', 'wamid.HBgNNATIVE001'],
         to: '5511900000001',
       },
     ]);
+  });
+
+  it('native message-event failure carries the vendor reason', async () => {
+    const { plugin, statuses } = makeHandlerHarness();
+
+    await handleGupshupWebhook(
+      makeWebhookRequest({
+        type: 'message-event',
+        payload: {
+          id: 'wamid.HBgNNATIVE002',
+          gsId: 'gs-2',
+          type: 'failed',
+          destination: '5511900000001',
+          payload: { reason: 'Message undeliverable' },
+        },
+      }),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]?.status).toBe('failed');
+    expect(statuses[0]?.reason).toBe('Message undeliverable');
+  });
+
+  it('native enqueued and sent callbacks are acknowledged quietly', async () => {
+    for (const type of ['enqueued', 'sent']) {
+      const { plugin, logs, received, statuses } = makeHandlerHarness();
+
+      const response = await handleGupshupWebhook(
+        makeWebhookRequest({
+          type: 'message-event',
+          payload: {
+            id: 'gs-1',
+            gsId: 'gs-1',
+            type,
+            destination: '5511900000001',
+            payload: { whatsappMessageId: 'wamid.X' },
+          },
+        }),
+        plugin,
+        'inst-gs-handler',
+        undefined,
+        createInboundDedupeCache(),
+      );
+
+      expect(response.status).toBe(200);
+      expect(received).toHaveLength(0);
+      expect(statuses).toHaveLength(0);
+      expect(logs.filter((l) => l.level === 'warn' && !l.message.includes('first time seeing'))).toHaveLength(0);
+      const dims = findMetricLogs(logs)[0]?.data?.dimensions as Record<string, unknown>;
+      expect(dims.handled).toBe('dropped_known_non_message');
+      expect(dims.event_type).toBe('message-event');
+    }
+  });
+
+  it('labels the receipt metric with the native event type and marks it as first seen once', async () => {
+    const { plugin, logs } = makeHandlerHarness();
+    const delivered = {
+      type: 'message-event',
+      payload: { id: 'wamid.A', gsId: 'gs-a', type: 'delivered', destination: '5511900000001' },
+    };
+
+    await handleGupshupWebhook(
+      makeWebhookRequest(delivered),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+    await handleGupshupWebhook(
+      makeWebhookRequest(delivered),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    const metrics = findMetricLogs(logs).map((m) => m.data?.dimensions as Record<string, unknown>);
+    expect(metrics.map((m) => m.event_type)).toEqual(['message-event', 'message-event']);
+    expect(metrics.every((m) => m.handled === 'processed_status')).toBe(true);
+    const firstSeen = logs.filter(
+      (l) => l.message.includes('first time seeing this event_type') && l.data?.event_type === 'message-event',
+    );
+    expect(firstSeen.length).toBeLessThanOrEqual(1);
   });
 
   it('status dispatch failure still acknowledges the webhook', async () => {
