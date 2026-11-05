@@ -266,6 +266,25 @@ describe('GupshupPlugin.sendMessage — interactive dispatch', () => {
     expect(bodies[0]).toMatchObject({ msg_type: 'BUTTONS', buttons: [{ title: 'Yes' }, { title: 'No' }] });
   });
 
+  it('an image with buttons still sends the image, not a BUTTONS event that drops it', async () => {
+    const { bodies } = await sentBodies((p) =>
+      p.sendMessage('inst-1', {
+        to: TO,
+        content: {
+          type: 'image',
+          mediaUrl: 'https://cdn.example.com/a.jpg',
+          mimeType: 'image/jpeg',
+          caption: 'Look',
+          buttons: [{ text: 'Yes' }, { text: 'No' }],
+        },
+      }),
+    );
+
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({ msg_type: 'IMAGE' });
+    expect(bodies[0]).not.toMatchObject({ msg_type: 'BUTTONS' });
+  });
+
   it('content.type=flow with metadata.flow (the /whatsapp-flows/send contract) → FLOW event', async () => {
     const { bodies } = await sentBodies((p) =>
       p.sendMessage('inst-1', {

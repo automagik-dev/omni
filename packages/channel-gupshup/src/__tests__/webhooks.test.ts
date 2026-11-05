@@ -1123,6 +1123,37 @@ describe('handleGupshupWebhook — flow_response', () => {
     expect(received).toHaveLength(1);
   });
 
+  it('renders nested answer values as JSON instead of [object Object]', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    await handleGupshupWebhook(
+      makeWebhookRequest(flowBody({ address: { city: 'Springfield', zip: '12345' }, picks: [{ id: 1 }, 'b'] })),
+      plugin,
+      'inst-gs-handler',
+      undefined,
+      createInboundDedupeCache(),
+    );
+
+    expect(received[0]?.content.text).toBe(
+      '[Form submitted]\naddress: {"city":"Springfield","zip":"12345"}\npicks: {"id":1}, b',
+    );
+  });
+
+  it('a reused flow token with identical answers from two recipients is not deduplicated', async () => {
+    const { plugin, received } = makeHandlerHarness();
+    const cache = createInboundDedupeCache();
+    for (const id of ['5500000000002', '5500000000003']) {
+      await handleGupshupWebhook(
+        makeWebhookRequest({ ...flowBody({ city: 'Springfield' }), sender: { id, name: 'Test' } }),
+        plugin,
+        'inst-gs-handler',
+        undefined,
+        cache,
+      );
+    }
+
+    expect(received.map((m) => m.from)).toEqual(['5500000000002', '5500000000003']);
+  });
+
   it('answers that are not a JSON object are dropped, still acked', async () => {
     const { plugin, received } = makeHandlerHarness();
     const response = await handleGupshupWebhook(

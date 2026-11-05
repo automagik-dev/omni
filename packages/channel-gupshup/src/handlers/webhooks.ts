@@ -195,9 +195,9 @@ function normalizeSimplifiedWebhook(
 // agent can use as-is) with the structured answers in rawPayload.flowResponse.
 // ─────────────────────────────────────────────────────────────
 
-export const GUPSHUP_FLOW_RESPONSE_EVENT = 'flow_response';
+const GUPSHUP_FLOW_RESPONSE_EVENT = 'flow_response';
 
-export const GupshupFlowResponseSchema = z
+const GupshupFlowResponseSchema = z
   .object({
     event_type: z.literal(GUPSHUP_FLOW_RESPONSE_EVENT),
     sender: z.object({
@@ -230,10 +230,16 @@ function parseFlowAnswers(response: Record<string, unknown> | string): Record<st
 }
 
 /** "field: value" lines, flow_token dropped — the agent reads this as the user's message. */
-export function renderFlowAnswers(answers: Record<string, unknown>): string {
+function renderFlowValue(value: unknown): string {
+  if (Array.isArray(value)) return value.map(renderFlowValue).join(', ');
+  if (value !== null && typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function renderFlowAnswers(answers: Record<string, unknown>): string {
   const lines = Object.entries(answers)
     .filter(([key, value]) => key !== FLOW_TOKEN_KEY && value !== undefined && value !== null && value !== '')
-    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(', ') : String(value)}`);
+    .map(([key, value]) => `${key}: ${renderFlowValue(value)}`);
   return ['[Form submitted]', ...lines].join('\n');
 }
 
@@ -255,7 +261,7 @@ function normalizeFlowResponse(p: z.infer<typeof GupshupFlowResponseSchema>): Gu
     senderobj: { channelid: phone, display: p.sender.name, channeltype: 'whatsapp' },
     messageobj: {
       // The flow token is unique per send, so a Journey retry dedupes.
-      id: `gs-flow-${textDigest(p.flow.token)}-${textDigest(JSON.stringify(answers))}`,
+      id: `gs-flow-${phone}-${textDigest(p.flow.token)}-${textDigest(JSON.stringify(answers))}`,
       type: 'text',
       from: phone,
       timestamp: tsSeconds,
@@ -270,7 +276,7 @@ function normalizeFlowResponse(p: z.infer<typeof GupshupFlowResponseSchema>): Gu
 }
 
 /** Try the Flow-submission schema; return a normalized native webhook, or null if it doesn't match. */
-export function parseFlowResponseWebhook(parsed: unknown): GupshupNativeInboundWebhook | null {
+function parseFlowResponseWebhook(parsed: unknown): GupshupNativeInboundWebhook | null {
   const r = GupshupFlowResponseSchema.safeParse(parsed);
   return r.success ? normalizeFlowResponse(r.data) : null;
 }

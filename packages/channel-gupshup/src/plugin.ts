@@ -79,7 +79,7 @@ async function dispatchContent(
   if (content.type === 'flow') {
     return sendFlow(client, dest, parseFlowDescriptor(meta?.flow));
   }
-  if (content.buttons?.length) {
+  if (content.type === 'text' && content.buttons?.length) {
     const { response, droppedRows } = await sendInteractive(
       client,
       dest,
