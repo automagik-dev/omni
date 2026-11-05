@@ -53,9 +53,17 @@ import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import {
+  SUPERVISED_INSTALL_TIMEOUT_MS,
+  SandboxInstallerStillRunningError,
+  runSandboxInstallCommand,
+} from './sandbox-install-command.js';
+import { SANDBOX_UPDATE_BUSY, checkSandboxUpdateLease, sandboxProcessIdentity } from './sandbox-update-lease.js';
+import {
   SANDBOX_EXTERNAL_UPDATE_REFUSAL,
   SANDBOX_UPDATE_ROLLED_BACK,
+  SANDBOX_UPDATE_TIMED_OUT,
   SANDBOX_UPDATE_UNHEALTHY,
+  appendSandboxUpdateFailure,
   assertSandboxRollbackSafe,
   beginSandboxUpdateTransaction,
   hasPendingSandboxUpdate,
@@ -648,20 +656,25 @@ export interface SandboxDeps {
   bun: string;
   bunVersion: string;
   env: Record<string, string | undefined>;
-  run(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult>;
+  run(cmd: string[], opts: { cwd?: string; env: Record<string, string>; timeoutMs?: number }): Promise<RunResult>;
   spawnDetached(cmd: string[], opts: { cwd: string; env: Record<string, string>; logPath: string }): number;
   isPortFree(port: number): Promise<boolean>;
   health(apiUrl: string, timeoutMs: number): Promise<boolean>;
   /** Installs the pinned nats-server at `target`, or keeps the one there when it is the pin. */
   installNats(target: string): Promise<NatsInstall>;
   readCgroup(pid: number): string | null;
+  processIdentity(pid: number): string | null;
   isAlive(pid: number): boolean;
   kill(pid: number, signal: NodeJS.Signals): void;
   now(): Date;
   sleep(ms: number): Promise<void>;
 }
 
-async function runCommand(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult> {
+async function runCommand(
+  cmd: string[],
+  opts: { cwd?: string; env: Record<string, string>; timeoutMs?: number },
+): Promise<RunResult> {
+  if (opts.timeoutMs !== undefined) return runSandboxInstallCommand(cmd, { ...opts, timeoutMs: opts.timeoutMs });
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
   try {
     proc = Bun.spawn({ cmd, cwd: opts.cwd, env: opts.env, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
@@ -757,6 +770,7 @@ function defaultSandboxDeps(): SandboxDeps {
         return null;
       }
     },
+    processIdentity: sandboxProcessIdentity,
     isAlive: processAlive,
     kill: (pid, signal) => process.kill(pid, signal),
     now: () => new Date(),
@@ -1401,25 +1415,21 @@ export const sandboxUpdateFiles = (layout: SandboxLayout) => ({
   request: join(layout.runDir, 'update-request.json'),
   owner: join(layout.runDir, 'update-owner.json'),
 });
-const UpdateOwnerSchema = z.object({ pid: z.number().int().positive() });
-
-export function sandboxUpdateOwner(layout: SandboxLayout): number | null {
-  try {
-    return UpdateOwnerSchema.parse(JSON.parse(readFileSync(sandboxUpdateFiles(layout).owner, 'utf8'))).pid;
-  } catch {
-    return null;
-  }
+function sandboxUpdateOwner(layout: SandboxLayout, deps: Pick<SandboxDeps, 'processIdentity' | 'isAlive' | 'now'>) {
+  return checkSandboxUpdateLease(sandboxUpdateFiles(layout).owner, { ...deps, now: () => deps.now().getTime() });
 }
 
 function assertNoSandboxUpdate(layout: SandboxLayout, deps: SandboxDeps, noStartInstall = false): void {
-  const owner = sandboxUpdateOwner(layout);
+  const owner = sandboxUpdateOwner(layout, deps);
   if (
-    owner !== null &&
-    deps.isAlive(owner) &&
-    !(noStartInstall && deps.env.OMNI_SANDBOX_UPDATE_PID === String(owner))
-  ) {
-    throw new SandboxError('A supervisor-owned sandbox update is in progress.');
-  }
+    owner &&
+    !(
+      noStartInstall &&
+      deps.env.OMNI_SANDBOX_UPDATE_PID === String(owner.pid) &&
+      deps.env.OMNI_SANDBOX_UPDATE_TOKEN === owner.token
+    )
+  )
+    throw new SandboxError(SANDBOX_UPDATE_BUSY);
 }
 
 /** A version `omni sandbox update` takes: what npm publishes, never a range or a tag. */
@@ -1443,6 +1453,7 @@ const UpdateSupervisorSchema = z.object({
 const SystemUnitSchema = z.object({
   MainPID: z.string(),
   Restart: z.literal('always'),
+  KillMode: z.enum(['control-group', 'mixed']),
   Type: z.enum(['simple', 'exec']),
   WatchdogUSec: z.literal('0'),
   RuntimeMaxUSec: z.literal('infinity'),
@@ -1455,11 +1466,7 @@ function externalSystemUnit(cgroup: string): string | null {
   return /(?:^|\/)system\.slice\/([^/\n]+\.service)(?:\/|$)/m.exec(cgroup)?.[1] ?? null;
 }
 function refuseExternalUpdate(layout: SandboxLayout): never {
-  appendFileSync(
-    sandboxUpdateLogPath(layout),
-    `${JSON.stringify({ ok: false, error: SANDBOX_EXTERNAL_UPDATE_REFUSAL })}\n`,
-    { mode: 0o600 },
-  );
+  appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), SANDBOX_EXTERNAL_UPDATE_REFUSAL);
   throw new SandboxError(SANDBOX_EXTERNAL_UPDATE_REFUSAL);
 }
 
@@ -1480,7 +1487,7 @@ async function queueSupervisedUpdate(
         'systemctl',
         'show',
         unit,
-        '--property=MainPID,Restart,Type,WatchdogUSec,RuntimeMaxUSec,RemainAfterExit,ExitType',
+        '--property=MainPID,Restart,KillMode,Type,WatchdogUSec,RuntimeMaxUSec,RemainAfterExit,ExitType',
       ],
       { env: serviceManagerEnv(deps) },
     );
@@ -1509,6 +1516,25 @@ async function queueSupervisedUpdate(
   }
 }
 
+function supervisedInstallFailure(result: RunResult): string {
+  if (result.code === 124) return SANDBOX_UPDATE_TIMED_OUT;
+  // Carry only parsed numeric versions, never the target install's paths or raw text.
+  let failure = SANDBOX_UPDATE_ROLLED_BACK;
+  for (const line of result.stdout.slice(-65536).split('\n')) {
+    try {
+      const parsed = z.object({ ok: z.literal(false), error: z.string() }).parse(JSON.parse(line));
+      const bun =
+        /^Sandbox install requires Bun (\d{1,6}\.\d{1,6}\.\d{1,6}); .+ runs (\d{1,6}\.\d{1,6}\.\d{1,6})\.(?:\s|$)/.exec(
+          parsed.error,
+        );
+      if (bun) failure = `${SANDBOX_UPDATE_ROLLED_BACK} Requires Bun ${bun[1]}; running Bun ${bun[2]}.`;
+    } catch {
+      /* non-result output */
+    }
+  }
+  return failure;
+}
+
 /** Called only after every child is stopped, while the external unit's main PID is still alive. */
 export async function installSupervisedSandboxUpdate(
   opts: { home: string; version: string; pid: number },
@@ -1516,8 +1542,9 @@ export async function installSupervisedSandboxUpdate(
 ): Promise<void> {
   const layout = sandboxLayout(opts.home);
   const previous = requireState(layout);
+  const owner = sandboxUpdateOwner(layout, deps);
   if (
-    sandboxUpdateOwner(layout) !== opts.pid ||
+    owner?.pid !== opts.pid ||
     readPid(layout) !== null ||
     !deps.isAlive(opts.pid) ||
     installedVersion(layout, '@automagik/omni') !== previous.version
@@ -1525,6 +1552,7 @@ export async function installSupervisedSandboxUpdate(
     return refuseExternalUpdate(layout);
   }
   let transaction: ReturnType<typeof beginSandboxUpdateTransaction> | undefined;
+  let failure = SANDBOX_UPDATE_ROLLED_BACK;
   try {
     transaction = beginSandboxUpdateTransaction(layout.home, previous.version, opts.version);
     const result = await deps.run(
@@ -1542,10 +1570,16 @@ export async function installSupervisedSandboxUpdate(
       ],
       {
         cwd: layout.home,
-        env: { ...sandboxBaseEnv(layout, deps.env), OMNI_SANDBOX_UPDATE_PID: String(opts.pid) },
+        env: {
+          ...sandboxBaseEnv(layout, deps.env),
+          OMNI_SANDBOX_UPDATE_PID: String(opts.pid),
+          OMNI_SANDBOX_UPDATE_TOKEN: owner.token,
+        },
+        timeoutMs: SUPERVISED_INSTALL_TIMEOUT_MS,
       },
     );
     appendFileSync(sandboxUpdateLogPath(layout), `${result.stdout}\n${result.stderr}\n`, { mode: 0o600 });
+    failure = supervisedInstallFailure(result);
     if (
       result.code !== 0 ||
       readSandboxState(layout)?.version !== opts.version ||
@@ -1553,9 +1587,9 @@ export async function installSupervisedSandboxUpdate(
     )
       throw new Error('install failed');
     transaction.commit(); // The next supervisor retires the backup only after its API is healthy.
-  } catch {
+  } catch (cause) {
     try {
-      transaction?.rollback();
+      if (!(cause instanceof SandboxInstallerStillRunningError)) transaction?.rollback();
     } catch {
       /* Keep the remaining backup for operator recovery. */
     }
@@ -1563,8 +1597,8 @@ export async function installSupervisedSandboxUpdate(
       !hasPendingSandboxUpdate(layout.home) &&
       readSandboxState(layout)?.version === previous.version &&
       installedVersion(layout, '@automagik/omni') === previous.version;
-    const error = restored ? SANDBOX_UPDATE_ROLLED_BACK : SANDBOX_UPDATE_UNHEALTHY;
-    appendFileSync(sandboxUpdateLogPath(layout), `${JSON.stringify({ ok: false, error })}\n`, { mode: 0o600 });
+    const error = restored ? failure : SANDBOX_UPDATE_UNHEALTHY;
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), error);
     throw new SandboxError(error);
   }
 }
@@ -1587,6 +1621,7 @@ export async function handOffSandboxUpdate(
   }
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
+  assertNoSandboxUpdate(layout, deps);
   if (deps.platform === 'linux') {
     const pid = livePid(layout, deps);
     if (pid !== null) {

@@ -173,10 +173,10 @@ WantedBy=multi-user.target
 
 Use the actual pinned Bun path and a home writable only by the service user.
 `Type=exec` also works. The unit must run the supervisor as its main PID, use
-`Restart=always`, and have no watchdog or runtime deadline. `ExitType`, on systemd
+`Restart=always` and `KillMode=control-group` or `mixed`, and have no watchdog or runtime deadline. `ExitType`, on systemd
 versions that support it, must remain `main`. Do not use `--at-login` with an external
 system unit. The service user must be able to read its supervisor's `/proc/<pid>/cgroup`
-and query the unit with `systemctl show`; neither requires root in a normal systemd setup.
+and query the unit with `systemctl show`; neither requires root in a normal systemd setup. A working system D-Bus is required.
 
 The update detects the supervisor's system-service cgroup, including a system unit
 whose name happens to equal Omni's user-unit name. It checks the unit settings and
@@ -195,21 +195,48 @@ autopg, pgserve tooling, NATS, config and sandbox state are protected; the data 
 is never replaced. New concurrent sandbox start/stop/install commands are refused during
 this maintenance window. Allow enough free disk space for another copy of the install.
 
-If install fails, the originals are restored before the same supervisor restarts the old
-Postgres, NATS and API. The owner gets a fixed mapped reason: "The install failed; the
-previous runtime was restored." On success the supervisor exits as its final step, and
-the external unit starts the new runtime. Migrations run on the new API's boot, after the
-install. The new supervisor removes the backup only after its API's health endpoint
-succeeds. If boot never becomes healthy, the backup stays and `logs/update.log` records
-"The new sandbox did not become healthy; its rollback backup was kept."
+The installer has a ten-minute deadline. On timeout its entire process group is killed,
+and rollback waits for the installer to close. If that cannot be confirmed, the backup
+stays for operator recovery rather than racing possible writers. If install fails and
+rollback completes, the same supervisor restarts the old Postgres, NATS and API. The
+owner gets a mapped failure reason, including a timeout or the required/current Bun
+versions when applicable. On success the supervisor exits as its final step, and the
+external unit starts the new runtime. Migrations run on the new API's boot, after install.
 
-An operator can then stop the unit, restore the install components listed in
-`.update-backup/manifest.json` from that directory to their corresponding paths directly
-under the home, archive/remove the now-consumed backup directory, and start the unit.
-Keep `data/` intact. Database migrations are not reversed. An interrupted install or
-invalid recovery manifest is refused at supervisor startup so the saved originals can
-be recovered deliberately. Do not manually stop or kill the unit during an update;
-a host crash, forced service stop, or filesystem failure still needs operator recovery.
+Readiness still means that a child's port answers, including an API returning HTTP 503.
+A persistent 503 (for example an old dead letter) never stops or restarts the sandbox.
+Only backup retirement requires HTTP 200: the new supervisor checks every five seconds
+until health succeeds. Until then the backup stays and `logs/update.log` records a fixed
+unhealthy reason. Identical consecutive refused-boot/health result lines are not repeated.
+
+Crash recovery distinguishes copying from installation. `.update-backup/manifest.json`
+starts in `backing-up`, changes to `installing` only after every protected component was
+copied, then to `installed` after a verified install. A boot with `backing-up`, or a backup
+directory with no manifest, discards that partial copy, records the fixed interrupted-backup
+reason, and starts the untouched old install. Never restore a partial `backing-up` copy.
+An `installing`, invalid, or wrong-version manifest refuses boot and retains the backup.
+
+`run/update-owner.json` is a 30-minute maintenance lease bound to Linux boot identity,
+process start time, PID and a random installer token. A dead process or a different
+process incarnation cannot block boot through PID reuse (even when kill-zero returns
+EPERM). An unreadable identity, legacy/malformed lease, or expired possibly-live lease
+refuses boot with a mapped lease-recovery reason. Expiry never authorizes racing a
+possibly live installer. To recover: stop the external system unit and confirm all its
+installer/child processes have exited, then archive/remove `run/update-owner.json` and
+`run/update-request.json`. Do not remove a live lease merely because its deadline passed.
+
+With the unit stopped, inspect the manifest. Discard a `backing-up`/missing-manifest copy;
+for an interrupted `installing` or failed `installed` boot, restore the complete saved
+components to their corresponding paths directly under the home, then archive/remove
+the consumed backup and start the unit. A rollback that failed partway may already have
+moved some components back: inspect those original paths rather than deleting them when
+the corresponding backup component is absent. An invalid manifest needs manual inspection.
+Keep `data/` intact. **Migrations remain applied after rollback**, including migrations
+from a new API that already booted; they are never reversed. Additive migrations normally
+allow old code to read the migrated database, but an autopg/Postgres data-format change
+may prevent old binaries from using that data. Check compatibility before manual rollback.
+Do not manually stop or kill the unit during an update; forced stops, filesystem failures
+and interrupted installs can still require operator recovery.
 
 **One manual upgrade is required for supervisors predating this protocol**, including
 the lembr incident's `2.261104.23`. Stop the external unit, install a release containing

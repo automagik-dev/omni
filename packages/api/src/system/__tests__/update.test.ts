@@ -683,6 +683,27 @@ test('sandbox external-service refusals and recovery use only allow-listed owner
       'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.',
       'In-app update is unavailable for this system service; update it manually first.',
     ],
+    ['A supervisor-owned sandbox update is in progress.', 'A sandbox update is already in progress.'],
+    [
+      'Sandbox update lease expired or cannot be verified; stop the system unit and recover its lease.',
+      'The update lease needs recovery; stop the system unit and recover its lease.',
+    ],
+    [
+      'Sandbox backup was interrupted; the previous install was left unchanged.',
+      'The backup was interrupted; the previous install was left unchanged.',
+    ],
+    [
+      'Sandbox update stopped before installation; the previous install was left unchanged.',
+      'The update stopped before installation; the previous install is unchanged.',
+    ],
+    [
+      'Sandbox install timed out; the previous runtime was restored.',
+      'The install timed out; the previous runtime was restored.',
+    ],
+    [
+      'Sandbox install failed; the previous runtime was restored. Requires Bun 1.4.4; running Bun 1.3.9.',
+      'Restored previous runtime. Needs Bun 1.4.4; running 1.3.9.',
+    ],
     [
       'Sandbox install failed; the previous runtime was restored.',
       'The install failed; the previous runtime was restored.',

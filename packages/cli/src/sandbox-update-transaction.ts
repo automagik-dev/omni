@@ -1,10 +1,15 @@
 /** Rollback boundary for a quiescent sandbox. The data directory is never copied or replaced. */
 import {
+  appendFileSync,
+  closeSync,
   cpSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readdirSync,
   readlinkSync,
   renameSync,
@@ -22,7 +27,7 @@ export const SANDBOX_UPDATE_UNHEALTHY = 'Sandbox update did not become healthy; 
 const ManifestSchema = z.object({
   from: z.string(),
   to: z.string(),
-  phase: z.enum(['installing', 'installed']),
+  phase: z.enum(['backing-up', 'installing', 'installed']),
   present: z.array(z.enum(COMPONENTS)),
 });
 const backupPath = (home: string) => join(home, '.update-backup');
@@ -51,9 +56,12 @@ export function beginSandboxUpdateTransaction(home: string, from: string, to: st
   const backup = backupPath(home);
   mkdirSync(backup, { mode: 0o700 });
   const present = COMPONENTS.filter((part) => existsSync(join(home, part)));
-  const manifest = { from, to, phase: 'installing', present };
-  const writeManifest = () =>
-    writeFileSync(join(backup, 'manifest.json'), `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+  const manifest = { from, to, phase: 'backing-up', present };
+  const writeManifest = () => {
+    const temp = join(backup, 'manifest.tmp');
+    writeFileSync(temp, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+    renameSync(temp, join(backup, 'manifest.json'));
+  };
   const rollback = () => {
     for (const part of COMPONENTS) {
       if (present.includes(part)) {
@@ -68,6 +76,8 @@ export function beginSandboxUpdateTransaction(home: string, from: string, to: st
     for (const part of present) {
       cpSync(join(home, part), join(backup, part), { recursive: true, verbatimSymlinks: true });
     }
+    manifest.phase = 'installing';
+    writeManifest();
   } catch (error) {
     // Nothing in the working install has changed while the snapshot is being copied.
     rmSync(backup, { recursive: true, force: true });
@@ -100,9 +110,46 @@ export function hasPendingSandboxUpdate(home: string): boolean {
 export function sandboxUpdateNeedsRecovery(home: string, version: string): boolean {
   if (!hasPendingSandboxUpdate(home)) return false;
   try {
-    const manifest = ManifestSchema.parse(JSON.parse(readFileSync(join(backupPath(home), 'manifest.json'), 'utf8')));
+    const path = join(backupPath(home), 'manifest.json');
+    if (!existsSync(path)) {
+      rmSync(backupPath(home), { recursive: true });
+      return false;
+    }
+    const manifest = ManifestSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+    if (manifest.phase === 'backing-up') {
+      rmSync(backupPath(home), { recursive: true });
+      return false;
+    }
     return manifest.phase !== 'installed' || manifest.to !== version;
   } catch {
     return true;
   }
+}
+
+export const SANDBOX_UPDATE_DRAIN_FAILED =
+  'Sandbox update stopped before installation; the previous install was left unchanged.';
+export const SANDBOX_UPDATE_COPY_INTERRUPTED =
+  'Sandbox backup was interrupted; the previous install was left unchanged.';
+export const SANDBOX_UPDATE_TIMED_OUT = 'Sandbox install timed out; the previous runtime was restored.';
+
+/** Suppress the identical terminal line on every refused Restart=always boot. */
+export function appendSandboxUpdateFailure(path: string, error: string, deduplicate = false): void {
+  const line = JSON.stringify({ ok: false, error });
+  if (!deduplicate) {
+    appendFileSync(path, `${line}\n`, { mode: 0o600 });
+    return;
+  }
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const size = fstatSync(fd).size;
+    const tail = Buffer.alloc(Math.min(size, 4096));
+    readSync(fd, tail, 0, tail.length, size - tail.length);
+    if (tail.toString('utf8').trimEnd().endsWith(line)) return;
+  } catch {
+    /* first result */
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+  appendFileSync(path, `${line}\n`, { mode: 0o600 });
 }

@@ -14,11 +14,20 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { appendFileSync, closeSync, fstatSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
+import { closeSync, fstatSync, openSync, renameSync, rmSync, writeFileSync, writeSync } from 'node:fs';
 import { AUTOPG_PIN, type AutopgTarget, autopgTarget, detectLibc, readPgPasswordFile } from './autopg-runtime.js';
 import { ensureOmniDatabaseExists, waitForCanonicalReady } from './lib/canonical-pgserve.js';
 import {
+  SANDBOX_UPDATE_BUSY,
+  checkSandboxUpdateLease,
+  sandboxProcessIdentity,
+  writeSandboxUpdateLease,
+} from './sandbox-update-lease.js';
+import {
+  SANDBOX_UPDATE_COPY_INTERRUPTED,
+  SANDBOX_UPDATE_DRAIN_FAILED,
   SANDBOX_UPDATE_UNHEALTHY,
+  appendSandboxUpdateFailure,
   finishSandboxUpdateTransaction,
   hasPendingSandboxUpdate,
   sandboxUpdateNeedsRecovery,
@@ -43,7 +52,6 @@ import {
   sandboxLayout,
   sandboxUpdateFiles,
   sandboxUpdateLogPath,
-  sandboxUpdateOwner,
   sweepSandboxLeftovers,
 } from './sandbox.js';
 
@@ -107,7 +115,7 @@ export interface ChildHandle {
 
 export interface SupervisorDeps {
   spawnChild(spec: SandboxChildSpec): ChildHandle;
-  /** Resolves true when the API health endpoint succeeds, or another child's loopback port answers. */
+  /** Port-answer readiness for every child, including an API returning HTTP 503. */
   waitReady(spec: SandboxChildSpec, timeoutMs: number): Promise<boolean>;
   /** Creates the `omni` database on the sandbox's Postgres if it is missing; `password` for a password-file cluster. */
   ensureDatabase(port: number, password?: string): Promise<boolean>;
@@ -121,6 +129,8 @@ export interface SupervisorDeps {
   env: Record<string, string | undefined>;
   installUpdate?(version: string): Promise<void>;
   onHealthy?(): void;
+  apiHealthy?(spec: SandboxChildSpec): Promise<boolean>;
+  processIdentity(pid: number): string | null;
   onSignal(handler: (signal: NodeJS.Signals) => void): void;
   /** Stops children an earlier supervisor left running; resolves with how many. */
   sweepLeftovers?(layout: SandboxLayout): Promise<number>;
@@ -156,28 +166,37 @@ export function spawnChildProcess(spec: SandboxChildSpec): ChildHandle {
   return { pid: child.pid ?? -1, exited, kill: (signal) => child.kill(signal) };
 }
 
-async function waitPortAnswers(spec: SandboxChildSpec, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (spec.name === 'api') {
-      try {
-        const response = await fetch(`http://127.0.0.1:${spec.readyPort}/api/v2/health`, {
-          signal: AbortSignal.timeout(2000),
-        });
-        if (response.ok) return true;
-      } catch {
-        /* not healthy yet */
-      }
-    } else if (!(await isLoopbackPortFree(spec.readyPort))) return true;
-    await Bun.sleep(500);
+export async function waitPortAnswers(
+  spec: SandboxChildSpec,
+  timeoutMs: number,
+  effects = { now: Date.now, free: isLoopbackPortFree, sleep: (ms: number) => Bun.sleep(ms) },
+): Promise<boolean> {
+  const deadline = effects.now() + timeoutMs;
+  while (effects.now() < deadline) {
+    if (!(await effects.free(spec.readyPort))) return true;
+    await effects.sleep(500);
   }
   return false;
+}
+
+export async function sandboxApiHealthy(spec: SandboxChildSpec, request: typeof fetch = fetch): Promise<boolean> {
+  try {
+    return (
+      await request(`http://127.0.0.1:${spec.readyPort}/api/v2/health`, {
+        signal: AbortSignal.timeout(2000),
+      })
+    ).ok;
+  } catch {
+    return false;
+  }
 }
 
 function defaultSupervisorDeps(): SupervisorDeps {
   return {
     spawnChild: spawnChildProcess,
     waitReady: waitPortAnswers,
+    apiHealthy: sandboxApiHealthy,
+    processIdentity: sandboxProcessIdentity,
     ensureDatabase: async (port, password) =>
       (await waitForCanonicalReady(port, 60, password)) && ensureOmniDatabaseExists(port, password),
     autopgTarget: () =>
@@ -246,8 +265,8 @@ export class SandboxSupervisor {
     }
   }
 
-  private updateFailure(error: string): void {
-    appendFileSync(sandboxUpdateLogPath(this.layout), `${JSON.stringify({ ok: false, error })}\n`, { mode: 0o600 });
+  private updateFailure(error: string, deduplicate = false): void {
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(this.layout), error, deduplicate);
   }
 
   /** Hold the system unit's main PID until install/rollback has finished. Never detach or stop the unit. */
@@ -262,7 +281,7 @@ export class SandboxSupervisor {
       await this.deps.sweepLeftovers?.(this.layout);
       drained = true;
       // The installer must see a stopped sandbox; the separate lease still excludes other commands.
-      writeFileSync(files.owner, JSON.stringify({ pid: this.deps.pid }), { mode: 0o600 });
+      writeSandboxUpdateLease(files.owner, this.deps.pid, this.deps);
       rmSync(this.layout.pidPath, { force: true });
       await this.deps.installUpdate?.(version);
       this.updating = false;
@@ -276,7 +295,7 @@ export class SandboxSupervisor {
       rmSync(files.request, { force: true });
       if (!drained || hasPendingSandboxUpdate(this.layout.home)) {
         // No runtime was touched before drain, or rollback needs an operator. Keep any backup.
-        this.updateFailure(SANDBOX_UPDATE_UNHEALTHY);
+        this.updateFailure(drained ? SANDBOX_UPDATE_UNHEALTHY : SANDBOX_UPDATE_DRAIN_FAILED);
         await this.stop(SANDBOX_EXIT.failed);
         return;
       }
@@ -339,8 +358,24 @@ export class SandboxSupervisor {
     child.state = 'ready';
     this.writeStatus();
     this.deps.log(`${spec.name} ready on 127.0.0.1:${spec.readyPort}`);
-    if (spec.name === 'api') this.deps.onHealthy?.();
+    if (spec.name === 'api' && hasPendingSandboxUpdate(this.layout.home)) {
+      // Health only retires the backup. It must never gate startup or child restarts.
+      void this.checkUpdateHealth(child, handle).catch(() => this.deps.log('could not record sandbox update health'));
+    }
     return true;
+  }
+
+  private async checkUpdateHealth(child: ChildState, handle: ChildHandle): Promise<void> {
+    while (!this.stopping && child.handle === handle && hasPendingSandboxUpdate(this.layout.home)) {
+      const healthy = await this.deps.apiHealthy?.(child.spec);
+      if (this.stopping || child.handle !== handle) return;
+      if (healthy) {
+        this.deps.onHealthy?.();
+        return;
+      }
+      this.updateFailure(SANDBOX_UPDATE_UNHEALTHY, true);
+      await this.deps.sleep(5000);
+    }
   }
 
   private async onExit(child: ChildState, handle: ChildHandle, code: number, startedAt: number): Promise<void> {
@@ -427,17 +462,23 @@ export async function runSandboxSupervisor(
   const state = readSandboxState(layout);
   const apiKey = readSandboxApiKey(layout);
   if (!state || !apiKey) throw new SandboxError(`No sandboxed Omni at ${home}`, SANDBOX_EXIT.notInstalled);
-  const updating = sandboxUpdateOwner(layout);
-  if (updating !== null && deps.isAlive(updating))
-    throw new SandboxError('A supervisor-owned sandbox update is in progress.');
-  if (sandboxUpdateNeedsRecovery(home, state.version)) {
-    appendFileSync(
+  try {
+    if (checkSandboxUpdateLease(sandboxUpdateFiles(layout).owner, deps)) throw new SandboxError(SANDBOX_UPDATE_BUSY);
+  } catch (error) {
+    appendSandboxUpdateFailure(
       sandboxUpdateLogPath(layout),
-      `${JSON.stringify({ ok: false, error: SANDBOX_UPDATE_UNHEALTHY })}\n`,
-      { mode: 0o600 },
+      error instanceof Error ? error.message : SANDBOX_UPDATE_BUSY,
+      true,
     );
+    throw error;
+  }
+  const hadBackup = hasPendingSandboxUpdate(home);
+  if (sandboxUpdateNeedsRecovery(home, state.version)) {
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), SANDBOX_UPDATE_UNHEALTHY, true);
     throw new SandboxError(SANDBOX_UPDATE_UNHEALTHY);
   }
+  if (hadBackup && !hasPendingSandboxUpdate(home))
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), SANDBOX_UPDATE_COPY_INTERRUPTED);
   const running = readPid(layout);
   if (running !== null && running !== deps.pid && deps.isAlive(running)) {
     throw new SandboxError(`The sandbox at ${home} is already running (pid ${running})`);
