@@ -13,6 +13,8 @@
 #                      refuses the stale update: no retry (fails loudly)
 #   lost_ack           the update lands but git reports failure: treated as
 #                      pushed, one bump commit, tag pushed
+#   other_ref_nff      dev advances and the push reports a non-fast-forward
+#                      rejection of a DIFFERENT ref: no retry (fails loudly)
 # bun is stubbed; prepare-dev-version.sh is the real script.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -50,6 +52,8 @@ TODAY=$(date -u +%y%m%d)
 
 # The command another writer runs to land a docs commit on dev.
 advance_cmd() {
+  # The single quotes are deliberate: $$ and $RANDOM expand in the shell that runs the command.
+  # shellcheck disable=SC2016
   printf '( unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE; cd "%s/other" && "%s" pull -q origin dev && echo "$$-$RANDOM" >> docs.md && "%s" add docs.md && "%s" commit -qm "docs: %s" && "%s" push -q origin dev )' \
     "$1" "${REAL_GIT}" "${REAL_GIT}" "${REAL_GIT}" "$2" "${REAL_GIT}"
 }
@@ -138,6 +142,14 @@ setup_moved_during_hook() {
 setup_lost_ack() {
   git_shim "$1" "  if [[ ! -e \"$1/acked\" ]]; then : > \"$1/acked\"; \"${REAL_GIT}\" \"\$@\"; echo 'fatal: the remote end hung up unexpectedly' >&2; exit 128; fi"
 }
+# The dev push fails reporting a non-fast-forward rejection of another ref
+# while dev advances: only the dev ref's own status may admit a retry.
+setup_other_ref_nff() {
+  git_shim "$1" "  $(advance_cmd "$1" moving) >/dev/null 2>&1
+  printf 'To https://github.com/o/r.git\n!\tHEAD:refs/heads/main\t[rejected] (fetch first)\nDone\n'
+  echo 'error: failed to push some refs' >&2
+  exit 1"
+}
 subject() { git -C "${work}/$1/remote.git" log -1 --format=%s dev; }
 attempts() { grep -c '^Derived version: ' "${work}/$1/log" || true; }
 bumps() { git -C "${work}/$1/remote.git" log --format=%s dev | grep -c '^chore(version): bump to ' || true; }
@@ -192,4 +204,11 @@ grep -q "already contains" "${work}/lost_ack/log" || fail "lost_ack: the landed 
 grep -qx "version=2.${TODAY}.1" "${work}/lost_ack/output" || fail "lost_ack: no version output"
 [[ "$(git -C "${work}/lost_ack/remote.git" rev-parse "v2.${TODAY}.1^{commit}")" == "$(git -C "${work}/lost_ack/remote.git" rev-parse dev)" ]] || fail "lost_ack: the tag is not on the landed bump"
 
-printf 'PASS: version bump push handling (normal, race, exhaust, reject, hook_failure, moved_during_hook, lost_ack)\n'
+run_case other_ref_nff setup_other_ref_nff
+[[ "${rc}" != 0 ]] || fail "other_ref_nff: succeeded although dev was never pushed"
+[[ "$(attempts other_ref_nff)" == 1 ]] || fail "other_ref_nff: retried on another ref's non-fast-forward ($(attempts other_ref_nff) attempts)"
+grep -q "::error::the dev push failed without a non-fast-forward rejection" "${work}/other_ref_nff/log" || fail "other_ref_nff: wrong failure"
+[[ "$(bumps other_ref_nff)" == 0 ]] || fail "other_ref_nff: a bump reached dev"
+no_tag other_ref_nff; no_output other_ref_nff
+
+printf 'PASS: version bump push handling (normal, race, exhaust, reject, hook_failure, moved_during_hook, lost_ack, other_ref_nff)\n'
