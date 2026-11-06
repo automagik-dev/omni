@@ -9,14 +9,14 @@
  *    `docs/rfcs/NNNN-*.md` (except the 0000 template) needs a row. An unlinked `RFC-NNNN` row is
  *    a reserved number and must be Draft. Numbers are unique, and Status is one word from
  *    STATUSES.
- * 2. Every `RFC-NNNN` cited in apps/ packages/ scripts/ docs/ is a row of the index. IETF
- *    standards written the same way (IETF_RFCS, e.g. RFC-4122 for UUIDs) are not Omni RFCs, and
- *    the index may not use their numbers.
+ * 2. Every `RFC-NNNN` cited in apps/ packages/ scripts/ docs/ is a row of the index, whatever its
+ *    number. IETF standards are written with a space ("RFC 4122"), which is not a citation.
  * 3. Every `ADR-NNNN` or named `ADR-XXX-NNNN` cited there is a row of the index (keys are frozen).
- * 4. Every `.genie/wishes/...` or `.genie/brainstorms/...` path and every wish slug cited there
- *    resolves to a file git tracks. A wish slug is `wish <slug>`, `wish: <slug>` or
- *    ``wish `<slug>` `` (any case of Wish); a one-word slug counts only with the colon or the
- *    backticks, so prose such as "the wish requires" is not a citation.
+ * 4. Every planning path and every wish slug cited there resolves to a file git tracks. A path is
+ *    `.genie/wishes/...` or `.genie/brainstorms/...`, or the same without `.genie/` when it starts
+ *    a word (`wishes/<slug>/WISH.md`). A wish slug follows Wish, wish or WISH as `<slug>`,
+ *    `: <slug>`, `` `<slug>` `` or `**<slug>**` (also `*`, `_`, `__`). A one-word slug counts only
+ *    with the colon, backticks or emphasis, so prose such as "the wish requires" is not a citation.
  *
  * Citations already dangling when the gate landed sit in ALLOWLIST with their count per file.
  * One more in that file, or the same citation in another file, fails; fewer fails too until the
@@ -48,9 +48,6 @@ export interface AllowEntry {
   count: number;
   reason: string;
 }
-
-/** IETF standards cited with the RFC-NNNN shape. Not Omni RFCs; their numbers are never used. */
-export const IETF_RFCS = new Set(['RFC-4122']);
 
 function allow(cite: string, reason: string, counts: Record<string, number>): AllowEntry[] {
   return Object.entries(counts).map(([file, count]) => ({ file, cite, count, reason }));
@@ -237,9 +234,6 @@ export function checkIndex(rows: IndexRow[], trackedFiles: string[]): string[] {
   const linked = new Set<string>();
   for (const row of rows) {
     if (!row.key.startsWith('RFC-')) continue;
-    if (IETF_RFCS.has(row.key)) {
-      errors.push(`${INDEX_PATH}:${row.line}: ${row.key} is an IETF standard cited in the code; take the next number`);
-    }
     const number = row.key.slice(4);
     const at = `${INDEX_PATH}:${row.line}`;
     if (!row.linkedFile) {
@@ -267,21 +261,24 @@ export function checkIndex(rows: IndexRow[], trackedFiles: string[]): string[] {
 const RFC_CITE = /\bRFC-(\d{4})\b/g;
 const ADR_CITE = /\bADR-((?:[A-Z]+-)?\d{4})\b/g;
 const GENIE_CITE = /\.genie\/(?:wishes|brainstorms)\/[A-Za-z0-9_.\-/]*/g;
+/** `wishes/<slug>/...` without `.genie/`, at the start of a word (not `brain/wishes/...`). */
+const SHORT_GENIE_CITE = /(?<![A-Za-z0-9_./-])(?:wishes|brainstorms)\/[a-z0-9][A-Za-z0-9_.\-/]*/g;
 const WISH_CITE =
-  /\b(?:[Ww]ish|WISH)(?::?\s+`?([a-z0-9]+(?:-[a-z0-9]+)+)|:\s+`?([a-z0-9]+)(?![a-z0-9-])|\s+`([a-z0-9]+)`)/g;
+  /\b(?:[Ww]ish|WISH)(?::?\s+`?([a-z0-9]+(?:-[a-z0-9]+)+)|:\s+`?([a-z0-9]+)(?![a-z0-9-])|\s+`([a-z0-9]+)`|:?\s+(\*{1,2}|_{1,2})([a-z0-9]+(?:-[a-z0-9]+)*)\4)/g;
 
 /** Every citation in one file's text. Genie paths lose trailing dots; empty slugs are skipped. */
 export function findCitations(file: string, text: string): Citation[] {
   const found: Citation[] = [];
   for (const [i, line] of text.split('\n').entries()) {
     const add = (cite: string) => found.push({ file, line: i + 1, cite });
-    for (const m of line.matchAll(RFC_CITE)) if (!IETF_RFCS.has(m[0])) add(m[0]);
+    for (const m of line.matchAll(RFC_CITE)) add(m[0]);
     for (const m of line.matchAll(ADR_CITE)) add(`ADR-${m[1]}`);
     for (const m of line.matchAll(GENIE_CITE)) {
       const path = m[0].replace(/\.+$/, '');
       if (!/^\.genie\/(?:wishes|brainstorms)\/$/.test(path)) add(path);
     }
-    for (const m of line.matchAll(WISH_CITE)) add(`wish ${m[1] ?? m[2] ?? m[3]}`);
+    for (const m of line.matchAll(SHORT_GENIE_CITE)) add(`.genie/${m[0].replace(/\.+$/, '')}`);
+    for (const m of line.matchAll(WISH_CITE)) add(`wish ${m[1] ?? m[2] ?? m[3] ?? m[5]}`);
   }
   return found;
 }

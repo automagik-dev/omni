@@ -53,7 +53,7 @@ function green(extra: Record<string, string> = {}): Record<string, string> {
     '.genie/brainstorms/tracked-design/DESIGN.md': '# Design\n',
     'packages/core/src/a.ts': [
       '// RFC-0001 and RFC-0002 (reserved) and ADR-0001 and ADR-LID-0003',
-      '// UUIDs follow RFC-4122 (an IETF standard, not an Omni RFC)',
+      '// UUIDs follow RFC 4122 (an IETF standard, written with a space)',
       '// the wish requires this; WISH lines and wish slugs are prose',
       '// wish: tracked-wish, Wish tracked-design',
       '// see .genie/wishes/tracked-wish/WISH.md.',
@@ -148,6 +148,22 @@ describe('citations (RED for any new dangling one)', () => {
     ]);
   });
 
+  test('a dashed RFC-4122 is an Omni citation like any other number', () => {
+    expect(verifyRfcs(repo(green({ 'packages/a/uuid.ts': '// RFC-4122 variant' })), [])).toEqual([
+      'packages/a/uuid.ts:1: RFC-4122 is not a row of docs/rfcs/README.md',
+    ]);
+  });
+
+  test('an emphasized wish slug and a shortened planning path fail when untracked', () => {
+    const root = repo(
+      green({ 'docs/guide.md': 'Wish **reviewprobe**; see wishes/reviewprobe/WISH.md.\nplain wish reviewprobe.' }),
+    );
+    expect(verifyRfcs(root, [])).toEqual([
+      'docs/guide.md:1: .genie/wishes/reviewprobe/WISH.md is not tracked; track the design or cite its RFC',
+      'docs/guide.md:1: no tracked .genie/wishes/reviewprobe/ or .genie/brainstorms/reviewprobe/; track the design or cite its RFC',
+    ]);
+  });
+
   test('a one-word wish slug with a colon or backticks fails when untracked', () => {
     const root = repo(green({ 'docs/guide.md': 'Wish: reviewprobe. Also wish `otherprobe`.' }));
     expect(verifyRfcs(root, [])).toEqual([
@@ -213,12 +229,6 @@ describe('index rows and files', () => {
     expect(errors[0]).toStartWith('docs/rfcs/README.md:4: status "Accepted (delivery 1 merged)" is not one of');
   });
 
-  test('the index may not use an IETF standard number', () => {
-    expect(verifyRfcs(withIndex('| RFC-4122 | Clash | Draft | — | — | — |\n'), [])).toEqual([
-      'docs/rfcs/README.md:4: RFC-4122 is an IETF standard cited in the code; take the next number',
-    ]);
-  });
-
   test('a malformed # cell fails', () => {
     expect(parseIndex(`${HEADER}| 7 | Bad | Draft | — | — | — |\n`).errors).toEqual([
       'docs/rfcs/README.md:3: # cell "7" is not [RFC-NNNN](NNNN-name.md), RFC-NNNN, ADR-NNNN or —',
@@ -233,14 +243,17 @@ describe('index rows and files', () => {
 describe('findCitations', () => {
   test('reads each citation shape and ignores prose and placeholders', () => {
     const text = [
-      'RFC-0001, RFC-4122, ADR-0003 and ADR-LID-0003, not ADR-NNNN',
+      'RFC-0001, RFC-4122, ADR-0003 and ADR-LID-0003, not ADR-NNNN or RFC 4122',
       'Wish omni-chat-threads; WISH: omni-install-resilience; wish `slack-personal-oauth`',
       'see .genie/wishes/a-b/WISH.md. and .genie/brainstorms/<slug>/DESIGN.md',
       'a wish that holds, wishes come-true, RFC 7231, the WISH requires',
       'wish: single, Wish `word`, WISH: per-repo',
+      'wish **bold-slug**, Wish _one_, see wishes/a-b/WISH.md and brainstorms/c/DESIGN.md.',
+      'not brain/wishes/2026/x.md, src/wishes/y, or wishes/<slug>/WISH.md',
     ].join('\n');
     expect(findCitations('f', text).map((c) => `${c.line} ${c.cite}`)).toEqual([
       '1 RFC-0001',
+      '1 RFC-4122',
       '1 ADR-0003',
       '1 ADR-LID-0003',
       '2 wish omni-chat-threads',
@@ -250,6 +263,10 @@ describe('findCitations', () => {
       '5 wish single',
       '5 wish word',
       '5 wish per-repo',
+      '6 .genie/wishes/a-b/WISH.md',
+      '6 .genie/brainstorms/c/DESIGN.md',
+      '6 wish bold-slug',
+      '6 wish one',
     ]);
   });
 });
@@ -265,8 +282,6 @@ describe('the repository .gitignore', () => {
       '.genie/brainstorms/probe/nested/DESIGN.md',
       '.genie/wishes/probe/WISH.md',
       '.genie/wishes/probe/adrs/ADR-0001-x.md',
-      '.genie/wishes/probe/PURPOSE_SPEC.yaml',
-      '.genie/wishes/probe/plan.json',
     ]) {
       expect({ path, ignored: ignored(path) }).toEqual({ path, ignored: false });
     }
@@ -293,6 +308,17 @@ describe('the repository .gitignore', () => {
       '.genie/wishes/probe/cache/a.json',
       '.genie/wishes/probe/key.pem',
       '.genie/wishes/probe/script.sh',
+      '.genie/wishes/probe/PURPOSE_SPEC.yaml',
+      '.genie/wishes/probe/plan.json',
+      '.genie/wishes/probe/service-account.json',
+      '.genie/wishes/probe/token.json',
+      '.genie/wishes/probe/auth.json',
+      '.genie/wishes/probe/session.json',
+      '.genie/wishes/probe/state.json',
+      '.genie/wishes/probe/client.key.json',
+      '.genie/wishes/probe/refresh-token.yml',
+      '.genie/wishes/probe/nested/service-account.json',
+      '.genie/wishes/probe/nested/refresh-token.yml',
     ]) {
       expect({ path, ignored: ignored(path) }).toEqual({ path, ignored: true });
     }
