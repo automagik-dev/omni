@@ -15422,6 +15422,45 @@ function useChatPoll(chatId, on2) {
   }, [chatId, on2]);
   return read.chatId === chatId ? read : { chatId, messages: null, error: null };
 }
+var sendsAllowed = (thread) => thread?.permissions?.sends === "allow";
+function SendSwitch({ thread }) {
+  const on2 = sendsAllowed(thread);
+  const [wanted, setWanted] = (0, import_react13.useState)(null);
+  const [problem, setProblem] = (0, import_react13.useState)(null);
+  (0, import_react13.useEffect)(() => {
+    setWanted(null);
+  }, [on2]);
+  const shown = wanted ?? on2;
+  const flip = () => {
+    const next = !shown;
+    setWanted(next);
+    setProblem(null);
+    call("omni-thread-permissions", { threadId: thread.id, sends: next ? "allow" : "ask" }).catch((error) => {
+      console.warn("Could not change the chat settings:", error);
+      setWanted(null);
+      setProblem(t("Could not change this chat's settings. Try again."));
+    });
+  };
+  return (0, import_react13.createElement)(
+    "div",
+    { className: "op-send" },
+    (0, import_react13.createElement)(
+      "label",
+      { className: "op-send-row" },
+      (0, import_react13.createElement)("span", null, t("Always allow send")),
+      (0, import_react13.createElement)("button", {
+        type: "button",
+        role: "switch",
+        "aria-checked": shown,
+        className: "op-switch",
+        "data-thread-id": thread.id,
+        title: shown ? t("Sends into this chat go without asking you") : t("Each send into this chat asks you first"),
+        onClick: flip
+      }, (0, import_react13.createElement)("span"))
+    ),
+    problem ? (0, import_react13.createElement)("span", { className: "op-send-problem", role: "alert" }, hostText(problem)) : null
+  );
+}
 function PhonePane({ params, sessionId, useRoster, visible = true }) {
   const thread = useRoster((roster) => phoneThreadOf(roster, params, sessionId));
   const read = useChatPoll(thread?.chatId ?? null, visible);
@@ -15443,7 +15482,8 @@ function PhonePane({ params, sessionId, useRoster, visible = true }) {
         "header",
         { className: "op-head" },
         (0, import_react13.createElement)("strong", null, name),
-        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, threadReason(thread)) : null
+        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, threadReason(thread)) : null,
+        (0, import_react13.createElement)(SendSwitch, { thread })
       ),
       (0, import_react13.createElement)(
         "div",
@@ -15532,7 +15572,14 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
 .op-head{display:flex;flex-direction:column;align-items:center;gap:1px;padding:28px 12px 8px;border-bottom:1px solid var(--bt-line, rgba(127,127,127,.2));text-align:center}
 .op-head strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
-.op-head span{font-size:11px;color:var(--bt-ink-3)}
+.op-head > span{font-size:11px;color:var(--bt-ink-3)}
+.op-send{display:flex;flex-direction:column;align-items:center;gap:2px;margin-top:4px}
+.op-send-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--bt-ink-2, var(--bt-ink-3));cursor:pointer}
+.op-send-problem{font-size:11px;color:var(--bt-danger, #dc2626)}
+.op-switch{position:relative;flex:none;width:26px;height:15px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2, rgba(127,127,127,.35));cursor:pointer;transition:background-color .15s ease}
+.op-switch span{position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
+.op-switch[aria-checked=true]{background:var(--bt-accent, #22d3ee)}
+.op-switch[aria-checked=true] span{transform:translateX(11px)}
 .op-screen .oc-thread-in{max-width:none;padding:8px 8px 14px}
 .op-screen .oc-msg{max-width:86%}
 .op-screen .oc-bubble{padding:6px 10px 5px;border-radius:16px;font-size:13px;line-height:18px}
@@ -17518,6 +17565,9 @@ var STRINGS = {
   "Ask an admin to configure META_APP_SECRET on the Omni server before receiving webhooks.": "接收 Webhook 前，请管理员在 Omni 服务器上配置 META_APP_SECRET。",
   "Open Meta Developers, choose your app and its WhatsApp webhook configuration. Paste Callback URL and Verify token into the matching fields, then verify and save.": "打开 Meta 开发者平台，选择应用及其 WhatsApp Webhook 配置。将回调 URL 和验证令牌粘贴到对应字段，然后验证并保存。",
   "Open Meta Developers": "打开 Meta 开发者平台",
+  "Always allow send": "始终允许发送",
+  "Sends into this chat go without asking you": "发送到这个聊天的消息不再询问你",
+  "Each send into this chat asks you first": "每次发送到这个聊天都会先询问你",
   "The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.": "验证令牌不是 Graph API 访问令牌。连接成功不代表 Webhook 已验证；Meta 必须能够访问此 HTTPS URL。"
 };
 

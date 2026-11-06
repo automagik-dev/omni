@@ -6,7 +6,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { operatesHere, operatesOmni } from './grants.js'
+import { isThreadSession, omniActorOf, operatesHere, operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
 import { THREAD_TOOLS } from './threads.js'
@@ -236,14 +236,15 @@ export function install(rt) {
     return spec.ops
   }
 
-  // A Main Bot or an Omni Bot operates omni. In a Session that handles an automation's event, whose text
-  // came from other people, it only reads.
+  // A Main Bot or an Omni Bot operates omni, and a chat thread as the Omni Bot. In a Session
+  // that handles an automation's event, whose text came from other people, it only reads; a
+  // thread's automation turns ask first instead (standing-runs.js).
   async function allowed(exec, method) {
     await rt.load()
     const id = exec.agent?.id
-    const self = rt.selfOf(id)
+    const self = omniActorOf(rt, id)
     if (!operatesOmni(rt, self)) return 'Only an Omni Bot or a Main Bot operates omni. Ask one in its chat.'
-    const eventRun = (state.subscriptionRuns ?? []).some(run => run.sessionId === id)
+    const eventRun = !isThreadSession(rt, id) && (state.subscriptionRuns ?? []).some(run => run.sessionId === id)
     if (eventRun && method !== 'GET') return 'This Session handles an automation event, so it only reads omni. Tell the user what you would change instead.'
     return null
   }
@@ -548,7 +549,7 @@ export function install(rt) {
       async execute(raw, exec) {
         try {
           await rt.load()
-          const args = { ...await spec.prepare(raw ?? {}), bot: rt.selfOf(exec.agent?.id) }
+          const args = { ...await spec.prepare(raw ?? {}), bot: omniActorOf(rt, exec.agent?.id) }
           const { chat, resource } = await chatResource(args.chat)
           const message = args.message ? await messageIn(chat, args.message) : undefined
           const asked = await rt.omniPermit(exec, { action: spec.action, resource, call: { tool: definition.name, args }, preview: spec.preview?.(args, message) ?? {} })
@@ -573,7 +574,7 @@ export function install(rt) {
     output,
     async execute(args, exec) {
       await rt.load()
-      const self = rt.selfOf(exec.agent?.id)
+      const self = omniActorOf(rt, exec.agent?.id)
       if (rt.botOf(self) === undefined) return 'Only Bots on the team use Omni.'
       try {
         const data = await chats(args)
