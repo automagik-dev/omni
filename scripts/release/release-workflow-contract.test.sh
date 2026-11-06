@@ -523,6 +523,73 @@ require(
     r"    concurrency:\n      group: version-dev\n      cancel-in-progress: false\n",
     "the dev version writer does not serialize every trigger under one constant version-dev group",
 )
+
+# A merged PR labelled `no-release` skips the dev release. The check lives only
+# in the merged-PR clause, so dispatch and candidate cuts never read it and an
+# unlabelled merge still bumps.
+require(
+    version_workflow,
+    r"^    if: >-\n"
+    r"      \(github\.event_name == 'workflow_dispatch' && inputs\.stable_publish_only != true\) \|\|\n"
+    r"      \(github\.event_name == 'push' && inputs\.candidate == true\) \|\|\n"
+    r"      \(github\.event_name == 'pull_request' &&\n"
+    r"       github\.event\.pull_request\.merged == true &&\n"
+    r"       github\.event\.pull_request\.base\.ref == 'dev' &&\n"
+    r"       github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\n"
+    r"       !contains\(github\.event\.pull_request\.labels\.\*\.name, 'no-release'\)\)\n",
+    "the auto-version job does not skip a merged PR labelled no-release, or the label check reaches past the merged-PR clause",
+)
+
+# Bounded fresh-tip retry (#1624 review). dev can move between the checkout and
+# the bump push (a no-release merge runs no writer; a direct commit never queues
+# in version-dev), and the rejected non-fast-forward push used to lose that
+# release. Each attempt must derive the version inside the loop from freshly
+# fetched tags, retry only on git's non-fast-forward status for the dev ref,
+# keep an update that landed although git reported failure, and stop after three.
+prepare_dev_version = (root / "scripts/release/prepare-dev-version.sh").read_text(encoding="utf-8")
+require(
+    prepare_dev_version,
+    r'EXISTING=\$\(git tag --list "v2\.\$\{TODAY\}\.\*" \| wc -l\)\n',
+    "prepare-dev-version.sh does not derive the build number from this checkout's tags",
+)
+require(prepare_dev_version, r'^printf \x27%s\\n\x27 "\$\{VERSION\}"\n\Z', "prepare-dev-version.sh does not print the version as its last stdout line")
+forbid(version_workflow, r"- name: Derive version\n|steps\.version\.outputs", "the version is derived once outside the bump retry loop, so a retry would reuse a stale number")
+require(
+    version_workflow,
+    r"- name: Commit and tag\n        id: bump\n[\s\S]{0,600}?"
+    r"          MAX_ATTEMPTS=3\n          attempt=1\n          while :; do\n"
+    r"            BASE_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n"
+    r"            VERSION=\$\(scripts/release/prepare-dev-version\.sh \| tail -n 1\)\n"
+    r"[\s\S]{0,2400}?"
+    r"            PUSH_STATUS=\$\(mktemp\)\n"
+    r"            if git -c http\.https://github\.com/\.extraheader= \\\n"
+    r"              push --porcelain \"https://x-access-token:\$\{VERSION_WRITER_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}\.git\" \\\n"
+    r"              \"HEAD:refs/heads/\$\{PUSH_REF\}\" > \"\$\{PUSH_STATUS\}\"; then\n"
+    r"              cat \"\$\{PUSH_STATUS\}\"\n              break\n            fi\n"
+    r"            cat \"\$\{PUSH_STATUS\}\"\n\n"
+    r"            git -c http\.https://github\.com/\.extraheader= \\\n"
+    r"              fetch [^\n]*\n"
+    r"              \"\+refs/heads/\$\{PUSH_REF\}:refs/remotes/origin/\$\{PUSH_REF\}\"\n"
+    r"            FRESH_SHA=\$\(git rev-parse \"refs/remotes/origin/\$\{PUSH_REF\}\^\{commit\}\"\)\n"
+    # A landed update whose acknowledgement was lost is kept, never re-bumped.
+    r"            if git merge-base --is-ancestor \"\$\{BUMP_SHA\}\" \"\$\{FRESH_SHA\}\"; then\n"
+    r"              echo \"::warning::[^\n]*\"\n              break\n            fi\n"
+    # Only git's own non-fast-forward status for the dev ref admits a retry.
+    r"            if ! awk -F '\\t' -v ref=\"HEAD:refs/heads/\$\{PUSH_REF\}\" \\\n"
+    r"              '\$1 == \"!\" && \$2 == ref && \(\$3 == \"\[rejected\] \(fetch first\)\" \|\| \$3 == \"\[rejected\] \(non-fast-forward\)\"\) \{ found = 1 \} END \{ exit !found \}' \\\n"
+    r"              \"\$\{PUSH_STATUS\}\"; then\n"
+    r"              echo \"::error::[^\n]*\"\n              exit 1\n            fi\n"
+    r"            if \(\( attempt >= MAX_ATTEMPTS \)\); then\n              echo \"::error::[^\n]*\"\n              exit 1\n            fi\n"
+    r"            echo \"::warning::[^\n]*\"\n"
+    r"            git tag -d \"v\$\{VERSION\}\"\n"
+    r"            git -c http\.https://github\.com/\.extraheader= \\\n"
+    r"              fetch --force [^\n]*\n"
+    r"              \"\+refs/tags/\*:refs/tags/\*\"\n"
+    r"            git reset --hard \"\$\{FRESH_SHA\}\"\n"
+    r"            attempt=\$\(\(attempt \+ 1\)\)\n"
+    r"          done\n",
+    "the dev bump push has no bounded fresh-tip retry: at most 3 attempts, each recomputing the version inside the loop, retrying only on a non-fast-forward rejection of dev, keeping a landed bump, failing loudly otherwise",
+)
 require(
     version_workflow,
     # Only 4-space-indented or blank lines, so this cannot reach past
@@ -561,7 +628,8 @@ require(
 )
 require(
     version_workflow,
-    r"BUMP_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n\s+\[\[ \"\$\{BUMP_SHA\}\" =~ \^\[0-9a-f\]\{40\}\$ \]\]\n[\s\S]{0,2400}"
+    r"BUMP_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n\s+\[\[ \"\$\{BUMP_SHA\}\" =~ \^\[0-9a-f\]\{40\}\$ \]\]\n[\s\S]{0,4000}?"
+    r"\n          done\n[\s\S]{0,1600}"
     r"\"refs/tags/v\$\{VERSION\}\"\n\n\s+echo \"bump_sha=\$\{BUMP_SHA\}\" >> \"\$GITHUB_OUTPUT\"\n",
     "the version bump step does not emit the pushed dev commit as bump_sha after both pushes",
 )
