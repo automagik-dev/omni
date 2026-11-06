@@ -101,7 +101,7 @@ test('a thread lists only its five tools: restricted right after it is added and
   assert.deepEqual(run.executors.map(entry => [entry.agent, entry.executor instanceof NativeToolExecutor]), [[first, true], [next, true]])
   // Whatever stays visible outside the five, a scope-local subagent and run_code included,
   // is refused in the thread; its own five are not.
-  for (const name of ['bash', 'subagent', 'list_subagent_models', 'run_code', 'omni_call', 'omni_send', 'start_task']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL, name)
+  for (const name of ['bash', 'subagent', 'list_subagent_models', 'run_code', 'omni_call', 'omni_send', 'start_task', 'browser_open', 'browser_handoff']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL, name)
   for (const name of THREAD_TOOLS) assert.equal(guarded(run.ctx, thread.sessionId, name), undefined, name)
 })
 
