@@ -271,6 +271,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'on tools/pre-execute (prepend)',
     'effect omni-channels: thread Sessions',
     'on agent/created',
+    'on agent/created (prepend)',
     'effect omni-channels: omni-free-reactions',
     'effect omni-channels: omni-free-reactions-save',
     'effect omni-channels: omni-thread-defaults',

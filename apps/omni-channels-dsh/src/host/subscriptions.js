@@ -7,7 +7,7 @@
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { closeRun, excerptOf, fenced, isAskRun, pruneRuns, readsOnly, RUNS_KEPT, runId, SUMMARY_MAX } from './asks.js'
-import { operatesOmni } from './grants.js'
+import { omniActorOf, operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { isStandingRun } from './standing-runs.js'
@@ -105,12 +105,13 @@ export function install(rt) {
   const subs = () => (state.subscriptions ??= {})
   const runs = () => (state.subscriptionRuns ??= [])
   // The team's Omni Bot runs automations, else its first Main Bot; it was a Bot of its own
-  // (Autopilot) before. Any Bot that operates Omni manages them. Loads the team first: the
-  // check reads the Bots from the saved state.
+  // (Autopilot) before. Any Bot that operates Omni manages them, and a chat thread as the Omni
+  // Bot (grants.js omniActorOf). Loads the team first: the check reads the Bots from the saved
+  // state.
   const eventsBotId = () => Object.values(state.bots ?? {}).find(bot => bot?.kind === 'omni')?.id ?? state.mainBotIds.find(id => rt.botOf(id))
   const isEventsBot = async (exec) => {
     await rt.load()
-    return operatesOmni(rt, rt.selfOf(exec.agent?.id))
+    return operatesOmni(rt, omniActorOf(rt, exec.agent?.id))
   }
   const eventsName = () => rt.botOf(eventsBotId())?.name ?? 'Omni'
   const notEventsBot = () => `Only ${eventsName()} manages automations. Ask ${eventsName()} in its chat.`
