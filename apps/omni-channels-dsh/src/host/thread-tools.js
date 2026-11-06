@@ -18,6 +18,7 @@
 // host reads the message's row, checks it is in the thread's chat and has media, and only then
 // downloads it, saves it through DSH's attachments and hands the model the image beside Omni's
 // description of it.
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { fitted } from './omni-api.js'
@@ -353,8 +354,9 @@ export function install(rt) {
   // on the live agent. Right after the thread is added (its agent/created came before it was
   // a thread), and on every later agent/created of a thread's Session (a resume, a clear, a
   // compaction), since a restriction belongs to one agent. A scope-local tool (subagent) stays
-  // listed, and the guard refuses it. A tools mode that collapses every call into run_code
-  // (ptc) is turned back to native for the thread, as run_code runs Node code beside the tools.
+  // listed, and the guard refuses it. The thread's agent also runs its tools natively: DSH picks
+  // the executor nearest the agent, so one in the agent's own scope wins over a preset's PTC
+  // executor, which collapses every call into run_code (Node code run beside the tools).
   const held = new WeakSet()
   function hold(agent) {
     if (agent === undefined || agent === null || held.has(agent)) return
@@ -372,9 +374,9 @@ export function install(rt) {
       rt.warn('omni-channels: the thread Session %s keeps DSH\'s tool list (its guard still refuses them): %s', sessionId, error?.message ?? error)
     }
     try {
-      if (typeof ctx.tools.modeFor === 'function' && ctx.tools.modeFor(agent) !== 'native' && typeof tools.presentAs === 'function') tools.presentAs('native')
+      tools.setExecutor(new NativeToolExecutor(agent.ctx))
     } catch (error) {
-      rt.warn('omni-channels: the thread Session %s stays in its tools mode: %s', sessionId, error?.message ?? error)
+      rt.warn('omni-channels: the thread Session %s keeps its tool executor: %s', sessionId, error?.message ?? error)
     }
   }
   ctx.effect(() => rt.threads.onAdded(async (thread) => {

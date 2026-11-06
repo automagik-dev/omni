@@ -14,6 +14,8 @@ import { Context } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
+import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
 import { defineTool, ToolRuntime, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
 import { MEDIA_FILE_BYTES } from '../src/host/omni.js'
@@ -67,12 +69,14 @@ const asked = (omni, from) => askedOf(omni).slice(from)
 // answers it as an error.
 const CARDED = new Set(['thread_say', 'thread_react'])
 
-// DSH's real tool registry (dsh-tools), with a stand-in for each tool of a DSH profile.
+// DSH's real tool registry (dsh-tools), with a stand-in for each tool of a DSH profile, and
+// the deployment's executor: native, or PTC as a preset's ptc row selects it.
 async function realTools(mode) {
   const root = new Context()
   root.plugin(SystemPrompt, {})
-  root.plugin(ToolRuntime, { mode })
-  const ctx = await new Promise((resolve) => { root.plugin({ inject: ['tools'], apply: resolve }) })
+  root.plugin(ToolRuntime, {})
+  const ctx = await new Promise((resolve) => { root.plugin({ inject: ['tools', 'systemPrompt'], apply: resolve }) })
+  ctx.tools.setExecutor(mode === 'ptc' ? new PtcExecutor(ctx) : new NativeToolExecutor(ctx))
   const stub = name => defineTool({ name, description: name, parameters: {}, output: { schema: { type: 'string' }, render: (_args, value) => [{ type: 'text', text: value }] }, execute: async () => name })
   return { ctx, stub }
 }
@@ -93,13 +97,15 @@ test('a thread lists only its five tools: restricted right after it is added and
   run.ctx.emit('agent/created', { agent: next })
   await flush()
   assert.deepEqual(run.restricts.map(entry => entry.agent), [first, next])
+  // Each of the thread's agents runs its tools natively, from its own scope.
+  assert.deepEqual(run.executors.map(entry => [entry.agent, entry.executor instanceof NativeToolExecutor]), [[first, true], [next, true]])
   // Whatever stays visible outside the five, a scope-local subagent and run_code included,
   // is refused in the thread; its own five are not.
   for (const name of ['bash', 'subagent', 'list_subagent_models', 'run_code', 'omni_call', 'omni_send', 'start_task']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL, name)
   for (const name of THREAD_TOOLS) assert.equal(guarded(run.ctx, thread.sessionId, name), undefined, name)
 })
 
-test('probe 2: on DSH\'s real tool registry the thread\'s filter hides every global tool but the five; scope-local tools stay listed and the guard refuses them; ptc mode is turned back to native (:197)', async (t) => {
+test('probe 2: on DSH\'s real tool registry the thread\'s filter hides every global tool but the five; scope-local tools stay listed and the guard refuses them; a ptc executor is turned back to native (:197)', async (t) => {
   for (const mode of ['native', 'ptc']) {
     const { run, thread } = await bench(t)
     const real = await realTools(mode)
@@ -111,14 +117,17 @@ test('probe 2: on DSH\'s real tool registry the thread\'s filter hides every glo
     agent.ctx = createScope(real.ctx, agent).ctx
     for (const name of ['subagent', 'list_subagent_models']) agent.ctx.tools.register(real.stub(name))
     const visible = () => [...real.ctx.tools.view(agent).visible.keys()].sort()
+    const executor = scope => real.ctx.tools.selectExecutor(scope)
     assert.ok(visible().includes('bash'))
-    assert.equal(visible().includes('run_code'), mode === 'ptc')
-    // The plugin restricts it on agent/created, through the registry's own restrict().
-    run.ctx.tools.modeFor = scope => real.ctx.tools.modeFor(scope)
+    assert.ok(executor(agent) instanceof (mode === 'ptc' ? PtcExecutor : NativeToolExecutor), mode)
+    // The plugin restricts it on agent/created, through the registry's own restrict(), and runs
+    // its tools natively from the agent's own scope; the deployment's executor stays.
     run.ctx.emit('agent/created', { agent })
     await flush()
     assert.deepEqual(visible(), [...THREAD_TOOLS, 'list_subagent_models', 'subagent'].sort(), mode)
-    assert.equal(real.ctx.tools.modeFor(agent), 'native')
+    assert.ok(executor(agent) instanceof NativeToolExecutor, mode)
+    assert.deepEqual(executor(agent).describe(real.ctx.tools.definitions(agent)).schemas.map(schema => schema.name).sort(), visible(), mode)
+    assert.ok(executor() instanceof (mode === 'ptc' ? PtcExecutor : NativeToolExecutor), mode)
     for (const name of ['subagent', 'list_subagent_models']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL)
     // restrict() refuses the whole list for one name it does not know, so the five are all
     // registered globally before any thread is restricted.

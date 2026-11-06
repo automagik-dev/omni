@@ -10,6 +10,7 @@ import { LlmAdapter, LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { SessionStore } from '@deepseek-ai/dsh-session'
 import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
 import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { NO_CHAT, RETIRED_QUEUED, ROW_RETIRED, UNKNOWN_WORKER, WORKER_MOVED } from '../src/host/subscriptions.js'
@@ -1033,7 +1034,7 @@ async function realDsh(t) {
     }
   }
   const root = new Context()
-  for (const [plugin, config] of [[SessionStore], [SessionProjectionRegistry], [AgentRegistry], [LlmRuntime], [SystemPrompt, {}], [ToolRuntime, {}], [AgentLoop, {}]]) await root.plugin(plugin, config)
+  for (const [plugin, config] of [[SessionStore], [SessionProjectionRegistry], [AgentRegistry], [LlmRuntime], [SystemPrompt, {}], [ToolRuntime, {}], [NativeToolExecutor], [AgentLoop, {}]]) await root.plugin(plugin, config)
   await root.plugin(Object.assign((ctx) => { ctx.llm.registerAdapter(['scripted'], new Scripted()) }, { inject: ['llm'] }))
   await root.plugin(Object.assign(() => {}, { inject: ['agents', 'agentLoop', 'llm'] }))
   t.after(() => root.fiber.dispose())
