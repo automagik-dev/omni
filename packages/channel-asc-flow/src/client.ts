@@ -130,12 +130,12 @@ export class AscFlowClient {
    * inbound media is resolved (the flow hands us a file NAME, the atendimento
    * carries the bytes).
    */
-  async get(path: string, query: Record<string, string | number> = {}): Promise<AscFlowResponse> {
-    let response = await this.rawRequest('GET', path, query, undefined, await this.getToken());
+  async get(path: string, query: Record<string, string | number> = {}, signal?: AbortSignal): Promise<AscFlowResponse> {
+    let response = await this.rawRequest('GET', path, query, undefined, await this.getToken(), false, signal);
 
     if (response.status === 401 && codErrorOf(response.body) === undefined) {
       this.logger.info('[asc-flow] 401 without cod_error — re-authenticating and retrying', { path });
-      response = await this.rawRequest('GET', path, query, undefined, await this.getToken(true));
+      response = await this.rawRequest('GET', path, query, undefined, await this.getToken(true), false, signal);
     }
 
     return response;
@@ -184,6 +184,8 @@ export class AscFlowClient {
     payload: Record<string, unknown> | undefined,
     token?: string,
     form = false,
+    /** Cancels the request before its own timeout (a caller with a shorter deadline). */
+    signal?: AbortSignal,
   ): Promise<AscFlowResponse> {
     const headers: Record<string, string> = {
       'content-type': form ? 'application/x-www-form-urlencoded' : 'application/json',
@@ -199,7 +201,9 @@ export class AscFlowClient {
         method,
         headers,
         ...(payload === undefined ? {} : { body: form ? formEncode(payload) : JSON.stringify(payload) }),
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: signal
+          ? AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), signal])
+          : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       throw new AscFlowApiError(AscFlowErrorCode.UPSTREAM_ERROR, `ASC ${path} unreachable: ${String(err)}`, {
@@ -214,7 +218,7 @@ export class AscFlowClient {
     } catch {
       // Non-JSON body — keep the raw text for diagnosis.
     }
-    return { status: response.status, body };
+    return { status: response.status, body, bytes: text.length };
   }
 }
 
