@@ -51,6 +51,9 @@ import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
 
+const ZENVIA_HANDOFF_SOLUTIONS = ['conversion', 'zenvia_chat', 'nlu'] as const;
+type ZenviaHandoffSolution = (typeof ZENVIA_HANDOFF_SOLUTIONS)[number];
+
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();
 
 // Instance access middleware for :id routes
@@ -254,6 +257,28 @@ const createInstanceSchema = z.object({
     .describe('ASC gateway base URL (default https://apigw.ascbrazil.com.br)'),
   ascToken: z.string().optional().nullable().describe('ASC access token (asc-token header)'),
   ascOriginador: z.string().optional().nullable().describe('WABA phone number, digits-only E.164 (originador header)'),
+  zenviaApiToken: z.string().optional().nullable().describe('Zenvia API token (X-API-TOKEN header)'),
+  zenviaSenderId: z.string().optional().nullable().describe('Sender registered at Zenvia (the WhatsApp number)'),
+  zenviaHandoffSolution: z
+    .enum(ZENVIA_HANDOFF_SOLUTIONS)
+    .optional()
+    .nullable()
+    .describe('Zenvia solution a handoff routes the conversation to (conversation.solution)'),
+  zenviaSalesApiKey: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Zenvia Sales API key (not the same token as zenviaApiToken)'),
+  zenviaHandoffGroupId: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Sales group dedicated to the chatbot; handoffs transfer the prospect to it'),
+  zenviaHandoffUserId: z
+    .string()
+    .optional()
+    .nullable()
+    .describe('Optional agent inside the handoff group the prospect is transferred to'),
   ascFlowBaseUrl: z
     .string()
     .optional()
@@ -525,13 +550,22 @@ function resolveChannelToken(data: {
   discordBotToken?: string | null;
   slackBotToken?: string | null;
   twilioAuthToken?: string | null;
+  zenviaApiToken?: string | null;
 }): string | undefined {
   // If a generic `token` was provided but no channel-specific field, persist it
-  if (data.token && !data.telegramBotToken && !data.discordBotToken && !data.slackBotToken && !data.twilioAuthToken) {
+  if (
+    data.token &&
+    !data.telegramBotToken &&
+    !data.discordBotToken &&
+    !data.slackBotToken &&
+    !data.twilioAuthToken &&
+    !data.zenviaApiToken
+  ) {
     if (data.channel === 'telegram') data.telegramBotToken = data.token;
     else if (data.channel === 'discord') data.discordBotToken = data.token;
     else if (data.channel === 'slack') data.slackBotToken = data.token;
     else if (data.channel === 'twilio-whatsapp') data.twilioAuthToken = data.token;
+    else if (data.channel === 'zenvia') data.zenviaApiToken = data.token;
   }
   return (
     data.token ??
@@ -579,6 +613,8 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'hermesPassword',
   'ascToken',
   'ascFlowChave',
+  'zenviaApiToken',
+  'zenviaSalesApiKey',
 ] as const;
 
 /**
@@ -686,6 +722,8 @@ function channelTokenField(channel: string): string | undefined {
       return 'discordBotToken';
     case 'slack':
       return 'slackBotToken';
+    case 'zenvia':
+      return 'zenviaApiToken';
     default:
       return undefined;
   }
@@ -729,6 +767,12 @@ type InstanceConnectionOptionsInput = {
   ascBaseUrl?: string | null;
   ascToken?: string | null;
   ascOriginador?: string | null;
+  zenviaApiToken?: string | null;
+  zenviaSenderId?: string | null;
+  zenviaHandoffSolution?: ZenviaHandoffSolution | null;
+  zenviaSalesApiKey?: string | null;
+  zenviaHandoffGroupId?: string | null;
+  zenviaHandoffUserId?: string | null;
   metaAccessToken?: string | null;
   metaPhoneNumberId?: string | null;
   metaWabaId?: string | null;
@@ -824,6 +868,27 @@ function applyAscConnectionOptions(
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
+function applyZenviaConnectionOptions(
+  options: Record<string, unknown>,
+  input: {
+    zenviaApiToken?: string | null;
+    zenviaSenderId?: string | null;
+    zenviaHandoffSolution?: string | null;
+    zenviaSalesApiKey?: string | null;
+    zenviaHandoffGroupId?: string | null;
+    zenviaHandoffUserId?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (input.zenviaApiToken) options.zenviaApiToken = input.zenviaApiToken;
+  if (input.zenviaSenderId) options.zenviaSenderId = input.zenviaSenderId;
+  if (input.zenviaHandoffSolution) options.zenviaHandoffSolution = input.zenviaHandoffSolution;
+  if (input.zenviaSalesApiKey) options.zenviaSalesApiKey = input.zenviaSalesApiKey;
+  if (input.zenviaHandoffGroupId) options.zenviaHandoffGroupId = input.zenviaHandoffGroupId;
+  if (input.zenviaHandoffUserId) options.zenviaHandoffUserId = input.zenviaHandoffUserId;
+  if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
+}
+
 function applyAscFlowConnectionOptions(
   options: Record<string, unknown>,
   input: {
@@ -878,6 +943,9 @@ function applyChannelSpecificConnectionOptions(
       return;
     case 'asc':
       applyAscConnectionOptions(options, input);
+      return;
+    case 'zenvia':
+      applyZenviaConnectionOptions(options, input);
       return;
     case 'whatsapp-business':
       applyWhatsAppBusinessConnectionOptions(options, input);
@@ -1231,6 +1299,12 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     ascBaseUrl: instance.ascBaseUrl,
     ascToken: instance.ascToken,
     ascOriginador: instance.ascOriginador,
+    zenviaApiToken: instance.zenviaApiToken,
+    zenviaSenderId: instance.zenviaSenderId,
+    zenviaHandoffSolution: instance.zenviaHandoffSolution,
+    zenviaSalesApiKey: instance.zenviaSalesApiKey,
+    zenviaHandoffGroupId: instance.zenviaHandoffGroupId,
+    zenviaHandoffUserId: instance.zenviaHandoffUserId,
     // No meta* threading here: createInstanceSchema carries no Meta fields, so
     // a whatsapp-business row is never credentialed at create — credentials
     // arrive via the whatsapp-cloud connect/OAuth route.
@@ -1788,6 +1862,21 @@ const connectInstanceSchema = z.object({
   ascBaseUrl: z.string().optional().describe('ASC gateway base URL'),
   ascToken: z.string().optional().describe('ASC access token (asc-token header)'),
   ascOriginador: z.string().optional().describe('WABA phone number, digits-only E.164 (originador header)'),
+  zenviaApiToken: z.string().optional().describe('Zenvia API token (X-API-TOKEN header)'),
+  zenviaSenderId: z.string().optional().describe('Sender registered at Zenvia (the WhatsApp number)'),
+  zenviaHandoffSolution: z
+    .enum(ZENVIA_HANDOFF_SOLUTIONS)
+    .optional()
+    .describe('Zenvia solution a handoff routes the conversation to (conversation.solution)'),
+  zenviaSalesApiKey: z.string().optional().describe('Zenvia Sales API key (not the same token as zenviaApiToken)'),
+  zenviaHandoffGroupId: z
+    .string()
+    .optional()
+    .describe('Sales group dedicated to the chatbot; handoffs transfer the prospect to it'),
+  zenviaHandoffUserId: z
+    .string()
+    .optional()
+    .describe('Optional agent inside the handoff group the prospect is transferred to'),
   ascFlowBaseUrl: z.string().optional().describe('ASC platform base URL'),
   ascFlowLogin: z.string().optional().describe('ASC platform /authuser login'),
   ascFlowChave: z.string().optional().describe('ASC platform /authuser chave (secret)'),
@@ -1836,6 +1925,36 @@ function mergeAscFlowFields(
   };
 }
 
+function mergeZenviaFields(
+  instance: Pick<
+    InstanceRecord,
+    | 'zenviaApiToken'
+    | 'zenviaSenderId'
+    | 'zenviaHandoffSolution'
+    | 'zenviaSalesApiKey'
+    | 'zenviaHandoffGroupId'
+    | 'zenviaHandoffUserId'
+  >,
+  body: Pick<
+    ConnectInstanceBody,
+    | 'zenviaApiToken'
+    | 'zenviaSenderId'
+    | 'zenviaHandoffSolution'
+    | 'zenviaSalesApiKey'
+    | 'zenviaHandoffGroupId'
+    | 'zenviaHandoffUserId'
+  >,
+) {
+  return {
+    zenviaApiToken: body.zenviaApiToken ?? instance.zenviaApiToken,
+    zenviaSenderId: body.zenviaSenderId ?? instance.zenviaSenderId,
+    zenviaHandoffSolution: body.zenviaHandoffSolution ?? instance.zenviaHandoffSolution,
+    zenviaSalesApiKey: body.zenviaSalesApiKey ?? instance.zenviaSalesApiKey,
+    zenviaHandoffGroupId: body.zenviaHandoffGroupId ?? instance.zenviaHandoffGroupId,
+    zenviaHandoffUserId: body.zenviaHandoffUserId ?? instance.zenviaHandoffUserId,
+  };
+}
+
 function buildConnectConnectionOptions(
   instance: InstanceRecord,
   body: ConnectInstanceBody,
@@ -1874,6 +1993,7 @@ function buildConnectConnectionOptions(
     ascBaseUrl: body.ascBaseUrl ?? instance.ascBaseUrl,
     ascToken: body.ascToken ?? instance.ascToken,
     ascOriginador: body.ascOriginador ?? instance.ascOriginador,
+    ...mergeZenviaFields(instance, body),
     metaAccessToken: instance.metaAccessToken,
     metaPhoneNumberId: instance.metaPhoneNumberId,
     metaWabaId: instance.metaWabaId,
@@ -1966,6 +2086,10 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
       ascToken: body.ascToken ?? instance.ascToken,
       ascOriginador: body.ascOriginador ?? instance.ascOriginador,
     };
+  }
+
+  if (instance.channel === 'zenvia') {
+    return { ...updates, ...mergeZenviaFields(instance, body) };
   }
 
   if (instance.channel === 'asc-flow') {
@@ -2142,6 +2266,9 @@ instancesRoutes.post('/:id/restart', instanceAccess, async (c) => {
     }
     if (instance.channel === 'asc') {
       applyAscConnectionOptions(restartOptions, instance);
+    }
+    if (instance.channel === 'zenvia') {
+      applyZenviaConnectionOptions(restartOptions, instance);
     }
     if (instance.channel === 'gupshup') {
       // Same failure mode as #894: the plugin's connect() requires the persisted

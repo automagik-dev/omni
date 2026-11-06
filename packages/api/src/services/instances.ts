@@ -82,6 +82,8 @@ const SEALED_CREDENTIAL_COLUMNS = [
   'gupshupAuthToken',
   'webhookVerifyToken',
   'twilioAuthToken',
+  'zenviaApiToken',
+  'zenviaSalesApiKey',
 ] as const satisfies readonly (keyof Instance)[];
 
 /**

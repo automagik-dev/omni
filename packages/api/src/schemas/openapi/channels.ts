@@ -75,4 +75,34 @@ export function registerChannelSchemas(registry: OpenAPIRegistry): void {
       },
     },
   });
+
+  registry.registerPath({
+    method: 'post',
+    path: '/channels/zenvia/{instanceId}/webhook',
+    operationId: 'receiveZenviaWebhook',
+    tags: ['Instances'],
+    summary: 'Zenvia subscription webhook (public)',
+    description:
+      'Receives the events of a Zenvia subscription for one instance. Unauthenticated by contract: Zenvia signs nothing, ' +
+      'so authenticity rests on the unguessable instance id in the path plus the instance webhookVerifyToken, which ' +
+      'the subscription echoes as the fixed x-webhook-token header and the plugin requires on every request. ' +
+      'MESSAGE events with direction IN become message.received and MESSAGE_STATUS events become delivered, read or ' +
+      'failed. Every other event is acknowledged with 200 and ignored.',
+    security: [],
+    request: {
+      params: z.object({ instanceId: z.string().uuid().openapi({ description: 'Zenvia instance id' }) }),
+      body: {
+        required: true,
+        content: { 'application/json': { schema: z.record(z.unknown()) } },
+      },
+    },
+    responses: {
+      200: { description: 'Event acknowledged', content: { 'text/plain': { schema: z.string() } } },
+      401: { description: 'The x-webhook-token header is missing or does not match the instance webhookVerifyToken' },
+      503: {
+        description:
+          'No connected Zenvia instance with this id yet (Zenvia may redeliver), or the Zenvia plugin is not loaded',
+      },
+    },
+  });
 }

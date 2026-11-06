@@ -14,6 +14,7 @@ describe('Plugin validation', () => {
       expect(isValidChannelType('slack')).toBe(true);
       expect(isValidChannelType('telegram')).toBe(true);
       expect(isValidChannelType('twilio-whatsapp')).toBe(true);
+      expect(isValidChannelType('zenvia')).toBe(true);
     });
 
     it('should reject invalid channel types', () => {

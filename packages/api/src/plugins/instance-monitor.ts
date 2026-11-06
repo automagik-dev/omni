@@ -232,6 +232,12 @@ export function buildInstanceConnectOptions(instance: {
   ascBaseUrl?: string | null;
   ascToken?: string | null;
   ascOriginador?: string | null;
+  zenviaApiToken?: string | null;
+  zenviaSenderId?: string | null;
+  zenviaHandoffSolution?: string | null;
+  zenviaSalesApiKey?: string | null;
+  zenviaHandoffGroupId?: string | null;
+  zenviaHandoffUserId?: string | null;
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
@@ -261,6 +267,9 @@ export function buildInstanceConnectOptions(instance: {
   }
   if (instance.channel === 'asc') {
     applyAscOptions(options, instance);
+  }
+  if (instance.channel === 'zenvia') {
+    applyZenviaOptions(options, instance);
   }
   if (instance.channel === 'asc-flow') {
     applyAscFlowOptions(options, instance);
@@ -349,6 +358,27 @@ function applyAscOptions(
   if (instance.ascBaseUrl) options.ascBaseUrl = instance.ascBaseUrl;
   if (instance.ascToken) options.ascToken = instance.ascToken;
   if (instance.ascOriginador) options.ascOriginador = instance.ascOriginador;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
+}
+
+function applyZenviaOptions(
+  options: Record<string, unknown>,
+  instance: {
+    zenviaApiToken?: string | null;
+    zenviaSenderId?: string | null;
+    zenviaHandoffSolution?: string | null;
+    zenviaSalesApiKey?: string | null;
+    zenviaHandoffGroupId?: string | null;
+    zenviaHandoffUserId?: string | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.zenviaApiToken) options.zenviaApiToken = instance.zenviaApiToken;
+  if (instance.zenviaSenderId) options.zenviaSenderId = instance.zenviaSenderId;
+  if (instance.zenviaHandoffSolution) options.zenviaHandoffSolution = instance.zenviaHandoffSolution;
+  if (instance.zenviaSalesApiKey) options.zenviaSalesApiKey = instance.zenviaSalesApiKey;
+  if (instance.zenviaHandoffGroupId) options.zenviaHandoffGroupId = instance.zenviaHandoffGroupId;
+  if (instance.zenviaHandoffUserId) options.zenviaHandoffUserId = instance.zenviaHandoffUserId;
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
