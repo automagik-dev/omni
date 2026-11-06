@@ -64,7 +64,7 @@ here and start only after slice 1 merges and the paired-agent delivery gate (Set
 | 8 | Group 2 owns the minimal nullable-compatibility edits in `services/connectors.ts` and keeps the per-subscription route fail-closed (a `'subscription'` row with a NULL target or secret is treated as unknown). SDK `actions` stays a required `readonly ConnectorActionDefinition[]` that may be `[]`. | A group must build and pass on its own; plan review finding 2. |
 | 9 | Pinned surfaces (design leaves them open): delivery route `POST /api/v2/connectors/hooks/:connectorId`, declared in `app.ts` beside the existing public route; hook secret set and rotated by a write-only `hookSecret` field on the existing `POST /api/v2/connectors` and `PATCH /api/v2/connectors/:id` (same auth and scope as today), surfaced only as `hasHookSecret: boolean`; subscription create on the existing `POST /api/v2/connectors/:id/subscriptions` with `ingress: 'connector'`; `ingress` is never in the PATCH schema; the test endpoint `POST /:id/subscriptions/:sid/test` answers 409 `CONNECTOR_INGRESS_TEST_UNSUPPORTED` for a `'connector'` row. | Plan review findings 4 and 6; smallest surface consistent with Decisions #7, #19 and #24. |
 | 10 | `ConnectorParsedDelivery` gains optional `eventType?: string`; the per-connector route uses `eventType` when it starts with `connector.{provider}.`, else `connector.{provider}.{eventKey}`. ClickUp's shape and behaviour are unchanged. | Pins the typed-name contract group 6 implements. |
-| 11 | Safe gate for every code group, run in the task worktree (never `make check` or `make test`): `test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'`. | `make test` depends on `_sync-db`, which sources `.env` and runs `drizzle-kit push --force`; a real Postgres listens on 127.0.0.1:5432 on this host. The whole chain runs inside the Mac-wide gate semaphore `brain-v3.worktrees/.tools/gate.sh` (at most 2 heavy runs on this host; t1m rule 2026-11-01; focused single-file runs need no lock) and under `env -i` (only HOME, USER, PATH, TERM, LANG survive; PATH is prefixed with the host's PostgreSQL server binaries (autopg) and the `psql` client (Homebrew libpq), which the disposable cluster and the PostgreSQL suites need; `OMNI_PG_BIN_DIR` stays unset so `psql` is not looked up in the server directory), so no ambient `DATABASE_URL`, `ENABLE_DB_TESTS`, `PG*` or `OMNI_G*_POSTGRES_URL` reaches any test, and no `.env*` file (other than `*.example`) may exist anywhere in the worktree outside `node_modules`, so Bun autoloads nothing. `bun run check` covers typecheck, lint, knip, verify-migrations, verify-versions and turbo tests; only `make test-pg-gate` injects URLs, for its own disposable cluster. Plan review findings 1 and R2-1. |
+| 11 | Safe gate for every code group, run in the task worktree (never `make check` or `make test`): `test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'`. | `make test` depends on `_sync-db`, which sources `.env` and runs `drizzle-kit push --force`; a real Postgres listens on 127.0.0.1:5432 on this host. The whole chain runs inside the Mac-wide gate semaphore `brain-v3.worktrees/.tools/gate.sh` (at most 2 heavy runs on this host; t1m rule 2026-11-01; focused single-file runs need no lock) and under `env -i` (only HOME, USER, PATH, TERM, LANG survive; PATH is prefixed with the host's PostgreSQL server binaries (autopg) and the `psql` client (Homebrew libpq), which the disposable cluster and the PostgreSQL suites need; `OMNI_PG_BIN_DIR` stays unset so `psql` is not looked up in the server directory), so no ambient `DATABASE_URL`, `ENABLE_DB_TESTS`, `PG*` or `OMNI_G*_POSTGRES_URL` reaches any test, and no `.env*` file (other than `*.example`) may exist anywhere in the worktree outside `node_modules`, so Bun autoloads nothing. `bun run check` covers typecheck, lint, knip, verify-migrations, verify-versions and turbo tests; only `make test-pg-gate` injects URLs, for its own disposable cluster. Plan review findings 1 and R2-1. |
 | 12 | `make test-pg-gate` is accepted only once group 1 deliverable 1 makes it bind 127.0.0.1 only, refuse 5432 and 15432, and destroy the cluster and its temp dirs on every exit. | t1m ruling 2026-11-01. |
 | 13 | Real-NATS tests follow `engine-trigger-parallelism-nats.test.ts`: a throwaway `nats-server` (binary from `scripts/ensure-nats.sh`, random loopback port, temp store, removed in `afterAll`), run in a child process, failing (never skipping) when the binary is missing; they run inside `bun run check`'s turbo tests. | Plan review finding 7; other suites mock `nats` process-wide. |
 | 14 | One PR to `dev` per group, sequential; the owner merges in order and agents never merge. A dependent group may start on a branch stacked on its dependency and opens its PR after the dependency merges. Groups run by hand with hc agents, not the saved `wish.js` workflow. | t1m 2026-11-01. |
@@ -211,7 +211,7 @@ Each criterion is owned by the group in brackets; the group's acceptance criteri
 
 **Validation:**
 ```bash
-test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
+test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
 ```
 
 **depends-on:** none
@@ -242,7 +242,7 @@ test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example'
 
 **Validation:**
 ```bash
-test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
+test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
 ```
 
 **depends-on:** Group 1
@@ -270,7 +270,7 @@ test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example'
 
 **Validation:**
 ```bash
-test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
+test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
 ```
 
 **depends-on:** Group 2
@@ -300,7 +300,7 @@ test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example'
 
 **Validation:**
 ```bash
-test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
+test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check && make test-pg-gate'
 ```
 
 **depends-on:** Group 3
@@ -327,7 +327,7 @@ test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example'
 
 **Validation:**
 ```bash
-make sdk-generate && test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check'
+make sdk-generate && test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check'
 ```
 
 **depends-on:** Group 4
@@ -353,7 +353,7 @@ make sdk-generate && test -z "$(find . -name node_modules -prune -o -name '.env*
 
 **Validation:**
 ```bash
-test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:/opt/homebrew/opt/libpq/bin:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check'
+test -z "$(find . -name node_modules -prune -o -name '.env*' ! -name '*.example' -print)" && <gate-wrapper> env -i HOME="$HOME" USER="$USER" PATH="$HOME/.autopg/bin/darwin-arm64/bin:<local-bin>:$PATH" TERM="${TERM:-xterm}" LANG="${LANG:-en_US.UTF-8}" bash -c 'bun run check && make marketplace-check'
 ```
 
 **depends-on:** Group 5, plus the R5-1 gate recorded under Dependencies
