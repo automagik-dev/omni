@@ -49,6 +49,9 @@ export interface AllowEntry {
   reason: string;
 }
 
+/** IETF standard numbers the code cites (written "RFC 4122"); the index never uses them. */
+export const IETF_RFC_NUMBERS = new Set(['4122']);
+
 function allow(cite: string, reason: string, counts: Record<string, number>): AllowEntry[] {
   return Object.entries(counts).map(([file, count]) => ({ file, cite, count, reason }));
 }
@@ -234,6 +237,9 @@ export function checkIndex(rows: IndexRow[], trackedFiles: string[]): string[] {
   const linked = new Set<string>();
   for (const row of rows) {
     if (!row.key.startsWith('RFC-')) continue;
+    if (IETF_RFC_NUMBERS.has(row.key.slice(4))) {
+      errors.push(`${INDEX_PATH}:${row.line}: ${row.key} is an IETF standard number; take the next free number`);
+    }
     const number = row.key.slice(4);
     const at = `${INDEX_PATH}:${row.line}`;
     if (!row.linkedFile) {
@@ -361,7 +367,17 @@ export function verifyRfcs(root: string, allowlist: AllowEntry[] = ALLOWLIST): s
   const { rows, errors } = parseIndex(readFileSync(join(root, INDEX_PATH), 'utf8'));
   errors.push(...checkIndex(rows, trackedFiles));
 
-  const candidates = git(root, ['grep', '-l', '-z', '-I', '-i', '-E', 'rfc-|adr-|\\.genie/|wish', '--', ...SCAN_ROOTS])
+  const candidates = git(root, [
+    'grep',
+    '-l',
+    '-z',
+    '-I',
+    '-i',
+    '-E',
+    'rfc-|adr-|\\.genie/|wish|brainstorm',
+    '--',
+    ...SCAN_ROOTS,
+  ])
     .split('\0')
     .filter((file) => file && !SCAN_EXCLUDE.has(file));
   const citations = candidates.flatMap((file) => findCitations(file, readFileSync(join(root, file), 'utf8')));

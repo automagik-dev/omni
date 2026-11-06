@@ -164,6 +164,12 @@ describe('citations (RED for any new dangling one)', () => {
     ]);
   });
 
+  test('a file whose only citation is a shortened brainstorm path is scanned', () => {
+    expect(verifyRfcs(repo(green({ 'docs/only.md': 'See brainstorms/lost-idea/DESIGN.md.' })), [])).toEqual([
+      'docs/only.md:1: .genie/brainstorms/lost-idea/DESIGN.md is not tracked; track the design or cite its RFC',
+    ]);
+  });
+
   test('a one-word wish slug with a colon or backticks fails when untracked', () => {
     const root = repo(green({ 'docs/guide.md': 'Wish: reviewprobe. Also wish `otherprobe`.' }));
     expect(verifyRfcs(root, [])).toEqual([
@@ -227,6 +233,12 @@ describe('index rows and files', () => {
   test('a status outside the five words fails, including progress text', () => {
     const errors = verifyRfcs(withIndex('| RFC-0007 | Busy | Accepted (delivery 1 merged) | — | — | — |\n'), []);
     expect(errors[0]).toStartWith('docs/rfcs/README.md:4: status "Accepted (delivery 1 merged)" is not one of');
+  });
+
+  test('the index may not use an IETF standard number', () => {
+    expect(verifyRfcs(withIndex('| RFC-4122 | Clash | Draft | — | — | — |\n'), [])).toEqual([
+      'docs/rfcs/README.md:4: RFC-4122 is an IETF standard number; take the next free number',
+    ]);
   });
 
   test('a malformed # cell fails', () => {
