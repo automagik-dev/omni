@@ -708,5 +708,8 @@ export const STRINGS = {
   'Ask an admin to configure META_APP_SECRET on the Omni server before receiving webhooks.': '接收 Webhook 前，请管理员在 Omni 服务器上配置 META_APP_SECRET。',
   'Open Meta Developers, choose your app and its WhatsApp webhook configuration. Paste Callback URL and Verify token into the matching fields, then verify and save.': '打开 Meta 开发者平台，选择应用及其 WhatsApp Webhook 配置。将回调 URL 和验证令牌粘贴到对应字段，然后验证并保存。',
   'Open Meta Developers': '打开 Meta 开发者平台',
+  'Always allow send': '始终允许发送',
+  'Sends into this chat go without asking you': '发送到这个聊天的消息不再询问你',
+  'Each send into this chat asks you first': '每次发送到这个聊天都会先询问你',
   'The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.': '验证令牌不是 Graph API 访问令牌。连接成功不代表 Webhook 已验证；Meta 必须能够访问此 HTTPS URL。',
 }

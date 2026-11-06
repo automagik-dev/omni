@@ -3,8 +3,8 @@
 // lists no hand-off tool, its computer tools and the team's start_task are refused in plain
 // words, and the hand-offs a start finds from before are archived, never resumed.
 // The team's browser tools are the exception (the owner, 2026-11-06): the Omni Bot keeps every
-// browser_* tool, browser_handoff included. Chat threads still have only their five tools
-// (thread-tools.test.js).
+// browser_* tool, browser_handoff included. Chat threads are not Bots: they keep DSH's whole
+// tool set, computer tools included (the owner, 2026-11-06; thread-tools.test.js).
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'

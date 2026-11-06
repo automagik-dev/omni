@@ -112,6 +112,9 @@ function installed(t) {
   return stand
 }
 
+// A pane header's words, its "Always allow send" switch left out.
+const headText = head => text({ children: (head?.children ?? []).filter(child => !all(child, 'op-send').length && child?.props?.className !== 'op-send') })
+
 const pane = (props, t) => {
   const view = mount(() => react.createElement(ui.PhonePane, props))
   t.after(() => view.unmount())
@@ -132,7 +135,7 @@ test('the pane shows the thread\'s chat in the drawn frame: a picture, a voice n
   assert.deepEqual(all(frame, 'op-button').map(button => button.props['data-side']), ['left', 'left', 'left', 'right'])
   const screen = one(frame, 'op-screen')
   assert.equal(screen.props['aria-label'], 'Chat 1 on the phone')
-  assert.equal(text(one(screen, 'op-head')), 'Chat 1')
+  assert.equal(headText(one(screen, 'op-head')), 'Chat 1')
   const log = one(screen, 'oc-thread')
   assert.equal(log.props.role, 'log')
   const bubbles = all(log, 'oc-bubble')
@@ -382,7 +385,7 @@ test('on a stand-in Bot team without the hook, a click on the row opens the pane
   t.after(() => view.unmount())
   const shown = await drawn(view)
   assert.equal(one(shown, 'op-pane').props['data-thread-id'], 't1')
-  assert.equal(text(one(shown, 'op-head')), `Chat 1${NEEDS_NEWER_TEAM}`)
+  assert.equal(headText(one(shown, 'op-head')), `Chat 1${NEEDS_NEWER_TEAM}`)
   assert.deepEqual(asked('omni-messages'), [['omni-messages', { chatId: CHAT_1 }]])
   assert.equal(all(shown, 'oc-bubble').length, MESSAGES.length)
   assert.deepEqual(sessions, [])
@@ -464,7 +467,7 @@ test('the pane\'s header names a thread by its chat, never a raw id: "Chat" or "
   const thread = THREAD(1, CHAT_1, { title: null, kind: 'group' })
   const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, useRoster: useRosterOf(hooked([thread])) }, t)
   const shown = await drawn(view)
-  assert.equal(text(one(shown, 'op-head')), 'Group')
+  assert.equal(headText(one(shown, 'op-head')), 'Group')
   assert.equal(nodes(shown).find(node => node.props?.role === 'log').props['aria-label'], 'Conversation with Group')
   assert.equal(ui.threadName({ title: null, kind: 'direct' }), 'Chat')
   assert.equal(ui.threadName({ title: '+5511988887777', kind: 'direct' }), '+5511988887777')
@@ -676,4 +679,36 @@ test('a later poll failure keeps messages visible, hides raw text, and clears on
   assert.equal(all(root, 'op-note').find(node => node.props.role === 'alert'), undefined)
   assert.equal(one(root, 'oc-bubble').children.find(child => typeof child === 'string'), 'On my way')
   assert.equal(asked('omni-messages').length, 3)
+})
+
+test('the pane\'s "Always allow send" switch sets only this thread\'s sends: on to allow, off to ask; it follows the host\'s view, and a failed save says so', async (t) => {
+  reset()
+  let roster = hooked([THREAD(1)])
+  const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's1', useRoster: select => select(roster) }, t)
+  let root = await drawn(view)
+  const toggle = () => one(root, 'op-switch')
+  assert.equal(toggle().props.role, 'switch')
+  assert.equal(toggle().props['aria-checked'], false)
+  assert.equal(text(one(root, 'op-send')), 'Always allow send')
+  // On: this thread's sends allow; the switch shows it until the host's view does.
+  toggle().props.onClick()
+  root = await drawn(view)
+  assert.deepEqual(asked('omni-thread-permissions'), [['omni-thread-permissions', { threadId: 't1', sends: 'allow' }]])
+  assert.equal(toggle().props['aria-checked'], true)
+  roster = hooked([THREAD(1, CHAT_1, { permissions: { sends: 'allow', reactions: 'list' }, ownPermissions: { sends: 'allow' } })])
+  root = await drawn(view)
+  assert.equal(toggle().props['aria-checked'], true)
+  // Off: its sends ask, whatever the default is.
+  toggle().props.onClick()
+  root = await drawn(view)
+  assert.deepEqual(asked('omni-thread-permissions').at(-1), ['omni-thread-permissions', { threadId: 't1', sends: 'ask' }])
+  assert.equal(toggle().props['aria-checked'], false)
+  // A save the host refuses leaves the state in force and says so in place.
+  roster = hooked([THREAD(1, CHAT_1, { permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: { sends: 'ask' } })])
+  root = await drawn(view)
+  answer = endpoint => (endpoint === 'omni-thread-permissions' ? new Error('This host is read-only.') : host()(endpoint))
+  toggle().props.onClick()
+  root = await drawn(view)
+  assert.equal(toggle().props['aria-checked'], false)
+  assert.equal(text(one(root, 'op-send-problem')), 'Could not change this chat\'s settings. Try again.')
 })

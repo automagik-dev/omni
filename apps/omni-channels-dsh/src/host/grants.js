@@ -37,6 +37,16 @@ export const operatesOmni = (rt, botId) => botId !== undefined && (rt.isMain(bot
  */
 export const operatesHere = (rt, sessionId) => (rt.omniNamed?.() ?? Boolean(rt.config?.omni?.url)) && operatesOmni(rt, rt.selfOf(sessionId))
 
+/**
+ * Whether a Session is a chat thread's (threads.js): it works on Omni as the Omni Bot does,
+ * through Omni's tools, and DSH's card in the thread asks before what it sends or deletes
+ * (thread-tools.js), so the Omni Bot's own cards and its automation-event rule are not its.
+ */
+export const isThreadSession = (rt, sessionId) => rt.threads?.bySession(sessionId) !== undefined
+
+/** The Bot a Session works on Omni as: its own Bot, or for a chat thread the Omni Bot. */
+export const omniActorOf = (rt, sessionId) => rt.selfOf(sessionId) ?? (isThreadSession(rt, sessionId) ? rt.eventsBotId?.() : undefined)
+
 /** Whether `grant` lets `botId` do `action` on `resource` at `now`. */
 export function covers(grant, { botId, resource, action, now = Date.now() }) {
   if (!grant || grant.botId !== botId || !Array.isArray(grant.actions) || !grant.actions.includes(action)) return false
@@ -108,9 +118,11 @@ export function install(rt) {
   rt.omniPermit = async (exec, { action, resource, call, preview = {}, force }) => {
     await rt.load()
     const sessionId = exec.agent?.id
-    const botId = rt.selfOf(sessionId)
+    const botId = omniActorOf(rt, sessionId)
     if (rt.botOf(botId) === undefined) return 'Only Bots on the team use Omni.'
     const main = operatesOmni(rt, botId)
+    // A thread's acts were asked on DSH's card in the thread before they ran (thread-tools.js).
+    if (main && isThreadSession(rt, sessionId)) return null
     // A run for an automation's event reads text other people wrote. A Bot's own chat is not
     // one, even when an automation once ran there.
     const eventRun = rt.chatOwners?.has(sessionId) !== true && (state.subscriptionRuns ?? []).some(run => run.sessionId === sessionId)

@@ -100,8 +100,8 @@ function services(ctx) {
 // The team's browser tools (bots-dsh browser-plugins.js, since 3.87), which TEAM_TOOLS does not
 // name: one browser plugin for the whole team, registered beside TEAM_TOOLS.
 const TEAM_BROWSER_TOOLS = ['browser_back', 'browser_click', 'browser_handoff', 'browser_open', 'browser_press', 'browser_resume', 'browser_screenshot', 'browser_select', 'browser_snapshot', 'browser_tabs', 'browser_type', 'browser_upload']
-// The channels plugin's own tools and the chat threads' (THREAD_TOOLS) come on top: the Omni
-// Bot has no hand-off tool.
+// The channels plugin's own tools and the chat threads' (THREAD_TOOLS) come on top;
+// omni_handoff is gone (the team's browser_handoff is a browser tool, not the plugin's).
 test('with all three plugins, the team registers exactly the tools TEAM_TOOLS names, plus the channels plugin\'s own', async (t) => {
   const ctx = services(fakeContext())
   const home = mkdtempSync(join(tmpdir(), 'omni-canvas-all-'))
