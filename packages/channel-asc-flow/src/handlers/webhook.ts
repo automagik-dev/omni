@@ -253,6 +253,9 @@ export async function handleAscFlowWebhookRequest(
   verifyToken: string | undefined,
   dedupeCache: DedupeCache,
 ): Promise<Response> {
+  // The hold below must fit the node's own timeout with everything that runs
+  // before it (typing, media, the quoted-reply lookup) counted against it.
+  const receivedAt = Date.now();
   const logger = plugin.getLogger();
 
   if (request.method !== 'POST') {
@@ -362,8 +365,11 @@ export async function handleAscFlowWebhookRequest(
   // node is switched to synchronous, so the flow needs no edit either way.
   // The deadline sits under the node's own `timeout` (180s), and falling back
   // to `pronto:0` keeps the old polling behaviour for anything slower.
-  const holdMs = holdTimeoutMs();
-  if (holdMs <= 0) return pending();
-  const held = await plugin.waitForTurn(instanceId, turn.codAtendimento, turn.text, holdMs);
+  // Only what is LEFT of the hold budget: the pre-hold work above already spent
+  // part of it. An answer that misses the window stays parked for the next poll.
+  // `ASC_FLOW_HOLD_MS=0` still turns the hold off (nothing is ever left).
+  const remainingMs = holdTimeoutMs() - (Date.now() - receivedAt);
+  if (remainingMs <= 0) return pending();
+  const held = await plugin.waitForTurn(instanceId, turn.codAtendimento, turn.text, remainingMs);
   return held ? json(held) : pending();
 }

@@ -74,11 +74,18 @@ describe('inbound turn with a quoted reply', () => {
   let eventBus: MockEventBus;
   let restore: (() => void) | undefined;
 
+  const env = { hold: process.env.ASC_FLOW_HOLD_MS, lookup: process.env.ASC_FLOW_QUOTE_LOOKUP_MS };
+
   afterEach(async () => {
     await plugin?.destroy();
     restore?.();
+    // The suite shares one process: leave both knobs as the helpers set them.
+    process.env.ASC_FLOW_HOLD_MS = env.hold;
+    if (env.lookup === undefined) Reflect.deleteProperty(process.env, 'ASC_FLOW_QUOTE_LOOKUP_MS');
+    else process.env.ASC_FLOW_QUOTE_LOOKUP_MS = env.lookup;
   });
 
+  /** Connect a plugin whose `GET /atendimento` answers with `atendimento`. */
   async function boot(atendimento: () => Response | Promise<Response>): Promise<void> {
     restore = stubPlatform({ '/atendimento': atendimento as () => Response }).restore;
     eventBus = new MockEventBus();
@@ -87,6 +94,7 @@ describe('inbound turn with a quoted reply', () => {
     await connectPlugin(plugin);
   }
 
+  /** Post one typed turn and return the single `message.received` payload it published. */
   async function received(chatInput: string, messageId: string): Promise<Record<string, unknown>> {
     await plugin.handleWebhook(
       new Request(`http://localhost/api/v2/channels/asc-flow/${instanceId}/webhook`, {
@@ -120,10 +128,37 @@ describe('inbound turn with a quoted reply', () => {
     expect((await received('Confirmar', '145142300')).replyTo).toBeUndefined();
   });
 
-  it('fails open: the turn goes out without the quote when the record cannot be read', async () => {
+  it('fails open: the turn goes out without the quote when the record answers an error', async () => {
     await boot(() => new Response('boom', { status: 500 }));
     const payload = await received('Quero essa opção', '145142185');
     expect(payload.replyTo).toBeUndefined();
     expect((payload.content as { text: string }).text).toBe('Quero essa opção');
+  });
+
+  it('stops waiting at the lookup deadline and sends the turn without the quote', async () => {
+    process.env.ASC_FLOW_QUOTE_LOOKUP_MS = '50';
+    const late = () => new Promise<Response>((r) => setTimeout(() => r(jsonResponse({ mensagens: rows() })), 2_000));
+    await boot(late);
+    const started = Date.now();
+    const payload = await received('Quero essa opção', '145142185');
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(payload.replyTo).toBeUndefined();
+    expect((payload.content as { text: string }).text).toBe('Quero essa opção');
+  });
+
+  it('holds only what is left of the budget after the lookup', async () => {
+    process.env.ASC_FLOW_HOLD_MS = '1000';
+    process.env.ASC_FLOW_QUOTE_LOOKUP_MS = '300';
+    const late = () => new Promise<Response>((r) => setTimeout(() => r(jsonResponse({ mensagens: rows() })), 2_000));
+    await boot(late);
+    const holds: number[] = [];
+    plugin.waitForTurn = async (_instance, _cod, _text, holdMs) => {
+      holds.push(holdMs);
+      return null;
+    };
+    await received('Quero essa opção', '145142185');
+    expect(holds).toHaveLength(1);
+    expect(holds[0]).toBeGreaterThan(0);
+    expect(holds[0]).toBeLessThanOrEqual(700);
   });
 });

@@ -2040,6 +2040,7 @@ describe('agent-dispatcher', () => {
       }
     });
 
+    /** Run `prependQuotedContext` over one typed turn and return the text the agent would read. */
     async function prepended(payload: Record<string, unknown>, services: unknown = {}): Promise<string> {
       const entries = [{ text: 'Quero essa opção', messageKey: 'k0' }];
       const messages = [{ payload: { content: { type: 'text', text: 'Quero essa opção' }, ...payload }, metadata: {} }];
@@ -2068,6 +2069,24 @@ describe('agent-dispatcher', () => {
       expect(await prepended({ replyToId: '145132791', replyTo: { ...replyTo, text: 'bolha' } }, services)).toBe(
         '[Quoting You: bolha]\nQuero essa opção',
       );
+    });
+
+    it('keeps the DB-resolved quote over the channel copy when both exist', async () => {
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => ({ id: 'chat-db-1' })) },
+        messages: {
+          getByExternalId: mock(async () => ({
+            externalId: 'omni-row',
+            isFromMe: true,
+            platformTimestamp: null,
+            messageType: 'text',
+            textContent: 'from the DB',
+          })),
+        },
+      };
+      expect(
+        await prepended({ replyToId: 'omni-row', replyTo: { ...replyTo, text: 'from the channel' } }, services),
+      ).toBe('[Quoting You: from the DB]\nQuero essa opção');
     });
 
     it('leaves the turn alone without either', async () => {

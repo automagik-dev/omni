@@ -1572,6 +1572,7 @@ export async function resolveQuotedMessage(
   }
 }
 
+/** The `[Quoting <sender>[ at <time>]: <content>]` line the agent reads, truncated to `QUOTED_MESSAGE_MAX_CHARS`. */
 function formatQuote(sender: string, time: string, content: string): string {
   // Truncate long quoted content to keep context manageable
   const truncated =

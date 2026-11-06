@@ -245,10 +245,12 @@ const IN_FLIGHT_MAX_ENTRIES = 5_000;
 
 /**
  * How long a typed turn waits for the platform record that says what it quoted.
- * The read rides the inbound path before the agent run, so it is kept short:
- * past it the turn goes out without the quote (`quotedBubble`).
+ * The read rides the inbound path before the agent run, and its time counts
+ * against the webhook hold, so it is kept short: past it the turn goes out
+ * without the quote (`quotedReplyTo`). `ASC_FLOW_QUOTE_LOOKUP_MS` overrides it,
+ * read per CALL like `ASC_FLOW_HOLD_MS`, so a test can set it.
  */
-const QUOTE_LOOKUP_TIMEOUT_MS = 3_000;
+const quoteLookupTimeoutMs = () => Number(process.env.ASC_FLOW_QUOTE_LOOKUP_MS ?? 3_000);
 
 /**
  * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
@@ -1328,7 +1330,7 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<null>((resolve) => {
-      timer = setTimeout(resolve, QUOTE_LOOKUP_TIMEOUT_MS, null);
+      timer = setTimeout(resolve, quoteLookupTimeoutMs(), null);
     });
     let quoted: AscQuotedBubble | null;
     try {
