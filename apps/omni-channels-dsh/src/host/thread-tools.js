@@ -405,10 +405,11 @@ export function install(rt) {
   // record keeps `autoReview`, so a preset the owner picks for it later stays); a DSH without
   // Auto review keeps its default preset, and the next agent tries again.
   const held = new WeakSet()
+  const autoLive = presets => presets.catalog().options.some(option => option.value === AUTO_PRESET)
   function autoReview(agent, thread) {
     if (thread.autoReview === true) return
     const presets = ctx.get?.('permissionPresets')
-    if (presets === undefined || !presets.catalog().options.some(option => option.value === AUTO_PRESET)) {
+    if (presets === undefined || !autoLive(presets)) {
       rt.warn('omni-channels: %s: %s', NO_AUTO, thread.sessionId)
       return
     }
@@ -446,6 +447,27 @@ export function install(rt) {
   ctx.on('agent/created', ({ agent } = {}) => {
     void Promise.resolve(rt.load()).then(() => hold(agent)).catch(error => rt.warn('omni-channels: a thread\'s Session was not set up: %s', error?.message ?? error))
   })
+  // A thread put on Auto review whose DSH has it no more (the plugin switched off): DSH refuses
+  // to restore that Session ("cannot restore preset auto without its active integration") in
+  // its own agent/created listener. This one runs before it (both are prepended, this one
+  // later, and DSH awaits them one at a time): the Session goes back on DSH's default preset and
+  // the record's mark is cleared, so the thread opens, and goes on Auto again once Auto review
+  // is back. A failure here is only logged; DSH then refuses the Session as before.
+  ctx.on('agent/created', async ({ agent } = {}) => {
+    try {
+      await rt.load()
+      const thread = rt.threads?.bySession(agent?.id ?? agent?.session?.id)
+      const presets = ctx.get?.('permissionPresets')
+      if (thread?.autoReview !== true || presets === undefined || agent?.session === undefined || autoLive(presets)) return
+      const fallback = presets.catalog().defaultPreset
+      presets.set(agent.session, fallback)
+      delete thread.autoReview
+      rt.warn('omni-channels: %s: the thread Session %s is back on %s', NO_AUTO, thread.sessionId, fallback)
+      await rt.save()
+    } catch (error) {
+      rt.warn('omni-channels: the thread Session %s could not leave Auto review: %s', agent?.id, error?.message ?? error)
+    }
+  }, { prepend: true })
 
   // The free reactions and the thread defaults on the Omni settings page: read anywhere, saved
   // only on the host that holds the team (a host that only reads it neither serves the saves

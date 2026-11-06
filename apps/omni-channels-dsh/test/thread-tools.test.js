@@ -55,6 +55,11 @@ function presetsFake({ auto = true } = {}) {
       on.set(session.id, name)
       fake.sets.push([session.id, name])
     },
+    // DSH's own agent/created check (pinInitialPermission): a Session kept on Auto does not
+    // come back while Auto review is off.
+    pin(session) {
+      if (on.get(session.id) === AUTO_PRESET && !fake.auto) throw new Error('permission: cannot restore preset "auto" without its active integration')
+    },
   }
   return fake
 }
@@ -966,4 +971,54 @@ test('a thread\'s instructions name its chat, its full tool set and the switch, 
   assert.match(text, /Omni's tools/)
   assert.match(text, /Always allow send/)
   assert.doesNotMatch(text, /You have no files, shell, web or other chats/)
+})
+
+test('a thread kept on Auto review comes back on DSH\'s default preset when Auto review is off: its Session opens, the mark is cleared, and Auto comes back with the plugin', async (t) => {
+  const presets = presetsFake()
+  const { run, thread, home } = await bench(t, { presets })
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+  // Auto review switched off; DSH makes the thread's agent again (a restart, a resume). DSH
+  // awaits the agent/created listeners one at a time, prepended ones first and the latest
+  // prepended first (the order is checked on cordis itself below), so this plugin's run before
+  // DSH's own check, which the fake's pin() plays last.
+  presets.auto = false
+  const restored = run.freshAgent(thread.sessionId)
+  for (const listener of run.ctx.listeners.get('agent/created')) await listener({ agent: restored })
+  assert.doesNotThrow(() => presets.pin(restored.session))
+  assert.deepEqual(presets.sets.at(-1), [thread.sessionId, 'workspace-write'])
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, undefined)
+  await until(() => saved(home).omniThreads[thread.id].autoReview === undefined)
+  // Without this plugin's step DSH would refuse it, as it did before.
+  const other = presetsFake()
+  other.set({ id: 'x' }, AUTO_PRESET)
+  other.auto = false
+  assert.throws(() => other.pin({ id: 'x' }), /cannot restore preset "auto" without its active integration/)
+  // Auto review back: the thread's next agent goes on it again.
+  presets.auto = true
+  run.ctx.emit('agent/created', { agent: run.freshAgent(thread.sessionId) })
+  await flush()
+  assert.deepEqual(presets.sets.at(-1), [thread.sessionId, AUTO_PRESET])
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+})
+
+test('cordis runs a later prepended agent/created listener before an earlier prepended one, and awaits each in turn', async () => {
+  const root = new Context()
+  const order = []
+  // DSH's permission check is prepended when its service starts, before any plugin.
+  root.on('agent/created', () => { order.push('dsh') }, { prepend: true })
+  root.on('agent/created', async () => { await new Promise(resolve => setImmediate(resolve)); order.push('plugin') }, { prepend: true })
+  await root.serial('agent/created', {})
+  assert.deepEqual(order, ['plugin', 'dsh'])
+})
+
+test('a thread uses the automation tools as the Omni Bot does', async (t) => {
+  const { run, thread } = await bench(t)
+  for (const [name, args] of [['list_automations', {}], ['find_chats', {}], ['pause_automation', { id: 'none', on: false }], ['delete_automation', { id: 'none' }]]) {
+    const own = await use(run, name, 'm1', args)
+    const threadAnswer = await use(run, name, thread.sessionId, args)
+    assert.doesNotMatch(String(threadAnswer), /manages automations/, name)
+    assert.equal(threadAnswer, own, name)
+  }
+  // A plain Session still may not.
+  assert.match(String(await use(run, 'list_automations', 'some-session', {})), /manages automations/)
 })
