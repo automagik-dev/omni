@@ -16,7 +16,7 @@ import { z } from 'zod'
 // plain follow-up `{ kind: 'user', resumed: true }`. `rowProps`: what each botChildren entry
 // is drawn with.
 export const TEAM_CONTRACT = Object.freeze({
-  release: '3.32.1',
+  release: '3.87.0',
   register: 'resumable.register',
   resumesDone: 'resumesDone',
   resentField: 'resent',

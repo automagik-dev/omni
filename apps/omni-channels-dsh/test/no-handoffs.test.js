@@ -2,6 +2,9 @@
 // against the real Bot team (the release apps/automagik.json pins) on a fake DSH: the Omni Bot
 // lists no hand-off tool, its computer tools and the team's start_task are refused in plain
 // words, and the hand-offs a start finds from before are archived, never resumed.
+// The team's browser tools are the exception (the owner, 2026-11-06): the Omni Bot keeps every
+// browser_* tool, browser_handoff included. Chat threads still have only their five tools
+// (thread-tools.test.js).
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
@@ -15,12 +18,14 @@ afterEach(resetFetch)
 const AT = Date.now() - 60_000
 const handoffRow = (sessionId, extra = {}) => ({ sessionId, kind: 'handoff', title: 'Fix the build', reportTo: 'm1', reported: false, turnOpenAt: AT, at: 1, ...extra })
 
-test('the Omni Bot has no hand-off tool, and nothing the plugin tells it names one, start_task or Tasks; its computer tools and start_task are refused saying it has no computer', async (t) => {
+test('the Omni Bot has no hand-off tool but the team\'s browser_handoff, and nothing the plugin tells it names one, start_task or Tasks; its computer tools and start_task are refused saying it has no computer', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const run = await boot(t, homeFor(t, fakeOmni()))
   await signal(t, run)
   assert.equal(run.ctx.registeredTools.has('omni_handoff'), false)
-  assert.deepEqual([...run.ctx.registeredTools.keys()].filter(name => /hand/i.test(name)), [])
+  assert.deepEqual([...run.ctx.registeredTools.keys()].filter(name => /hand/i.test(name)), ['browser_handoff'])
+  // The browser tools stay the Omni Bot's (owner, 2026-11-06): none is refused to it.
+  for (const name of ['browser_open', 'browser_click', 'browser_handoff']) assert.equal(guarded(run.ctx, 'm1', name), undefined, name)
   const said = [OPERATOR_RULES]
   for (const name of [...COMPUTER_TOOLS, 'start_task']) {
     const refusal = guarded(run.ctx, 'm1', name)

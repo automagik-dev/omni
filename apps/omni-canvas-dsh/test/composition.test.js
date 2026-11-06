@@ -97,6 +97,9 @@ function services(ctx) {
   return ctx
 }
 
+// The team's browser tools (bots-dsh browser-plugins.js, since 3.87), which TEAM_TOOLS does not
+// name: one browser plugin for the whole team, registered beside TEAM_TOOLS.
+const TEAM_BROWSER_TOOLS = ['browser_back', 'browser_click', 'browser_handoff', 'browser_open', 'browser_press', 'browser_resume', 'browser_screenshot', 'browser_select', 'browser_snapshot', 'browser_tabs', 'browser_type', 'browser_upload']
 // The channels plugin's own tools and the chat threads' (THREAD_TOOLS) come on top: the Omni
 // Bot has no hand-off tool.
 test('with all three plugins, the team registers exactly the tools TEAM_TOOLS names, plus the channels plugin\'s own', async (t) => {
@@ -104,7 +107,7 @@ test('with all three plugins, the team registers exactly the tools TEAM_TOOLS na
   const home = mkdtempSync(join(tmpdir(), 'omni-canvas-all-'))
   applyAll(ctx, { home, browser: true })
   t.after(async () => { await ctx.dispose(); rmSync(home, { recursive: true, force: true, maxRetries: 5 }) })
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS, ...THREAD_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS, ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS].sort())
   assert.equal(ctx.registeredTools.has('omni_handoff'), false)
   // This plugin's own come last, and it adds no llm/stream listener.
   const own = ctx.calls.slice(ctx.calls.indexOf('provide omniChannels') + 1)
