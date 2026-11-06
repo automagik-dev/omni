@@ -43,7 +43,7 @@
     "harness": "bun install --cwd dev/harness --no-save --no-summary"
   },
   "engines": {
-    "dsh": ">=0.2.1-rc.3 <0.2.2-0",
+    "dsh": ">=0.2.2-rc.1 <0.2.3-0",
     "omni": ">=2.261102.41"
   },
   "peerDependencies": {
@@ -51,6 +51,7 @@
     "@automagik/omni-dsh": ">=2.261019.10",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-llm": "*",
+    "@deepseek-ai/dsh-tool-executor-native": "*",
     "@deepseek-ai/dsh-tools": "*"
   },
   "peerDependenciesMeta": {

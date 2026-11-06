@@ -40,7 +40,7 @@ return JSON: this is an authoring convention for the canvas, not a change to the
 
 ## Install
 
-The plugin needs DSH `>=0.2.1-rc.3 <0.2.2-0` (the DSH its tests run on, up to the next patch;
+The plugin needs DSH `>=0.2.2-rc.1 <0.2.3-0` (the DSH its tests run on, up to the next patch;
 DSH turns the plugin off outside it), the Bot team plugin (`>=3.1.0 <3.261000.0`), the
 Omni channels plugin and an Omni no older than its `engines.omni` minimum. Its version is the
 Omni release of its last change, so it can trail the newest Omni. Add the Automagik marketplace index to DSH's plugin market

@@ -23,7 +23,7 @@
 # github.com for the pinned Automagik tarballs, as it reaches the npm registry.
 # =============================================================================
 
-ARG NODE_VERSION=22.23.2
+ARG NODE_VERSION=24.22.2
 
 # ---- builder: the pinned DSH + the plugins (this checkout's, Automagik's pinned) --
 FROM node:${NODE_VERSION}-bookworm-slim AS builder
