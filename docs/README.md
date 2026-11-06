@@ -32,11 +32,18 @@ docs/
 │   ├── omni-internals/     # Deep dives into Omni's own systems
 │   ├── whatsapp-business/  # WhatsApp Business API, Telegram analysis
 │   └── SQUAD.md            # Research squad roster
+├── rfcs/                   # Index of design decisions (RFCs and ADRs)
 ├── runbooks/               # Operator recipes (webhook sources, consumers, governance)
 ├── sdk/                    # SDK generation & usage
 ├── templates/              # Note templates
 └── ui/                     # Dashboard components
 ```
+
+## Decisions
+
+Start at the [RFC index](rfcs/README.md) for why something is built the way it is. It lists
+every RFC and earlier ADR with its status and links the Genie design behind it. Status lives
+there, not in the tables below.
 
 ## Document Index
 
@@ -57,7 +64,7 @@ docs/
 | [[event-system\|Event System]] | Event journal, schema registry, causality, durable consumers, replay | ✅ current |
 | [[connector-contract\|Connector Contract]] | Webhook-source lifecycle: signatures, idempotency, heartbeats | ✅ current |
 | [[identity-graph\|Identity Graph]] | Cross-platform identity resolution and merging | ✅ current |
-| [[adr-0003-lid-first-identity\|ADR-0003: LID-First Identity]] | Decision record for LID-first identity keying | ✅ current |
+| [[adr-0003-lid-first-identity\|ADR-LID-0003: LID-First Identity]] | Decision record for LID-first identity keying | see the [RFC index](rfcs/README.md) |
 | [[actor-model\|Actor Model]] | Actor-based concurrency notes | ✅ current |
 | [[a2a-implementation\|A2A Implementation]] | Agent-to-agent channel design | ✅ current |
 | [[plugin-system\|Plugin System]] | Channel plugin SDK, lifecycle, capabilities | ✅ current |
