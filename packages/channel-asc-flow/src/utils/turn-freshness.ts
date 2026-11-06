@@ -28,13 +28,8 @@
 import type { Logger } from '@omni/core';
 
 import type { AscFlowClient } from '../client';
+import { atendimentoMessages } from './atendimento';
 import { decodeAscEmoji } from './emoji';
-
-interface AscAtendimentoMessage {
-  id_mensagem?: string | number;
-  descricao_msg?: string | null;
-  boleano_entrante?: string | number;
-}
 
 interface LatestInbound {
   id: string | null;
@@ -46,16 +41,13 @@ interface LatestInbound {
  * `null` when it cannot be read.
  */
 async function latestInbound(client: AscFlowClient, codAtendimento: string): Promise<LatestInbound | null> {
-  const { status, body } = await client.get('/atendimento', { codigo_atendimento: codAtendimento });
-  if (status !== 200 || typeof body !== 'object' || body === null) return null;
-
-  const list = (body as Record<string, unknown>).mensagens;
-  if (!Array.isArray(list)) return null;
+  const list = await atendimentoMessages(client, codAtendimento);
+  if (list === null) return null;
 
   // Newest last, so walk backwards to the first inbound with text of its own.
   // Media rows carry a null `descricao_msg` and are skipped rather than read
   // as an empty message.
-  for (const raw of [...(list as AscAtendimentoMessage[])].reverse()) {
+  for (const raw of [...list].reverse()) {
     if (String(raw.boleano_entrante ?? '') !== '1') continue;
     const text = decodeAscEmoji(String(raw.descricao_msg ?? '').trim());
     if (text) return { id: raw.id_mensagem == null ? null : String(raw.id_mensagem), text };

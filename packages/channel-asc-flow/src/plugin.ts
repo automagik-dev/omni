@@ -67,13 +67,14 @@ import type {
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
-import { type Logger, markdownToWhatsApp } from '@omni/core';
+import { type Logger, type MessageReceivedPayload, markdownToWhatsApp } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
 import type { AscFlowConfig } from './types';
+import { type AscQuotedBubble, atendimentoMessages, quotedBubbleOf } from './utils/atendimento';
 import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
@@ -241,6 +242,13 @@ const IN_FLIGHT_SWEEP_MS = 60_000;
  * at a few MB of turn state no matter what the platform does.
  */
 const IN_FLIGHT_MAX_ENTRIES = 5_000;
+
+/**
+ * How long a typed turn waits for the platform record that says what it quoted.
+ * The read rides the inbound path before the agent run, so it is kept short:
+ * past it the turn goes out without the quote (`quotedBubble`).
+ */
+const QUOTE_LOOKUP_TIMEOUT_MS = 3_000;
 
 /**
  * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
@@ -1229,6 +1237,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
           })
         : null;
 
+    const replyTo = await this.quotedReplyTo(client, instanceId, turn);
+
     const timings = this.captureInboundTimings(Date.now());
     let duplicate = false;
     const correlationId = await this.emitMessageReceived({
@@ -1257,6 +1267,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
             type: 'text' as import('@omni/core/types').ContentType,
             text: isMediaName ? mediaFallbackText(turn.text) : sanitized.text,
           },
+      // The typed quote only, never `replyToId`: the dispatcher answers
+      // "in reply to" `replyToId`, and `/mensagem` would then render our answer
+      // as a reply to our OWN bubble. See `utils/atendimento.ts`.
+      replyTo,
       rawPayload: {
         ascFlow: {
           codAtendimento: turn.codAtendimento,
@@ -1286,6 +1300,51 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     if (timings) this.captureT2(correlationId, timings);
     return true;
+  }
+
+  /**
+   * The bubble of ours this turn replied to (WhatsApp "Reply"), as the typed quote.
+   *
+   * Only the platform record knows: the flow body carries the typed text
+   * alone. Bounded and fail-open — a slow or failed read costs the agent the
+   * quote, never the beneficiary the turn.
+   */
+  private async quotedReplyTo(
+    client: AscFlowClient | undefined,
+    instanceId: string,
+    turn: ParsedAscFlowTurn,
+  ): Promise<MessageReceivedPayload['replyTo']> {
+    const { messageId } = turn;
+    // A media turn's `chatInput` is a file name, never a typed reply.
+    if (!client || !messageId || isAscMediaFilename(turn.text)) return undefined;
+    // ponytail: one GET per typed turn; drop it if the flow ever exposes the reply id itself.
+    const read = atendimentoMessages(client, turn.codAtendimento).catch((err: unknown) => {
+      this.logger.warn('[asc-flow] could not read the atendimento for a quoted reply — sending the turn without it', {
+        instanceId,
+        codAtendimento: turn.codAtendimento,
+        err: String(err),
+      });
+      return null;
+    });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<null>((resolve) => {
+      timer = setTimeout(resolve, QUOTE_LOOKUP_TIMEOUT_MS, null);
+    });
+    let quoted: AscQuotedBubble | null;
+    try {
+      const messages = await Promise.race([read, timeout]);
+      quoted = messages ? quotedBubbleOf(messages, messageId) : null;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!quoted) return undefined;
+    return {
+      externalId: quoted.externalId,
+      chatId: turn.codAtendimento,
+      fromMe: true,
+      type: 'text',
+      text: quoted.text,
+    };
   }
 
   /** Close the turn window a refused re-publish opened — no answer will fill it. */
