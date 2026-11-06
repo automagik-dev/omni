@@ -11,6 +11,15 @@ Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 - Prefer safe static gates for routine validation.
 - Use a disposable database for database-backed or full integration tests.
 
+## Design records
+
+- Decisions live in `docs/rfcs/README.md`, the one index: RFCs, the frozen multitenancy `ADR-NNNN` keys, and earlier
+  records. An RFC is short and links its Genie DESIGN and WISH; it never replaces them.
+- Genie planning files (`.genie/INDEX.md`, brainstorm `DRAFT.md`/`DESIGN.md`, `.genie/wishes/**`) are tracked; only
+  Genie's runtime state is ignored.
+- Code, commits and PRs cite `RFC-NNNN` or an ADR key, never a `.genie` path or a wish slug. `make verify-rfcs` fails
+  on a citation that does not resolve.
+
 ## Working across residences
 
 Two teams, on two machines with two GitHub accounts, work this repo. Coordinate on GitHub only; there is no shared hc.
