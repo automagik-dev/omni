@@ -544,7 +544,8 @@ require(
 # the bump push (a no-release merge runs no writer; a direct commit never queues
 # in version-dev), and the rejected non-fast-forward push used to lose that
 # release. Each attempt must derive the version inside the loop from freshly
-# fetched tags, retry only when dev really moved, and stop after three.
+# fetched tags, retry only on git's non-fast-forward status for the dev ref,
+# keep an update that landed although git reported failure, and stop after three.
 prepare_dev_version = (root / "scripts/release/prepare-dev-version.sh").read_text(encoding="utf-8")
 require(
     prepare_dev_version,
@@ -560,21 +561,34 @@ require(
     r"            BASE_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n"
     r"            VERSION=\$\(scripts/release/prepare-dev-version\.sh \| tail -n 1\)\n"
     r"[\s\S]{0,2400}?"
+    r"            PUSH_STATUS=\$\(mktemp\)\n"
     r"            if git -c http\.https://github\.com/\.extraheader= \\\n"
-    r"              push \"https://x-access-token:\$\{VERSION_WRITER_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}\.git\" \\\n"
-    r"              \"HEAD:refs/heads/\$\{PUSH_REF\}\"; then\n              break\n            fi\n\n"
+    r"              push --porcelain \"https://x-access-token:\$\{VERSION_WRITER_TOKEN\}@github\.com/\$\{GITHUB_REPOSITORY\}\.git\" \\\n"
+    r"              \"HEAD:refs/heads/\$\{PUSH_REF\}\" > \"\$\{PUSH_STATUS\}\"; then\n"
+    r"              cat \"\$\{PUSH_STATUS\}\"\n              break\n            fi\n"
+    r"            cat \"\$\{PUSH_STATUS\}\"\n\n"
+    r"            git -c http\.https://github\.com/\.extraheader= \\\n"
+    r"              fetch [^\n]*\n"
+    r"              \"\+refs/heads/\$\{PUSH_REF\}:refs/remotes/origin/\$\{PUSH_REF\}\"\n"
+    r"            FRESH_SHA=\$\(git rev-parse \"refs/remotes/origin/\$\{PUSH_REF\}\^\{commit\}\"\)\n"
+    # A landed update whose acknowledgement was lost is kept, never re-bumped.
+    r"            if git merge-base --is-ancestor \"\$\{BUMP_SHA\}\" \"\$\{FRESH_SHA\}\"; then\n"
+    r"              echo \"::warning::[^\n]*\"\n              break\n            fi\n"
+    # Only git's own non-fast-forward status for the dev ref admits a retry.
+    r"            if ! awk -F '\\t' -v ref=\"HEAD:refs/heads/\$\{PUSH_REF\}\" \\\n"
+    r"              '\$1 == \"!\" && \$2 == ref && \(\$3 == \"\[rejected\] \(fetch first\)\" \|\| \$3 == \"\[rejected\] \(non-fast-forward\)\"\) \{ found = 1 \} END \{ exit !found \}' \\\n"
+    r"              \"\$\{PUSH_STATUS\}\"; then\n"
+    r"              echo \"::error::[^\n]*\"\n              exit 1\n            fi\n"
+    r"            if \(\( attempt >= MAX_ATTEMPTS \)\); then\n              echo \"::error::[^\n]*\"\n              exit 1\n            fi\n"
+    r"            echo \"::warning::[^\n]*\"\n"
     r"            git tag -d \"v\$\{VERSION\}\"\n"
     r"            git -c http\.https://github\.com/\.extraheader= \\\n"
     r"              fetch --force [^\n]*\n"
-    r"              \"\+refs/heads/\$\{PUSH_REF\}:refs/remotes/origin/\$\{PUSH_REF\}\" \"\+refs/tags/\*:refs/tags/\*\"\n"
-    r"            FRESH_SHA=\$\(git rev-parse \"refs/remotes/origin/\$\{PUSH_REF\}\^\{commit\}\"\)\n"
-    r"            if \[\[ \"\$\{FRESH_SHA\}\" == \"\$\{BASE_SHA\}\" \]\]; then\n              echo \"::error::[^\n]*\"\n              exit 1\n            fi\n"
-    r"            if \(\( attempt >= MAX_ATTEMPTS \)\); then\n              echo \"::error::[^\n]*\"\n              exit 1\n            fi\n"
-    r"            echo \"::warning::[^\n]*\"\n"
+    r"              \"\+refs/tags/\*:refs/tags/\*\"\n"
     r"            git reset --hard \"\$\{FRESH_SHA\}\"\n"
     r"            attempt=\$\(\(attempt \+ 1\)\)\n"
     r"          done\n",
-    "the dev bump push has no bounded fresh-tip retry: each of at most 3 attempts must recompute the version inside the loop, retry only when dev moved, and fail loudly at the bound",
+    "the dev bump push has no bounded fresh-tip retry: at most 3 attempts, each recomputing the version inside the loop, retrying only on a non-fast-forward rejection of dev, keeping a landed bump, failing loudly otherwise",
 )
 require(
     version_workflow,
@@ -614,7 +628,7 @@ require(
 )
 require(
     version_workflow,
-    r"BUMP_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n\s+\[\[ \"\$\{BUMP_SHA\}\" =~ \^\[0-9a-f\]\{40\}\$ \]\]\n[\s\S]{0,2400}?"
+    r"BUMP_SHA=\$\(git rev-parse \"HEAD\^\{commit\}\"\)\n\s+\[\[ \"\$\{BUMP_SHA\}\" =~ \^\[0-9a-f\]\{40\}\$ \]\]\n[\s\S]{0,4000}?"
     r"\n          done\n[\s\S]{0,1600}"
     r"\"refs/tags/v\$\{VERSION\}\"\n\n\s+echo \"bump_sha=\$\{BUMP_SHA\}\" >> \"\$GITHUB_OUTPUT\"\n",
     "the version bump step does not emit the pushed dev commit as bump_sha after both pushes",

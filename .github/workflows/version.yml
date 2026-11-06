@@ -190,12 +190,16 @@ jobs:
       # Derive the version, write the version files, commit, tag and push dev,
       # with a bounded fresh-tip retry. dev can move between the checkout and
       # the push: a merged PR labelled no-release runs no writer of its own,
-      # and a direct commit to dev never queues in version-dev. The ordinary
-      # push is then rejected as non-fast-forward. The step re-fetches dev and
-      # every tag, resets to the fresh tip, drops its unpushed local tag and
-      # runs prepare-dev-version.sh again, so the number is recomputed from the
-      # fresh tags and never reused. A rejection while dev did NOT move (auth,
-      # pre-push gate) fails at once; after MAX_ATTEMPTS it fails loudly.
+      # and a direct commit to dev never queues in version-dev. A failed dev
+      # push is classified from its --porcelain ref status:
+      #   - dev already contains this attempt's commit (the update landed but
+      #     its acknowledgement was lost): treat it as pushed, never re-bump.
+      #   - `[rejected] (fetch first)` / `(non-fast-forward)` for the dev ref:
+      #     drop the unpushed local tag, fetch every tag, reset to the fresh tip
+      #     and run prepare-dev-version.sh again, so the number is recomputed
+      #     and never reused. At most MAX_ATTEMPTS attempts, then fail loudly.
+      #   - anything else (pre-push gate, auth, network, a server refusal such
+      #     as dev moving while the pre-push gate ran): fail loudly, no retry.
       - name: Commit and tag
         id: bump
         env:
@@ -247,19 +251,27 @@ jobs:
             # Split push (was --atomic): the two refs need DIFFERENT credentials.
             # Branch push uses the machine PAT explicitly so the push actor is not
             # github-actions[bot] — see the checkout step for why.
+            PUSH_STATUS=$(mktemp)
             if git -c http.https://github.com/.extraheader= \
-              push "https://x-access-token:${VERSION_WRITER_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-              "HEAD:refs/heads/${PUSH_REF}"; then
+              push --porcelain "https://x-access-token:${VERSION_WRITER_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "HEAD:refs/heads/${PUSH_REF}" > "${PUSH_STATUS}"; then
+              cat "${PUSH_STATUS}"
               break
             fi
+            cat "${PUSH_STATUS}"
 
-            git tag -d "v${VERSION}"
             git -c http.https://github.com/.extraheader= \
-              fetch --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-              "+refs/heads/${PUSH_REF}:refs/remotes/origin/${PUSH_REF}" "+refs/tags/*:refs/tags/*"
+              fetch "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "+refs/heads/${PUSH_REF}:refs/remotes/origin/${PUSH_REF}"
             FRESH_SHA=$(git rev-parse "refs/remotes/origin/${PUSH_REF}^{commit}")
-            if [[ "${FRESH_SHA}" == "${BASE_SHA}" ]]; then
-              echo "::error::the ${PUSH_REF} push was rejected but ${PUSH_REF} did not move (still ${BASE_SHA}); not a concurrent advance, so no retry"
+            if git merge-base --is-ancestor "${BUMP_SHA}" "${FRESH_SHA}"; then
+              echo "::warning::the ${PUSH_REF} push reported failure, but ${PUSH_REF} (${FRESH_SHA}) already contains ${BUMP_SHA}; treating it as pushed, no second bump"
+              break
+            fi
+            if ! awk -F '\t' -v ref="HEAD:refs/heads/${PUSH_REF}" \
+              '$1 == "!" && $2 == ref && ($3 == "[rejected] (fetch first)" || $3 == "[rejected] (non-fast-forward)") { found = 1 } END { exit !found }' \
+              "${PUSH_STATUS}"; then
+              echo "::error::the ${PUSH_REF} push failed without a non-fast-forward rejection of refs/heads/${PUSH_REF} (pre-push gate, auth, network or server refusal); not retrying"
               exit 1
             fi
             if (( attempt >= MAX_ATTEMPTS )); then
@@ -267,6 +279,10 @@ jobs:
               exit 1
             fi
             echo "::warning::${PUSH_REF} moved from ${BASE_SHA} to ${FRESH_SHA} during attempt ${attempt}/${MAX_ATTEMPTS}; recomputing the version from the fresh tip"
+            git tag -d "v${VERSION}"
+            git -c http.https://github.com/.extraheader= \
+              fetch --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+              "+refs/tags/*:refs/tags/*"
             git reset --hard "${FRESH_SHA}"
             attempt=$((attempt + 1))
           done

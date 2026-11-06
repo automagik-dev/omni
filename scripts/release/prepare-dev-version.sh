@@ -3,8 +3,8 @@
 # Derive the next dev version from this checkout's tags and write every
 # version file for it. Run from the repository root.
 # =============================================================================
-# version.yml "Commit and tag" runs this once per bump attempt. When the dev
-# push is rejected because dev moved, the step resets to the fresh tip,
+# version.yml "Commit and tag" runs this once per bump attempt. When git
+# rejects the dev push as non-fast-forward, the step resets to the fresh tip,
 # deletes its unpushed local tag and runs this again, so a retry always
 # recomputes the number from the fresh tags and never reuses a stale one.
 #
