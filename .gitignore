@@ -61,16 +61,41 @@ TOOLS.md
 HEARTBEAT.md
 BOOTSTRAP.md
 memory/
-# Genie: planning documents are tracked by default (docs/rfcs/README.md links them);
-# runtime state (genie.db and its sidecars, roadmap/workspace/config JSON, bin/) stays
-# ignored. Brainstorm notes other than DRAFT.md and DESIGN.md stay local.
+# Genie: planning documents are tracked by default (docs/rfcs/README.md links them).
+# Allow-list, at any depth: .genie/INDEX.md, brainstorm DRAFT.md and DESIGN.md, and wish
+# Markdown/YAML/JSON plans. Everything else under .genie stays local: runtime state
+# (genie.db and sidecars, roadmap/workspace/config JSON, bin/), brainstorm council and
+# review notes, and the credential/runtime names re-excluded below.
 .genie/*
 !.genie/INDEX.md
-!.genie/wishes/
 !.genie/brainstorms/
-.genie/brainstorms/*/*
-!.genie/brainstorms/*/DRAFT.md
-!.genie/brainstorms/*/DESIGN.md
+!.genie/wishes/
+.genie/brainstorms/**
+!.genie/brainstorms/**/
+!.genie/brainstorms/**/DRAFT.md
+!.genie/brainstorms/**/DESIGN.md
+.genie/wishes/**
+!.genie/wishes/**/
+!.genie/wishes/**/*.md
+!.genie/wishes/**/*.yaml
+!.genie/wishes/**/*.yml
+!.genie/wishes/**/*.json
+# Never credentials or runtime state, even when the name ends in an allowed extension.
+.genie/**/.env*
+.genie/**/*.env*
+.genie/**/credentials*
+.genie/**/secrets*
+.genie/**/*.pem
+.genie/**/*.key
+.genie/**/config.json
+.genie/**/*.db*
+.genie/**/*-wal
+.genie/**/*-shm
+.genie/**/*-recovery-lock
+.genie/**/*.log
+.genie/**/logs/
+.genie/**/cache/
+.genie/**/.cache/
 docs/reports/
 docs/reports/tmp/
 
