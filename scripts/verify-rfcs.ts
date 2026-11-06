@@ -9,12 +9,18 @@
  *    `docs/rfcs/NNNN-*.md` (except the 0000 template) needs a row. An unlinked `RFC-NNNN` row is
  *    a reserved number and must be Draft. Numbers are unique, and Status is one word from
  *    STATUSES.
- * 2. Every `RFC-NNNN` cited in apps/ packages/ scripts/ docs/ is a row of the index.
- * 3. Every `ADR-NNNN` cited there is an ADR row of the index (the keys are frozen).
- * 4. Every `.genie/wishes/...` or `.genie/brainstorms/...` path and every `wish <slug>` cited
- *    there resolves to a file git tracks. Citations that were already dangling when the gate
- *    landed sit in ALLOWLIST; an entry that no longer matches anything is an error, so the list
- *    only shrinks.
+ * 2. Every `RFC-NNNN` cited in apps/ packages/ scripts/ docs/ is a row of the index. IETF
+ *    standards written the same way (IETF_RFCS, e.g. RFC-4122 for UUIDs) are not Omni RFCs, and
+ *    the index may not use their numbers.
+ * 3. Every `ADR-NNNN` or named `ADR-XXX-NNNN` cited there is a row of the index (keys are frozen).
+ * 4. Every `.genie/wishes/...` or `.genie/brainstorms/...` path and every wish slug cited there
+ *    resolves to a file git tracks. A wish slug is `wish <slug>`, `wish: <slug>` or
+ *    ``wish `<slug>` `` (any case of Wish); a one-word slug counts only with the colon or the
+ *    backticks, so prose such as "the wish requires" is not a citation.
+ *
+ * Citations already dangling when the gate landed sit in ALLOWLIST with their count per file.
+ * One more in that file, or the same citation in another file, fails; fewer fails too until the
+ * count is lowered, so the list only shrinks.
  *
  * Run: bun scripts/verify-rfcs.ts [--root <repo>]
  */
@@ -34,92 +40,122 @@ const SCAN_ROOTS = ['apps', 'packages', 'scripts', 'docs'];
 const SCAN_EXCLUDE = new Set(['scripts/verify-rfcs.ts', 'scripts/verify-rfcs.test.ts', 'docs/rfcs/0000-template.md']);
 
 export interface AllowEntry {
-  /** Repo-relative file, or '*' for every file. */
+  /** Repo-relative file. */
   file: string;
   /** The citation as reported: `.genie/wishes/<path>` or `wish <slug>`. */
   cite: string;
+  /** How many times the file cites it today. */
+  count: number;
   reason: string;
+}
+
+/** IETF standards cited with the RFC-NNNN shape. Not Omni RFCs; their numbers are never used. */
+export const IETF_RFCS = new Set(['RFC-4122']);
+
+function allow(cite: string, reason: string, counts: Record<string, number>): AllowEntry[] {
+  return Object.entries(counts).map(([file, count]) => ({ file, cite, count, reason }));
 }
 
 const CHAT_THREADS = 'omni-chat-threads design: rebuilt as RFC-0001 (reserved), then this entry goes';
 const NOT_A_WISH = 'prose, not a wish slug';
 const LOCAL_ONLY = 'design exists only on one machine; the owner decides whether it is published';
 const MISSING = 'design was never committed';
-const IETF = 'IETF RFC (UUID format), not an Omni RFC; write "RFC 4122" in new code';
 
-/** Dangling citations that predate this gate. Remove an entry when its design is tracked. */
+/** Dangling citations that predate this gate, with their count per file. Lower or remove as designs land. */
 export const ALLOWLIST: AllowEntry[] = [
-  { file: '*', cite: 'wish omni-chat-threads', reason: CHAT_THREADS },
-  {
-    file: 'packages/db/drizzle/0033_close_contact_logs.sql',
-    cite: '.genie/wishes/559-close-contact/design.md',
-    reason: MISSING,
-  },
-  { file: 'packages/api/src/scheduler.ts', cite: '.genie/wishes/idle-chat-follow-up/WISH.md', reason: MISSING },
-  { file: 'docs/guides/idle-chat-follow-up.md', cite: '.genie/wishes/idle-chat-follow-up/WISH.md', reason: MISSING },
-  {
-    file: 'packages/cli/src/commands/update.ts',
-    cite: '.genie/wishes/update-unify-stages/SHARED-DESIGN.md',
-    reason: MISSING,
-  },
-  {
-    file: 'packages/cli/src/lib/pgserve-transport.ts',
-    cite: '.genie/wishes/pgserve-singleton-no-proxy/SHARED-DESIGN.md',
-    reason: MISSING,
-  },
-  {
-    file: 'packages/cli/src/runtime-env.ts',
-    cite: '.genie/wishes/pgserve-singleton-no-proxy/SHARED-DESIGN.md',
-    reason: MISSING,
-  },
-  {
-    file: 'packages/cli/src/__tests__/pgserve-transport.test.ts',
-    cite: '.genie/wishes/pgserve-singleton-no-proxy/',
-    reason: MISSING,
-  },
-  {
-    file: 'packages/cli/src/__tests__/requirements.test.ts',
-    cite: '.genie/wishes/pgserve-singleton-no-proxy/',
-    reason: MISSING,
-  },
-  {
-    file: 'packages/api/src/lib/__tests__/sentry-scrub-whatsapp-business-audit.test.ts',
-    cite: '.genie/wishes/whatsapp-business-channel/WISH.md',
-    reason: MISSING,
-  },
-  { file: 'packages/db/drizzle/0092_connector_ingress.sql', cite: 'wish gitlab-sdlc-connector', reason: LOCAL_ONLY },
-  ...[
-    'packages/cli/src/signing.ts',
-    'packages/cli/src/__tests__/signing.test.ts',
-    'packages/cli/src/commands/trust.ts',
-    'packages/api/src/routes/v2/trust.ts',
-    'packages/api/src/middleware/genie-signature.ts',
-    'packages/api/src/middleware/__tests__/genie-signature.test.ts',
-    'packages/api/src/middleware/__tests__/scope-enforcer-host-scopes.test.ts',
-    'packages/api/src/middleware/require-signed-instance.ts',
-    'packages/api/src/middleware/__tests__/require-signed-instance.test.ts',
-    'packages/api/src/__tests__/host-fingerprint-pipeline.test.ts',
-  ].map((file) => ({ file, cite: 'wish omni-host-fingerprint-trust', reason: MISSING })),
-  ...[
-    'packages/db/drizzle/0089_connectors.sql',
-    'packages/db/drizzle/0090_connector_event_ownership.sql',
-    'packages/db/src/tenancy-ownership.ts',
-    'packages/db/src/tenancy-db-access-guard.ts',
-  ].map((file) => ({ file, cite: 'wish connectors-first-slice-clickup', reason: MISSING })),
-  ...[
-    'packages/api/src/routes/v2/__tests__/console-profile-scope-coverage.test.ts',
-    'packages/api/src/routes/v2/__tests__/keys-console-profiles.test.ts',
-    'packages/api/src/routes/v2/__tests__/keys-mint-ceiling.test.ts',
-  ].map((file) => ({ file, cite: 'wish omni-appkit-gap', reason: MISSING })),
-  { file: 'packages/cli/src/pm2.ts', cite: 'wish omni-install-resilience', reason: MISSING },
-  { file: 'packages/cli/src/commands/install.ts', cite: 'wish omni-install-resilience', reason: MISSING },
-  { file: 'packages/cli/src/pm2.ts', cite: 'wish pm2-log-noise-and-bumps', reason: MISSING },
-  { file: 'packages/api/src/services/media-storage.ts', cite: 'RFC-4122', reason: IETF },
-  { file: 'packages/db/src/backfill/person-clone.ts', cite: 'RFC-4122', reason: IETF },
-  { file: 'packages/cli/src/update-diagnostics.ts', cite: 'wish per-repo', reason: NOT_A_WISH },
-  { file: 'packages/db/src/tenancy-dual-write.ts', cite: 'wish mixed-version', reason: NOT_A_WISH },
-  { file: 'packages/db/src/tenancy-ownership.test.ts', cite: 'wish 185-190', reason: NOT_A_WISH },
-  { file: 'packages/db/src/tenancy-db-access-guard.test.ts', cite: 'wish operator-surface', reason: NOT_A_WISH },
+  ...allow('wish omni-chat-threads', CHAT_THREADS, {
+    'apps/omni-channels-dsh/src/host/asks.js': 1,
+    'apps/omni-channels-dsh/src/host/standing-recovery.js': 1,
+    'apps/omni-channels-dsh/src/host/standing-runs.js': 1,
+    'apps/omni-channels-dsh/src/host/thread-tools.js': 1,
+    'apps/omni-channels-dsh/test/dshbot-migration.test.js': 1,
+    'apps/omni-channels-dsh/test/omni-api.test.js': 2,
+    'apps/omni-channels-dsh/test/omni-link.test.js': 1,
+    'apps/omni-channels-dsh/test/team-view.test.js': 1,
+    'apps/omni-channels-dsh/test/thread-fixture.js': 1,
+    'apps/omni-channels-dsh/test/thread-keys.test.js': 1,
+    'apps/omni-channels-dsh/test/thread-tools.test.js': 1,
+    'apps/omni-channels-dsh/test/threads.test.js': 1,
+    'packages/api/src/__tests__/openapi-route-coverage.test.ts': 1,
+    'packages/api/src/constants/__tests__/scope-map-coverage.test.ts': 1,
+    'packages/api/src/constants/scopes.ts': 1,
+    'packages/api/src/routes/v2/__tests__/keys-device-child.test.ts': 1,
+    'packages/api/src/routes/v2/__tests__/keys-mint-ceiling.test.ts': 1,
+    'packages/api/src/routes/v2/keys.ts': 1,
+    'packages/api/src/schemas/openapi/keys.ts': 1,
+    'packages/api/src/services/__tests__/api-key-children-postgres.test.ts': 1,
+    'packages/api/src/services/api-keys.ts': 1,
+    'packages/api/src/tenancy/__tests__/route-ownership-gate.test.ts': 1,
+    'packages/api/src/tenancy/route-ownership.ts': 1,
+    'packages/db/drizzle/0088_api_key_parent.sql': 1,
+    'packages/db/src/schema.ts': 1,
+  }),
+  ...allow('.genie/wishes/idle-chat-follow-up/WISH.md', MISSING, {
+    'docs/guides/idle-chat-follow-up.md': 1,
+    'packages/api/src/scheduler.ts': 1,
+  }),
+  ...allow('wish omni-host-fingerprint-trust', MISSING, {
+    'packages/api/src/__tests__/host-fingerprint-pipeline.test.ts': 1,
+    'packages/api/src/middleware/__tests__/genie-signature.test.ts': 1,
+    'packages/api/src/middleware/__tests__/require-signed-instance.test.ts': 1,
+    'packages/api/src/middleware/__tests__/scope-enforcer-host-scopes.test.ts': 1,
+    'packages/api/src/middleware/genie-signature.ts': 1,
+    'packages/api/src/middleware/require-signed-instance.ts': 1,
+    'packages/api/src/routes/v2/trust.ts': 1,
+    'packages/cli/src/__tests__/signing.test.ts': 1,
+    'packages/cli/src/commands/trust.ts': 1,
+    'packages/cli/src/signing.ts': 1,
+  }),
+  ...allow('.genie/wishes/whatsapp-business-channel/WISH.md', MISSING, {
+    'packages/api/src/lib/__tests__/sentry-scrub-whatsapp-business-audit.test.ts': 1,
+  }),
+  ...allow('wish omni-appkit-gap', MISSING, {
+    'packages/api/src/routes/v2/__tests__/console-profile-scope-coverage.test.ts': 1,
+    'packages/api/src/routes/v2/__tests__/keys-console-profiles.test.ts': 1,
+    'packages/api/src/routes/v2/__tests__/keys-mint-ceiling.test.ts': 1,
+  }),
+  ...allow('.genie/wishes/pgserve-singleton-no-proxy/', MISSING, {
+    'packages/cli/src/__tests__/pgserve-transport.test.ts': 1,
+    'packages/cli/src/__tests__/requirements.test.ts': 1,
+  }),
+  ...allow('wish omni-install-resilience', MISSING, {
+    'packages/cli/src/commands/install.ts': 1,
+    'packages/cli/src/pm2.ts': 1,
+  }),
+  ...allow('.genie/wishes/update-unify-stages/SHARED-DESIGN.md', MISSING, {
+    'packages/cli/src/commands/update.ts': 1,
+  }),
+  ...allow('.genie/wishes/pgserve-singleton-no-proxy/SHARED-DESIGN.md', MISSING, {
+    'packages/cli/src/lib/pgserve-transport.ts': 1,
+    'packages/cli/src/runtime-env.ts': 1,
+  }),
+  ...allow('wish pm2-log-noise-and-bumps', MISSING, {
+    'packages/cli/src/pm2.ts': 1,
+  }),
+  ...allow('wish per-repo', NOT_A_WISH, {
+    'packages/cli/src/update-diagnostics.ts': 1,
+  }),
+  ...allow('.genie/wishes/559-close-contact/design.md', MISSING, {
+    'packages/db/drizzle/0033_close_contact_logs.sql': 1,
+  }),
+  ...allow('wish connectors-first-slice-clickup', MISSING, {
+    'packages/db/drizzle/0089_connectors.sql': 1,
+    'packages/db/drizzle/0090_connector_event_ownership.sql': 1,
+    'packages/db/src/tenancy-db-access-guard.ts': 1,
+    'packages/db/src/tenancy-ownership.ts': 1,
+  }),
+  ...allow('wish gitlab-sdlc-connector', LOCAL_ONLY, {
+    'packages/db/drizzle/0092_connector_ingress.sql': 1,
+  }),
+  ...allow('wish operator-surface', NOT_A_WISH, {
+    'packages/db/src/tenancy-db-access-guard.test.ts': 1,
+  }),
+  ...allow('wish mixed-version', NOT_A_WISH, {
+    'packages/db/src/tenancy-dual-write.ts': 1,
+  }),
+  ...allow('wish 185-190', NOT_A_WISH, {
+    'packages/db/src/tenancy-ownership.test.ts': 1,
+  }),
 ];
 
 export interface IndexRow {
@@ -201,6 +237,9 @@ export function checkIndex(rows: IndexRow[], trackedFiles: string[]): string[] {
   const linked = new Set<string>();
   for (const row of rows) {
     if (!row.key.startsWith('RFC-')) continue;
+    if (IETF_RFCS.has(row.key)) {
+      errors.push(`${INDEX_PATH}:${row.line}: ${row.key} is an IETF standard cited in the code; take the next number`);
+    }
     const number = row.key.slice(4);
     const at = `${INDEX_PATH}:${row.line}`;
     if (!row.linkedFile) {
@@ -226,22 +265,23 @@ export function checkIndex(rows: IndexRow[], trackedFiles: string[]): string[] {
 }
 
 const RFC_CITE = /\bRFC-(\d{4})\b/g;
-const ADR_CITE = /\bADR-(\d{4})\b/g;
+const ADR_CITE = /\bADR-((?:[A-Z]+-)?\d{4})\b/g;
 const GENIE_CITE = /\.genie\/(?:wishes|brainstorms)\/[A-Za-z0-9_.\-/]*/g;
-const WISH_CITE = /\b(?:[Ww]ish|WISH):?\s+`?([a-z0-9]+(?:-[a-z0-9]+)+)/g;
+const WISH_CITE =
+  /\b(?:[Ww]ish|WISH)(?::?\s+`?([a-z0-9]+(?:-[a-z0-9]+)+)|:\s+`?([a-z0-9]+)(?![a-z0-9-])|\s+`([a-z0-9]+)`)/g;
 
 /** Every citation in one file's text. Genie paths lose trailing dots; empty slugs are skipped. */
 export function findCitations(file: string, text: string): Citation[] {
   const found: Citation[] = [];
   for (const [i, line] of text.split('\n').entries()) {
     const add = (cite: string) => found.push({ file, line: i + 1, cite });
-    for (const m of line.matchAll(RFC_CITE)) add(`RFC-${m[1]}`);
+    for (const m of line.matchAll(RFC_CITE)) if (!IETF_RFCS.has(m[0])) add(m[0]);
     for (const m of line.matchAll(ADR_CITE)) add(`ADR-${m[1]}`);
     for (const m of line.matchAll(GENIE_CITE)) {
       const path = m[0].replace(/\.+$/, '');
       if (!/^\.genie\/(?:wishes|brainstorms)\/$/.test(path)) add(path);
     }
-    for (const m of line.matchAll(WISH_CITE)) add(`wish ${m[1]}`);
+    for (const m of line.matchAll(WISH_CITE)) add(`wish ${m[1] ?? m[2] ?? m[3]}`);
   }
   return found;
 }
@@ -251,7 +291,25 @@ function genieTracked(path: string, trackedFiles: string[]): boolean {
   return trackedFiles.some((file) => file === path || file.startsWith(dir));
 }
 
-/** Citations that do not resolve, after the allowlist; plus allowlist entries that matched nothing. */
+function resolves(cite: string, keys: Set<string>, trackedFiles: string[]): string | undefined {
+  if (cite.startsWith('RFC-') || cite.startsWith('ADR-')) {
+    return keys.has(cite) ? undefined : `${cite} is not a row of ${INDEX_PATH}`;
+  }
+  if (cite.startsWith('wish ')) {
+    const slug = cite.slice(5);
+    const found =
+      genieTracked(`.genie/wishes/${slug}/`, trackedFiles) || genieTracked(`.genie/brainstorms/${slug}/`, trackedFiles);
+    return found
+      ? undefined
+      : `no tracked .genie/wishes/${slug}/ or .genie/brainstorms/${slug}/; track the design or cite its RFC`;
+  }
+  return genieTracked(cite, trackedFiles) ? undefined : `${cite} is not tracked; track the design or cite its RFC`;
+}
+
+/**
+ * Citations that do not resolve, after the allowlist. An allowlisted (file, citation) pair passes
+ * only while the file holds exactly the allowlisted count; entries that match nothing fail.
+ */
 export function checkCitations(
   citations: Citation[],
   rows: IndexRow[],
@@ -260,38 +318,33 @@ export function checkCitations(
 ): string[] {
   const errors: string[] = [];
   const keys = new Set(rows.map((row) => row.key));
-  const used = new Set<AllowEntry>();
+  const dangling = new Map<string, { citations: Citation[]; hint: string }>();
   for (const citation of citations) {
-    const { cite } = citation;
-    let resolved: boolean;
-    let hint: string;
-    if (cite.startsWith('RFC-') || cite.startsWith('ADR-')) {
-      resolved = keys.has(cite);
-      hint = `${cite} is not a row of ${INDEX_PATH}`;
-    } else if (cite.startsWith('wish ')) {
-      const slug = cite.slice(5);
-      resolved =
-        genieTracked(`.genie/wishes/${slug}/`, trackedFiles) ||
-        genieTracked(`.genie/brainstorms/${slug}/`, trackedFiles);
-      hint = `no tracked .genie/wishes/${slug}/ or .genie/brainstorms/${slug}/; track the design or cite its RFC`;
-    } else {
-      resolved = genieTracked(cite, trackedFiles);
-      hint = `${cite} is not tracked; track the design or cite its RFC`;
-    }
-    if (resolved) continue;
-    const entry = allowlist.find((e) => e.cite === cite && (e.file === '*' || e.file === citation.file));
-    if (entry) {
-      used.add(entry);
+    const hint = resolves(citation.cite, keys, trackedFiles);
+    if (!hint) continue;
+    const pair = `${citation.file}\0${citation.cite}`;
+    const group = dangling.get(pair) ?? { citations: [], hint };
+    group.citations.push(citation);
+    dangling.set(pair, group);
+  }
+  const entries = new Map(allowlist.map((entry) => [`${entry.file}\0${entry.cite}`, entry]));
+  for (const [pair, { citations: found, hint }] of dangling) {
+    const entry = entries.get(pair);
+    entries.delete(pair);
+    if (entry && found.length === entry.count) continue;
+    if (entry && found.length < entry.count) {
+      errors.push(
+        `scripts/verify-rfcs.ts ALLOWLIST: "${entry.cite}" in ${entry.file} is cited ${found.length} time(s), not ${entry.count}; lower the count`,
+      );
       continue;
     }
-    errors.push(`${citation.file}:${citation.line}: ${hint}`);
+    const note = entry ? ` (the allowlist covers ${entry.count} existing citation(s) here; one is new)` : '';
+    for (const citation of found) errors.push(`${citation.file}:${citation.line}: ${hint}${note}`);
   }
-  for (const entry of allowlist) {
-    if (!used.has(entry)) {
-      errors.push(
-        `scripts/verify-rfcs.ts ALLOWLIST: "${entry.cite}" in ${entry.file} no longer dangles; remove the entry`,
-      );
-    }
+  for (const entry of entries.values()) {
+    errors.push(
+      `scripts/verify-rfcs.ts ALLOWLIST: "${entry.cite}" in ${entry.file} no longer dangles; remove the entry`,
+    );
   }
   return errors;
 }

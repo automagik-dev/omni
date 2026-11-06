@@ -11,7 +11,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { type AllowEntry, findCitations, parseIndex, verifyRfcs } from './verify-rfcs';
+import { type AllowEntry, findCitations, parseIndex, repoRoot, verifyRfcs } from './verify-rfcs';
 
 const HEADER = '| # | Title | Status | Milestone | Issue | Design |\n|---|---|---|---|---|---|\n';
 
@@ -21,6 +21,7 @@ const GREEN_INDEX = `# RFCs\n\n${HEADER}| [RFC-0001](0001-first.md) | First | Ac
 ## Earlier records
 
 ${HEADER}| ADR-0001 | Ownership | Accepted | — | — | — |
+| ADR-LID-0003 | LID-first identity | Shipped | — | — | — |
 | — | Paired agents | Accepted | — | — | — |
 `;
 
@@ -51,7 +52,9 @@ function green(extra: Record<string, string> = {}): Record<string, string> {
     '.genie/wishes/tracked-wish/WISH.md': '# Wish\n',
     '.genie/brainstorms/tracked-design/DESIGN.md': '# Design\n',
     'packages/core/src/a.ts': [
-      '// RFC-0001 and RFC-0002 (reserved) and ADR-0001',
+      '// RFC-0001 and RFC-0002 (reserved) and ADR-0001 and ADR-LID-0003',
+      '// UUIDs follow RFC-4122 (an IETF standard, not an Omni RFC)',
+      '// the wish requires this; WISH lines and wish slugs are prose',
       '// wish: tracked-wish, Wish tracked-design',
       '// see .genie/wishes/tracked-wish/WISH.md.',
       '// see `.genie/brainstorms/tracked-design/`',
@@ -71,7 +74,7 @@ describe('verifyRfcs on a consistent repository', () => {
   });
 
   test('passes when an allowlisted citation still dangles', () => {
-    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish gone-design', reason: 'test' }];
+    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish gone-design', count: 1, reason: 'test' }];
     expect(verifyRfcs(repo(green({ 'apps/x.js': '// wish gone-design' })), allow)).toEqual([]);
   });
 });
@@ -105,7 +108,7 @@ describe('citations (RED for any new dangling one)', () => {
   });
 
   test('an allowlist entry for one file does not cover the same citation in a new file', () => {
-    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish gone-design', reason: 'test' }];
+    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish gone-design', count: 1, reason: 'test' }];
     const root = repo(green({ 'apps/x.js': '// wish gone-design', 'apps/y.js': '// wish gone-design' }));
     expect(verifyRfcs(root, allow)).toEqual([
       'apps/y.js:1: no tracked .genie/wishes/gone-design/ or .genie/brainstorms/gone-design/; track the design or cite its RFC',
@@ -124,8 +127,37 @@ describe('citations (RED for any new dangling one)', () => {
     expect(verifyRfcs(repo(green({ 'README.md': 'RFC-0042 wish: lost-design' })), [])).toEqual([]);
   });
 
+  test('one more citation of an allowlisted pair in the same file fails', () => {
+    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish gone-design', count: 1, reason: 'test' }];
+    const root = repo(green({ 'apps/x.js': '// wish gone-design\n// new: wish gone-design' }));
+    const hint =
+      'no tracked .genie/wishes/gone-design/ or .genie/brainstorms/gone-design/; track the design or cite its RFC (the allowlist covers 1 existing citation(s) here; one is new)';
+    expect(verifyRfcs(root, allow)).toEqual([`apps/x.js:1: ${hint}`, `apps/x.js:2: ${hint}`]);
+  });
+
+  test('an allowlist count above what the file cites fails until it is lowered', () => {
+    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish gone-design', count: 2, reason: 'test' }];
+    expect(verifyRfcs(repo(green({ 'apps/x.js': '// wish gone-design' })), allow)).toEqual([
+      'scripts/verify-rfcs.ts ALLOWLIST: "wish gone-design" in apps/x.js is cited 1 time(s), not 2; lower the count',
+    ]);
+  });
+
+  test('a named ADR key that is not a row fails', () => {
+    expect(verifyRfcs(repo(green({ 'docs/guide.md': 'See ADR-LID-9999.' })), [])).toEqual([
+      'docs/guide.md:1: ADR-LID-9999 is not a row of docs/rfcs/README.md',
+    ]);
+  });
+
+  test('a one-word wish slug with a colon or backticks fails when untracked', () => {
+    const root = repo(green({ 'docs/guide.md': 'Wish: reviewprobe. Also wish `otherprobe`.' }));
+    expect(verifyRfcs(root, [])).toEqual([
+      'docs/guide.md:1: no tracked .genie/wishes/reviewprobe/ or .genie/brainstorms/reviewprobe/; track the design or cite its RFC',
+      'docs/guide.md:1: no tracked .genie/wishes/otherprobe/ or .genie/brainstorms/otherprobe/; track the design or cite its RFC',
+    ]);
+  });
+
   test('a stale allowlist entry fails so the list only shrinks', () => {
-    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish tracked-wish', reason: 'test' }];
+    const allow: AllowEntry[] = [{ file: 'apps/x.js', cite: 'wish tracked-wish', count: 1, reason: 'test' }];
     expect(verifyRfcs(repo(green({ 'apps/x.js': '// wish tracked-wish' })), allow)).toEqual([
       'scripts/verify-rfcs.ts ALLOWLIST: "wish tracked-wish" in apps/x.js no longer dangles; remove the entry',
     ]);
@@ -181,6 +213,12 @@ describe('index rows and files', () => {
     expect(errors[0]).toStartWith('docs/rfcs/README.md:4: status "Accepted (delivery 1 merged)" is not one of');
   });
 
+  test('the index may not use an IETF standard number', () => {
+    expect(verifyRfcs(withIndex('| RFC-4122 | Clash | Draft | — | — | — |\n'), [])).toEqual([
+      'docs/rfcs/README.md:4: RFC-4122 is an IETF standard cited in the code; take the next number',
+    ]);
+  });
+
   test('a malformed # cell fails', () => {
     expect(parseIndex(`${HEADER}| 7 | Bad | Draft | — | — | — |\n`).errors).toEqual([
       'docs/rfcs/README.md:3: # cell "7" is not [RFC-NNNN](NNNN-name.md), RFC-NNNN, ADR-NNNN or —',
@@ -195,18 +233,68 @@ describe('index rows and files', () => {
 describe('findCitations', () => {
   test('reads each citation shape and ignores prose and placeholders', () => {
     const text = [
-      'RFC-0001, ADR-0003 and ADR-LID-0003',
+      'RFC-0001, RFC-4122, ADR-0003 and ADR-LID-0003, not ADR-NNNN',
       'Wish omni-chat-threads; WISH: omni-install-resilience; wish `slack-personal-oauth`',
       'see .genie/wishes/a-b/WISH.md. and .genie/brainstorms/<slug>/DESIGN.md',
-      'a wish that holds, wishes come-true, RFC 7231',
+      'a wish that holds, wishes come-true, RFC 7231, the WISH requires',
+      'wish: single, Wish `word`, WISH: per-repo',
     ].join('\n');
     expect(findCitations('f', text).map((c) => `${c.line} ${c.cite}`)).toEqual([
       '1 RFC-0001',
       '1 ADR-0003',
+      '1 ADR-LID-0003',
       '2 wish omni-chat-threads',
       '2 wish omni-install-resilience',
       '2 wish slack-personal-oauth',
       '3 .genie/wishes/a-b/WISH.md',
+      '5 wish single',
+      '5 wish word',
+      '5 wish per-repo',
     ]);
+  });
+});
+
+describe('the repository .gitignore', () => {
+  const ignored = (path: string) =>
+    Bun.spawnSync(['git', '-C', repoRoot, 'check-ignore', '-q', '--no-index', path]).exitCode === 0;
+
+  test('tracks Genie planning files at any depth', () => {
+    for (const path of [
+      '.genie/INDEX.md',
+      '.genie/brainstorms/probe/DRAFT.md',
+      '.genie/brainstorms/probe/nested/DESIGN.md',
+      '.genie/wishes/probe/WISH.md',
+      '.genie/wishes/probe/adrs/ADR-0001-x.md',
+      '.genie/wishes/probe/PURPOSE_SPEC.yaml',
+      '.genie/wishes/probe/plan.json',
+    ]) {
+      expect({ path, ignored: ignored(path) }).toEqual({ path, ignored: false });
+    }
+  });
+
+  test('keeps Genie runtime state, notes and credentials ignored at any depth', () => {
+    for (const path of [
+      '.genie/genie.db',
+      '.genie/genie.db-wal',
+      '.genie/roadmap.json',
+      '.genie/config.json',
+      '.genie/bin/genie',
+      '.genie/brainstorms/probe/council-x.md',
+      '.genie/brainstorms/probe/nested/notes.md',
+      '.genie/wishes/probe/credentials.json',
+      '.genie/wishes/probe/.env.production',
+      '.genie/wishes/probe/secrets.yaml',
+      '.genie/wishes/probe/config.json',
+      '.genie/wishes/probe/genie.db-wal',
+      '.genie/wishes/probe/genie.db-shm',
+      '.genie/wishes/probe/genie.db-recovery-lock',
+      '.genie/wishes/probe/run.log',
+      '.genie/wishes/probe/logs/a.md',
+      '.genie/wishes/probe/cache/a.json',
+      '.genie/wishes/probe/key.pem',
+      '.genie/wishes/probe/script.sh',
+    ]) {
+      expect({ path, ignored: ignored(path) }).toEqual({ path, ignored: true });
+    }
   });
 });
