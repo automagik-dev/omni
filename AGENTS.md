@@ -15,10 +15,13 @@ Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 
 - Decisions live in `docs/rfcs/README.md`, the one index: RFCs, the frozen multitenancy `ADR-NNNN` keys, and earlier
   records. An RFC is short and links its Genie DESIGN and WISH; it never replaces them.
-- Genie planning files (`.genie/INDEX.md`, brainstorm `DRAFT.md`/`DESIGN.md`, `.genie/wishes/**`) are tracked; only
-  Genie's runtime state is ignored.
-- Code, commits and PRs cite `RFC-NNNN` or an ADR key, never a `.genie` path or a wish slug. `make verify-rfcs` fails
-  on a citation that does not resolve.
+- Tracked by default, at any depth: `.genie/INDEX.md`, brainstorm `DRAFT.md`/`DESIGN.md`, and wish `.md`/`.yaml`/
+  `.yml`/`.json` files. Ignored: Genie runtime state, other brainstorm notes, and credential/runtime names (`.env*`,
+  `credentials*`, `secrets*`, `config.json`, `*.db*`, logs, caches) anywhere under `.genie`.
+- Code, commits and PRs cite `RFC-NNNN` or an ADR key, never a `.genie` path or a wish slug. `make verify-rfcs` scans
+  tracked files under `apps/ packages/ scripts/ docs/` and fails on an `RFC-NNNN`, `ADR-[XXX-]NNNN`,
+  `.genie/wishes|brainstorms/...` path or `wish <slug>` / `wish: <slug>` citation that is not an index row or a
+  tracked file, beyond the counted allowlist in `scripts/verify-rfcs.ts`. It does not check commits or PR bodies.
 
 ## Working across residences
 
