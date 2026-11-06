@@ -63,9 +63,10 @@ BOOTSTRAP.md
 memory/
 # Genie: planning documents are tracked by default (docs/rfcs/README.md links them).
 # Allow-list, at any depth: .genie/INDEX.md, brainstorm DRAFT.md and DESIGN.md, and wish
-# Markdown/YAML/JSON plans. Everything else under .genie stays local: runtime state
-# (genie.db and sidecars, roadmap/workspace/config JSON, bin/), brainstorm council and
-# review notes, and the credential/runtime names re-excluded below.
+# Markdown (WISH.md, ADRs, notes). Everything else under .genie stays local and needs a
+# deliberate forced add: runtime state (genie.db and sidecars, roadmap/workspace/config
+# JSON, bin/), brainstorm council and review notes, wish JSON/YAML and any other file type,
+# and the credential/runtime names re-excluded below. Files already tracked stay tracked.
 .genie/*
 !.genie/INDEX.md
 !.genie/brainstorms/
@@ -77,9 +78,6 @@ memory/
 .genie/wishes/**
 !.genie/wishes/**/
 !.genie/wishes/**/*.md
-!.genie/wishes/**/*.yaml
-!.genie/wishes/**/*.yml
-!.genie/wishes/**/*.json
 # Never credentials or runtime state, even when the name ends in an allowed extension.
 .genie/**/.env*
 .genie/**/*.env*
