@@ -52,7 +52,7 @@ export interface EmitMessageReceivedParams {
   /** ID of message this is replying to */
   replyToId?: string;
 
-  /** Typed quote of the replied-to message (additive to replyToId; absent when not a reply or not opted in) */
+  /** Typed quote of the replied-to message (additive to replyToId; absent when not a reply). See `MessageReceivedPayload.replyTo` in @omni/core. */
   replyTo?: {
     externalId: string;
     chatId: string;

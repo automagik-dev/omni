@@ -52,8 +52,10 @@ POST /api/v2/channels/asc-flow/{instanceId}/webhook
 { "codAtendimento": "12345", "chatInput": "quero marcar consulta", "phone": "5511999999999" }
 ```
 
-`cod_atendimento` / `message` / `telefone` are accepted as aliases. An optional
-`messageId` (alias `idMensagem`) is used for dedupe when the flow supplies one.
+`cod_atendimento` / `message` / `telefone` are accepted as aliases. `messageId`
+(alias `idMensagem`) is the inbound row's `id_mensagem`: it keys the dedupe, and
+the quoted-reply lookup needs it to see a WhatsApp "Reply" (see INTEGRATION.md).
+A flow body without it still works, but no quote ever reaches the agent.
 
 ### Inbound media
 
