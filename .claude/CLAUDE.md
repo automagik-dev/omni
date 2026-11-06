@@ -499,6 +499,12 @@ ci(rolling-pr): update workflow permissions
   changed since its version's tag. Each declares the oldest Omni it needs in
   `engines.omni`, checked against that release's API (`scripts/plugin-compat.ts`);
   a minimum above the repo's version means "the release this change is cut in".
+- A PR to `dev` labelled `no-release` skips the dev release: `version.yml`
+  auto-version does not run, so no bump, tag, npm `next`, dev image or release
+  candidate follows; the next normal merge's bump carries the change. Use it
+  for docs-only, `docs/rfcs` and `.genie`-only PRs. A PR that changes code,
+  workflows, packages or plugins must never carry it. The label only skips; an
+  unlabelled merge behaves exactly as before.
 - The reviewed version carries unchanged into `main`.
 - The public `main` path only verifies existing immutable artifacts.
 - Production release and runtime decisions belong to the separate/private

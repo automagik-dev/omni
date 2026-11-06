@@ -523,6 +523,22 @@ require(
     r"    concurrency:\n      group: version-dev\n      cancel-in-progress: false\n",
     "the dev version writer does not serialize every trigger under one constant version-dev group",
 )
+
+# A merged PR labelled `no-release` skips the dev release. The check lives only
+# in the merged-PR clause, so dispatch and candidate cuts never read it and an
+# unlabelled merge still bumps.
+require(
+    version_workflow,
+    r"^    if: >-\n"
+    r"      \(github\.event_name == 'workflow_dispatch' && inputs\.stable_publish_only != true\) \|\|\n"
+    r"      \(github\.event_name == 'push' && inputs\.candidate == true\) \|\|\n"
+    r"      \(github\.event_name == 'pull_request' &&\n"
+    r"       github\.event\.pull_request\.merged == true &&\n"
+    r"       github\.event\.pull_request\.base\.ref == 'dev' &&\n"
+    r"       github\.event\.pull_request\.head\.repo\.full_name == github\.repository &&\n"
+    r"       !contains\(github\.event\.pull_request\.labels\.\*\.name, 'no-release'\)\)\n",
+    "the auto-version job does not skip a merged PR labelled no-release, or the label check reaches past the merged-PR clause",
+)
 require(
     version_workflow,
     # Only 4-space-indented or blank lines, so this cannot reach past

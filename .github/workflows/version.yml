@@ -4,6 +4,13 @@ on:
   # Fire directly when an in-repository PR merges to dev. Stable main versions
   # are fixed in their reviewed dev-to-main promotion and are never bumped
   # after merge.
+  #
+  # The `no-release` label opts one merged PR out: auto-version skips, so no
+  # bump commit, tag, npm `next`, dev image or release candidate follows
+  # (release-candidate.yml fires only on the bump push). Use it for docs-only,
+  # docs/rfcs and .genie-only PRs; a PR that changes code must never carry it.
+  # The label only skips; an unlabelled merge runs exactly as before, and the
+  # next normal merge's bump releases the skipped change with it.
   pull_request:
     types: [closed]
     branches: [dev]
@@ -109,7 +116,8 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.merged == true &&
        github.event.pull_request.base.ref == 'dev' &&
-       github.event.pull_request.head.repo.full_name == github.repository)
+       github.event.pull_request.head.repo.full_name == github.repository &&
+       !contains(github.event.pull_request.labels.*.name, 'no-release'))
 
     steps:
       - name: Determine channel and npm tag
