@@ -236,6 +236,12 @@ jobs:
             bun scripts/verify-migration-contract.ts --base "origin/${MIGRATION_BASE_BRANCH}"
           fi
 
+      - name: RFC index gate
+        # Static check of docs/rfcs/README.md (index rows <-> docs/rfcs/NNNN-*.md files, unique
+        # numbers, one-word status) and of every RFC/ADR number, .genie design path and wish slug
+        # cited in apps/ packages/ scripts/ docs/: each must resolve to a row or a tracked file.
+        run: make verify-rfcs
+
       - name: Setup environment
         run: |
           cp .env.example .env

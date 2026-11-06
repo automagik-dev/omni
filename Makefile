@@ -3,7 +3,7 @@
 
 .PHONY: help install dev dev-api dev-services dev-stop build clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions marketplace-check skill-cli-check \
+        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions verify-rfcs marketplace-check skill-cli-check \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -30,6 +30,7 @@ help:
 	@echo "  make check         Run all quality checks (typecheck + lint + dead-code + migrations + test)"
 	@echo "  make check-all     Run check AND the pg-gate concurrently (fastest full validation)"
 	@echo "  make verify-migrations  Static migration contract gate (journal/immutability/lint)"
+	@echo "  make verify-rfcs        RFC index gate (index/files, cited RFCs, ADRs and designs resolve)"
 	@echo "  make marketplace-check  Automagik marketplace index gate"
 	@echo "  make verify-versions    Version sync gate (BASE=<ref> exempts files absent on ref)"
 	@echo "  make typecheck     TypeScript type checking"
@@ -293,6 +294,12 @@ verify-versions:
 	bun test scripts/verify-versions.test.ts scripts/plugin-versions.test.ts scripts/bun-version.test.ts
 	bun scripts/verify-versions.ts $(if $(BASE),--base $(BASE),)
 
+# RFC index gate: docs/rfcs/README.md rows match docs/rfcs/NNNN-*.md, and every RFC/ADR number,
+# .genie design path and wish slug cited in apps/ packages/ scripts/ docs/ resolves. No DB.
+verify-rfcs:
+	bun test scripts/verify-rfcs.test.ts
+	bun scripts/verify-rfcs.ts
+
 # Automagik marketplace: the static index (DSH's own parser, and every pinned omni commit holds its
 # package) and the packer that bundles apps/*-dsh into each Omni's own market (bun pm pack), and
 # which package manager installs each plugin folder and each DSH profile, and that each plugin
@@ -309,7 +316,7 @@ skill-cli-check: _build-dist
 	bun scripts/check-skill-cli.ts
 
 # Run all quality checks
-check: typecheck lint dead-code verify-migrations verify-versions marketplace-check skill-cli-check test
+check: typecheck lint dead-code verify-migrations verify-versions verify-rfcs marketplace-check skill-cli-check test
 	@echo ""
 	@echo "All checks passed!"
 
