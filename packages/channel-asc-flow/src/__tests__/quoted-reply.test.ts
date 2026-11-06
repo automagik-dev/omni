@@ -208,7 +208,9 @@ describe('inbound turn with a quoted reply', () => {
   });
 
   it('holds only what is left of the budget after the lookup', async () => {
-    process.env.ASC_FLOW_HOLD_MS = '1000';
+    // A budget far above any scheduling delay: the assertion is that the lookup's
+    // 300 ms came out of it, and a slow machine cannot use the whole budget up.
+    process.env.ASC_FLOW_HOLD_MS = '60000';
     process.env.ASC_FLOW_QUOTE_LOOKUP_MS = '300';
     await boot(late);
     const holds: number[] = [];
@@ -219,6 +221,13 @@ describe('inbound turn with a quoted reply', () => {
     await received('Quero essa opção', '2001');
     expect(holds).toHaveLength(1);
     expect(holds[0]).toBeGreaterThan(0);
-    expect(holds[0]).toBeLessThanOrEqual(700);
+    expect(holds[0]).toBeLessThanOrEqual(60_000 - 300);
+  });
+
+  it('falls back to the default deadline when the setting is not a number', async () => {
+    process.env.ASC_FLOW_QUOTE_LOOKUP_MS = 'tres segundos';
+    // 100 ms of ASC latency: a NaN deadline would abort it at once.
+    await boot(() => new Promise<Response>((r) => setTimeout(() => r(jsonResponse({ mensagens: rows() })), 100)));
+    expect(outcomeOf(await received('Quero essa opção', '2001'))).toBe('quoted');
   });
 });

@@ -250,7 +250,12 @@ const IN_FLIGHT_MAX_ENTRIES = 5_000;
  * without the quote (`quotedReplyTo`). `ASC_FLOW_QUOTE_LOOKUP_MS` overrides it,
  * read per CALL like `ASC_FLOW_HOLD_MS`, so a test can set it.
  */
-const quoteLookupTimeoutMs = () => Number(process.env.ASC_FLOW_QUOTE_LOOKUP_MS ?? 3_000);
+const QUOTE_LOOKUP_DEFAULT_MS = 3_000;
+const quoteLookupTimeoutMs = () => {
+  // A value that is not a number falls back to the default; `<= 0` still turns the lookup off.
+  const ms = Number(process.env.ASC_FLOW_QUOTE_LOOKUP_MS ?? QUOTE_LOOKUP_DEFAULT_MS);
+  return Number.isNaN(ms) ? QUOTE_LOOKUP_DEFAULT_MS : ms;
+};
 
 /**
  * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
