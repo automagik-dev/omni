@@ -61,7 +61,16 @@ TOOLS.md
 HEARTBEAT.md
 BOOTSTRAP.md
 memory/
-.genie/
+# Genie: planning documents are tracked by default (docs/rfcs/README.md links them);
+# runtime state (genie.db and its sidecars, roadmap/workspace/config JSON, bin/) stays
+# ignored. Brainstorm notes other than DRAFT.md and DESIGN.md stay local.
+.genie/*
+!.genie/INDEX.md
+!.genie/wishes/
+!.genie/brainstorms/
+.genie/brainstorms/*/*
+!.genie/brainstorms/*/DRAFT.md
+!.genie/brainstorms/*/DESIGN.md
 docs/reports/
 docs/reports/tmp/
 
