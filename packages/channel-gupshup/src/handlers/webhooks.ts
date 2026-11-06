@@ -253,6 +253,141 @@ const KNOWN_NON_MESSAGE_EVENT_TYPES = new Set<string>([
   'account_event',
 ]);
 
+const IdSchema = z.union([z.string(), z.number()]).transform((v) => String(v).trim());
+
+const HvMessageEventSchema = z.object({
+  event_type: z.literal('message_event'),
+  sender: IdSchema.optional(),
+  messageobj: z
+    .object({
+      id: IdSchema.optional(),
+      gsId: IdSchema.optional(),
+      from: IdSchema.optional(),
+      status: z.string().optional(),
+    })
+    .passthrough()
+    .optional(),
+  metadata: z
+    .object({
+      status: z.string().optional(),
+      gsId: IdSchema.optional(),
+      messageId: IdSchema.optional(),
+    })
+    .passthrough()
+    .optional(),
+});
+
+const NativeMessageEventSchema = z.object({
+  type: z.literal('message-event'),
+  payload: z
+    .object({
+      id: IdSchema.optional(),
+      gsId: IdSchema.optional(),
+      type: z.string(),
+      destination: IdSchema.optional(),
+      payload: z.object({ reason: z.string().optional() }).passthrough().optional(),
+    })
+    .passthrough(),
+});
+
+const MessageStatusSchema = z.enum(['delivered', 'read', 'failed']);
+
+const NATIVE_QUIET_STATUSES = new Set(['enqueued', 'sent']);
+
+const HV_MESSAGE_EVENT_TYPE = 'message_event';
+const NATIVE_MESSAGE_EVENT_TYPE = 'message-event';
+
+export interface GupshupMessageStatus {
+  status: z.infer<typeof MessageStatusSchema>;
+  externalId: string;
+  providerAliases: string[];
+  to: string;
+  reason?: string;
+}
+
+type GupshupReceipt =
+  | { kind: 'status'; eventType: string; status: GupshupMessageStatus }
+  | { kind: 'quiet'; eventType: string };
+
+function firstFilled(...values: Array<string | undefined>): string {
+  return values.find((v) => typeof v === 'string' && v.length > 0) ?? '';
+}
+
+function uniqueFilled(...values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((v): v is string => typeof v === 'string' && v.length > 0))];
+}
+
+function buildMessageStatus(
+  status: string | undefined,
+  ids: Array<string | undefined>,
+  to: string,
+  reason?: string,
+): GupshupMessageStatus | null {
+  const parsedStatus = MessageStatusSchema.safeParse((status ?? '').trim().toLowerCase());
+  const providerAliases = uniqueFilled(...ids);
+  const externalId = firstFilled(...ids);
+  if (!parsedStatus.success || !externalId || !to) return null;
+  return { status: parsedStatus.data, externalId, providerAliases, to, reason: reason || undefined };
+}
+
+function extractGupshupReceipt(parsed: unknown): GupshupReceipt | null {
+  const hv = HvMessageEventSchema.safeParse(parsed);
+  if (hv.success) {
+    const { messageobj, metadata, sender } = hv.data;
+    const status = buildMessageStatus(
+      firstFilled(metadata?.status, messageobj?.status),
+      [metadata?.gsId, metadata?.messageId, messageobj?.gsId, messageobj?.id],
+      firstFilled(sender, messageobj?.from),
+    );
+    return status ? { kind: 'status', eventType: HV_MESSAGE_EVENT_TYPE, status } : null;
+  }
+  const native = NativeMessageEventSchema.safeParse(parsed);
+  if (native.success) {
+    const { payload } = native.data;
+    if (NATIVE_QUIET_STATUSES.has(payload.type.trim().toLowerCase())) {
+      return { kind: 'quiet', eventType: NATIVE_MESSAGE_EVENT_TYPE };
+    }
+    const status = buildMessageStatus(
+      payload.type,
+      [payload.gsId, payload.id],
+      firstFilled(payload.destination),
+      payload.payload?.reason,
+    );
+    return status ? { kind: 'status', eventType: NATIVE_MESSAGE_EVENT_TYPE, status } : null;
+  }
+  return null;
+}
+
+async function dispatchMessageStatus(
+  plugin: GupshupPlugin,
+  instanceId: string,
+  messageStatus: GupshupMessageStatus,
+): Promise<void> {
+  const params = {
+    instanceId,
+    externalId: messageStatus.externalId,
+    providerAliases: messageStatus.providerAliases,
+    to: messageStatus.to,
+  };
+  if (messageStatus.status === 'delivered') {
+    await plugin.handleMessageDelivered(params);
+  } else if (messageStatus.status === 'read') {
+    await plugin.handleMessageRead(params);
+  } else {
+    await plugin.handleMessageFailed({ ...params, reason: messageStatus.reason });
+  }
+}
+
+function noteFirstSeenEventType(logger: import('@omni/core').Logger, instanceId: string, eventType: string): void {
+  if (!seenEventTypes.markIfFirst(eventType)) return;
+  logger.warn('[gupshup] first time seeing this event_type', {
+    instanceId,
+    event_type: eventType,
+    knownMessage: KNOWN_MESSAGE_EVENT_TYPES.has(eventType),
+    knownNonMessage: KNOWN_NON_MESSAGE_EVENT_TYPES.has(eventType) || eventType === NATIVE_MESSAGE_EVENT_TYPE,
+  });
+}
+
 // ─────────────────────────────────────────────────────────────
 // Payload extraction — handles multiple Gupshup envelope formats
 // ─────────────────────────────────────────────────────────────
@@ -388,6 +523,36 @@ export async function handleGupshupWebhook(
     return new Response('OK', { status: 200 });
   }
 
+  const receipt = extractGupshupReceipt(parsed);
+  if (receipt) {
+    noteFirstSeenEventType(logger, instanceId, receipt.eventType);
+    if (receipt.kind === 'quiet') {
+      logger.debug('[gupshup] status callback ignored', { instanceId, event_type: receipt.eventType });
+      recordGupshupWebhookReceived(logger, {
+        instanceId,
+        event_type: receipt.eventType,
+        handled: 'dropped_known_non_message',
+      });
+      return new Response('OK', { status: 200 });
+    }
+    try {
+      await dispatchMessageStatus(plugin, instanceId, receipt.status);
+    } catch (error) {
+      logger.warn('[gupshup] message status dispatch failed', {
+        instanceId,
+        status: receipt.status.status,
+        externalId: receipt.status.externalId,
+        error: String(error),
+      });
+    }
+    recordGupshupWebhookReceived(logger, {
+      instanceId,
+      event_type: receipt.eventType,
+      handled: 'processed_status',
+    });
+    return new Response('OK', { status: 200 });
+  }
+
   // Native schema first, then the simplified HV-Entry-Flow fallback.
   // resolveInboundWebhook logs + records the drop metric when neither matches.
   const webhook = resolveInboundWebhook(parsed, instanceId, logger);
@@ -395,16 +560,7 @@ export async function handleGupshupWebhook(
     return new Response('OK', { status: 200 });
   }
 
-  // First-seen WARN — fires once per process per event_type value. Would have
-  // caught the 2026-04-22 async_response cutover at webhook #1.
-  if (seenEventTypes.markIfFirst(webhook.event_type)) {
-    logger.warn('[gupshup] first time seeing this event_type', {
-      instanceId,
-      event_type: webhook.event_type,
-      knownMessage: KNOWN_MESSAGE_EVENT_TYPES.has(webhook.event_type),
-      knownNonMessage: KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type),
-    });
-  }
+  noteFirstSeenEventType(logger, instanceId, webhook.event_type);
 
   if (KNOWN_NON_MESSAGE_EVENT_TYPES.has(webhook.event_type)) {
     logger.debug('[gupshup] known non-message event ignored', {

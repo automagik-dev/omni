@@ -334,3 +334,47 @@ describe('GupshupPlugin — close-contact', () => {
     }
   });
 });
+
+describe('GupshupPlugin — receipt events carry the provider aliases', () => {
+  it('forwards externalId and providerAliases on delivered, read and failed', async () => {
+    const published: Array<[string, Record<string, unknown>]> = [];
+    const publish = mock(async (type: string, payload: unknown) => {
+      published.push([type, payload as Record<string, unknown>]);
+    });
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(makeOkResponse({ status: 'ok' }));
+    const plugin = new GupshupPlugin();
+    await plugin.initialize({
+      eventBus: { publish } as unknown as EventBus,
+      logger: makeLogger(),
+      storage: {} as never,
+      config: {} as never,
+      db: {} as never,
+    });
+    await plugin.connect('inst-1', {
+      instanceId: 'inst-1',
+      credentials: {
+        gupshupCallbackUrl: 'https://callbacks.gupshup.io/custom/abc123',
+        gupshupAuthToken: 'Bearer test-auth-token',
+      },
+    });
+    const params = {
+      instanceId: 'inst-1',
+      externalId: 'gs-1',
+      providerAliases: ['gs-1', 'wamid.1'],
+      to: '5511900000001',
+    };
+
+    fetchSpy.mockRestore();
+
+    await plugin.handleMessageDelivered(params);
+    await plugin.handleMessageRead(params);
+    await plugin.handleMessageFailed({ ...params, reason: 'undeliverable' });
+
+    const byType = Object.fromEntries(published.map(([type, payload]) => [type, payload]));
+    for (const type of ['message.delivered', 'message.read', 'message.failed']) {
+      expect(byType[type]?.externalId).toBe('gs-1');
+      expect(byType[type]?.providerAliases).toEqual(['gs-1', 'wamid.1']);
+    }
+    expect(byType['message.failed']?.error).toBe('undeliverable');
+  });
+});

@@ -368,12 +368,14 @@ export interface MessageDeliveredPayload {
   externalId: string;
   chatId: string;
   deliveredAt: number;
+  providerAliases?: string[];
 }
 
 export interface MessageReadPayload {
   externalId: string;
   chatId: string;
   readAt: number;
+  providerAliases?: string[];
 }
 
 export interface MessageFailedPayload {
@@ -382,6 +384,7 @@ export interface MessageFailedPayload {
   error: string;
   errorCode?: string;
   retryable: boolean;
+  providerAliases?: string[];
 }
 
 /** Canonical event: inline button clicked (Telegram callback query, etc.) */
