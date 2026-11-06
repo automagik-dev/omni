@@ -58,7 +58,6 @@ function allow(cite: string, reason: string, counts: Record<string, number>): Al
 
 const CHAT_THREADS = 'omni-chat-threads design: rebuilt as RFC-0001 (reserved), then this entry goes';
 const NOT_A_WISH = 'prose, not a wish slug';
-const LOCAL_ONLY = 'design exists only on one machine; the owner decides whether it is published';
 const MISSING = 'design was never committed';
 
 /** Dangling citations that predate this gate, with their count per file. Lower or remove as designs land. */
@@ -143,9 +142,6 @@ export const ALLOWLIST: AllowEntry[] = [
     'packages/db/drizzle/0090_connector_event_ownership.sql': 1,
     'packages/db/src/tenancy-db-access-guard.ts': 1,
     'packages/db/src/tenancy-ownership.ts': 1,
-  }),
-  ...allow('wish gitlab-sdlc-connector', LOCAL_ONLY, {
-    'packages/db/drizzle/0092_connector_ingress.sql': 1,
   }),
   ...allow('wish operator-surface', NOT_A_WISH, {
     'packages/db/src/tenancy-db-access-guard.test.ts': 1,
