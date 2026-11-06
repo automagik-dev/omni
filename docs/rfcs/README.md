@@ -47,10 +47,11 @@ Security gaps are named by title only until their fix merges. Details go to a pr
 `make verify-rfcs` (part of `make check` and CI) checks that index rows and files match, that
 numbers are unique, and that each Status is one of the five words. It also scans the tracked
 files under `apps/`, `packages/`, `scripts/` and `docs/`: every `RFC-NNNN`, `ADR-NNNN` or named
-`ADR-XXX-NNNN`, every `.genie/wishes/...` or `.genie/brainstorms/...` path, and every wish slug
-(`wish <hyphenated-slug>`, `wish: <slug>` or ``wish `<slug>` ``) must resolve to a row or a
-tracked file. IETF standards written as `RFC-NNNN` (RFC-4122, UUIDs) are not Omni RFCs and the
-index never uses their numbers; prefer "RFC 4122" with a space. Citations that were already
+`ADR-XXX-NNNN`, every `.genie/wishes/...` or `.genie/brainstorms/...` path (also written
+without `.genie/` at the start of a word), and every wish slug (`wish <hyphenated-slug>`,
+`wish: <slug>`, ``wish `<slug>` `` or `wish **<slug>**`) must resolve to a row or a tracked
+file. Write IETF standards with a space ("RFC 4122"); the dashed form is always an Omni RFC.
+Plain prose such as "the wish requires" is not a citation. Citations that were already
 dangling when the gate landed are listed in `scripts/verify-rfcs.ts` with their count per file;
 one more fails, and the list only shrinks.
 

@@ -15,13 +15,17 @@ Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 
 - Decisions live in `docs/rfcs/README.md`, the one index: RFCs, the frozen multitenancy `ADR-NNNN` keys, and earlier
   records. An RFC is short and links its Genie DESIGN and WISH; it never replaces them.
-- Tracked by default, at any depth: `.genie/INDEX.md`, brainstorm `DRAFT.md`/`DESIGN.md`, and wish `.md`/`.yaml`/
-  `.yml`/`.json` files. Ignored: Genie runtime state, other brainstorm notes, and credential/runtime names (`.env*`,
-  `credentials*`, `secrets*`, `config.json`, `*.db*`, logs, caches) anywhere under `.genie`.
-- Code, commits and PRs cite `RFC-NNNN` or an ADR key, never a `.genie` path or a wish slug. `make verify-rfcs` scans
-  tracked files under `apps/ packages/ scripts/ docs/` and fails on an `RFC-NNNN`, `ADR-[XXX-]NNNN`,
-  `.genie/wishes|brainstorms/...` path or `wish <slug>` / `wish: <slug>` citation that is not an index row or a
-  tracked file, beyond the counted allowlist in `scripts/verify-rfcs.ts`. It does not check commits or PR bodies.
+- Tracked by default, at any depth: `.genie/INDEX.md`, brainstorm `DRAFT.md`/`DESIGN.md`, and wish `*.md`. Everything
+  else under `.genie` is ignored (runtime state, other brainstorm notes, wish JSON/YAML/scripts) and needs a deliberate
+  forced add; `.env*`, `credentials*`, `secrets*`, `*.pem`, `*.key`, `config.json`, `*.db*`, logs and caches stay
+  ignored even as `.md`. Files already tracked stay tracked.
+- Code, commits and PRs cite `RFC-NNNN` or an ADR key, never a `.genie` path or a wish slug. Write IETF standards with
+  a space ("RFC 4122").
+- `make verify-rfcs` scans tracked files under `apps/ packages/ scripts/ docs/` only. It fails when one of these does
+  not resolve to an index row or a tracked file, beyond the counted allowlist in `scripts/verify-rfcs.ts`: any
+  `RFC-NNNN`; `ADR-NNNN` or `ADR-XXX-NNNN`; a `.genie/wishes|brainstorms/...` path, or `wishes|brainstorms/<slug>/...`
+  at the start of a word; `wish <hyphenated-slug>`; `wish: <slug>`, ``wish `<slug>` `` or `wish **<slug>**`.
+  Not covered: plain one-word `wish <word>` (read as prose), other files and directories, commits and PR bodies.
 
 ## Working across residences
 
