@@ -67,13 +67,14 @@ import type {
   PluginContext,
   SendResult,
 } from '@omni/channel-sdk';
-import { type Logger, markdownToWhatsApp } from '@omni/core';
+import { type Logger, type MessageReceivedPayload, markdownToWhatsApp } from '@omni/core';
 import type { ChannelType } from '@omni/core/types';
 
 import { ASC_FLOW_CAPABILITIES } from './capabilities';
 import { AscFlowClient } from './client';
 import { type ParsedAscFlowTurn, handleAscFlowWebhookRequest } from './handlers/webhook';
 import type { AscFlowConfig } from './types';
+import { type QuotedReply, type QuotedReplyOutcome, atendimentoMessages, quotedReplyOf } from './utils/atendimento';
 import { encodeAscEmoji, nonLatin1Left } from './utils/emoji';
 import { AscFlowApiError, AscFlowErrorCode, isRetryable } from './utils/errors';
 import { type AscFlowHandoffMode, type HandoffPlan, planHandoff } from './utils/handoff';
@@ -241,6 +242,20 @@ const IN_FLIGHT_SWEEP_MS = 60_000;
  * at a few MB of turn state no matter what the platform does.
  */
 const IN_FLIGHT_MAX_ENTRIES = 5_000;
+
+/**
+ * How long a typed turn waits for the platform record that says what it quoted.
+ * The read rides the inbound path before the agent run, and its time counts
+ * against the webhook hold, so it is kept short: past it the turn goes out
+ * without the quote (`quotedReplyTo`). `ASC_FLOW_QUOTE_LOOKUP_MS` overrides it,
+ * read per CALL like `ASC_FLOW_HOLD_MS`, so a test can set it.
+ */
+const QUOTE_LOOKUP_DEFAULT_MS = 3_000;
+const quoteLookupTimeoutMs = () => {
+  // A value that is not a number falls back to the default; `<= 0` still turns the lookup off.
+  const ms = Number(process.env.ASC_FLOW_QUOTE_LOOKUP_MS ?? QUOTE_LOOKUP_DEFAULT_MS);
+  return Number.isNaN(ms) ? QUOTE_LOOKUP_DEFAULT_MS : ms;
+};
 
 /**
  * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
@@ -1205,6 +1220,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       inboundState.seenCods.add(turn.codAtendimento);
     }
 
+    // The quoted-reply read starts now and runs alongside "digitando…" and the
+    // media fetch: its time comes out of the webhook hold (`handlers/webhook.ts`).
+    const client = this.ascFlowInstances.get(instanceId)?.client;
+    const quote = this.quotedReplyTo(client, instanceId, turn);
+
     // Raise "digitando…" as soon as the turn lands: the agent run is the slow
     // part, and the beneficiary is already waiting.
     await this.sendTyping(instanceId, turn.codAtendimento);
@@ -1216,7 +1236,6 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     // `utils/media.ts`. A failed resolution degrades to a short text so the
     // agent gets something it can answer instead of the raw file name.
     const isMediaName = isAscMediaFilename(turn.text);
-    const client = this.ascFlowInstances.get(instanceId)?.client;
     const media =
       isMediaName && client
         ? await resolveAscInboundMedia({
@@ -1228,6 +1247,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
             logger: this.logger,
           })
         : null;
+
+    const { replyTo, outcome: quotedReply } = await quote;
 
     const timings = this.captureInboundTimings(Date.now());
     let duplicate = false;
@@ -1257,11 +1278,16 @@ export class AscFlowPlugin extends BaseChannelPlugin {
             type: 'text' as import('@omni/core/types').ContentType,
             text: isMediaName ? mediaFallbackText(turn.text) : sanitized.text,
           },
+      // The typed quote only, never `replyToId`: the dispatcher answers
+      // "in reply to" `replyToId`, and `/mensagem` would then render our answer
+      // as a reply to our OWN bubble. See `utils/atendimento.ts`.
+      replyTo,
       rawPayload: {
         ascFlow: {
           codAtendimento: turn.codAtendimento,
           hasPhone: Boolean(turn.phone),
           ...(isMediaName ? { mediaFilename: turn.text, mediaResolved: Boolean(media) } : {}),
+          quotedReply,
         },
         ...(media ? { mediaLocalPath: media.localPath } : {}),
       },
@@ -1286,6 +1312,64 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
     if (timings) this.captureT2(correlationId, timings);
     return true;
+  }
+
+  /**
+   * The bubble of ours this turn replied to (WhatsApp "Reply"), as the typed
+   * quote, and what the lookup found (`QuotedReplyOutcome`).
+   *
+   * Only the platform record knows: the flow body carries the typed text
+   * alone. Bounded and fail-open: past `ASC_FLOW_QUOTE_LOOKUP_MS` the request
+   * is ABORTED and the turn goes out without the quote; `<= 0` never reads.
+   * Never throws: a lost quote costs the agent context, a thrown one the turn.
+   */
+  private async quotedReplyTo(
+    client: AscFlowClient | undefined,
+    instanceId: string,
+    turn: ParsedAscFlowTurn,
+  ): Promise<{ replyTo?: MessageReceivedPayload['replyTo']; outcome?: QuotedReplyOutcome }> {
+    // A media turn's `chatInput` is a file name, never a typed reply.
+    if (isAscMediaFilename(turn.text)) return {};
+    const { messageId, codAtendimento } = turn;
+    if (!messageId) return { outcome: 'no-message-id' };
+    const deadlineMs = quoteLookupTimeoutMs();
+    if (deadlineMs <= 0) return { outcome: 'off' };
+    if (!client) return { outcome: 'error' };
+
+    // ponytail: one GET per typed turn; drop it if the flow ever exposes the reply id itself.
+    const controller = new AbortController();
+    const deadline = new Promise<never>((_, reject) => {
+      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true });
+    });
+    const timer = setTimeout(() => controller.abort(), deadlineMs);
+    const started = Date.now();
+    let found: QuotedReply = { outcome: 'error' };
+    let bytes = 0;
+    try {
+      const read = await Promise.race([atendimentoMessages(client, codAtendimento, controller.signal), deadline]);
+      bytes = read?.bytes ?? 0;
+      if (read) found = quotedReplyOf(read.messages, messageId);
+    } catch (err) {
+      found = { outcome: controller.signal.aborted ? 'timeout' : 'error' };
+      this.logger.warn('[asc-flow] quoted-reply lookup failed — sending the turn without the quote', {
+        instanceId,
+        codAtendimento,
+        outcome: found.outcome,
+        err: String(err),
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    this.logger.info('[asc-flow] quoted-reply lookup', {
+      instanceId,
+      codAtendimento,
+      outcome: found.outcome,
+      ms: Date.now() - started,
+      bytes,
+    });
+    if (found.outcome !== 'quoted') return { outcome: found.outcome };
+    const { externalId, text } = found.bubble;
+    return { outcome: 'quoted', replyTo: { externalId, chatId: codAtendimento, fromMe: true, type: 'text', text } };
   }
 
   /** Close the turn window a refused re-publish opened — no answer will fill it. */

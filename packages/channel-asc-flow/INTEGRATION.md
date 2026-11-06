@@ -212,8 +212,18 @@ O nó que fala com o Omni.
 {"codAtendimento": "{#CODIGO_ATENDIMENTO}",
  "chatInput": "{#entrada}",
  "message": "{#MENSAGEM}",
- "phone": "{#CONTATO.TELEFONE}"}
+ "phone": "{#CONTATO.TELEFONE}",
+ "messageId": "<id_mensagem da mensagem de entrada>"}
 ```
+
+**`messageId` é obrigatório.** É o `id_mensagem` da linha de entrada no
+`GET /atendimento`, e é por ele que o plugin acha o `id_mensagem_resposta`
+quando a pessoa usa o "Responder" do WhatsApp (omni#1617). Sem ele, nenhuma
+citação chega ao agente: o evento sai com
+`rawPayload.ascFlow.quotedReply = "no-message-id"`. O flow de produção já o
+envia (medido em `GET /RelRequisicoes`, 06/11/2026); confira a variável no
+editor do flow ao montar um novo. Ele também passa a ser a chave de dedupe do
+turno (cache de 60 s do SDK).
 
 **Store** — mapeia a resposta em variáveis do flow:
 
@@ -444,7 +454,7 @@ onde a ASC assume a conversa.
 **Na ASC (flow):**
 1. Login com **"Permanecer no painel clássico"** marcado
 2. `api_rest`: URL apontando para a instância certa, `async: 0`, `timeout: 45`
-3. `api_rest` body com os **quatro** campos (`codAtendimento`, `chatInput`, `message`, `phone`)
+3. `api_rest` body com os **cinco** campos (`codAtendimento`, `chatInput`, `message`, `phone`, `messageId`). Sem `messageId`, o "Responder" nunca chega ao agente
 4. `api_rest` store mapeando os **quatro** retornos (`resposta`, `hand_off`, `motivo_transf_vq`, `fila_vq`) — e `codigo_operadora_vq` **só depois** de uma release com o plugin já a enviando (o store é tudo-ou-nada: um campo mapeado ausente do body zera `{#resposta}`)
 5. `aguarda_usuario.timeout` em **minutos de conversa**, não segundos de rede (300+)
 6. `dec_handoff` comparando `{#hand_off}` com `sim`

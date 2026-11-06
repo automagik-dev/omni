@@ -38,6 +38,7 @@ import {
   type DispatcherCleanup,
   __test__,
   cancelActiveAgentRun,
+  quoteFromChannel,
   resolveQuotedMessage,
   setupAgentDispatcher,
 } from '../agent-dispatcher';
@@ -2007,6 +2008,89 @@ describe('agent-dispatcher', () => {
 
       const result = await resolveQuotedMessage(services, 'inst-1', 'chat-ext-1', 'quoted-ext-1');
       expect(result).toBeNull();
+    });
+  });
+
+  // ======================================================================
+  // quoteFromChannel — the quote the channel resolved itself (omni#1617)
+  // ======================================================================
+  describe('quoteFromChannel', () => {
+    const replyTo = { externalId: '1001', chatId: '900001', fromMe: true, type: 'text' };
+
+    it('builds the same envelope as a DB-resolved quote, without the time', () => {
+      expect(quoteFromChannel({ ...replyTo, text: 'Dr(a). *Exemplo*\n📅 Hoje, *01/01*: 10:00' })).toBe(
+        '[Quoting You: Dr(a). *Exemplo*\n📅 Hoje, *01/01*: 10:00]',
+      );
+    });
+
+    it('truncates like the DB path', () => {
+      const result = quoteFromChannel({ ...replyTo, text: 'A'.repeat(5000) });
+      expect(result).toBe(`[Quoting You: ${'A'.repeat(4000)}...]`);
+    });
+
+    it('names a quote that is not ours by its participant', () => {
+      expect(quoteFromChannel({ ...replyTo, fromMe: false, participant: 'Maria', text: 'oi' })).toBe(
+        '[Quoting Maria: oi]',
+      );
+    });
+
+    it('returns null without text', () => {
+      for (const value of [undefined, { ...replyTo }, { ...replyTo, text: '  ' }]) {
+        expect(quoteFromChannel(value)).toBeNull();
+      }
+    });
+
+    /** Run `prependQuotedContext` over one typed turn and return the text the agent would read. */
+    async function prepended(payload: Record<string, unknown>, services: unknown = {}): Promise<string> {
+      const entries = [{ text: 'Quero essa opção', messageKey: 'k0' }];
+      const messages = [{ payload: { content: { type: 'text', text: 'Quero essa opção' }, ...payload }, metadata: {} }];
+      await __test__.prependQuotedContext(
+        services as import('../../services').Services,
+        'inst-1',
+        '900001',
+        messages as unknown as Parameters<typeof __test__.prependQuotedContext>[3],
+        entries,
+        new Map([[0, 'k0']]),
+      );
+      return entries[0]?.text ?? '';
+    }
+
+    it('is what the agent reads when the channel resolved the quote and sent no replyToId (asc-flow)', async () => {
+      expect(await prepended({ replyTo: { ...replyTo, text: 'Dr(a). *Exemplo*' } })).toBe(
+        '[Quoting You: Dr(a). *Exemplo*]\nQuero essa opção',
+      );
+    });
+
+    it('fills in when the DB lookup by replyToId finds nothing', async () => {
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => ({ id: 'chat-db-1' })) },
+        messages: { getByExternalId: mock(async () => null) },
+      };
+      expect(await prepended({ replyToId: '1001', replyTo: { ...replyTo, text: 'bolha' } }, services)).toBe(
+        '[Quoting You: bolha]\nQuero essa opção',
+      );
+    });
+
+    it('keeps the DB-resolved quote over the channel copy when both exist', async () => {
+      const services = {
+        chats: { findByExternalIdSmart: mock(async () => ({ id: 'chat-db-1' })) },
+        messages: {
+          getByExternalId: mock(async () => ({
+            externalId: 'omni-row',
+            isFromMe: true,
+            platformTimestamp: null,
+            messageType: 'text',
+            textContent: 'from the DB',
+          })),
+        },
+      };
+      expect(
+        await prepended({ replyToId: 'omni-row', replyTo: { ...replyTo, text: 'from the channel' } }, services),
+      ).toBe('[Quoting You: from the DB]\nQuero essa opção');
+    });
+
+    it('leaves the turn alone without either', async () => {
+      expect(await prepended({})).toBe('Quero essa opção');
     });
   });
 

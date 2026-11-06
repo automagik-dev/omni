@@ -1565,17 +1565,34 @@ export async function resolveQuotedMessage(
 
     const content = getMessageContentText(quoted);
     if (!content) return null;
-
-    // Truncate long quoted content to keep context manageable
-    const truncated =
-      content.length > QUOTED_MESSAGE_MAX_CHARS ? `${content.slice(0, QUOTED_MESSAGE_MAX_CHARS)}...` : content;
-
-    const timeStr = time ? ` at ${time}` : '';
-    return `[Quoting ${sender}${timeStr}: ${truncated}]`;
+    return formatQuote(sender, time, content);
   } catch (error) {
     log.debug('Failed to resolve quoted message', { replyToId, error: String(error) });
     return null;
   }
+}
+
+/** The `[Quoting <sender>[ at <time>]: <content>]` line the agent reads, truncated to `QUOTED_MESSAGE_MAX_CHARS`. */
+function formatQuote(sender: string, time: string, content: string): string {
+  // Truncate long quoted content to keep context manageable
+  const truncated =
+    content.length > QUOTED_MESSAGE_MAX_CHARS ? `${content.slice(0, QUOTED_MESSAGE_MAX_CHARS)}...` : content;
+
+  const timeStr = time ? ` at ${time}` : '';
+  return `[Quoting ${sender}${timeStr}: ${truncated}]`;
+}
+
+/**
+ * The quote the CHANNEL already resolved (`payload.replyTo.text`), for providers
+ * whose quoted message never reaches Omni's DB under the id they report: on
+ * asc-flow our outbound rows carry Omni's UUID and join several bubbles, so
+ * the platform's `id_mensagem_resposta` finds nothing (omni#1617). `null`
+ * without text.
+ */
+export function quoteFromChannel(replyTo: MessageReceivedPayload['replyTo']): string | null {
+  const text = replyTo?.text?.trim();
+  if (!text) return null;
+  return formatQuote(replyTo?.fromMe ? 'You' : replyTo?.participant || 'unknown', '', text);
 }
 
 // ============================================================================
@@ -1750,15 +1767,15 @@ async function prependQuotedContext(
 ): Promise<void> {
   for (const [index, m] of messages.entries()) {
     const replyToId = m.payload.replyToId;
-    if (!replyToId) continue;
-
     const rawPayload = m.payload.rawPayload as Record<string, unknown> | undefined;
-    const providerAliases = extractQuotedProviderAliases(rawPayload);
-    const quotedText = await resolveQuotedMessage(services, instanceId, chatId, replyToId, providerAliases, {
-      inboundAt: extractInboundPlatformDate(rawPayload),
-      inboundText: m.payload.content?.text,
-      trustedTenantId: m.metadata.trustedTenantId,
-    });
+    const fromDb = replyToId
+      ? await resolveQuotedMessage(services, instanceId, chatId, replyToId, extractQuotedProviderAliases(rawPayload), {
+          inboundAt: extractInboundPlatformDate(rawPayload),
+          inboundText: m.payload.content?.text,
+          trustedTenantId: m.metadata.trustedTenantId,
+        })
+      : null;
+    const quotedText = fromDb ?? quoteFromChannel(m.payload.replyTo);
     if (!quotedText) continue;
 
     const messageKey = messageKeyByIndex.get(index);
@@ -6634,6 +6651,7 @@ export const setupAgentResponder = setupAgentDispatcher;
 export const __test__ = {
   dispatchViaTurnBasedProvider,
   buildContextMessages,
+  prependQuotedContext,
   /**
    * #1408 — the native-failure → legacy-fallback funnel. Exported so a probe can
    * force the native provider to fail and observe the fallback it produces

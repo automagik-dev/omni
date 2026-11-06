@@ -47,4 +47,6 @@ export interface AscFlowInboundBody {
 export interface AscFlowResponse {
   status: number;
   body: unknown;
+  /** Size of the raw response body, in characters (the atendimento carries attachments inline). */
+  bytes?: number;
 }
