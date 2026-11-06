@@ -336,8 +336,9 @@ export async function handleAscFlowWebhookRequest(
   }
 
   // `messageId` wins when the flow supplies one (60s SDK cache). Otherwise fall
-  // back to the in-flight window, which is the REAL case: the flow body we
-  // author carries no message id.
+  // back to the in-flight window. The production flow sends it (the inbound
+  // row's `id_mensagem`, measured 06/11/2026), and the quoted-reply lookup
+  // needs it: without it no Reply ever reaches the agent (INTEGRATION.md).
   const isRedelivery = turn.messageId
     ? dedupeCache.isDuplicate(instanceId, turn.messageId, 'asc-flow', logger)
     : plugin.isRedeliveryOfTurnInFlight(instanceId, turn);

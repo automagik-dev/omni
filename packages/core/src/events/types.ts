@@ -310,9 +310,12 @@ export interface MessageReceivedPayload {
   replyToId?: string;
   /**
    * Typed quote of the replied-to message (additive to `replyToId`; absent when
-   * the message is not a reply, and unless the instance opted in with
-   * `inboundReplyContext` — WhatsApp Baileys only). `fromMe` is true only when the
-   * quoted sender is proven to be this instance's own account.
+   * the message is not a reply). Sent by WhatsApp Baileys when the instance opted
+   * in with `inboundReplyContext`, where `fromMe` is true only when the quoted
+   * sender is proven to be this instance's own account; and by asc-flow without
+   * `replyToId`, where `fromMe` means an outbound row of the atendimento (agent,
+   * flow node or human). The dispatcher quotes `text` when the DB has no row
+   * for the replied-to id (`quoteFromChannel`).
    */
   replyTo?: {
     externalId: string;

@@ -41,13 +41,13 @@ interface LatestInbound {
  * `null` when it cannot be read.
  */
 async function latestInbound(client: AscFlowClient, codAtendimento: string): Promise<LatestInbound | null> {
-  const list = await atendimentoMessages(client, codAtendimento);
-  if (list === null) return null;
+  const read = await atendimentoMessages(client, codAtendimento);
+  if (read === null) return null;
 
   // Newest last, so walk backwards to the first inbound with text of its own.
   // Media rows carry a null `descricao_msg` and are skipped rather than read
   // as an empty message.
-  for (const raw of [...list].reverse()) {
+  for (const raw of [...read.messages].reverse()) {
     if (String(raw.boleano_entrante ?? '') !== '1') continue;
     const text = decodeAscEmoji(String(raw.descricao_msg ?? '').trim());
     if (text) return { id: raw.id_mensagem == null ? null : String(raw.id_mensagem), text };

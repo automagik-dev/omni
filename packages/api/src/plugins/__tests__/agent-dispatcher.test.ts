@@ -2015,11 +2015,11 @@ describe('agent-dispatcher', () => {
   // quoteFromChannel — the quote the channel resolved itself (omni#1617)
   // ======================================================================
   describe('quoteFromChannel', () => {
-    const replyTo = { externalId: '145132791', chatId: '23946532', fromMe: true, type: 'text' };
+    const replyTo = { externalId: '1001', chatId: '900001', fromMe: true, type: 'text' };
 
     it('builds the same envelope as a DB-resolved quote, without the time', () => {
-      expect(quoteFromChannel({ ...replyTo, text: 'Dr(a). *Lucas*\n📅 Hoje, *28/10*: 14:15' })).toBe(
-        '[Quoting You: Dr(a). *Lucas*\n📅 Hoje, *28/10*: 14:15]',
+      expect(quoteFromChannel({ ...replyTo, text: 'Dr(a). *Exemplo*\n📅 Hoje, *01/01*: 10:00' })).toBe(
+        '[Quoting You: Dr(a). *Exemplo*\n📅 Hoje, *01/01*: 10:00]',
       );
     });
 
@@ -2047,7 +2047,7 @@ describe('agent-dispatcher', () => {
       await __test__.prependQuotedContext(
         services as import('../../services').Services,
         'inst-1',
-        '23946532',
+        '900001',
         messages as unknown as Parameters<typeof __test__.prependQuotedContext>[3],
         entries,
         new Map([[0, 'k0']]),
@@ -2056,8 +2056,8 @@ describe('agent-dispatcher', () => {
     }
 
     it('is what the agent reads when the channel resolved the quote and sent no replyToId (asc-flow)', async () => {
-      expect(await prepended({ replyTo: { ...replyTo, text: 'Dr(a). *Lucas*' } })).toBe(
-        '[Quoting You: Dr(a). *Lucas*]\nQuero essa opção',
+      expect(await prepended({ replyTo: { ...replyTo, text: 'Dr(a). *Exemplo*' } })).toBe(
+        '[Quoting You: Dr(a). *Exemplo*]\nQuero essa opção',
       );
     });
 
@@ -2066,7 +2066,7 @@ describe('agent-dispatcher', () => {
         chats: { findByExternalIdSmart: mock(async () => ({ id: 'chat-db-1' })) },
         messages: { getByExternalId: mock(async () => null) },
       };
-      expect(await prepended({ replyToId: '145132791', replyTo: { ...replyTo, text: 'bolha' } }, services)).toBe(
+      expect(await prepended({ replyToId: '1001', replyTo: { ...replyTo, text: 'bolha' } }, services)).toBe(
         '[Quoting You: bolha]\nQuero essa opção',
       );
     });
