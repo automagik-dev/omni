@@ -47,7 +47,7 @@
     "omni": ">=2.261102.41"
   },
   "peerDependencies": {
-    "@automagik/bots-dsh": ">=3.32.1 <3.261000.0",
+    "@automagik/bots-dsh": ">=3.87.0 <3.261000.0",
     "@automagik/omni-dsh": ">=2.261019.10",
     "@deepseek-ai/cordis": "*",
     "@deepseek-ai/dsh-llm": "*",

@@ -734,16 +734,16 @@ test('the board\'s notes on an automation whose worker moved to its chats\' thre
 // The Bot team's sidebar (bots-dsh sidebar.js, the same in the pinned 3.32.1 and in 3.47.0):
 // BotChildren hands each entry the props of the Bot's own rows and `wide`. Its landing rule
 // (useLandOnMainBot) sends a main view that holds no Bot, group or DSH bot back to the Main
-// Bot while DSH lists that Session as blank (no turn yet): a thread that never ran stays open
-// only once the team counts the threads' Sessions as its own destinations, which is the
-// team's change to make. This pins the rule as the pinned team has it, so a team that changes
-// it shows here.
+// Bot while DSH lists that Session as blank (no turn yet), unless the user opened that Session
+// on purpose (openedOnPurpose, since bots-dsh 3.87): a thread that never ran stays open when
+// the user picked it. This pins the rule as the pinned team has it, so a team that changes it
+// shows here.
 const teamSidebar = readFileSync(new URL('src/client/sidebar.js', `${pathToFileURL(process.env.OMNI_DSH_CORE).href}/`), 'utf8')
 
 test('the pinned Bot team passes BotChildren entries the row props and wide; its landing rule, which a never-run thread depends on, is as documented', () => {
   assert.match(teamSidebar, /const rowProps = \{ roster, actions: rowActions, useSessions, useUi, useSessionStatus: props\.useSessionStatus, useSessionRetainInfo: props\.useSessionRetainInfo, useActivity: props\.useActivity, useWork: props\.useWork, wide \}/)
   assert.match(teamSidebar, /function BotChildren\(\{ wide, \.\.\.props \}\) \{[^}]*h\(entry\.Component, \{ key: entry\.id, \.\.\.props, wide \}\)/)
-  assert.match(teamSidebar, /roster\.roomsById\[id\] \|\| \(actions\.isAgentSession\?\.\(id\) \?\? roster\.agentOf\[id\] !== undefined\) \|\| blank !== '1'/)
+  assert.match(teamSidebar, /Boolean\(roster\.roomsById\[id\]\) \|\| actions\.ownershipPending\?\.\(id\) === true \|\| \(actions\.isAgentSession\?\.\(id\) \?\? roster\.agentOf\[id\] !== undefined\) \|\| !blank \|\| actions\.openedOnPurpose\?\.\(id\) === true/)
 })
 
 test('on the props the Bot team passes, a click on a thread row opens its Session at once, through the team\'s row action', (t) => {
