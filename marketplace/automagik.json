@@ -98,6 +98,19 @@
       },
       "versions": [
         {
+          "version": "2.261106.1",
+          "publishTimestamp": 1793983669,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "beaba158ecb92d134981f3876dde7056c11048be",
+            "path": "apps/omni-channels-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.2.3-0"
+          }
+        },
+        {
           "version": "2.261104.14",
           "publishTimestamp": 1793824487,
           "source": {
@@ -619,6 +632,19 @@
         ]
       },
       "versions": [
+        {
+          "version": "2.261106.1",
+          "publishTimestamp": 1793983669,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "beaba158ecb92d134981f3876dde7056c11048be",
+            "path": "apps/omni-canvas-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.2.3-0"
+          }
+        },
         {
           "version": "2.261029.12",
           "publishTimestamp": 1793309806,
