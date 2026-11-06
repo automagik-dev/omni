@@ -22,8 +22,8 @@ import { MEDIA_FILE_BYTES } from '../src/host/omni.js'
 import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
-import { FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
-import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
+import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
+import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
 import { askedOf, boot, CHAT, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
@@ -41,17 +41,41 @@ function pictureStore(limits = {}) {
   }
 }
 
+// DSH's permission presets (dsh-permission-presets), with Auto review on (`auto`) or not:
+// each set recorded as [sessionId, preset].
+function presetsFake({ auto = true } = {}) {
+  const on = new Map()
+  const fake = {
+    auto,
+    sets: [],
+    catalog: () => ({ options: ['read-only', 'workspace-write', 'danger-full-access', ...(fake.auto ? [AUTO_PRESET] : [])].map(value => ({ value, name: value })), defaultPreset: 'workspace-write' }),
+    current: session => on.get(session.id) ?? 'workspace-write',
+    set(session, name) {
+      if (!fake.catalog().options.some(option => option.value === name)) throw new Error(`permission: unknown preset "${name}"`)
+      on.set(session.id, name)
+      fake.sets.push([session.id, name])
+    },
+    // DSH's own agent/created check (pinInitialPermission): a Session kept on Auto does not
+    // come back while Auto review is off.
+    pin(session) {
+      if (on.get(session.id) === AUTO_PRESET && !fake.auto) throw new Error('permission: cannot restore preset "auto" without its active integration')
+    },
+  }
+  return fake
+}
+
 // A linked Omni and one added chat (CHAT, or `chat`), its thread on a model that `sees`
-// pictures or not; `store` is DSH's attachment service, or none.
+// pictures or not; `store` is DSH's attachment service, or none; `presets` DSH's permission
+// presets, or none.
 const mocked = new WeakSet()
-async function bench(t, { chat = CHAT, sees = true, store = pictureStore(), mask = false, state } = {}) {
+async function bench(t, { chat = CHAT, sees = true, store = pictureStore(), mask = false, state, presets } = {}) {
   // One test may make several benches; its timers are mocked once.
   if (!mocked.has(t)) t.mock.timers.enable({ apis: ['setTimeout'] })
   mocked.add(t)
   const omni = fakeOmni()
   const home = homeFor(t, omni, state)
   const llm = { resolveModelInfo: async (provider, model) => ({ id: `${provider}/${model}`, inputModalities: sees ? ['text', 'image'] : ['text'] }) }
-  const services = { llm, ...(store ? { attachments: store } : {}) }
+  const services = { llm, ...(store ? { attachments: store } : {}), ...(presets ? { permissionPresets: presets } : {}) }
   const run = await boot(t, home, { services })
   const added = await run.channels.threads.add(INSTANCE, chat)
   assert.equal(added.ok, true, added.reason)
@@ -81,35 +105,51 @@ async function realTools(mode) {
   return { ctx, stub }
 }
 
-test('a thread lists only its five tools: restricted right after it is added and again on a later agent; the guard refuses the rest (:197)', async (t) => {
-  const { run, thread } = await bench(t)
+test('a thread keeps DSH\'s whole tool list: nothing is restricted or refused; each of its agents runs natively and its Session goes on Auto review once', async (t) => {
+  const presets = presetsFake()
+  const { run, thread, home } = await bench(t, { presets })
   // Right after add, on the agent DSH resolves for the Session.
   const first = run.agentOf(thread.sessionId)
-  assert.deepEqual(run.restricts.map(entry => [entry.sessionId, entry.filter]), [[thread.sessionId, { allow: [...THREAD_TOOLS] }]])
-  assert.equal(run.restricts[0].agent, first)
-  // The same agent again changes nothing; a new agent of the Session (a resume, a clear) is
-  // restricted again; another Session's agent is not.
+  assert.deepEqual(run.restricts, [])
+  assert.deepEqual(presets.sets, [[thread.sessionId, AUTO_PRESET]])
+  assert.equal(presets.current(first.session), AUTO_PRESET)
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+  await until(() => saved(home).omniThreads[thread.id].autoReview === true)
+  // The same agent again changes nothing; a new agent of the Session (a resume, a clear) runs
+  // natively too, and keeps the preset the thread got (or one the owner picked since); another
+  // Session's agent is not touched.
   run.ctx.emit('agent/created', { agent: first })
   run.ctx.emit('agent/created', { agent: run.freshAgent('some-session') })
   await flush()
-  assert.equal(run.restricts.length, 1)
   const next = run.freshAgent(thread.sessionId)
   run.ctx.emit('agent/created', { agent: next })
   await flush()
-  assert.deepEqual(run.restricts.map(entry => entry.agent), [first, next])
-  // Each of the thread's agents runs its tools natively, from its own scope.
   assert.deepEqual(run.executors.map(entry => [entry.agent, entry.executor instanceof NativeToolExecutor]), [[first, true], [next, true]])
-  // Whatever stays visible outside the five, a scope-local subagent and run_code included,
-  // is refused in the thread; its own five are not.
-  for (const name of ['bash', 'subagent', 'list_subagent_models', 'run_code', 'omni_call', 'omni_send', 'start_task', 'browser_open', 'browser_handoff']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL, name)
-  for (const name of THREAD_TOOLS) assert.equal(guarded(run.ctx, thread.sessionId, name), undefined, name)
+  assert.deepEqual(presets.sets, [[thread.sessionId, AUTO_PRESET]])
+  assert.deepEqual(run.restricts, [])
+  // No guard refuses a tool in the thread: DSH's, the team's and Omni's all run there.
+  for (const name of ['bash', 'read', 'write', 'web_search', 'web_fetch', 'subagent', 'run_code', 'omni_call', 'omni_send', 'omni_chats', 'start_task', 'browser_open', ...THREAD_TOOLS]) assert.equal(guarded(run.ctx, thread.sessionId, name), undefined, name)
 })
 
-test('probe 2: on DSH\'s real tool registry the thread\'s filter hides every global tool but the five; scope-local tools stay listed and the guard refuses them; a ptc executor is turned back to native (:197)', async (t) => {
+test('a DeepSeek Harness without Auto review keeps the thread on its default preset and tries again on the next agent', async (t) => {
+  const presets = presetsFake({ auto: false })
+  const { run, thread } = await bench(t, { presets })
+  assert.deepEqual(presets.sets, [])
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, undefined)
+  // Auto review switched on later: the thread's next agent goes on it.
+  presets.auto = true
+  run.ctx.emit('agent/created', { agent: run.freshAgent(thread.sessionId) })
+  await flush()
+  assert.deepEqual(presets.sets, [[thread.sessionId, AUTO_PRESET]])
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+})
+
+test('probe 2: on DSH\'s real tool registry a thread sees every global tool and its own scope\'s; a ptc executor is turned back to native (:197)', async (t) => {
   for (const mode of ['native', 'ptc']) {
     const { run, thread } = await bench(t)
     const real = await realTools(mode)
-    for (const name of ['bash', 'read', 'write', 'web_search', 'omni_call', 'omni_send', 'start_task']) real.ctx.tools.register(real.stub(name))
+    const globals = ['bash', 'read', 'write', 'web_search', 'omni_call', 'omni_send', 'start_task']
+    for (const name of globals) real.ctx.tools.register(real.stub(name))
     // The plugin's own definitions, as DSH registers them: their output schemas pass DSH's checks.
     for (const name of THREAD_TOOLS) real.ctx.tools.register(run.ctx.registeredTools.get(name))
     // A live agent of the thread's Session, with tools of its own layer, as DSH's subagent tool has.
@@ -118,20 +158,16 @@ test('probe 2: on DSH\'s real tool registry the thread\'s filter hides every glo
     for (const name of ['subagent', 'list_subagent_models']) agent.ctx.tools.register(real.stub(name))
     const visible = () => [...real.ctx.tools.view(agent).visible.keys()].sort()
     const executor = scope => real.ctx.tools.selectExecutor(scope)
-    assert.ok(visible().includes('bash'))
+    const all = [...globals, ...THREAD_TOOLS, 'list_subagent_models', 'subagent'].sort()
     assert.ok(executor(agent) instanceof (mode === 'ptc' ? PtcExecutor : NativeToolExecutor), mode)
-    // The plugin restricts it on agent/created, through the registry's own restrict(), and runs
-    // its tools natively from the agent's own scope; the deployment's executor stays.
+    // The plugin runs its tools natively from the agent's own scope on agent/created; nothing
+    // is hidden, and the deployment's executor stays.
     run.ctx.emit('agent/created', { agent })
     await flush()
-    assert.deepEqual(visible(), [...THREAD_TOOLS, 'list_subagent_models', 'subagent'].sort(), mode)
+    assert.deepEqual(visible(), all, mode)
     assert.ok(executor(agent) instanceof NativeToolExecutor, mode)
-    assert.deepEqual(executor(agent).describe(real.ctx.tools.definitions(agent)).schemas.map(schema => schema.name).sort(), visible(), mode)
+    assert.deepEqual(executor(agent).describe(real.ctx.tools.definitions(agent)).schemas.map(schema => schema.name).sort(), all, mode)
     assert.ok(executor() instanceof (mode === 'ptc' ? PtcExecutor : NativeToolExecutor), mode)
-    for (const name of ['subagent', 'list_subagent_models']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL)
-    // restrict() refuses the whole list for one name it does not know, so the five are all
-    // registered globally before any thread is restricted.
-    assert.throws(() => agent.ctx.tools.restrict({ allow: [...THREAD_TOOLS, 'not_a_tool'] }), /unknown global tool "not_a_tool"/)
   }
 })
 
@@ -891,4 +927,98 @@ test('a save that fails puts a thread\'s permissions and the settings back as th
   assert.equal((await say(run, thread, 'Ainda sem cartão.')).card, false)
   assert.equal((await reactIn(fresh.run, fresh.thread, '🔥')).card, true)
   run.channels.save = save
+})
+
+test('a thread uses Omni\'s tools as the Omni Bot: reads run at once; a send into its own chat follows its switch on the link key, and any other chat, a reaction off the list or a delete asks on DSH\'s card in the thread', async (t) => {
+  const { omni, run, thread } = await bench(t)
+  const reads = await dsh(run, 'omni_chats', thread.sessionId, {})
+  assert.equal(reads.card, false)
+  assert.match(reads.result, /"status":200/)
+  const history = await dsh(run, 'omni_messages', thread.sessionId, { chat: CHAT })
+  assert.equal(history.card, false)
+  assert.doesNotMatch(history.result, /consent_required|confirmation_required|Only Bots/)
+  // Its own chat, asking by default: DSH's card in the thread carries the text, and the send
+  // runs once it is allowed, with no second card in the Omni Bot's chat.
+  const asked = await dsh(run, 'omni_send', thread.sessionId, { chat: CHAT, text: 'Chego às 8.' })
+  assert.deepEqual([asked.card, asked.waiting], [true, 'waiting'])
+  assert.equal(asked.decision.reason, `Send into "${CHATS[CHAT].name}" as you?\n\nChego às 8.`)
+  assert.match(asked.result, /"status":201/)
+  assert.deepEqual(run.channels.state.omniConsents ?? {}, {})
+  // The switch on: its own chat goes at once; another chat still asks.
+  await run.call('omni-thread-permissions', { threadId: thread.id, sends: 'allow' })
+  const free = await dsh(run, 'omni_send', thread.sessionId, { chat: CHAT, text: 'Até já.' })
+  assert.equal(free.card, false)
+  assert.match(free.result, /"status":201/)
+  const elsewhere = await dsh(run, 'omni_send', thread.sessionId, { chat: GROUP, text: 'Oi grupo' })
+  assert.equal(elsewhere.card, true)
+  assert.equal(elsewhere.decision.reason, `Send into chat ${GROUP} as you?\n\nOi grupo`)
+  assert.equal((await dsh(run, 'omni_react', thread.sessionId, { chat: CHAT, message: MESSAGE_IDS.text, emoji: '👍' })).card, false)
+  assert.equal((await dsh(run, 'omni_react', thread.sessionId, { chat: CHAT, message: MESSAGE_IDS.text, emoji: '🔥' })).card, true)
+  assert.equal((await dsh(run, 'omni_delete', thread.sessionId, { chat: CHAT, message: MESSAGE_IDS.text }, 'rejected')).card, true)
+  // Omni's sends went on the link key, the Omni Bot's, to each chat's JID.
+  assert.deepEqual(omni.sent.filter(send => send.path === '/messages/send').map(send => [send.body.to, send.body.text, send.key]), [
+    [CHATS[CHAT].externalId, 'Chego às 8.', omni.link.text],
+    [CHATS[CHAT].externalId, 'Até já.', omni.link.text],
+    [CHATS[GROUP].externalId, 'Oi grupo', omni.link.text],
+  ])
+})
+
+test('a thread\'s instructions name its chat, its full tool set and the switch, and tell it to act', () => {
+  const text = threadInstructions({ chatName: 'Ana' })
+  assert.match(text, /named "Ana"/)
+  assert.match(text, /dedicated to this chat/)
+  assert.match(text, /full DeepSeek Harness tool set/)
+  assert.match(text, /Omni's tools/)
+  assert.match(text, /Always allow send/)
+  assert.doesNotMatch(text, /You have no files, shell, web or other chats/)
+})
+
+test('a thread kept on Auto review comes back on DSH\'s default preset when Auto review is off: its Session opens, the mark is cleared, and Auto comes back with the plugin', async (t) => {
+  const presets = presetsFake()
+  const { run, thread, home } = await bench(t, { presets })
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+  // Auto review switched off; DSH makes the thread's agent again (a restart, a resume). DSH
+  // awaits the agent/created listeners one at a time, prepended ones first and the latest
+  // prepended first (the order is checked on cordis itself below), so this plugin's run before
+  // DSH's own check, which the fake's pin() plays last.
+  presets.auto = false
+  const restored = run.freshAgent(thread.sessionId)
+  for (const listener of run.ctx.listeners.get('agent/created')) await listener({ agent: restored })
+  assert.doesNotThrow(() => presets.pin(restored.session))
+  assert.deepEqual(presets.sets.at(-1), [thread.sessionId, 'workspace-write'])
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, undefined)
+  await until(() => saved(home).omniThreads[thread.id].autoReview === undefined)
+  // Without this plugin's step DSH would refuse it, as it did before.
+  const other = presetsFake()
+  other.set({ id: 'x' }, AUTO_PRESET)
+  other.auto = false
+  assert.throws(() => other.pin({ id: 'x' }), /cannot restore preset "auto" without its active integration/)
+  // Auto review back: the thread's next agent goes on it again.
+  presets.auto = true
+  run.ctx.emit('agent/created', { agent: run.freshAgent(thread.sessionId) })
+  await flush()
+  assert.deepEqual(presets.sets.at(-1), [thread.sessionId, AUTO_PRESET])
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+})
+
+test('cordis runs a later prepended agent/created listener before an earlier prepended one, and awaits each in turn', async () => {
+  const root = new Context()
+  const order = []
+  // DSH's permission check is prepended when its service starts, before any plugin.
+  root.on('agent/created', () => { order.push('dsh') }, { prepend: true })
+  root.on('agent/created', async () => { await new Promise(resolve => setImmediate(resolve)); order.push('plugin') }, { prepend: true })
+  await root.serial('agent/created', {})
+  assert.deepEqual(order, ['plugin', 'dsh'])
+})
+
+test('a thread uses the automation tools as the Omni Bot does', async (t) => {
+  const { run, thread } = await bench(t)
+  for (const [name, args] of [['list_automations', {}], ['find_chats', {}], ['pause_automation', { id: 'none', on: false }], ['delete_automation', { id: 'none' }]]) {
+    const own = await use(run, name, 'm1', args)
+    const threadAnswer = await use(run, name, thread.sessionId, args)
+    assert.doesNotMatch(String(threadAnswer), /manages automations/, name)
+    assert.equal(threadAnswer, own, name)
+  }
+  // A plain Session still may not.
+  assert.match(String(await use(run, 'list_automations', 'some-session', {})), /manages automations/)
 })

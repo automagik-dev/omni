@@ -1,9 +1,10 @@
 // A chat thread's own tools (wish omni-chat-threads, design rows 10 and 11): it reads its chat
 // (thread_history), looks at a picture in it (thread_picture), writes into it (thread_say) and
 // reacts to one of its messages (thread_react), on its own chat key (thread-keys.js), and asks
-// the Omni Bot to look something up (thread_ask_omni). Nothing else is in its hands: one guard
-// (threads.js) refuses every other tool in a thread's Session, and DSH's restrict() hides the
-// rest of DSH's global tools from it.
+// the Omni Bot to look something up (thread_ask_omni). Beside them a thread has DSH's whole
+// tool set and Omni's tools, on DSH's Auto review preset (hold, below): Omni's sends, reactions
+// and deletes ask on DSH's card in the thread as thread_say does, and one into its own chat
+// follows that chat's choice.
 //
 // Each tool works only in its own thread's Session, and the chat always comes from the
 // thread's record, never from the arguments. Sends and reactions go to the chat's JID on the
@@ -11,8 +12,9 @@
 // 14); history reads the chat by its UUID. By default a send asks the user on DSH's own card,
 // every time and groups included, and a reaction asks unless its emoji is on the free list, one
 // setting the owner edits on the Omni settings page. The owner may let sends, or any reaction,
-// go without a card, for every thread or for one (Decision 15, threads.js permissionsOf); an
-// automation event's turn that asks first still asks for both (standing-runs.js).
+// go without a card, for every thread or for one (Decision 15, threads.js permissionsOf; the
+// phone pane's "Always allow send" switch sets one thread's sends); an automation event's turn
+// that asks first still asks for both (standing-runs.js).
 //
 // A picture is the one thing read with the link key: a chat key holds no messages:read, so the
 // host reads the message's row, checks it is in the thread's chat and has media, and only then
@@ -21,7 +23,7 @@
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
-import { fitted } from './omni-api.js'
+import { fitted, sensitiveCall } from './omni-api.js'
 import { MEDIA_FILE_BYTES, messageOf, readBounded } from './omni.js'
 import { output } from './output.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
@@ -30,6 +32,20 @@ import { automationAsk } from './standing-runs.js'
 import { permissionsOf, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
 
 export { permissionsOf }
+
+// DSH's Auto review preset (dsh-experimental-auto-review): each call is reviewed by the
+// thread's own model before it runs with full access, and a denied one asks the user.
+export const AUTO_PRESET = 'auto'
+export const NO_AUTO = 'Auto review is not on in this DeepSeek Harness (Plugins page), so the thread keeps DSH\'s default permissions'
+// Omni's tools that act on a chat, and an omni_call that the Omni Bot confirms (omni-api.js
+// sensitiveCall): in a thread they ask on DSH's card, as thread_say does.
+const OMNI_ACTS = new Set(['omni_send', 'omni_react', 'omni_delete'])
+const callBody = (body) => {
+  if (typeof body !== 'string' || body === '') return body ?? undefined
+  try { return JSON.parse(body) } catch { return undefined }
+}
+const confirmedCall = args => sensitiveCall(String(args?.method ?? 'GET').toUpperCase(), String(args?.path ?? '').trim().replace(/^\/api\/v2(?=\/)/, ''), callBody(args?.body)) !== null
+const writesOmni = exec => OMNI_ACTS.has(exec.name) || (exec.name === 'omni_call' && confirmedCall(exec.arguments))
 
 // The reactions that go without a card, until the owner edits the list.
 export const FREE_REACTIONS_DEFAULT = Object.freeze(['👍', '❤️', '😂', '😮', '😢', '🙏'])
@@ -350,45 +366,108 @@ export function install(rt) {
     return asksFirst ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
   }, { prepend: true })
 
-  // The thread's Session also sees no other global tool: DSH's restrict() keeps only the five,
-  // on the live agent. Right after the thread is added (its agent/created came before it was
-  // a thread), and on every later agent/created of a thread's Session (a resume, a clear, a
-  // compaction), since a restriction belongs to one agent. A scope-local tool (subagent) stays
-  // listed, and the guard refuses it. The thread's agent also runs its tools natively: DSH picks
-  // the executor nearest the agent, so one in the agent's own scope wins over a preset's PTC
-  // executor, which collapses every call into run_code (Node code run beside the tools).
+  // Omni's own tools in a thread work as the Omni Bot (grants.js), whose sends to a person and
+  // deletes confirm on a card in its own chat; a thread's ask on DSH's card in the thread
+  // instead, with what goes out. A send or a reaction into the thread's own chat follows that
+  // chat's choice, as thread_say and thread_react do; any other chat, a delete or a call the
+  // Omni Bot would confirm asks every time.
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    const decision = await next()
+    if (!writesOmni(exec) || (decision?.kind !== 'allow' && decision?.kind !== 'ask')) return decision
+    const thread = rt.threads?.bySession(exec.agent?.id ?? exec.agent?.session?.id)
+    if (thread === undefined) return decision
+    const args = exec.arguments ?? {}
+    const own = args.chat === thread.chatId
+    const where = own ? JSON.stringify(thread.chatName) : `chat ${String(args.chat ?? '')}`
+    const asksFirst = rt.standingRuns?.asksFirst?.(thread.sessionId) ?? true
+    const allowed = permissionsOf(thread, state.omniSettings)
+    const goes = decision.kind === 'allow' && !asksFirst && own
+    const text = String(args.text ?? '')
+    if (exec.name === 'omni_send') {
+      if (goes && allowed.sends === 'allow') return decision
+      return { kind: 'ask', reason: `Send into ${where} as you?\n\n${text.slice(0, CARD_TEXT_MAX)}${text.length > CARD_TEXT_MAX ? '…' : ''}` }
+    }
+    if (exec.name === 'omni_react') {
+      if (goes && (allowed.reactions === 'any' || isFreeReaction(args.emoji, freeReactions()))) return decision
+      return { kind: 'ask', reason: `React ${String(args.emoji ?? '')} in ${where} as you?\n\nTo message ${String(args.message ?? '')}` }
+    }
+    if (exec.name === 'omni_delete') return { kind: 'ask', reason: `Delete message ${String(args.message ?? '')} in ${where} for everyone?` }
+    const body = String(args.body ?? '')
+    return { kind: 'ask', reason: `${String(args.method).toUpperCase()} ${String(args.path ?? '')} on Omni?${body ? `\n\n${body.slice(0, CARD_TEXT_MAX)}${body.length > CARD_TEXT_MAX ? '…' : ''}` : ''}` }
+  }, { prepend: true })
+
+  // The thread's Session keeps DSH's whole tool list. Right after the thread is added (its
+  // agent/created came before it was a thread), and on every later agent/created of a thread's
+  // Session (a resume, a clear, a compaction): its agent runs its tools natively, since DSH
+  // picks the executor nearest the agent, so one in the agent's own scope wins over a preset's
+  // PTC executor, which collapses every call into run_code and keeps its inner effects off
+  // Auto review's path. And once per thread its Session goes on DSH's Auto review preset (the
+  // record keeps `autoReview`, so a preset the owner picks for it later stays); a DSH without
+  // Auto review keeps its default preset, and the next agent tries again.
   const held = new WeakSet()
-  function hold(agent) {
-    if (agent === undefined || agent === null || held.has(agent)) return
-    const sessionId = agent.id ?? agent.session?.id
-    if (rt.threads?.bySession(sessionId) === undefined) return
-    const tools = agent.ctx?.tools
-    if (typeof tools?.restrict !== 'function') {
-      rt.warn('omni-channels: the thread Session %s keeps DSH\'s tool list (its guard still refuses them): no restrict', sessionId)
+  const autoLive = presets => presets.catalog().options.some(option => option.value === AUTO_PRESET)
+  function autoReview(agent, thread) {
+    if (thread.autoReview === true) return
+    const presets = ctx.get?.('permissionPresets')
+    if (presets === undefined || !autoLive(presets)) {
+      rt.warn('omni-channels: %s: %s', NO_AUTO, thread.sessionId)
       return
     }
     try {
-      tools.restrict({ allow: [...THREAD_TOOLS] })
-      held.add(agent)
+      presets.set(agent.session, AUTO_PRESET)
+      const now = typeof presets.current === 'function' ? presets.current(agent.session) : AUTO_PRESET
+      if (now !== AUTO_PRESET) throw new Error(`the Session is on ${now}`)
     } catch (error) {
-      rt.warn('omni-channels: the thread Session %s keeps DSH\'s tool list (its guard still refuses them): %s', sessionId, error?.message ?? error)
+      rt.warn('omni-channels: the thread Session %s is not on Auto review: %s', thread.sessionId, error?.message ?? error)
+      return
     }
+    thread.autoReview = true
+    void Promise.resolve(rt.save()).catch(error => rt.warn('omni-channels: saving a thread failed: %s', error?.message ?? error))
+  }
+  function hold(agent) {
+    if (agent === undefined || agent === null || held.has(agent)) return
+    const sessionId = agent.id ?? agent.session?.id
+    const thread = rt.threads?.bySession(sessionId)
+    if (thread === undefined) return
+    held.add(agent)
     try {
-      tools.setExecutor(new NativeToolExecutor(agent.ctx))
+      agent.ctx.tools.setExecutor(new NativeToolExecutor(agent.ctx))
     } catch (error) {
       rt.warn('omni-channels: the thread Session %s keeps its tool executor: %s', sessionId, error?.message ?? error)
     }
+    if (agent.session !== undefined) autoReview(agent, thread)
   }
   ctx.effect(() => rt.threads.onAdded(async (thread) => {
     try {
       hold(await rt.resolveAgent(thread.sessionId))
     } catch (error) {
-      rt.warn('omni-channels: the thread Session %s was not restricted: %s', thread.sessionId, error?.message ?? error)
+      rt.warn('omni-channels: the thread Session %s was not set up: %s', thread.sessionId, error?.message ?? error)
     }
-  }), 'omni-channels: thread tool lists')
+  }), 'omni-channels: thread Sessions')
   ctx.on('agent/created', ({ agent } = {}) => {
-    void Promise.resolve(rt.load()).then(() => hold(agent)).catch(error => rt.warn('omni-channels: a thread\'s tool list was not restricted: %s', error?.message ?? error))
+    void Promise.resolve(rt.load()).then(() => hold(agent)).catch(error => rt.warn('omni-channels: a thread\'s Session was not set up: %s', error?.message ?? error))
   })
+  // A thread put on Auto review whose DSH has it no more (the plugin switched off): DSH refuses
+  // to restore that Session ("cannot restore preset auto without its active integration") in
+  // its own agent/created listener. This one runs before it (both are prepended, this one
+  // later, and DSH awaits them one at a time): the Session goes back on DSH's default preset and
+  // the record's mark is cleared, so the thread opens, and goes on Auto again once Auto review
+  // is back. A failure here is only logged; DSH then refuses the Session as before.
+  ctx.on('agent/created', async ({ agent } = {}) => {
+    try {
+      await rt.load()
+      const thread = rt.threads?.bySession(agent?.id ?? agent?.session?.id)
+      const presets = ctx.get?.('permissionPresets')
+      if (thread?.autoReview !== true || presets === undefined || agent?.session === undefined || autoLive(presets)) return
+      const fallback = presets.catalog().defaultPreset
+      presets.set(agent.session, fallback)
+      delete thread.autoReview
+      rt.warn('omni-channels: %s: the thread Session %s is back on %s', NO_AUTO, thread.sessionId, fallback)
+      await rt.save()
+    } catch (error) {
+      rt.warn('omni-channels: the thread Session %s could not leave Auto review: %s', agent?.id, error?.message ?? error)
+    }
+  }, { prepend: true })
 
   // The free reactions and the thread defaults on the Omni settings page: read anywhere, saved
   // only on the host that holds the team (a host that only reads it neither serves the saves

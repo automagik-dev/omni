@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
-import { CUT_WINDOW_MS, matchesChat, THREAD_REFUSAL, THREAD_TOOLS } from '../src/host/threads.js'
+import { CUT_WINDOW_MS, matchesChat, THREAD_TOOLS } from '../src/host/threads.js'
 import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
@@ -82,13 +82,12 @@ test('a link written or removed while DSH runs is a new team revision, so the pa
   assert.deepEqual(offered(), [false, NOT_LINKED])
 })
 
-test('a thread\'s Session runs only its own tools; every other Session is left to its own rules', async (t) => {
+test('a thread\'s Session runs DSH\'s and Omni\'s tools beside its own: no guard refuses them; every other Session is left to its own rules', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const run = await boot(t, homeFor(t, omni))
   const { thread } = await run.channels.threads.add(INSTANCE, CHAT)
-  for (const name of ['bash', 'write', 'web_search', 'omni_call', 'start_task', 'message_bot', 'subagent']) assert.equal(guarded(run.ctx, thread.sessionId, name), THREAD_REFUSAL, name)
-  for (const name of THREAD_TOOLS) assert.equal(guarded(run.ctx, thread.sessionId, name), undefined, name)
+  for (const name of ['bash', 'write', 'web_search', 'web_fetch', 'omni_call', 'omni_send', 'start_task', 'subagent', 'run_code', ...THREAD_TOOLS]) assert.equal(guarded(run.ctx, thread.sessionId, name), undefined, name)
   // The Omni Bot's chat and a plain Session are not held by it.
   assert.equal(guarded(run.ctx, 'some-session', 'bash'), undefined)
   assert.equal(guarded(run.ctx, 'm1', 'omni_call'), undefined)
@@ -114,8 +113,8 @@ test('removing a chat archives its Session with its work stopped and cuts its ke
   assert.equal(keysOf(home).threads[thread.id], undefined)
   const later = await fetch(`${OMNI}/api/v2/chats/${CHAT}`, { headers: { 'x-api-key': key } })
   assert.equal(later.status, 401)
-  // Its Session is a thread no more, and the guard lets it be.
-  assert.equal(guarded(run.ctx, thread.sessionId, 'bash'), undefined)
+  // Its Session is a thread no more.
+  assert.equal(run.channels.threads.bySession(thread.sessionId), undefined)
   // Added again, the chat is a new thread with a new Session and a new key.
   const again = await run.channels.threads.add(INSTANCE, CHAT)
   assert.notEqual(again.thread.id, thread.id)
@@ -123,7 +122,7 @@ test('removing a chat archives its Session with its work stopped and cuts its ke
   assert.notEqual(keysOf(home).threads[again.thread.id].key, key)
 })
 
-test('a thread whose Session cannot be archived keeps its record, its guard and its key; one DSH no longer has is removed', async (t) => {
+test('a thread whose Session cannot be archived keeps its record and its key; one DSH no longer has is removed', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const home = homeFor(t, omni)
@@ -132,7 +131,7 @@ test('a thread whose Session cannot be archived keeps its record, its guard and 
   run.fake.archiveError = new Error('disk full')
   await assert.rejects(run.call('omni-thread-remove', { threadId: thread.id }), /could not be removed: disk full/)
   assert.equal(run.channels.threads.byId(thread.id)?.id, thread.id)
-  assert.equal(guarded(run.ctx, thread.sessionId, 'bash'), THREAD_REFUSAL)
+  assert.equal(run.channels.threads.bySession(thread.sessionId)?.id, thread.id)
   assert.equal(omni.children().filter(child => !child.revoked).length, 1)
   run.fake.archiveError = Object.assign(new Error('no such session'), { name: 'WorkspaceUnknownSessionError' })
   await run.call('omni-thread-remove', { threadId: thread.id })
@@ -459,7 +458,7 @@ test('a key that can be neither cut nor marked keeps the thread, held by its gua
     chmodSync(home, 0o700)
   }
   assert.equal(run.channels.threads.byId(thread.id)?.id, thread.id)
-  assert.equal(guarded(run.ctx, thread.sessionId, 'bash'), THREAD_REFUSAL)
+  assert.equal(run.channels.threads.bySession(thread.sessionId)?.id, thread.id)
   assert.deepEqual(omni.children().map(child => child.revoked), [false])
   await run.channels.threads.remove(thread.id)
   assert.equal(run.channels.threads.byId(thread.id), undefined)
@@ -467,7 +466,7 @@ test('a key that can be neither cut nor marked keeps the thread, held by its gua
   assert.equal(run.archiving.length, 2)
 })
 
-test('a thread that can be neither saved nor have its key cut stays, guarded and untold, until a remove ends it', { skip: AS_ROOT }, async (t) => {
+test('a thread that can be neither saved nor have its key cut stays, untold, until a remove ends it', { skip: AS_ROOT }, async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()
   const home = homeFor(t, omni)
@@ -492,7 +491,7 @@ test('a thread that can be neither saved nor have its key cut stays, guarded and
   assert.match(answer.reason, /its chat key could not be cut, so it stays until it is removed/)
   const [kept] = run.channels.threads.list()
   assert.deepEqual([heard, omni.children().map(child => child.revoked)], [[], [false]])
-  assert.equal(guarded(run.ctx, kept.sessionId, 'bash'), THREAD_REFUSAL)
+  assert.equal(run.channels.threads.bySession(kept.sessionId), kept)
   await run.channels.threads.remove(kept.id)
   assert.deepEqual([run.channels.threads.list(), omni.children().map(child => child.revoked)], [[], [true]])
 })
@@ -507,16 +506,18 @@ test('two removes of one thread at once are one remove', async (t) => {
   assert.deepEqual([run.archiving.length, gone], [1, [thread.id]])
 })
 
-test('in a thread, a tool outside its own is rejected at the card and the thread does not wait', async (t) => {
+test('in a thread, any tool\'s card is DSH\'s own: the thread waits on it and works again once it is answered', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const run = await boot(t, homeFor(t, fakeOmni()))
   const { thread } = await run.channels.threads.add(INSTANCE, CHAT)
   run.emit(thread.sessionId, 'turn/start')
   const gate = run.ctx.listeners.get('approval/request').at(-1)
-  let asked = 0
-  assert.equal(await gate({ agent: { id: thread.sessionId }, toolName: 'bash' }, () => { asked += 1 }), 'rejected')
-  assert.equal(asked, 0)
-  assert.equal(run.view().omniThreads[0].status, 'working')
+  let answer
+  const card = gate({ agent: { id: thread.sessionId }, toolName: 'bash' }, () => new Promise((resolve) => { answer = resolve }))
+  assert.equal(run.channels.threads.byId(thread.id).status, 'waiting')
+  answer('approved')
+  assert.equal(await card, 'approved')
+  assert.notEqual(run.channels.threads.byId(thread.id).status, 'waiting')
 })
 
 test('the Omni Bot\'s chat selecting the model its threads already have moves none; selections in a row make one pass', async (t) => {
@@ -567,7 +568,7 @@ test('looking a thread up by its Session or id never sorts the threads', async (
   const kept = run.channels.state.omniThreads.b
   Object.defineProperty(kept, 'at', { get: () => { sorted += 1; return 2 }, enumerable: true, configurable: true })
   for (let round = 0; round < 50; round += 1) {
-    assert.equal(guarded(run.ctx, 'b-session', 'bash'), THREAD_REFUSAL)
+    assert.equal(run.channels.threads.bySession('b-session'), kept)
     assert.equal(run.channels.threads.byId('b'), kept)
     assert.equal(run.ctx.sections.get('omni-thread').text({ agent: { id: 'zzz' } }), '')
   }

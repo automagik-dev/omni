@@ -98,6 +98,7 @@ jobs:
           tar -xzf "${actionlint_archive}" -C "${tools}/actionlint" actionlint
 
           scripts/release/release-workflow-contract.test.sh
+          scripts/release/version-bump-retry.test.sh
           scripts/release/stable-release-order.test.sh
           scripts/release/release-notes-body-guard.test.sh
           scripts/release/verify-promotion-candidate.test.sh

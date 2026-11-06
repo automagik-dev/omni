@@ -25,6 +25,8 @@
         "scripts/plugin-compat.test.ts",
         "scripts/plugin-versions.test.ts",
         "scripts/bootstrap-platform-credential.ts",
+        "scripts/generate-version.ts",
+        "scripts/sync-versions.ts",
         "scripts/release/generate-release-notes.test.ts"
       ],
       "project": ["scripts/**/*.ts"],
