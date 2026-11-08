@@ -48,6 +48,9 @@ def require(text: str, pattern: str, message: str) -> None:
         errors.append(message)
 
 
+def uncommented(text: str) -> str:
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
 def forbid(text: str, pattern: str, message: str) -> None:
     if re.search(pattern, text, flags=re.MULTILINE | re.DOTALL | re.IGNORECASE) is not None:
         errors.append(message)
@@ -228,6 +231,14 @@ else:
     # #1057: the mint hands the public pin to pin-candidate.yml on dev instead
     # of asking for a hand-paste; the dispatch must not fail a finished mint.
     require(image_build, r"gh workflow run pin-candidate\.yml \\\n\s+--repo \"\$\{GITHUB_REPOSITORY\}\" \\\n\s+--ref dev \\\n\s+--field version=\"\$\{VERSION\}\" \|\| \{", "candidate minting does not dispatch pin-candidate.yml on dev without failing the mint")
+    # #1635: the pin needs the stable release and the attested image, not npm.
+    # It is dispatched right after the receipt and BEFORE the stable npm step,
+    # with plain step gating (a failed release step skips it; no always()), so
+    # a slow registry can neither skip the pin nor hide the digest.
+    pin_dispatch_at = image_build.find("- name: Dispatch the candidate pin to dev")
+    if pin_dispatch_at < 0 or receipt_at < 0 or npm_dispatch_at < 0 or not (receipt_at < pin_dispatch_at < npm_dispatch_at):
+        errors.append("candidate minting does not dispatch the pin between the receipt and the stable npm step")
+    forbid(uncommented(image_build), r"always\(\)", "candidate minting gates a step on always() instead of the preceding steps' success")
     forbid(image_build, r"paste the CANDIDATE_\* values", "candidate minting still asks for a hand-paste of the candidate pin")
     for pattern, message in (
         (r"values-prod-gitops|pin-production-image", "candidate minting still writes a public production pin"),
@@ -844,6 +855,13 @@ else:
     require(mint_job, r"gh run watch \"\$\{run_id\}\" --repo \"\$\{GITHUB_REPOSITORY\}\" --exit-status", "candidate pipeline does not wait for the mint to succeed")
     pin_job = "\n".join(rc_jobs.get("pin", []))
     require(pin_job, r"^    needs: mint\n", "candidate pipeline pin does not follow the mint")
+    # #1635: the pin runs once the stable release exists at the tag, even when
+    # the mint failed later in its stable npm step; never on always().
+    require(mint_job, r"stable_released: \$\{\{ steps\.release\.outputs\.stable_released \}\}", "candidate pipeline mint does not report whether the stable release exists")
+    require(mint_job, r"- name: Check whether the stable release exists at the tag\n\s+id: release\n\s+if: \$\{\{ !cancelled\(\) \}\}", "candidate pipeline mint does not check the stable release after a failed mint without always()")
+    require(mint_job, r"releases/tags/v\$\{VERSION\}[\s\S]{0,200}\[\[ \"\$\{state\}\" == \$'false\\tfalse' \]\][\s\S]{0,100}stable_released=true", "candidate pipeline mint does not require a public, non-prerelease stable release before reporting it")
+    require(pin_job, r"^    if: \$\{\{ !cancelled\(\) && needs\.mint\.outputs\.stable_released == 'true' \}\}\n", "candidate pipeline pin is not gated on the stable release existing (independent of the npm step)")
+    forbid(uncommented(release_candidate), r"always\(\)", "candidate pipeline gates a job or step on always()")
     require(pin_job, r"^    uses: \./\.github/workflows/pin-candidate\.yml\n", "candidate pipeline does not call pin-candidate.yml")
     forbid(release_candidate, r"uses:\s*\./\.github/workflows/image-build\.yml", "candidate pipeline calls image-build.yml, which breaks the dispatched-orchestrator binding")
     for pattern, message in (

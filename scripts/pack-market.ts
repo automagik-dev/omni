@@ -133,13 +133,37 @@ export interface PackMarketOptions {
   appsDir: string;
   outDir: string;
   omniVersion: string;
-  /** Unix seconds; defaults to SOURCE_DATE_EPOCH, else now. */
+  /**
+   * Unix seconds. Defaults to SOURCE_DATE_EPOCH, else the commit time of the tree's HEAD, so
+   * two packs of one commit are byte-identical (the stable npm publication rebuilds the package
+   * and compares it byte for byte with the registry's, scripts/release/verify-npm-artifact.py).
+   * Outside a git checkout (the API image build copies no .git) it falls back to now.
+   */
   packedAt?: number;
   /**
    * The Automagik plugins: the pin to take (default apps/automagik.json) and a folder that
    * already holds its tarballs (default AUTOMAGIK_TARBALLS, else download). false leaves them out.
    */
   automagik?: { pinFile?: string; from?: string } | false;
+}
+
+/** The default packedAt: SOURCE_DATE_EPOCH, else HEAD's commit time, else now (see PackMarketOptions). */
+export function defaultPackedAt(cwd: string = repoRoot): number {
+  const epoch = Number(process.env.SOURCE_DATE_EPOCH);
+  if (Number.isInteger(epoch) && epoch > 0) return epoch;
+  try {
+    const committed = Number(
+      execFileSync('git', ['log', '-1', '--format=%ct'], {
+        cwd,
+        stdio: ['ignore', 'pipe', 'ignore'],
+        encoding: 'utf8',
+      }).trim(),
+    );
+    if (Number.isInteger(committed) && committed > 0) return committed;
+  } catch {
+    // not a git checkout, or no git: the image build runs from a plain copy
+  }
+  return Math.floor(Date.now() / 1000);
 }
 
 /** Pack every plugin into outDir (emptied first) and write its market.json. */
@@ -153,11 +177,10 @@ export async function packMarket(options: PackMarketOptions): Promise<MarketMani
     .map(({ dir, pkg }) => packOne(dir, pkg, outDir, options.omniVersion));
   const automagik = options.automagik === false ? [] : await automagikPackages(outDir, options.automagik ?? {});
   const packages = [...automagik, ...own];
-  const epoch = Number(process.env.SOURCE_DATE_EPOCH);
   const manifest = MarketManifestSchema.parse({
     format: 1,
     omniVersion: options.omniVersion,
-    packedAt: options.packedAt ?? (Number.isInteger(epoch) && epoch > 0 ? epoch : Math.floor(Date.now() / 1000)),
+    packedAt: options.packedAt ?? defaultPackedAt(),
     packages,
   });
   writeFileSync(join(outDir, MARKET_MANIFEST_FILE), `${JSON.stringify(manifest, null, 2)}\n`);

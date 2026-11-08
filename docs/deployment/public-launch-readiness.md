@@ -55,17 +55,23 @@ Find the mint run: the `release-candidate.yml` run's summary links it, or
   stranded tag with no alias is harmless; the next cut takes the next number.
 - **mint failed**: `gh run rerun <mint run id> --failed`. Never dispatch a new
   mint for the same version: `build-push` refuses it once the `vX` alias
-  exists. When the rerun succeeds, its `finalize` dispatches `pin-candidate.yml`
-  itself; or run `gh workflow run pin-candidate.yml --ref dev -f
-  version=<version>`.
-- **mint failed after the image was published** (e.g. a registry 404 in the
-  stable npm step): `gh run rerun <release-candidate run id> --failed` also
+  exists. `finalize` dispatches `pin-candidate.yml` as soon as the stable
+  release exists, before the stable npm step, and again on a rerun (a no-op
+  once dev pins the candidate); or run `gh workflow run pin-candidate.yml
+  --ref dev -f version=<version>`.
+- **mint failed in the stable npm step** (the release, receipt and pin are
+  already done): `gh run rerun <release-candidate run id> --failed` also
   works. The mint job sees the existing `omni-api:v<version>`, verifies its
   attestation against the tag SHA (mismatch fails loudly), skips the dispatch,
   and reruns the failed jobs of the existing mint run. On that rerun,
-  `finalize` verifies an already-published npm package in place and skips the
-  publish dispatch; a publish run failing only on a registry 404/5xx (exit 75,
-  `npm_registry_transient`) is re-dispatched up to 3 times automatically.
+  `finalize` rebuilds the CLI package byte-identically (`scripts/pack-market.ts`
+  stamps the commit time, not the clock), verifies an already-published npm
+  package in place and skips the publish dispatch; a publish run failing only
+  because the registry is slow or returned a 404/5xx (exit 75,
+  `npm_registry_transient`: a readback that has not converged, a tarball URL
+  still 404, a 5xx on publish) is re-dispatched up to 3 times automatically.
+  The pipeline's own `pin` job runs whenever the stable release exists, so an
+  npm-only failure never leaves the candidate unpinned.
 - **pin failed**: `gh workflow run pin-candidate.yml --ref dev -f
   version=<version>`. If it reports that `dev` moved past the candidate, a
   newer merge already started a newer pipeline run; let that one finish.
