@@ -258,7 +258,11 @@ jobs:
     name: Verify candidate and orchestrate stable publication
     needs: build-push
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Must outlive the stable npm retry loop: up to three dispatched publisher
+    # runs (version.yml publish-stable, 40 min each) plus their backoffs, after
+    # the release.yml wait and the CLI build. The release, receipt and pin are
+    # done before that loop starts, so a timeout here loses only the npm step.
+    timeout-minutes: 180
     environment: release
     permissions:
       contents: read
