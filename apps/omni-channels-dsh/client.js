@@ -16426,7 +16426,9 @@ function ThreadPicker({ channel, onPick, onClose }) {
     event.stopPropagation();
     onClose();
   };
-  const empty = list.status === "ready" && list.chats.length === 0;
+  const availableChats = list.chats.filter((chat) => chat.added !== true);
+  const empty = list.status === "ready" && availableChats.length === 0;
+  const emptyText = list.chats.length > 0 ? t("No chats to add here. Search for another chat.") : words ? t("No chats match.") : t("No chats yet");
   return (0, import_react16.createElement)(
     "div",
     { className: "ot-picker", role: "group", "aria-label": t("Add a chat from {name}", { name: channel.name }), onKeyDown },
@@ -16447,11 +16449,11 @@ function ThreadPicker({ channel, onPick, onClose }) {
     problem ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
     list.status === "loading" ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
     list.status === "failed" ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
-    empty ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
-    list.chats.length > 0 ? (0, import_react16.createElement)(
+    empty ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, emptyText) : null,
+    availableChats.length > 0 ? (0, import_react16.createElement)(
       "div",
       { className: "ot-picker-list" },
-      list.chats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
+      availableChats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
     ) : null
   );
 }
@@ -17504,6 +17506,7 @@ var STRINGS = {
   "Add a chat from {name}": "从 {name} 添加聊天",
   "Search chats or numbers": "搜索聊天或号码",
   "No chats match.": "没有匹配的聊天。",
+  "No chats to add here. Search for another chat.": "这里没有可添加的聊天。请搜索其他聊天。",
   "Added": "已添加",
   "Other chats": "其他聊天",
   "Adding…": "正在添加…",

@@ -647,6 +647,7 @@ export const STRINGS = {
   'Add a chat from {name}': '从 {name} 添加聊天',
   'Search chats or numbers': '搜索聊天或号码',
   'No chats match.': '没有匹配的聊天。',
+  'No chats to add here. Search for another chat.': '这里没有可添加的聊天。请搜索其他聊天。',
   'Added': '已添加',
   'Other chats': '其他聊天',
   'Adding…': '正在添加…',
