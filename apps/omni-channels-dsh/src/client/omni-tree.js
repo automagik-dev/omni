@@ -264,8 +264,8 @@ function PickerChat({ chat, busy, onPick }) {
 /**
  * A channel's chats to add, searched on the host (omni-thread-chats; a number is searched by
  * its digits there). `onPick(chat)` adds one and resolves with the host's answer: a refusal (a
- * failed mint among them) shows here, and nothing is added. A chat that is a thread already is
- * marked and cannot be picked again.
+ * failed mint among them) shows here, and nothing is added. Chats that already have sidebar
+ * threads stay out of the picker, including search results.
  */
 export function ThreadPicker({ channel, onPick, onClose }) {
   const [query, setQuery] = useState('')
@@ -322,7 +322,9 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     event.stopPropagation()
     onClose()
   }
-  const empty = list.status === 'ready' && list.chats.length === 0
+  const availableChats = list.chats.filter(chat => chat.added !== true)
+  const empty = list.status === 'ready' && availableChats.length === 0
+  const emptyText = list.chats.length > 0 ? t('No chats to add here. Search for another chat.') : words ? t('No chats match.') : t('No chats yet')
   return h('div', { className: 'ot-picker', role: 'group', 'aria-label': t('Add a chat from {name}', { name: channel.name }), onKeyDown },
     h('div', { className: 'ot-picker-head' },
       h('input', {
@@ -333,9 +335,9 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
     list.status === 'loading' ? h('p', { className: 'ot-picker-note' }, t('Loading…')) : null,
     list.status === 'failed' ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(list.error)) : null,
-    empty ? h('p', { className: 'ot-picker-note' }, query.trim() ? t('No chats match.') : t('No chats yet')) : null,
-    list.chats.length > 0 ? h('div', { className: 'ot-picker-list' },
-      list.chats.map(chat => h(PickerChat, { key: chat.id, chat, busy, onPick: pick }))) : null)
+    empty ? h('p', { className: 'ot-picker-note' }, emptyText) : null,
+    availableChats.length > 0 ? h('div', { className: 'ot-picker-list' },
+      availableChats.map(chat => h(PickerChat, { key: chat.id, chat, busy, onPick: pick }))) : null)
 }
 
 // The host adds the chat; the row shows on the team's next roster pull.
