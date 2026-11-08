@@ -98,6 +98,19 @@
       },
       "versions": [
         {
+          "version": "2.261108.1",
+          "publishTimestamp": 1794153101,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/automagik-dev/omni",
+            "commit": "8f07f40bfb165741b3c0f48bce5b0f597dbef174",
+            "path": "apps/omni-channels-dsh"
+          },
+          "engines": {
+            "dsh": ">=0.2.2-rc.1 <0.2.3-0"
+          }
+        },
+        {
           "version": "2.261106.11",
           "publishTimestamp": 1794007316,
           "source": {
