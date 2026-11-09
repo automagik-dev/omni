@@ -203,3 +203,96 @@ test('the Omni Bot\'s Session has the thread tools trimmed one name at a time, w
     assert.equal(ours(omniBot.denied).length, (named ? COMPUTER_TOOLS.length + 1 : 0) + THREAD_TOOLS.length - 1)
   }
 })
+
+// #1603: a connector action the catalog declares as a read does not ask the user for
+// permission to change Omni. Only an explicit "read" counts; a write, an action with no
+// access, an unknown provider or action, and a catalog that fails all keep today's card.
+function connectorBench(t, { access = 'read', catalogStatus = 200, connectorStatus = 200 } = {}) {
+  const home = mkdtempSync(join(tmpdir(), 'ds-bot-catalog-'))
+  writeFileSync(join(home, 'state.json'), JSON.stringify({
+    version: 1, mainBotIds: ['m1'], revision: 1,
+    bots: { m1: { id: 'm1', name: 'Omni', role: 'Orchestrator', instructions: '', createdAt: 1 } },
+    rooms: {}, agents: {}, exchanges: [], exchangeTurns: {},
+  }))
+  const realFetch = globalThis.fetch
+  const requests = []
+  // Only list_tasks follows the case's access; create_task is a declared write and the
+  // legacy action declares nothing, so one bench covers read, write and unknown.
+  const accessOf = { list_tasks: access === null ? undefined : access, create_task: 'write' }
+  const action = key => ({ key, label: key, ...(accessOf[key] === undefined ? {} : { access: accessOf[key] }) })
+  const answers = {
+    '/openapi.json': { paths: { '/connectors/{id}/actions/{action}': { post: { summary: 'Typed provider action', tags: ['Connectors'], requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { input: { type: 'object' } } } } } } } } } },
+    '/connectors/providers': catalogStatus === 200
+      ? { data: [{ id: 'clickup', label: 'ClickUp', version: '1.0.0', actions: [action('list_tasks'), action('create_task'), { key: 'legacy_action', label: 'Legacy' }] }] }
+      : null,
+    '/connectors/c1': connectorStatus === 200 ? { data: { id: 'c1', provider: 'clickup' } } : null,
+    '/connectors/c1/actions/list_tasks': { data: { tasks: [] } },
+    '/connectors/c1/actions/create_task': { data: { id: 't1' } },
+    '/connectors/c1/actions/legacy_action': { data: { ok: true } },
+    '/connectors/gone/actions/list_tasks': { data: { ok: true } },
+  }
+  globalThis.fetch = async (address, init = {}) => {
+    const path = String(address).replace(`${OMNI}/api/v2`, '')
+    requests.push({ method: init.method ?? 'GET', path })
+    const answer = answers[path.split('?')[0]]
+    const status = path === '/connectors/providers' ? catalogStatus
+      : path.startsWith('/connectors/gone') ? connectorStatus : 200
+    return new Response(JSON.stringify(answer ?? {}), { status: answer !== undefined ? status : 404 })
+  }
+  const ctx = fakeContext({ services: { credentials: { resolve: async ref => (ref === 'OMNI_API_KEY' ? { value: HOST_KEY } : undefined) } } })
+  const runtimes = applyBoth(ctx, { home, omni: { url: OMNI } })
+  t.after(async () => {
+    globalThis.fetch = realFetch
+    await ctx.dispose()
+    rmSync(home, { recursive: true, force: true, maxRetries: 5 })
+  })
+  const tool = name => args => ctx.registeredTools.get(name).execute(args, { agent: { id: 'm1' } })
+  return { tool, requests, channels: runtimes.channels }
+}
+
+const counts = (requests, path) => requests.filter(request => request.path === path).length
+
+test('a connector read runs without a card; a write still asks and never reaches omni', async (t) => {
+  const { tool, requests } = connectorBench(t)
+  const read = await tool('omni_call')({ method: 'POST', path: '/connectors/c1/actions/list_tasks', body: '{"input":{}}' })
+  assert.equal(JSON.parse(read).status, 200)
+  assert.equal(counts(requests, '/connectors/c1/actions/list_tasks'), 1)
+
+  const write = await tool('omni_call')({ method: 'POST', path: '/connectors/c1/actions/create_task', body: '{"input":{}}' })
+  assert.match(write, /^confirmation_required/)
+  assert.equal(counts(requests, '/connectors/c1/actions/create_task'), 0)
+  // The pure classifier is unchanged: the catalog is the only thing that decides it.
+  assert.equal((await import('../src/host/omni-api.js')).sensitiveCall('POST', '/connectors/c1/actions/list_tasks', {}), 'change')
+})
+
+test('a write, an action with no access, an unknown provider and a failed catalog all ask', async (t) => {
+  const cases = [
+    [{ access: 'write' }, '/connectors/c1/actions/list_tasks', 'a declared write'],
+    [{ access: null }, '/connectors/c1/actions/list_tasks', 'no declared access'],
+    [{ connectorStatus: 404 }, '/connectors/gone/actions/list_tasks', 'an unknown connector'],
+    [{}, '/connectors/c1/actions/legacy_action', 'an action the catalog has no kind for'],
+    [{ catalogStatus: 500 }, '/connectors/c1/actions/list_tasks', 'a catalog that fails'],
+  ]
+  for (const [options, path, label] of cases) {
+    const { tool, requests } = connectorBench(t, options)
+    const result = await tool('omni_call')({ method: 'POST', path, body: '{"input":{}}' })
+    assert.match(result, /^confirmation_required/, label)
+    assert.equal(counts(requests, path), 0, label)
+  }
+})
+
+test('the catalog and the connector are read once, then answered from the cache', async (t) => {
+  const { tool, requests } = connectorBench(t)
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.equal(JSON.parse(await tool('omni_call')({ method: 'POST', path: '/connectors/c1/actions/list_tasks', body: '{"input":{}}' })).status, 200)
+  }
+  assert.equal(counts(requests, '/connectors/providers'), 1)
+  assert.equal(counts(requests, '/connectors/c1'), 1)
+})
+
+test('the same answer is what a thread asks: omni_call sensitivity is shared', async (t) => {
+  const { channels } = connectorBench(t)
+  assert.equal(await channels.omniCallSensitivity('POST', '/connectors/c1/actions/list_tasks', {}), null)
+  assert.equal(await channels.omniCallSensitivity('POST', '/connectors/c1/actions/create_task', {}), 'change')
+  assert.equal(await channels.omniCallSensitivity('POST', '/messages/send', {}), 'send')
+})
