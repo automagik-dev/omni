@@ -242,8 +242,8 @@ describe('ZenviaPlugin', () => {
       expect(file.buffer.toString()).toBe('abc');
       expect(fetchCall(fetchSpy, before).init?.headers).toMatchObject({ 'X-API-TOKEN': API_TOKEN });
       expect(fetchCall(fetchSpy, before).init?.redirect).toBe('manual');
-      expect(fetchCall(fetchSpy, before + 1).url).toBe('https://cdn.example.com/f.ogg');
-      expect(fetchCall(fetchSpy, before + 1).init?.headers).toEqual({});
+      expect(fetchCall(fetchSpy, before + 1).url).toBe('https://93.184.216.34/f.ogg');
+      expect(fetchCall(fetchSpy, before + 1).init?.headers).toEqual({ Host: 'cdn.example.com' });
     });
 
     it('refuses a redirect to plain http or to an address host', async () => {
@@ -358,7 +358,7 @@ describe('ZenviaPlugin', () => {
       expect(zenviaFile.mimeType).toBe('audio/ogg');
       expect(zenviaFile.buffer.toString()).toBe('abc');
       expect(fetchCall(fetchSpy, 1).init?.headers).toMatchObject({ 'X-API-TOKEN': API_TOKEN });
-      expect(fetchCall(fetchSpy, 2).init?.headers).toEqual({});
+      expect(fetchCall(fetchSpy, 2).init?.headers).toEqual({ Host: 'cdn.example.com' });
     });
 
     it('refuses non-https URLs and oversized declared downloads', async () => {

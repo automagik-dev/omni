@@ -19,7 +19,19 @@ function unresolvedHost(): ZenviaApiError {
   });
 }
 
-export async function assertPublicHost(hostname: string, resolve: HostResolver): Promise<void> {
+export interface PinnedTarget {
+  url: string;
+  host: string;
+  serverName: string;
+}
+
+export function pinTarget(url: URL, address: string): PinnedTarget {
+  const pinned = new URL(url);
+  pinned.hostname = address.includes(':') ? `[${address}]` : address;
+  return { url: pinned.toString(), host: url.host, serverName: url.hostname };
+}
+
+export async function resolvePublicAddresses(hostname: string, resolve: HostResolver): Promise<string[]> {
   let resolved: readonly ResolvedAddress[];
   try {
     resolved = await resolve(hostname);
@@ -37,4 +49,5 @@ export async function assertPublicHost(hostname: string, resolve: HostResolver):
       );
     }
   }
+  return resolved.map(({ address }) => address);
 }

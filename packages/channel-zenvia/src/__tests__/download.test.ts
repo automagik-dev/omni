@@ -183,6 +183,127 @@ describe('ZenviaClient.downloadFile destination check', () => {
   });
 });
 
+type FetchCall = [string | URL | Request, (RequestInit & { tls?: Record<string, unknown> }) | undefined];
+
+function requestsOf(fetchSpy: ReturnType<typeof spyOn>): Array<{
+  url: string;
+  headers: Record<string, string>;
+  tls: Record<string, unknown> | undefined;
+}> {
+  return (fetchSpy.mock.calls as FetchCall[]).map(([input, init]) => ({
+    url: String(input),
+    headers: (init?.headers ?? {}) as Record<string, string>,
+    tls: init?.tls,
+  }));
+}
+
+describe('ZenviaClient.downloadFile connection pinning', () => {
+  afterEach(() => {
+    spyOn(globalThis, 'fetch').mockRestore();
+  });
+
+  it('connects to the address it validated, keeping the host for virtual hosting and certificate checks', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('abc'));
+
+    await clientWith(resolving({ 'files.example.org': [PUBLIC_V4] })).downloadFile(
+      'https://files.example.org/a.ogg?sig=1',
+    );
+
+    const [request] = requestsOf(fetchSpy);
+    expect(request?.url).toBe(`https://${PUBLIC_V4}/a.ogg?sig=1`);
+    expect(request?.headers.Host).toBe('files.example.org');
+    expect(request?.tls).toEqual({ serverName: 'files.example.org' });
+  });
+
+  it('brackets an IPv6 address and keeps a non-default port in both the URL and the Host header', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('abc'));
+
+    await clientWith(resolving({ 'files.example.org': [PUBLIC_V6] })).downloadFile(
+      'https://files.example.org:8443/a.ogg',
+    );
+
+    const [request] = requestsOf(fetchSpy);
+    expect(request?.url).toBe(`https://[${PUBLIC_V6}]:8443/a.ogg`);
+    expect(request?.headers.Host).toBe('files.example.org:8443');
+    expect(request?.tls).toEqual({ serverName: 'files.example.org' });
+  });
+
+  it('resolves once per hop and connects to that answer, not to a later one', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('abc'));
+    const answers = [[PUBLIC_V4], ['10.0.0.9']];
+    const calls: string[] = [];
+    const rebinding: HostResolver = async (hostname) => {
+      calls.push(hostname);
+      return (answers.shift() ?? []).map((address) => ({ address, family: 4 }));
+    };
+
+    await clientWith(rebinding).downloadFile('https://files.example.org/a.ogg');
+
+    expect(calls).toEqual(['files.example.org']);
+    expect(requestsOf(fetchSpy)[0]?.url).toBe(`https://${PUBLIC_V4}/a.ogg`);
+  });
+
+  it('pins each redirect hop to the address validated for that hop', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(redirectTo('https://cdn.example.org/b.ogg'))
+      .mockResolvedValueOnce(new Response('abc'));
+    const resolver = resolving({ 'files.zenvia.com': [PUBLIC_V4], 'cdn.example.org': [PUBLIC_V6] });
+
+    await clientWith(resolver).downloadFile('https://files.zenvia.com/a.ogg');
+
+    const [first, second] = requestsOf(fetchSpy);
+    expect(first?.url).toBe(`https://${PUBLIC_V4}/a.ogg`);
+    expect(first?.headers).toMatchObject({ Host: 'files.zenvia.com', 'X-API-TOKEN': API_TOKEN });
+    expect(first?.tls).toEqual({ serverName: 'files.zenvia.com' });
+    expect(second?.url).toBe(`https://[${PUBLIC_V6}]/b.ogg`);
+    expect(second?.headers).toEqual({ Host: 'cdn.example.org' });
+    expect(second?.tls).toEqual({ serverName: 'cdn.example.org' });
+  });
+
+  it('tries the next validated address when the connection to one fails', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch')
+      .mockRejectedValueOnce(new TypeError('connection refused'))
+      .mockResolvedValueOnce(new Response('abc'));
+
+    const res = await clientWith(resolving({ 'files.example.org': [PUBLIC_V6, PUBLIC_V4] })).downloadFile(
+      'https://files.example.org/a.ogg',
+    );
+
+    expect(await res.text()).toBe('abc');
+    expect(requestsOf(fetchSpy).map((request) => request.url)).toEqual([
+      `https://[${PUBLIC_V6}]/a.ogg`,
+      `https://${PUBLIC_V4}/a.ogg`,
+    ]);
+  });
+
+  it('fails as a transient upstream error when every validated address fails', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('connection refused'));
+
+    const error = await rejection(
+      clientWith(resolving({ 'files.example.org': [PUBLIC_V6, PUBLIC_V4] })).downloadFile(
+        'https://files.example.org/a.ogg',
+      ),
+    );
+
+    expect(error.channelCode).toBe('ZENVIA_UPSTREAM_ERROR');
+    expect(error.retryable).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not try another address after an HTTP error answer', async () => {
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(new Response('nope', { status: 404 }));
+
+    const error = await rejection(
+      clientWith(resolving({ 'files.example.org': [PUBLIC_V4, PUBLIC_V6] })).downloadFile(
+        'https://files.example.org/a.ogg',
+      ),
+    );
+
+    expect(error.httpStatus).toBe(404);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ZenviaPlugin.downloadInboundMedia destination check', () => {
   afterEach(() => {
     spyOn(globalThis, 'fetch').mockRestore();

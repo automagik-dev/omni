@@ -24,9 +24,15 @@ official Meta BSP with its own API format (not a Cloud API mirror).
     not public: loopback, private (RFC 1918), carrier-grade NAT, link-local
     (cloud metadata included), IPv6 unique local, multicast, unspecified,
     reserved ranges, or an IPv4 address mapped into IPv6. A host that does not
-    resolve fails as a transient upstream error. The request resolves the name
-    again on its own, so a DNS answer that changes between the check and the
-    connection (DNS rebinding) is not covered. The timeout covers the body too;
+    resolve fails as a transient upstream error. The connection is pinned to
+    the addresses that passed the check: the request goes to that IP (the next
+    one when a connection fails), with the original `Host` header and the TLS
+    server name set to the host, so the certificate is still verified against
+    the name and a DNS answer that changes after the check (DNS rebinding)
+    cannot redirect it. This relies on `fetch` of Bun 1.4.4 honoring
+    `tls.serverName` for the certificate check, which was measured against a
+    local TLS server (a wrong name is rejected) and against a public host with
+    the system trust store. The timeout covers the body too;
   - a click-to-WhatsApp ad referral is exposed as `rawPayload.referral` in
     the Meta Cloud API shape (`source_type`, `source_id`, `source_url`,
     `headline`, `body`, `ctwa_clid`);

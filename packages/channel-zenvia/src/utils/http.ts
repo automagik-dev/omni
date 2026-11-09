@@ -14,7 +14,7 @@ function transportError(err: unknown, operation: string): ZenviaApiError {
 
 export async function zenviaFetch(
   url: string,
-  init: RequestInit,
+  init: BunFetchRequestInit,
   opts: { timeoutMs: number; operation: string },
 ): Promise<Response> {
   try {

@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { type ZenviaOutboundMessage, type ZenviaSendResponse, ZenviaSendResponseSchema } from './types';
 import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
 import { parseJsonOrUndefined, readBodyText, zenviaErrorFromResponse, zenviaFetch } from './utils/http';
-import { type HostResolver, assertPublicHost, resolveHostAddresses } from './utils/public-host';
+import { type HostResolver, pinTarget, resolveHostAddresses, resolvePublicAddresses } from './utils/public-host';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -79,13 +79,9 @@ export class ZenviaClient {
     let sendToken = isZenviaHost(currentUrl);
 
     for (let redirects = 0; redirects <= MAX_DOWNLOAD_REDIRECTS; redirects++) {
-      await assertPublicHost(currentUrl.hostname, this.resolveHost);
+      const addresses = await resolvePublicAddresses(currentUrl.hostname, this.resolveHost);
       const headers: Record<string, string> = sendToken ? { 'X-API-TOKEN': this.apiToken } : {};
-      const res = await zenviaFetch(
-        currentUrl.toString(),
-        { method: 'GET', headers, redirect: 'manual' },
-        { timeoutMs: this.downloadTimeoutMs, operation: 'downloadFile' },
-      );
+      const res = await this.fetchPinned(currentUrl, addresses, headers);
 
       if (res.status >= 300 && res.status < 400) {
         const location = res.headers.get('location');
@@ -112,6 +108,33 @@ export class ZenviaClient {
     throw new ZenviaApiError(ZenviaErrorCode.UPSTREAM_ERROR, 'Zenvia file download followed too many redirects', {
       operation: 'downloadFile',
     });
+  }
+
+  private async fetchPinned(
+    url: URL,
+    addresses: readonly string[],
+    headers: Record<string, string>,
+  ): Promise<Response> {
+    const deadline = Date.now() + this.downloadTimeoutMs;
+    let failure: unknown;
+    for (const address of addresses) {
+      const target = pinTarget(url, address);
+      try {
+        return await zenviaFetch(
+          target.url,
+          {
+            method: 'GET',
+            headers: { ...headers, Host: target.host },
+            redirect: 'manual',
+            tls: { serverName: target.serverName },
+          },
+          { timeoutMs: Math.max(1, deadline - Date.now()), operation: 'downloadFile' },
+        );
+      } catch (err) {
+        failure = err;
+      }
+    }
+    throw failure;
   }
 
   async ping(): Promise<boolean> {
