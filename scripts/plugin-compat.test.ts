@@ -90,6 +90,8 @@ describe("Omni's plugins and the Omni they need", () => {
     expect(result.against).toBe('v2.261023.14');
     expect(result.problems).toEqual([
       'Omni 2.261023.14 serves no GET /api/v2/channels/whatsapp-business/webhook-setup (src/host/omni-channel-actions.js): raise engines.omni',
+      'Omni 2.261023.14 serves no GET /api/v2/connectors/{} (src/host/omni-api.js): raise engines.omni',
+      'Omni 2.261023.14 serves no GET /api/v2/connectors/providers (src/host/omni-api.js): raise engines.omni',
       'Omni 2.261023.14 serves no POST /api/v2/keys/children (src/host/thread-keys.js): raise engines.omni',
       'Omni 2.261023.14 serves no POST /api/v2/keys/children/{}/revoke (src/host/thread-keys.js): raise engines.omni',
       'Omni 2.261023.14 serves no POST /api/v2/keys/children/self/revoke (src/host/thread-keys.js): raise engines.omni',
