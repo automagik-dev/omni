@@ -242,6 +242,14 @@ Wiring it needs a small core contract first, for example a
 `chat.handoff_activated`, so that it works for every channel. Until then
 these events are acknowledged and ignored.
 
+## Pending for follow-up PRs
+
+- `CONVERSATION_STATUS` events and human takeover: they need the core contract
+  described above.
+- Template management (create, list, sync): this plugin only sends templates.
+- An allowlist of hosts for inbound media: it waits for Zenvia's answer on
+  which hosts serve `fileUrl` (open questions below).
+
 ## Open questions for the vendor
 
 - The exact payload of the ZCC *Conversation Message* webhook: the event name
