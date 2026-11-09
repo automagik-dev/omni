@@ -3,6 +3,7 @@ import { isIP } from 'node:net';
 import { type ZenviaOutboundMessage, type ZenviaSendResponse, ZenviaSendResponseSchema } from './types';
 import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
 import { parseJsonOrUndefined, readBodyText, zenviaErrorFromResponse, zenviaFetch } from './utils/http';
+import { type HostResolver, assertPublicHost, resolveHostAddresses } from './utils/public-host';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
@@ -17,6 +18,7 @@ export interface ZenviaClientOptions {
   apiToken: string;
   timeoutMs?: number;
   downloadTimeoutMs?: number;
+  resolveHost?: HostResolver;
 }
 
 interface ZenviaRequestInit {
@@ -49,12 +51,14 @@ export class ZenviaClient {
   private readonly apiToken: string;
   private readonly timeoutMs: number;
   private readonly downloadTimeoutMs: number;
+  private readonly resolveHost: HostResolver;
 
   constructor(opts: ZenviaClientOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_ZENVIA_BASE_URL).replace(/\/+$/, '');
     this.apiToken = opts.apiToken;
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.downloadTimeoutMs = opts.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    this.resolveHost = opts.resolveHost ?? resolveHostAddresses;
   }
 
   async sendMessage(message: ZenviaOutboundMessage): Promise<ZenviaSendResponse> {
@@ -75,6 +79,7 @@ export class ZenviaClient {
     let sendToken = isZenviaHost(currentUrl);
 
     for (let redirects = 0; redirects <= MAX_DOWNLOAD_REDIRECTS; redirects++) {
+      await assertPublicHost(currentUrl.hostname, this.resolveHost);
       const headers: Record<string, string> = sendToken ? { 'X-API-TOKEN': this.apiToken } : {};
       const res = await zenviaFetch(
         currentUrl.toString(),

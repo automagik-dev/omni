@@ -1,11 +1,15 @@
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
 import type { ZenviaPlugin } from '../plugin';
+import type { HostResolver } from '../utils/public-host';
 
 export const instanceId = '00000000-0000-4000-8000-000000000011';
 export const SENDER_ID = '551140000000';
 export const API_TOKEN = 'test-zenvia-token';
 export const VERIFY_TOKEN = 'test-webhook-secret';
+const PUBLIC_ADDRESS = '93.184.216.34';
+
+export const publicHostResolver: HostResolver = async () => [{ address: PUBLIC_ADDRESS, family: 4 }];
 
 class MockLogger implements Logger {
   debug() {}
@@ -104,6 +108,7 @@ export async function connectPlugin(
   plugin: ZenviaPlugin,
   extraCredentials: Record<string, unknown> = {},
 ): Promise<void> {
+  plugin.hostResolver = publicHostResolver;
   await plugin.connect(instanceId, {
     instanceId,
     credentials: {

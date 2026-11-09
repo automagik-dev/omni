@@ -47,6 +47,7 @@ import {
   resolveHandoffMode,
 } from './utils/handoff';
 import { toSenderId, toZenviaPhone } from './utils/identity';
+import { type HostResolver, resolveHostAddresses } from './utils/public-host';
 
 const ZENVIA_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document']);
 
@@ -76,6 +77,8 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
   private zenviaInstances = new Map<string, ZenviaInstanceState>();
 
+  hostResolver: HostResolver = resolveHostAddresses;
+
   protected override async onInitialize(_context: PluginContext): Promise<void> {
     this.logger.info('Zenvia plugin initialized');
   }
@@ -94,7 +97,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
     this.logger.info('Connecting Zenvia instance', { instanceId, senderId: zenviaConfig.senderId });
 
-    const client = new ZenviaClient({ apiToken: zenviaConfig.apiToken });
+    const client = new ZenviaClient({ apiToken: zenviaConfig.apiToken, resolveHost: this.hostResolver });
 
     const reachable = await client.ping();
     if (!reachable) {

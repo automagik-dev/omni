@@ -19,7 +19,14 @@ official Meta BSP with its own API format (not a Cloud API mirror).
     `downloadInboundMedia`, behind the SDK download guard. Redirects are
     followed by hand (at most 5): every hop must be https to a named host (no
     IP literal, no localhost), and the token goes only to Zenvia hosts and is
-    dropped for good once a hop leaves them. The timeout covers the body too;
+    dropped for good once a hop leaves them. Right before each request the
+    host is resolved and the download is refused when any of its addresses is
+    not public: loopback, private (RFC 1918), carrier-grade NAT, link-local
+    (cloud metadata included), IPv6 unique local, multicast, unspecified,
+    reserved ranges, or an IPv4 address mapped into IPv6. A host that does not
+    resolve fails as a transient upstream error. The request resolves the name
+    again on its own, so a DNS answer that changes between the check and the
+    connection (DNS rebinding) is not covered. The timeout covers the body too;
   - a click-to-WhatsApp ad referral is exposed as `rawPayload.referral` in
     the Meta Cloud API shape (`source_type`, `source_id`, `source_url`,
     `headline`, `body`, `ctwa_clid`);
