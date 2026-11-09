@@ -309,7 +309,7 @@
     },
     "packages/channel-zenvia": {
       "name": "@omni/channel-zenvia",
-      "version": "2.260922.11",
+      "version": "2.261109.2",
       "dependencies": {
         "@omni/channel-sdk": "workspace:*",
         "@omni/core": "workspace:*",
