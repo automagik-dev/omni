@@ -9,7 +9,7 @@ type ZenviaErrorCodeName =
   | 'UPSTREAM_ERROR'
   | 'UNKNOWN';
 
-export const ZenviaErrorCode: Record<ZenviaErrorCodeName, string> = {
+export const ZenviaErrorCode = {
   AUTH_FAILED: 'ZENVIA_AUTH_FAILED',
   INVALID_REQUEST: 'ZENVIA_INVALID_REQUEST',
   RATE_LIMITED: 'ZENVIA_RATE_LIMITED',
@@ -17,7 +17,7 @@ export const ZenviaErrorCode: Record<ZenviaErrorCodeName, string> = {
   NOT_CONNECTED: 'ZENVIA_NOT_CONNECTED',
   UPSTREAM_ERROR: 'ZENVIA_UPSTREAM_ERROR',
   UNKNOWN: 'ZENVIA_UNKNOWN',
-} as const;
+} as const satisfies Record<ZenviaErrorCodeName, string>;
 
 export type ZenviaErrorCodeType = (typeof ZenviaErrorCode)[ZenviaErrorCodeName];
 
