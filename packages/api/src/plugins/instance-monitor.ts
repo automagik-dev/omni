@@ -44,6 +44,7 @@ import { eq } from 'drizzle-orm';
 
 import { applyInboundReplyContextOption } from '../lib/inbound-reply-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../lib/whatsapp-business-connection';
+import { openInstanceCredentials } from '../services/instances';
 import { lookupInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -922,8 +923,9 @@ export class InstanceMonitor {
     const [instance] = await runTenantWorkDb(this.pool, this.tenantOf(instanceId), () =>
       this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1),
     );
-    if (instance) rememberInstanceOwners([instance]);
-    return instance ?? null;
+    if (!instance) return null;
+    rememberInstanceOwners([instance]);
+    return openInstanceCredentials(instance);
   }
 
   /**
@@ -1028,7 +1030,7 @@ export async function reconnectWithPool(
     // `message.received` of a boot carry a trusted tenant rather than a legacy
     // envelope.
     rememberInstanceOwners(rows);
-    return rows as Array<{ id: string; name: string; channel: string; tenantId: string | null }>;
+    return rows.map(openInstanceCredentials);
   };
 
   // LEGACY WORLD: one ambient scan, then the pre-G5 batching. Unchanged.
