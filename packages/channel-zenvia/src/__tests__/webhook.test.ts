@@ -254,6 +254,47 @@ describe('Zenvia webhook', () => {
     });
   });
 
+  describe('body size limit', () => {
+    const OVER_LIMIT = String(1024 * 1024 + 1);
+    const AT_LIMIT = String(1024 * 1024);
+
+    function sized(contentLength: string, id: string): Request {
+      return post(messageEvent({ id, contents: [{ type: 'text', text: 'x' }] }), {
+        'x-webhook-token': VERIFY_TOKEN,
+        'content-length': contentLength,
+      });
+    }
+
+    it('answers 200 without reading a body that declares more than 1 MiB', async () => {
+      const request = sized(OVER_LIMIT, 'm-declared-big');
+      const readBody = spyOn(request, 'text');
+      const res = await plugin.handleWebhook(request);
+      expect(res.status).toBe(200);
+      expect(readBody).not.toHaveBeenCalled();
+      expect(received(eventBus)).toHaveLength(0);
+    });
+
+    it('still processes a body that declares exactly 1 MiB', async () => {
+      const res = await plugin.handleWebhook(sized(AT_LIMIT, 'm-at-limit'));
+      expect(res.status).toBe(200);
+      expect(received(eventBus).map((e) => e.externalId)).toEqual(['m-at-limit']);
+    });
+
+    it('ignores a content-length that is not a number', async () => {
+      const res = await plugin.handleWebhook(sized('abc', 'm-bad-length'));
+      expect(res.status).toBe(200);
+      expect(received(eventBus).map((e) => e.externalId)).toEqual(['m-bad-length']);
+    });
+
+    it('rejects an unauthenticated request before looking at its declared size', async () => {
+      const request = post(messageEvent({ id: 'm-big-noauth', contents: [{ type: 'text', text: 'x' }] }), {
+        'content-length': OVER_LIMIT,
+      });
+      const res = await plugin.handleWebhook(request);
+      expect(res.status).toBe(401);
+    });
+  });
+
   describe('MESSAGE_STATUS', () => {
     function statusEvent(code: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
       return {

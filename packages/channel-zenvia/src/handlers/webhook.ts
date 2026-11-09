@@ -27,6 +27,12 @@ export async function handleZenviaWebhookRequest(
     return new Response('Unauthorized', { status: 401 });
   }
 
+  const declaredLength = Number(request.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
+    logger.warn('[zenvia] oversized webhook body rejected before reading it', { instanceId, size: declaredLength });
+    return new Response('OK', { status: 200 });
+  }
+
   let body: string;
   try {
     body = await request.text();
