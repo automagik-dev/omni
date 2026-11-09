@@ -279,5 +279,133 @@ describe('Zenvia webhook', () => {
       const failed = (eventBus.published as Published[])[2]?.payload as Record<string, unknown>;
       expect(failed).toMatchObject({ externalId: 'out-1', chatId: CONTACT, errorCode: '131047' });
     });
+
+    describe('events without a recipient', () => {
+      function withoutRecipient(code: string, messageId: string, extra: Record<string, unknown> = {}) {
+        return {
+          type: 'MESSAGE_STATUS',
+          channel: 'whatsapp',
+          messageId,
+          message: { id: messageId, from: SENDER_ID, direction: 'OUT' },
+          messageStatus: { code, timestamp: '2026-09-22T12:00:05.000Z', ...extra },
+        };
+      }
+
+      function mockSends(): { count: () => number } {
+        let sent = 0;
+        spyOn(globalThis, 'fetch').mockImplementation((async () => {
+          sent += 1;
+          return jsonResponse({ id: `out-${sent}` });
+        }) as never);
+        return { count: () => sent };
+      }
+
+      function send(to = CONTACT) {
+        return plugin.sendMessage(instanceId, { to, content: { type: 'text', text: 'hello' } });
+      }
+
+      function lastPayload(): Record<string, unknown> {
+        return (eventBus.published as Published[]).at(-1)?.payload as Record<string, unknown>;
+      }
+
+      it('uses the recipient recorded when the message was sent', async () => {
+        mockSends();
+        await send('+55 (11) 90000-0002');
+        eventBus.published = [];
+
+        await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-1')));
+        await plugin.handleWebhook(post(withoutRecipient('READ', 'out-1')));
+        await plugin.handleWebhook(
+          post(withoutRecipient('NOT_DELIVERED', 'out-1', { causes: [{ channelErrorCode: '131047' }] })),
+        );
+
+        const events = eventBus.published as Published[];
+        expect(events.map((e) => e.type)).toEqual(['message.delivered', 'message.read', 'message.failed']);
+        for (const event of events) {
+          expect(event.payload).toMatchObject({ externalId: 'out-1', chatId: CONTACT });
+        }
+      });
+
+      it('prefers the recipient the event carries over the recorded one', async () => {
+        mockSends();
+        await send(CONTACT);
+        eventBus.published = [];
+
+        await plugin.handleWebhook(
+          post({
+            ...withoutRecipient('DELIVERED', 'out-1'),
+            message: { id: 'out-1', from: SENDER_ID, to: '5511911112222', direction: 'OUT' },
+          }),
+        );
+
+        expect(lastPayload()).toMatchObject({ externalId: 'out-1', chatId: '5511911112222' });
+      });
+
+      it('warns with the external id, and emits with an empty chat, when no recipient is known', async () => {
+        const warn = spyOn(plugin.getLogger(), 'warn');
+
+        await plugin.handleWebhook(post(withoutRecipient('NOT_DELIVERED', 'out-unknown')));
+
+        expect(lastPayload()).toMatchObject({ externalId: 'out-unknown', chatId: '' });
+        const lines = warn.mock.calls.map((args) => JSON.stringify(args));
+        expect(lines.some((line) => line.includes('out-unknown') && line.includes(instanceId))).toBe(true);
+      });
+
+      it('does not warn when the event carries its recipient', async () => {
+        const warn = spyOn(plugin.getLogger(), 'warn');
+
+        await plugin.handleWebhook(post(statusEvent('DELIVERED')));
+
+        expect(warn).not.toHaveBeenCalled();
+      });
+
+      it('does not record anything for a send that failed', async () => {
+        spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ message: 'down' }, 503));
+        await send();
+        const warn = spyOn(plugin.getLogger(), 'warn');
+        eventBus.published = [];
+
+        await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-1')));
+
+        expect(lastPayload()).toMatchObject({ chatId: '' });
+        expect(warn.mock.calls.some((args) => JSON.stringify(args).includes('out-1'))).toBe(true);
+      });
+
+      it('keeps at most 5000 recipients, dropping the oldest first', async () => {
+        const sends = mockSends();
+        for (let index = 0; index < 5001; index += 1) await send(`55119${String(index).padStart(8, '0')}`);
+        expect(sends.count()).toBe(5001);
+        const warn = spyOn(plugin.getLogger(), 'warn');
+        eventBus.published = [];
+
+        await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-1')));
+        expect(lastPayload()).toMatchObject({ externalId: 'out-1', chatId: '' });
+        expect(warn.mock.calls.some((args) => JSON.stringify(args).includes('out-1'))).toBe(true);
+
+        await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-2')));
+        expect(lastPayload()).toMatchObject({ externalId: 'out-2', chatId: '5511900000001' });
+
+        await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-5001')));
+        expect(lastPayload()).toMatchObject({ externalId: 'out-5001', chatId: '5511900005000' });
+      });
+
+      it('forgets a recipient 24 hours after the send', async () => {
+        mockSends();
+        const sentAt = Date.now();
+        await send();
+        const now = spyOn(Date, 'now');
+        try {
+          now.mockReturnValue(sentAt + 24 * 60 * 60 * 1000 - 1000);
+          await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-1')));
+          expect(lastPayload()).toMatchObject({ chatId: CONTACT });
+
+          now.mockReturnValue(sentAt + 24 * 60 * 60 * 1000 + 1000);
+          await plugin.handleWebhook(post(withoutRecipient('DELIVERED', 'out-1')));
+          expect(lastPayload()).toMatchObject({ chatId: '' });
+        } finally {
+          now.mockRestore();
+        }
+      });
+    });
   });
 });

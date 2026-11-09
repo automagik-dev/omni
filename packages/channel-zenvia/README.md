@@ -206,7 +206,12 @@ Neither failure pauses the agent, writes an audit row or disarms follow-ups.
 - contacts (as text);
 - quoted replies (`idRef`);
 - statuses: `DELIVERED`, `READ`, and `REJECTED`/`NOT_DELIVERED`, which map
-  to failed;
+  to failed. When a status event carries no `message.to`, the chat comes from
+  an in-memory map of `messageId -> recipient` recorded on every successful
+  send (at most 5000 entries per instance, 24 hours each, oldest dropped first).
+  A status for a message the map does not know (sent before a restart, or by
+  another system) logs a `warn` with its `externalId` and is emitted with an
+  empty chat id;
 - dedupe by message id.
 
 Files Zenvia itself marks as `REJECTED` are dropped. `MESSAGE` events with

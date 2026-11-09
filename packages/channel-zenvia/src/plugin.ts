@@ -1,4 +1,10 @@
-import { BaseChannelPlugin, createDownloadGuard, createInboundDedupeCache, sanitizeMessage } from '@omni/channel-sdk';
+import {
+  BaseChannelPlugin,
+  createDownloadGuard,
+  createInboundDedupeCache,
+  createThreadStarterCache,
+  sanitizeMessage,
+} from '@omni/channel-sdk';
 import type {
   ChannelCapabilities,
   DedupeCache,
@@ -10,6 +16,7 @@ import type {
   OutgoingMessage,
   PluginContext,
   SendResult,
+  ThreadStarterCache,
 } from '@omni/channel-sdk';
 import { markdownToWhatsApp } from '@omni/core';
 import type { Logger } from '@omni/core';
@@ -45,11 +52,16 @@ const ZENVIA_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'vide
 
 const downloadGuard = createDownloadGuard();
 
+const SENT_RECIPIENT_MAX_ENTRIES = 5000;
+const SENT_RECIPIENT_TTL_MS = 24 * 60 * 60 * 1000;
+const RECIPIENT_STATUS_CODES: ReadonlySet<string> = new Set(['DELIVERED', 'READ', 'REJECTED', 'NOT_DELIVERED']);
+
 interface ZenviaInstanceState {
   client: ZenviaClient;
   salesClient?: ZenviaSalesClient;
   config: ZenviaConfig;
   dedupeCache: DedupeCache;
+  sentRecipients: ThreadStarterCache<string>;
 }
 
 type TransferOutcome =
@@ -70,7 +82,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
   protected override async onDestroy(): Promise<void> {
     for (const [, state] of this.zenviaInstances) {
-      state.dedupeCache.dispose();
+      disposeState(state);
     }
     this.zenviaInstances.clear();
     this.logger.info('Zenvia plugin destroyed');
@@ -105,12 +117,17 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       );
     }
 
-    this.zenviaInstances.get(instanceId)?.dedupeCache.dispose();
+    const replaced = this.zenviaInstances.get(instanceId);
+    if (replaced) disposeState(replaced);
     this.zenviaInstances.set(instanceId, {
       client,
       salesClient,
       config: zenviaConfig,
       dedupeCache: createInboundDedupeCache(),
+      sentRecipients: createThreadStarterCache<string>({
+        ttlMs: SENT_RECIPIENT_TTL_MS,
+        maxSize: SENT_RECIPIENT_MAX_ENTRIES,
+      }),
     });
 
     await this.updateInstanceStatus(instanceId, config, {
@@ -191,6 +208,8 @@ export class ZenviaPlugin extends BaseChannelPlugin {
         }
         return { success: false, error: err, retryable: false, timestamp: Date.now() };
       }
+
+      state.sentRecipients.set(messageId, payload.to);
 
       await this.emitMessageSent({
         instanceId,
@@ -327,7 +346,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
   private dropInstanceState(instanceId: string): void {
     const previous = this.zenviaInstances.get(instanceId);
     if (!previous) return;
-    previous.dedupeCache.dispose();
+    disposeState(previous);
     this.zenviaInstances.delete(instanceId);
   }
 
@@ -498,6 +517,25 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     return true;
   }
 
+  private async resolveStatusChatId(
+    instanceId: string,
+    externalId: string,
+    event: ZenviaMessageStatusEvent,
+  ): Promise<string> {
+    const fromEvent = toZenviaPhone(event.message?.to ?? '');
+    if (fromEvent) return fromEvent;
+
+    const recorded = await this.zenviaInstances.get(instanceId)?.sentRecipients.get(externalId);
+    if (recorded) return recorded;
+
+    this.logger.warn('[zenvia] status event has no recipient and no recorded send; its chat is lost', {
+      instanceId,
+      externalId,
+      status: event.messageStatus.code,
+    });
+    return '';
+  }
+
   async handleStatusUpdate(instanceId: string, event: ZenviaMessageStatusEvent): Promise<void> {
     const externalId = event.message?.id ?? event.messageId;
     if (!externalId) return;
@@ -505,7 +543,9 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     const status = event.messageStatus;
     const parsedTs = status.timestamp ? Date.parse(status.timestamp) : Number.NaN;
     const timestampMs = Number.isFinite(parsedTs) ? parsedTs : Date.now();
-    const chatId = toZenviaPhone(event.message?.to ?? '');
+    const chatId = RECIPIENT_STATUS_CODES.has(status.code)
+      ? await this.resolveStatusChatId(instanceId, externalId, event)
+      : '';
 
     switch (status.code) {
       case 'DELIVERED':
@@ -534,6 +574,11 @@ export class ZenviaPlugin extends BaseChannelPlugin {
         return;
     }
   }
+}
+
+function disposeState(state: ZenviaInstanceState): void {
+  state.dedupeCache.dispose();
+  state.sentRecipients.dispose();
 }
 
 type OutboundBuildResult = { ok: true; payload: ZenviaOutboundMessage } | { ok: false; error: string; rejected?: true };
