@@ -92,6 +92,120 @@ describe('Zenvia webhook', () => {
     expect(received(eventBus)).toHaveLength(1);
   });
 
+  describe('inbound publication failure', () => {
+    function inboundEvent(id: string): Record<string, unknown> {
+      return messageEvent({ id, contents: [{ type: 'text', text: 'Hi' }] });
+    }
+
+    function gatePublish(): { open: () => void; started: Promise<void> } {
+      const original = eventBus.publish.bind(eventBus);
+      let open: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        open = resolve;
+      });
+      let markStarted: () => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      spyOn(eventBus, 'publish').mockImplementationOnce(async (type, payload, metadata) => {
+        markStarted();
+        await gate;
+        return original(type, payload, metadata);
+      });
+      return { open, started };
+    }
+
+    it('answers 503 and emits nothing when the message cannot be published', async () => {
+      spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+
+      const res = await plugin.handleWebhook(post(inboundEvent('m-fail')));
+
+      expect(res.status).toBe(503);
+      expect(received(eventBus)).toHaveLength(0);
+    });
+
+    it('processes the redelivery of a message whose publication failed', async () => {
+      const payload = inboundEvent('m-retry');
+      spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+
+      const first = await plugin.handleWebhook(post(payload));
+      const second = await plugin.handleWebhook(post(payload));
+
+      expect(first.status).toBe(503);
+      expect(second.status).toBe(200);
+      expect(received(eventBus).map((e) => e.externalId)).toEqual(['m-retry']);
+    });
+
+    it('drops a duplicate that arrives while the first delivery is still being published', async () => {
+      const payload = inboundEvent('m-concurrent');
+      const publish = gatePublish();
+
+      const first = plugin.handleWebhook(post(payload));
+      await publish.started;
+      const duplicate = await plugin.handleWebhook(post(payload));
+      publish.open();
+      const firstResult = await first;
+
+      expect(duplicate.status).toBe(200);
+      expect(firstResult.status).toBe(200);
+      expect(received(eventBus).map((e) => e.externalId)).toEqual(['m-concurrent']);
+    });
+
+    it('still drops a duplicate that arrives after the message was published', async () => {
+      const payload = inboundEvent('m-done');
+
+      const first = await plugin.handleWebhook(post(payload));
+      const duplicate = await plugin.handleWebhook(post(payload));
+
+      expect(first.status).toBe(200);
+      expect(duplicate.status).toBe(200);
+      expect(received(eventBus)).toHaveLength(1);
+    });
+
+    it('lets the redelivery through when a concurrent duplicate was dropped before the first publish failed', async () => {
+      const payload = inboundEvent('m-race');
+      const original = eventBus.publish.bind(eventBus);
+      let fail: () => void = () => {};
+      const failing = new Promise<void>((_resolve, reject) => {
+        fail = () => reject(new Error('bus down'));
+      });
+      let markStarted: () => void = () => {};
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      spyOn(eventBus, 'publish').mockImplementationOnce(async (type, body, metadata) => {
+        markStarted();
+        await failing;
+        return original(type, body, metadata);
+      });
+
+      const first = plugin.handleWebhook(post(payload));
+      await started;
+      const duplicate = await plugin.handleWebhook(post(payload));
+      fail();
+      const firstResult = await first;
+      const redelivery = await plugin.handleWebhook(post(payload));
+
+      expect(duplicate.status).toBe(200);
+      expect(firstResult.status).toBe(503);
+      expect(redelivery.status).toBe(200);
+      expect(received(eventBus).map((e) => e.externalId)).toEqual(['m-race']);
+    });
+
+    it('keeps answering 200 for messages it deliberately drops', async () => {
+      const otherSender = await plugin.handleWebhook(
+        post(messageEvent({ id: 'm-elsewhere', to: '5511988887777', contents: [{ type: 'text', text: 'Hi' }] })),
+      );
+      const rejectedFile = await plugin.handleWebhook(
+        post(messageEvent({ id: 'm-rejected-file', contents: [{ type: 'file', status: 'REJECTED' }] })),
+      );
+
+      expect(otherSender.status).toBe(200);
+      expect(rejectedFile.status).toBe(200);
+      expect(received(eventBus)).toHaveLength(0);
+    });
+  });
+
   it('ignores OUT echoes of messages sent from the number', async () => {
     await plugin.handleWebhook(post(messageEvent({ id: 'm-out', contents: [{ type: 'text', text: 'x' }] }, 'OUT')));
     expect(received(eventBus)).toHaveLength(0);

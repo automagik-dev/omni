@@ -450,6 +450,15 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       return false;
     }
 
+    try {
+      return await this.publishInboundMessage(instanceId, msg);
+    } catch (err) {
+      state.dedupeCache.release(instanceId, msg.id);
+      throw err;
+    }
+  }
+
+  private async publishInboundMessage(instanceId: string, msg: ZenviaInboundMessage): Promise<boolean> {
     if (msg.contents.length > 1) {
       this.logger.warn('[zenvia] inbound message has several contents — only the first is used', {
         instanceId,

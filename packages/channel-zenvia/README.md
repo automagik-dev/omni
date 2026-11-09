@@ -54,9 +54,12 @@ verify token in the subscription's fixed headers:
 
 Create one subscription per event type (`MESSAGE` and `MESSAGE_STATUS`).
 
-The webhook answers 200 to every authenticated event, 401 to a missing or
-wrong token and 503 while the instance is not connected (during a restart),
-so Zenvia can redeliver. An inbound `MESSAGE` addressed to a different sender
+The webhook answers 200 to every authenticated event it processed or
+deliberately ignores, 401 to a missing or wrong token and 503 while the
+instance is not connected (during a restart), so Zenvia can redeliver. An
+inbound `MESSAGE` that could not be published to the event bus also answers
+503: the message is not acknowledged, its id is not kept as seen, and the
+redelivery is processed. An inbound `MESSAGE` addressed to a different sender
 of the same Zenvia account is acknowledged and dropped, so two instances on
 one account never answer each other's contacts.
 
@@ -212,7 +215,9 @@ Neither failure pauses the agent, writes an audit row or disarms follow-ups.
   A status for a message the map does not know (sent before a restart, or by
   another system) logs a `warn` with its `externalId` and is emitted with an
   empty chat id;
-- dedupe by message id.
+- dedupe by message id: an id is claimed when its delivery starts, so a
+  concurrent duplicate is dropped, and is released again if publishing fails,
+  so the redelivery is not mistaken for a duplicate.
 
 Files Zenvia itself marks as `REJECTED` are dropped. `MESSAGE` events with
 `direction: OUT` are echoes of messages sent from the number and are

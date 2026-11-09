@@ -54,7 +54,11 @@ export async function handleZenviaWebhookRequest(
     return new Response('OK', { status: 200 });
   }
 
-  await handleZenviaEvent(plugin, instanceId, parsedJson);
+  try {
+    await handleZenviaEvent(plugin, instanceId, parsedJson);
+  } catch {
+    return new Response('Service Unavailable', { status: 503 });
+  }
   return new Response('OK', { status: 200 });
 }
 
@@ -100,6 +104,7 @@ async function dispatchMessageEvent(plugin: ZenviaPlugin, instanceId: string, pa
     await plugin.handleInboundMessage(instanceId, parsed.data.message);
   } catch (err) {
     logger.warn('[zenvia] failed to emit inbound message', { instanceId, err: String(err) });
+    throw err;
   }
 }
 
