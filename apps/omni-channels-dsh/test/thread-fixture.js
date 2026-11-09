@@ -179,7 +179,7 @@ export const record = (id, sessionId, extra = {}) => ({
 // One DSH start: the real Bot team and this plugin on a fake DSH over `home`. Sessions are
 // stand-ins whose log ends where `cut` puts it; selectModel writes model/selection into the
 // Session, as DSH's session controller does. Each stand-in agent has a scoped tool list whose
-// restrictions are recorded (`restricts`), and runs on deepseek/flash. `mask` hides the restart
+// restrictions and executors are recorded (`restricts`, `executors`), and runs on deepseek/flash. `mask` hides the restart
 // hook, as a Bot team before it has none. `fake.createError` makes the next Session fail to
 // be made. `services`: DSH services the plugin reads with ctx.get (llm, attachments).
 // `resumesDone`: the outcome the plugin is told, once the team's own pass is over, in place of
@@ -195,6 +195,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   const archived = []
   const archiving = []
   const restricts = []
+  const executors = []
   // Each DSH Session title set, [sessionId, title]: the team's when it makes a Session, and
   // this plugin's when it names a thread again.
   const titled = []
@@ -212,14 +213,20 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
       options: { provider: 'deepseek', model: 'flash' },
       status: 'idle', calls, inbox: { nextStep: [], nextTurn: [], remove: () => false }, followup: keep, steer: keep, cancel() {},
     }
-    // Its own scope: effects it owns, and its tool restrictions.
+    // Its own scope: effects it owns, its tool restrictions and its tool executor.
     agent.ctx = {
       effect: () => {},
-      tools: { restrict: (filter) => {
-        if (fake.restrictError) throw fake.restrictError
-        restricts.push({ agent, sessionId, filter })
-        return () => {}
-      } },
+      tools: {
+        restrict: (filter) => {
+          if (fake.restrictError) throw fake.restrictError
+          restricts.push({ agent, sessionId, filter })
+          return () => {}
+        },
+        setExecutor: (executor) => {
+          executors.push({ agent, sessionId, executor })
+          return () => {}
+        },
+      },
     }
     agents.set(sessionId, agent)
     return agent
@@ -295,7 +302,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   // Stopped before its home goes (homeFor).
   if (stopsOf.has(home)) stopsOf.get(home).push(stop)
   else t.after(stop)
-  return { ctx, team, channels, call, view, emit, cut, agentOf, freshAgent, made, resolved, selected, archived, archiving, restricts, registered, titled, fake, stop }
+  return { ctx, team, channels, call, view, emit, cut, agentOf, freshAgent, made, resolved, selected, archived, archiving, restricts, executors, registered, titled, fake, stop }
 }
 
 // A fresh home linked to `omni`, with the team in it; removed once every start on it stopped.

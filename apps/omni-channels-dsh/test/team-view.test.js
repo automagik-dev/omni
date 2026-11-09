@@ -106,12 +106,16 @@ test('the Omni endpoints are this plugin\'s, served on the team\'s route, and go
   assert.equal((await call('omni-overview', {})).error.code, 'bot/not-found')
 })
 
+// The team's browser tools (bots-dsh browser-plugins.js, since 3.87), which TEAM_TOOLS does not
+// name: one browser plugin for the whole team, registered beside TEAM_TOOLS.
+const TEAM_BROWSER_TOOLS = ['browser_back', 'browser_click', 'browser_handoff', 'browser_open', 'browser_press', 'browser_resume', 'browser_screenshot', 'browser_select', 'browser_snapshot', 'browser_tabs', 'browser_type', 'browser_upload']
 // show_canvas is the canvas plugin's, which checks the whole list. The plugin's own tools,
-// and the chat threads' (THREAD_TOOLS), come on top: the Omni Bot has no hand-off tool.
+// and the chat threads' (THREAD_TOOLS), come on top; omni_handoff is gone (the team's
+// browser_handoff is a browser tool, not one of this plugin's).
 test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas, plus the plugin\'s own', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...THREAD_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS].sort())
   assert.equal(ctx.registeredTools.has('omni_handoff'), false)
 })
 
@@ -248,7 +252,6 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: thread keys',
     'on session/event',
     'on approval/request (prepend)',
-    'tools guard',
     'effect omni-channels: thread instructions',
     'prompt omni-thread 650',
     'effect omni-channels: threads view',
@@ -265,8 +268,10 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'tool thread_ask_omni',
     'effect omni-channels: asks of removed threads',
     'on tools/pre-execute (prepend)',
-    'effect omni-channels: thread tool lists',
+    'on tools/pre-execute (prepend)',
+    'effect omni-channels: thread Sessions',
     'on agent/created',
+    'on agent/created (prepend)',
     'effect omni-channels: omni-free-reactions',
     'effect omni-channels: omni-free-reactions-save',
     'effect omni-channels: omni-thread-defaults',

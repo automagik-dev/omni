@@ -8,8 +8,10 @@ usage() {
 fail() { printf 'npm stable reconciliation failed: %s\n' "$*" >&2; exit 1; }
 # Exit codes: 0 reconciled and verified; 1 unsafe or unverifiable state;
 # 3 --verify-only and the registry still needs a mutation (nothing was written);
-# 75 transient registry failure (404/5xx fetching a tarball, 5xx on publish).
-# image-build.yml finalize re-dispatches the publish only on the 75 marker.
+# 75 transient registry failure: 404/5xx fetching a tarball, 5xx on publish, a
+# readback that has not converged after the publish, or a tarball URL that
+# stayed 404 (the registry is slow, not wrong). image-build.yml finalize
+# re-dispatches the publish only on the 75 marker.
 transient() {
   printf '::warning::npm_registry_transient: %s\n' "$*" >&2
   exit 75
@@ -120,9 +122,15 @@ case "${action}" in
   publish)
     if ! npm publish "${tarball}" --access public --tag latest 2>"${publish_error_file}"; then
       cat "${publish_error_file}" >&2
-      # Only a 5xx is retryable: a publish 404 is also npm's auth/scope refusal.
-      grep -Eq 'E5[0-9][0-9]' "${publish_error_file}" && transient "npm publish hit a registry 5xx"
-      fail "npm publish failed"
+      if grep -q 'cannot publish over' "${publish_error_file}"; then
+        # The registry already holds this version (a previous attempt published
+        # it) while its readback still lagged: nothing to publish; converge below.
+        printf '::warning::@automagik/omni@%s is already on the registry; its readback lagged behind the publish\n' "${expected}" >&2
+      else
+        # Only a 5xx is retryable: a publish 404 is also npm's auth/scope refusal.
+        grep -Eq 'E5[0-9][0-9]' "${publish_error_file}" && transient "npm publish hit a registry 5xx"
+        fail "npm publish failed"
+      fi
     fi
     ;;
   repair_latest)
@@ -139,10 +147,14 @@ esac
 # A fixed delay list, not a wall-clock deadline: the contract test mocks sleep.
 converge_delays=(0 5 10 20 40 60 60 60 60 60 60 60 60 60 60 60 60 60 60)
 final_state=""
+poll=0
 for delay in "${converge_delays[@]}"; do
   [[ "${delay}" -eq 0 ]] || sleep "${delay}"
+  poll=$((poll + 1))
   published_after="$(read_published "${error_file}")"
   latest_after="$(read_latest "${latest_error_file}")"
+  printf 'npm readback %d/%d after %s: published=%s latest=%s (expected %s)\n' \
+    "${poll}" "${#converge_delays[@]}" "${action}" "${published_after:-<none>}" "${latest_after:-<none>}" "${expected}" >&2
   if ! final_state="$("${state_helper}" \
     --expected "${expected}" --published "${published_after}" --latest "${latest_after}" \
     2>"${state_error_file}")"; then
@@ -151,8 +163,10 @@ for delay in "${converge_delays[@]}"; do
   fi
   [[ "${final_state}" != "npm_action=none" ]] || break
 done
+# The registry accepted the mutation and only its readback lags: transient, so
+# image-build.yml's bounded retry re-dispatches instead of failing the mint.
 [[ "${final_state}" == "npm_action=none" ]] || \
-  fail "registry state did not converge after ${action}"
+  transient "registry state did not converge after ${action} (published=${published_after:-<none>} latest=${latest_after:-<none>}, expected ${expected})"
 npm view "@automagik/omni@${expected}" dist --json > "${dist_file}"
 integrity="$(jq -r '.integrity // empty' "${dist_file}")"
 resolved="$(jq -r '.tarball // empty' "${dist_file}")"
@@ -163,15 +177,18 @@ registry_tarball="${pack_dir}/registry-omni-${expected}.tgz"
 # The tarball URL can still 404 for minutes after the packument converged
 # (CDN propagation); curl --retry does not cover 404, so poll it the same way.
 tarball_fetched=false
+poll=0
 for delay in "${converge_delays[@]}"; do
   [[ "${delay}" -eq 0 ]] || sleep "${delay}"
+  poll=$((poll + 1))
   if curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-connrefused \
     -o "${registry_tarball}" "${resolved}"; then
     tarball_fetched=true
     break
   fi
+  printf 'npm tarball %d/%d: %s is not downloadable yet\n' "${poll}" "${#converge_delays[@]}" "${resolved}" >&2
 done
-[[ "${tarball_fetched}" == "true" ]] || fail "registry tarball ${resolved} did not become downloadable"
+[[ "${tarball_fetched}" == "true" ]] || transient "registry tarball ${resolved} did not become downloadable"
 curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \
   -o "${keys_file}" "https://registry.npmjs.org/-/npm/v1/keys"
 curl -fsSL --connect-timeout 10 --max-time 60 --retry 3 --retry-connrefused \

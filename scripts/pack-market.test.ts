@@ -1,10 +1,20 @@
 import { afterAll, describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { MarketManifestSchema } from '../packages/api/src/market/manifest';
-import { discoverPlugins, packMarket } from './pack-market';
+import { defaultPackedAt, discoverPlugins, packMarket } from './pack-market';
 
 const repoRoot = join(import.meta.dir, '..');
 // Archive-backed tests use the marketplace budget of 120 s: bun pm pack and tar run
@@ -113,6 +123,63 @@ describe('pack-market', () => {
     // The out dir holds exactly this release: the stale tarball is gone.
     expect(() => readFileSync(join(outDir, 'stale.tgz'))).toThrow();
   }, 120_000);
+
+  test('two packs of one tree are byte-identical: packedAt is the commit time, not the clock', async () => {
+    const appsDir = join(root, 'repro');
+    plugin(appsDir, 'same-dsh', { name: 'same-dsh', version: '2.261025.2' });
+    const saved = process.env.SOURCE_DATE_EPOCH;
+    Reflect.deleteProperty(process.env, 'SOURCE_DATE_EPOCH');
+    try {
+      const first = await packMarket({
+        appsDir,
+        outDir: join(root, 'repro-a'),
+        omniVersion: '2.261025.2',
+        automagik: false,
+      });
+      // The stable npm publication rebuilds the package later, from a fresh checkout: other mtimes, another clock.
+      const touched = new Date('2020-01-01T00:00:00Z');
+      utimesSync(join(appsDir, 'same-dsh', 'index.js'), touched, touched);
+      const second = await packMarket({
+        appsDir,
+        outDir: join(root, 'repro-b'),
+        omniVersion: '2.261025.2',
+        automagik: false,
+      });
+      const committed = Number(
+        execFileSync('git', ['log', '-1', '--format=%ct'], { cwd: repoRoot, encoding: 'utf8' }).trim(),
+      );
+      expect(first.packedAt).toBe(committed);
+      expect(second).toEqual(first);
+      const files = readdirSync(join(root, 'repro-a')).sort();
+      expect(files).toEqual(['market.json', 'same-dsh-2.261025.2.tgz']);
+      expect(readdirSync(join(root, 'repro-b')).sort()).toEqual(files);
+      for (const file of files)
+        expect(readFileSync(join(root, 'repro-b', file)).equals(readFileSync(join(root, 'repro-a', file))), file).toBe(
+          true,
+        );
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, 'SOURCE_DATE_EPOCH');
+      else process.env.SOURCE_DATE_EPOCH = saved;
+    }
+  }, 120_000);
+
+  test('packedAt takes SOURCE_DATE_EPOCH first and falls back to the clock outside a git checkout', () => {
+    const saved = process.env.SOURCE_DATE_EPOCH;
+    try {
+      process.env.SOURCE_DATE_EPOCH = '1792553326';
+      expect(defaultPackedAt()).toBe(1792553326);
+      process.env.SOURCE_DATE_EPOCH = 'not-a-number';
+      expect(defaultPackedAt()).toBe(
+        Number(execFileSync('git', ['log', '-1', '--format=%ct'], { cwd: repoRoot, encoding: 'utf8' }).trim()),
+      );
+      // The API image build packs from a plain copy without .git (deploy/Dockerfile).
+      const now = Math.floor(Date.now() / 1000);
+      expect(Math.abs(defaultPackedAt(root) - now)).toBeLessThan(60);
+    } finally {
+      if (saved === undefined) Reflect.deleteProperty(process.env, 'SOURCE_DATE_EPOCH');
+      else process.env.SOURCE_DATE_EPOCH = saved;
+    }
+  });
 
   test('packs a plugin at its own version, the Omni release of its last change', async () => {
     const appsDir = join(root, 'lagging');

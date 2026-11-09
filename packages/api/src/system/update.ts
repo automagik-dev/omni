@@ -38,6 +38,7 @@ import {
 } from '../login/messages';
 import { UPDATE_CONFIRM_TTL_MS, type UpdateRequestStore, updateRequestStore } from '../login/update-requests';
 import type { OwnAccount } from '../login/whatsapp';
+import { lastUpdateError, updateFailureReason, updateLogSize } from './update-log';
 
 const log = createLogger('system-update');
 
@@ -64,6 +65,8 @@ const InFlightSchema = z.object({
   from: z.string().min(1),
   to: z.string().min(1),
   startedAt: z.string().datetime(),
+  /** Where the update log ended when this update started; only what follows is its own. */
+  logFrom: z.number().int().nonnegative().optional(),
 });
 type InFlight = z.infer<typeof InFlightSchema>;
 
@@ -85,6 +88,8 @@ export interface UpdateConfig {
   channel: UpdateChannel;
   registry: string;
   stateFile: string;
+  /** OMNI_UPDATE_LOG: where the update command writes its result (a sandbox's logs/update.log), or null. */
+  updateLog: string | null;
 }
 
 /** OMNI_UPDATE_COMMAND as argv: a JSON array of strings, else its words. */
@@ -129,6 +134,7 @@ export function readUpdateConfig(version: string, env: NodeJS.ProcessEnv = proce
     channel: channel.success ? channel.data : version.includes('-') ? 'next' : 'latest',
     registry: (env.OMNI_UPDATE_REGISTRY?.trim() || DEFAULT_REGISTRY).replace(/\/+$/, ''),
     stateFile: join(env.OMNI_UPDATE_STATE_DIR?.trim() || './data', 'system-update.json'),
+    updateLog: env.OMNI_UPDATE_LOG?.trim() || null,
   };
 }
 
@@ -281,12 +287,26 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
     const recorded = await readInFlight();
     if (recorded?.id !== record.id) return false;
     await rm(config.stateFile, { force: true });
+    const why = ok ? null : await failureReason(record);
     await eventBus
-      ?.publishGeneric('system.update.finished', { id: record.id, from: record.from, to: record.to, ok, reason })
+      ?.publishGeneric('system.update.finished', {
+        id: record.id,
+        from: record.from,
+        to: record.to,
+        ok,
+        reason: why ?? reason,
+      })
       .catch((error) => log.warn('Could not publish the update result', { error: String(error) }));
-    log.info('Update finished', { to: record.to, ok, reason });
-    await tellOwner(`update-done-${record.id}`, updateFinishedMessage(record.to, current, ok), wait);
+    log.info('Update finished', { to: record.to, ok, reason: why ?? reason });
+    await tellOwner(`update-done-${record.id}`, updateFinishedMessage(record.to, current, ok, why ?? undefined), wait);
     return true;
+  }
+
+  /** Why the update failed, in fixed words, from the result its command logged after it started; else null. */
+  async function failureReason(record: InFlight): Promise<string | null> {
+    if (!config.updateLog || record.logFrom === undefined) return null;
+    const error = await lastUpdateError(config.updateLog, record.logFrom).catch(() => null);
+    return error === null ? null : updateFailureReason(error, config.updateLog);
   }
 
   /** The update is late when it is still not done after the grace period. */
@@ -415,6 +435,7 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
       from: current,
       to,
       startedAt: new Date(now()).toISOString(),
+      ...(config.updateLog ? { logFrom: await updateLogSize(config.updateLog) } : {}),
     };
     await eventBus
       ?.publishGeneric('system.update.confirmed', {
@@ -487,6 +508,12 @@ export function createSystemUpdater(deps: SystemUpdaterDeps): SystemUpdater {
     if (current === record.to) {
       await settle(record, true, 'running the new version', REPORT_WAIT_MS);
       return 'updated';
+    }
+    // A supervisor can restore the old runtime after an install failure. Its terminal result
+    // is final: report it on that boot, rather than waiting out the detached-install grace.
+    if (await failureReason(record)) {
+      await settle(record, false, 'install failed', REPORT_WAIT_MS);
+      return 'not-completed';
     }
     if (now() - Date.parse(record.startedAt) < UPDATE_GRACE_MS) {
       // Restarted mid-update (the command may still be at work): give it the rest of the grace period.

@@ -99,9 +99,9 @@ The AST oracle checks dependency closure and unchanged bytes outside the five se
 
 ## Install
 
-The plugin needs DSH `>=0.2.1-rc.3 <0.2.2-0` (the DSH its tests run on, up to the next patch;
+The plugin needs DSH `>=0.2.2-rc.1 <0.2.3-0` (the DSH its tests run on, up to the next patch;
 DSH turns the plugin off outside it), the Bot team plugin (`@automagik/bots-dsh`
-`>=3.1.0 <3.261000.0`: Automagik's 3.N releases) and an Omni no older than its `engines.omni`
+`>=3.87.0 <3.261000.0`: Automagik's 3.N releases from the first that admits DSH 0.2.2) and an Omni no older than its `engines.omni`
 minimum. Its version is the Omni release of its last change: an Omni release moves it only when
 this folder changed, so it can trail the newest Omni. Add the Automagik
 marketplace index to DSH's plugin market ([marketplace/README.md](../../marketplace/README.md)

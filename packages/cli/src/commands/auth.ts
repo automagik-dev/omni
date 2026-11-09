@@ -121,7 +121,12 @@ async function restartApiWithNewKey(newKey: string): Promise<{ success: boolean;
     // Persist the key via `pm2 set` and bounce the process. We intentionally
     // do NOT ask pm2 to re-read the shell env — the env we pass via `runPm2`
     // is already hermetic and derived from config.
-    await runPm2(['set', `${name}:OMNI_API_KEY`, newKey]);
+    // PM2 echoes configured values on both streams; never forward its output.
+    const persisted = await capturePm2('set', `${name}:OMNI_API_KEY`, newKey).catch(() => ({ code: 1 }));
+    if (persisted.code !== 0) {
+      output.warn(`Could not save the PM2 key (${maskApiKey(newKey)}).`);
+      return { success: false, processName: name };
+    }
     const restartCode = await runPm2(['restart', name], runtimeEnv);
 
     return { success: restartCode === 0, processName: name };
@@ -263,7 +268,6 @@ function updateLocalConfig(apiKey: string, apiUrl?: string): void {
 
 /** Print manual recovery instructions when automation fails. */
 function printManualInstructions(newKey?: string): void {
-  const key = newKey ?? '<your-new-key>';
   output.raw('');
   output.raw('  Manual recovery steps:');
   output.raw('');
@@ -280,11 +284,12 @@ function printManualInstructions(newKey?: string): void {
   output.raw('  3. Or to rotate to a new key:');
   output.raw('     a. Stop the API:  omni stop');
   output.raw('     b. Delete primary key from DB manually');
-  output.raw(`     c. Restart:       OMNI_API_KEY=${key} omni start`);
+  output.raw('     c. Restart:       OMNI_API_KEY=<your-new-key> omni start');
   output.raw('     d. Sign in interactively: omni auth login --server default');
   output.raw(
     '        Or read a key from stdin: omni auth login --server default --api-key-stdin < /secure/path/omni-api-key',
   );
+  if (newKey) output.raw('  View the saved key: omni server list --reveal');
   output.raw('');
 }
 
@@ -332,8 +337,8 @@ function handleRotationFailure(newKey: string, processName: string | null, apiUr
   } else {
     output.warn(`Failed to restart ${processName} with new key.`);
   }
-  printManualInstructions(newKey);
   updateLocalConfig(newKey, apiUrlOverride);
+  printManualInstructions(newKey);
   output.warn(`Config updated with new key (${maskApiKey(newKey)}) but API restart failed.`);
   output.raw('  After fixing the DB and restarting the API, run: omni status');
   output.raw('');
@@ -381,8 +386,8 @@ async function handleRotationSuccess(
   output.raw('  Or diagnose with: omni doctor --fix');
   output.raw('  Then verify with: omni status');
   output.raw('');
-  // biome-ignore lint/suspicious/noConsole: CLI output — key shown once for manual use
-  console.log(`  New key (save this): ${newKey}`);
+  output.raw(`  Saved new key: ${maskApiKey(newKey)}`);
+  output.raw('  View the saved key in the default row: omni server list --reveal');
   output.raw('');
 }
 

@@ -5,7 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import type { SpawnOptions } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventBus } from '@omni/core';
@@ -23,6 +23,7 @@ import {
   createSystemUpdater,
   readUpdateConfig,
 } from '../update';
+import { updateFailureReason } from '../update-log';
 
 const OWNER: OwnAccount = {
   instanceId: '11111111-1111-4111-8111-111111111111',
@@ -485,6 +486,130 @@ describe('after the restart', () => {
   });
 });
 
+describe('why an update did not complete, from the sandbox update log', () => {
+  const updateLog = () => join(dir, 'update.log');
+  const env = () => ({
+    OMNI_UPDATE_COMMAND: 'omni sandbox update',
+    OMNI_UPDATE_CONFIRM: 'app',
+    API_HOST: '127.0.0.1',
+    OMNI_UPDATE_LOG: updateLog(),
+  });
+  const BUN_MISMATCH = JSON.stringify({
+    ok: false,
+    installed: true,
+    home: '/home/someone/.omni/sandbox',
+    error: 'Sandbox install requires Bun 1.4.4; /usr/local/bin/bun runs 1.3.9. Run this CLI with Bun 1.4.4 and retry.',
+  });
+  const NOT_COMPLETED = `🐙 The update to ${LATEST} did not complete; Omni is still on ${CURRENT}.`;
+  const finished = () => events.filter((event) => event.type === 'system.update.finished');
+
+  /** Starts the update as the app does, lets `written` reach the log, then boots past the grace period. */
+  async function failAfterGrace(written: string | null): Promise<void> {
+    const clock = { at: Date.now() };
+    await setup(env(), { clock }).updater.request(LATEST, 'key-1');
+    if (written !== null) appendFileSync(updateLog(), written);
+    clock.at += UPDATE_GRACE_MS + 1;
+    expect(await setup(env(), { clock }).updater.reconcile()).toBe('not-completed');
+  }
+
+  test('an external-service refusal settles immediately on command exit with its fixed reason', async () => {
+    const { updater } = setup(env());
+    await updater.request(LATEST, 'key-1');
+    appendFileSync(
+      updateLog(),
+      `${JSON.stringify({ ok: false, error: 'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.' })}\n`,
+    );
+    spawned[0]?.child.exitListener?.(1, null);
+    await waitForFailedUpdate();
+    const reason = 'In-app update is unavailable for this system service; update it manually first.';
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${reason}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([reason]);
+  });
+
+  test('the restored old API reports the failed install at boot without waiting for the grace period', async () => {
+    const clock = { at: Date.now() };
+    await setup(env(), { clock }).updater.request(LATEST, 'key-1');
+    appendFileSync(
+      updateLog(),
+      `${JSON.stringify({ ok: false, error: 'Sandbox install failed; the previous runtime was restored.' })}\n`,
+    );
+    expect(await setup(env(), { clock }).updater.reconcile()).toBe('not-completed');
+    const reason = 'The install failed; the previous runtime was restored.';
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${reason}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([reason]);
+  });
+
+  test('a Bun mismatch says which Bun the new version needs and which this computer has', async () => {
+    writeFileSync(updateLog(), 'Resolving dependencies\n');
+    await failAfterGrace(`bun x: installing\n${BUN_MISMATCH}\n`);
+    const reason = 'It needs Bun 1.4.4; this computer has 1.3.9.';
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${reason}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([reason]);
+  });
+
+  test('an unknown error says only where to look, never what the log says', async () => {
+    await failAfterGrace(`${JSON.stringify({ ok: false, home: '/elsewhere', error: 'boom: secret-token-123' })}\n`);
+    const reason = `The install failed; see ${updateLog()} on the server.`;
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${reason}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([reason]);
+    for (const text of [...sent, JSON.stringify(events)]) {
+      expect(text).not.toContain('boom');
+      expect(text).not.toContain('/elsewhere');
+    }
+  });
+
+  test('nothing written after the update started (an older line stays old): no reason, as before', async () => {
+    writeFileSync(updateLog(), `${BUN_MISMATCH}\n`);
+    const { updater } = setup(env());
+    await updater.request(LATEST, 'key-1');
+    appendFileSync(updateLog(), 'still installing, no result yet\n');
+    spawned[0]?.child.exitListener?.(1, null);
+    await waitForFailedUpdate();
+    expect(sent).toEqual([NOT_COMPLETED]);
+    expect(finished().map((event) => event.payload.reason)).toEqual(['exited with 1']);
+  });
+
+  test('no log at all: no reason, as before', async () => {
+    await failAfterGrace(null);
+    expect(existsSync(updateLog())).toBe(false);
+    expect(sent).toEqual([NOT_COMPLETED]);
+  });
+
+  test('a log cut shorter than it was when the update started proves nothing new: no reason', async () => {
+    const base = 'Sandbox install requires Bun 1.4.4; /b runs 1.3.9. ';
+    const pad = (error: string, bytes: number) =>
+      `${JSON.stringify({ ok: false, error: error.padEnd(bytes - 24, 'x') })}\n`;
+    const old = pad(base, 97);
+    expect(Buffer.byteLength(old)).toBe(97);
+    writeFileSync(updateLog(), `${old}${'p'.repeat(1397 - 97 - 1)}\n`);
+    const clock = { at: Date.now() };
+    await setup(env(), { clock }).updater.request(LATEST, 'key-1');
+    expect(JSON.parse(readFileSync(stateFile(), 'utf8')).logFrom).toBe(1397);
+    writeFileSync(updateLog(), old);
+    clock.at += UPDATE_GRACE_MS + 1;
+    expect(await setup(env(), { clock }).updater.reconcile()).toBe('not-completed');
+    expect(sent).toEqual([NOT_COMPLETED]);
+    expect(finished().map((event) => event.payload.reason)).toEqual(['still on the old version']);
+  });
+
+  test('a Bun version too long for one short line falls back to the generic line', async () => {
+    const generic = `The install failed; see ${updateLog()} on the server.`;
+    const long = `1.${'9'.repeat(19)}.0`;
+    await failAfterGrace(
+      `${JSON.stringify({ ok: false, error: `Sandbox install requires Bun ${long}; /b runs 1.3.9. Retry.` })}\n`,
+    );
+    expect(sent).toEqual([`${NOT_COMPLETED}\n${generic}`]);
+    expect(finished().map((event) => event.payload.reason)).toEqual([generic]);
+    const huge = `Sandbox install requires Bun 1.4.4; /b runs ${'9'.repeat(30_000)}.1.2. Retry.`;
+    expect(updateFailureReason(huge, '/s/logs/update.log')).toBe(
+      'The install failed; see /s/logs/update.log on the server.',
+    );
+    expect(updateFailureReason(`Sandbox install requires Bun ${'1'.repeat(20)}.0.0; /b runs 1.3.9.`, '/l')).toBe(
+      'The install failed; see /l on the server.',
+    );
+  });
+});
+
 describe('the routes', () => {
   test('GET says the status; POST validates the body and maps each refusal', async () => {
     const { updater } = setup({ OMNI_UPDATE_COMMAND: 'omni update --yes' });
@@ -550,4 +675,45 @@ describe('the confirmation message', () => {
     expect(updateCodeInMessage('update K7QM20')).toBeNull();
     expect(updateCodeInMessage('update')).toBeNull();
   });
+});
+
+test('sandbox external-service refusals and recovery use only allow-listed owner-facing reasons', () => {
+  for (const [error, reason] of [
+    [
+      'Sandbox external service update is unavailable; use a compatible supervisor and a supported Restart=always system unit.',
+      'In-app update is unavailable for this system service; update it manually first.',
+    ],
+    ['A supervisor-owned sandbox update is in progress.', 'A sandbox update is already in progress.'],
+    [
+      'Sandbox update lease expired or cannot be verified; stop the system unit and recover its lease.',
+      'The update lease needs recovery; stop the system unit and recover its lease.',
+    ],
+    [
+      'Sandbox backup was interrupted; the previous install was left unchanged.',
+      'The backup was interrupted; the previous install was left unchanged.',
+    ],
+    [
+      'Sandbox update stopped before installation; the previous install was left unchanged.',
+      'The update stopped before installation; the previous install is unchanged.',
+    ],
+    [
+      'Sandbox install timed out; the previous runtime was restored.',
+      'The install timed out; the previous runtime was restored.',
+    ],
+    [
+      'Sandbox install failed; the previous runtime was restored. Requires Bun 1.4.4; running Bun 1.3.9.',
+      'Restored previous runtime. Needs Bun 1.4.4; running 1.3.9.',
+    ],
+    [
+      'Sandbox install failed; the previous runtime was restored.',
+      'The install failed; the previous runtime was restored.',
+    ],
+    [
+      'Sandbox update did not become healthy; the rollback backup was kept.',
+      'The new sandbox did not become healthy; its rollback backup was kept.',
+    ],
+  ]) {
+    expect(updateFailureReason(error ?? '', '/log')).toBe(reason ?? '');
+    expect(updateFailureReason(`${error} remote secret`, '/log')).toBe('The install failed; see /log on the server.');
+  }
 });

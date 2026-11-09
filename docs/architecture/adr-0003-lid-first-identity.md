@@ -29,7 +29,8 @@ status: proposed
 
 ## 1. Status / Context
 
-**Status:** proposed.
+**Status:** proposed when written. The current status is in the [RFC index](../rfcs/README.md),
+where this record is `ADR-LID-0003` (the multitenancy wish also has an ADR-0003).
 
 ### Why now
 

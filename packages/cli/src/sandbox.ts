@@ -37,6 +37,7 @@
 import { type SpawnOptions, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
+  appendFileSync,
   chmodSync,
   closeSync,
   existsSync,
@@ -51,6 +52,23 @@ import { createConnection } from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
+import {
+  SUPERVISED_INSTALL_TIMEOUT_MS,
+  SandboxInstallerStillRunningError,
+  runSandboxInstallCommand,
+} from './sandbox-install-command.js';
+import { SANDBOX_UPDATE_BUSY, checkSandboxUpdateLease, sandboxProcessIdentity } from './sandbox-update-lease.js';
+import {
+  SANDBOX_EXTERNAL_UPDATE_REFUSAL,
+  SANDBOX_UPDATE_ROLLED_BACK,
+  SANDBOX_UPDATE_TIMED_OUT,
+  SANDBOX_UPDATE_UNHEALTHY,
+  appendSandboxUpdateFailure,
+  assertSandboxRollbackSafe,
+  beginSandboxUpdateTransaction,
+  hasPendingSandboxUpdate,
+} from './sandbox-update-transaction.js';
+
 import {
   AUTOPG_PIN,
   type AutopgPaths,
@@ -422,6 +440,8 @@ export function sandboxChildSpecs(
               // the update off.
               OMNI_UPDATE_COMMAND: JSON.stringify(sandboxUpdateCommand(layout, state)),
               OMNI_UPDATE_CONFIRM: 'app',
+              // Where the handed-off install writes its result, so the API can say why one failed.
+              OMNI_UPDATE_LOG: sandboxUpdateLogPath(layout),
             }),
       },
       readyPort: state.ports.api,
@@ -446,6 +466,11 @@ export function supervisorCommand(layout: SandboxLayout, state: SandboxState): s
 export function sandboxUpdateCommand(layout: SandboxLayout, state: SandboxState): string[] {
   const [bun, cli] = supervisorCommand(layout, state);
   return [bun as string, cli as string, 'sandbox', 'update', '--home', layout.home];
+}
+
+/** The log a handed-off update appends to; the API reads its last result line (OMNI_UPDATE_LOG). */
+export function sandboxUpdateLogPath(layout: SandboxLayout): string {
+  return join(layout.logsDir, 'update.log');
 }
 
 // ----------------------------------------------------------------------------
@@ -631,19 +656,25 @@ export interface SandboxDeps {
   bun: string;
   bunVersion: string;
   env: Record<string, string | undefined>;
-  run(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult>;
+  run(cmd: string[], opts: { cwd?: string; env: Record<string, string>; timeoutMs?: number }): Promise<RunResult>;
   spawnDetached(cmd: string[], opts: { cwd: string; env: Record<string, string>; logPath: string }): number;
   isPortFree(port: number): Promise<boolean>;
   health(apiUrl: string, timeoutMs: number): Promise<boolean>;
   /** Installs the pinned nats-server at `target`, or keeps the one there when it is the pin. */
   installNats(target: string): Promise<NatsInstall>;
+  readCgroup(pid: number): string | null;
+  processIdentity(pid: number): string | null;
   isAlive(pid: number): boolean;
   kill(pid: number, signal: NodeJS.Signals): void;
   now(): Date;
   sleep(ms: number): Promise<void>;
 }
 
-async function runCommand(cmd: string[], opts: { cwd?: string; env: Record<string, string> }): Promise<RunResult> {
+async function runCommand(
+  cmd: string[],
+  opts: { cwd?: string; env: Record<string, string>; timeoutMs?: number },
+): Promise<RunResult> {
+  if (opts.timeoutMs !== undefined) return runSandboxInstallCommand(cmd, { ...opts, timeoutMs: opts.timeoutMs });
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>;
   try {
     proc = Bun.spawn({ cmd, cwd: opts.cwd, env: opts.env, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' });
@@ -732,6 +763,14 @@ function defaultSandboxDeps(): SandboxDeps {
     isPortFree: isLoopbackPortFree,
     health: pollHealth,
     installNats: installNatsBinary,
+    readCgroup: (pid) => {
+      try {
+        return readFileSync(`/proc/${pid}/cgroup`, 'utf8');
+      } catch {
+        return null;
+      }
+    },
+    processIdentity: sandboxProcessIdentity,
     isAlive: processAlive,
     kill: (pid, signal) => process.kill(pid, signal),
     now: () => new Date(),
@@ -1137,6 +1176,7 @@ export async function startSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
+  assertNoSandboxUpdate(layout, deps);
   const state = requireState(layout);
   const defaultHome = unitDefaultHome(state, opts.defaultHome);
   if (livePid(layout, deps) === null) {
@@ -1176,6 +1216,7 @@ export async function stopSandbox(
   deps: SandboxDeps = defaultSandboxDeps(),
 ): Promise<SandboxReport> {
   const layout = sandboxLayout(opts.home);
+  assertNoSandboxUpdate(layout, deps);
   const state = requireState(layout);
   const env = serviceManagerEnv(deps);
   const names = sandboxUnitNames(layout.home, unitDefaultHome(state, opts.defaultHome));
@@ -1278,6 +1319,7 @@ export async function installSandbox(
     );
   }
   const layout = sandboxLayout(opts.home);
+  assertNoSandboxUpdate(layout, deps, opts.start === false);
   const previous = readSandboxState(layout);
   const packageSpec = opts.packageSpec?.trim() || VERSION;
   const atLogin = opts.atLogin ?? previous?.atLogin ?? false;
@@ -1368,8 +1410,198 @@ export async function uninstallSandbox(
   return report(layout, deps, 0);
 }
 
+/** Files of the supervisor-owned update protocol. Neither carries credentials. */
+export const sandboxUpdateFiles = (layout: SandboxLayout) => ({
+  request: join(layout.runDir, 'update-request.json'),
+  owner: join(layout.runDir, 'update-owner.json'),
+});
+function sandboxUpdateOwner(layout: SandboxLayout, deps: Pick<SandboxDeps, 'processIdentity' | 'isAlive' | 'now'>) {
+  return checkSandboxUpdateLease(sandboxUpdateFiles(layout).owner, { ...deps, now: () => deps.now().getTime() });
+}
+
+function assertNoSandboxUpdate(layout: SandboxLayout, deps: SandboxDeps, noStartInstall = false): void {
+  const owner = sandboxUpdateOwner(layout, deps);
+  if (
+    owner &&
+    !(
+      noStartInstall &&
+      deps.env.OMNI_SANDBOX_UPDATE_PID === String(owner.pid) &&
+      deps.env.OMNI_SANDBOX_UPDATE_TOKEN === owner.token
+    )
+  )
+    throw new SandboxError(SANDBOX_UPDATE_BUSY);
+}
+
 /** A version `omni sandbox update` takes: what npm publishes, never a range or a tag. */
 const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+
+const UpdateRequestSchema = z.object({ version: z.string().regex(SANDBOX_UPDATE_VERSION) }).strict();
+export function readSandboxUpdateRequest(layout: SandboxLayout): string | null {
+  try {
+    return UpdateRequestSchema.parse(JSON.parse(readFileSync(sandboxUpdateFiles(layout).request, 'utf8'))).version;
+  } catch {
+    return null;
+  }
+}
+
+const UpdateSupervisorSchema = z.object({
+  pid: z.number().int().positive(),
+  updateProtocol: z.literal(1),
+  updating: z.literal(false).optional(),
+  children: z.object({ api: z.object({ state: z.literal('ready') }) }),
+});
+const SystemUnitSchema = z.object({
+  MainPID: z.string(),
+  Restart: z.literal('always'),
+  KillMode: z.enum(['control-group', 'mixed']),
+  Type: z.enum(['simple', 'exec']),
+  WatchdogUSec: z.literal('0'),
+  RuntimeMaxUSec: z.literal('infinity'),
+  RemainAfterExit: z.literal('no'),
+  ExitType: z.literal('main').optional(),
+});
+
+/** system.slice is the boundary: even a unit named like our user unit is external here. */
+function externalSystemUnit(cgroup: string): string | null {
+  return /(?:^|\/)system\.slice\/([^/\n]+\.service)(?:\/|$)/m.exec(cgroup)?.[1] ?? null;
+}
+function refuseExternalUpdate(layout: SandboxLayout): never {
+  appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), SANDBOX_EXTERNAL_UPDATE_REFUSAL);
+  throw new SandboxError(SANDBOX_EXTERNAL_UPDATE_REFUSAL);
+}
+
+async function queueSupervisedUpdate(
+  layout: SandboxLayout,
+  state: SandboxState,
+  pid: number,
+  unit: string,
+  version: string,
+  deps: SandboxDeps,
+): Promise<void> {
+  try {
+    const status = UpdateSupervisorSchema.parse(JSON.parse(readFileSync(layout.statusPath, 'utf8')));
+    if (status.pid !== pid || state.atLogin) throw new Error('unsupported supervisor');
+    assertSandboxRollbackSafe(layout.home);
+    const shown = await deps.run(
+      [
+        'systemctl',
+        'show',
+        unit,
+        '--property=MainPID,Restart,KillMode,Type,WatchdogUSec,RuntimeMaxUSec,RemainAfterExit,ExitType',
+      ],
+      { env: serviceManagerEnv(deps) },
+    );
+    if (shown.code !== 0) throw new Error('unit not visible');
+    const properties = SystemUnitSchema.parse(
+      Object.fromEntries(
+        shown.stdout
+          .trim()
+          .split('\n')
+          .map((line) => {
+            const split = line.indexOf('=');
+            return [line.slice(0, split), line.slice(split + 1)];
+          }),
+      ),
+    );
+    if (properties.MainPID !== String(pid)) throw new Error('not the main process');
+    writeFileSync(sandboxUpdateFiles(layout).request, JSON.stringify({ version }), { flag: 'wx', mode: 0o600 });
+  } catch {
+    return refuseExternalUpdate(layout);
+  }
+  try {
+    deps.kill(pid, 'SIGUSR2');
+  } catch {
+    rmSync(sandboxUpdateFiles(layout).request, { force: true });
+    return refuseExternalUpdate(layout);
+  }
+}
+
+function supervisedInstallFailure(result: RunResult): string {
+  if (result.code === 124) return SANDBOX_UPDATE_TIMED_OUT;
+  // Carry only parsed numeric versions, never the target install's paths or raw text.
+  let failure = SANDBOX_UPDATE_ROLLED_BACK;
+  for (const line of result.stdout.slice(-65536).split('\n')) {
+    try {
+      const parsed = z.object({ ok: z.literal(false), error: z.string() }).parse(JSON.parse(line));
+      const bun =
+        /^Sandbox install requires Bun (\d{1,6}\.\d{1,6}\.\d{1,6}); .+ runs (\d{1,6}\.\d{1,6}\.\d{1,6})\.(?:\s|$)/.exec(
+          parsed.error,
+        );
+      if (bun) failure = `${SANDBOX_UPDATE_ROLLED_BACK} Requires Bun ${bun[1]}; running Bun ${bun[2]}.`;
+    } catch {
+      /* non-result output */
+    }
+  }
+  return failure;
+}
+
+/** Called only after every child is stopped, while the external unit's main PID is still alive. */
+export async function installSupervisedSandboxUpdate(
+  opts: { home: string; version: string; pid: number },
+  deps: SandboxDeps = defaultSandboxDeps(),
+): Promise<void> {
+  const layout = sandboxLayout(opts.home);
+  const previous = requireState(layout);
+  const owner = sandboxUpdateOwner(layout, deps);
+  if (
+    owner?.pid !== opts.pid ||
+    readPid(layout) !== null ||
+    !deps.isAlive(opts.pid) ||
+    installedVersion(layout, '@automagik/omni') !== previous.version
+  ) {
+    return refuseExternalUpdate(layout);
+  }
+  let transaction: ReturnType<typeof beginSandboxUpdateTransaction> | undefined;
+  let failure = SANDBOX_UPDATE_ROLLED_BACK;
+  try {
+    transaction = beginSandboxUpdateTransaction(layout.home, previous.version, opts.version);
+    const result = await deps.run(
+      [
+        previous.bun,
+        'x',
+        '--bun',
+        `@automagik/omni@${opts.version}`,
+        'install',
+        '--sandbox',
+        '--home',
+        layout.home,
+        '--no-start',
+        '--json',
+      ],
+      {
+        cwd: layout.home,
+        env: {
+          ...sandboxBaseEnv(layout, deps.env),
+          OMNI_SANDBOX_UPDATE_PID: String(opts.pid),
+          OMNI_SANDBOX_UPDATE_TOKEN: owner.token,
+        },
+        timeoutMs: SUPERVISED_INSTALL_TIMEOUT_MS,
+      },
+    );
+    appendFileSync(sandboxUpdateLogPath(layout), `${result.stdout}\n${result.stderr}\n`, { mode: 0o600 });
+    failure = supervisedInstallFailure(result);
+    if (
+      result.code !== 0 ||
+      readSandboxState(layout)?.version !== opts.version ||
+      installedVersion(layout, '@automagik/omni') !== opts.version
+    )
+      throw new Error('install failed');
+    transaction.commit(); // The next supervisor retires the backup only after its API is healthy.
+  } catch (cause) {
+    try {
+      if (!(cause instanceof SandboxInstallerStillRunningError)) transaction?.rollback();
+    } catch {
+      /* Keep the remaining backup for operator recovery. */
+    }
+    const restored =
+      !hasPendingSandboxUpdate(layout.home) &&
+      readSandboxState(layout)?.version === previous.version &&
+      installedVersion(layout, '@automagik/omni') === previous.version;
+    const error = restored ? failure : SANDBOX_UPDATE_UNHEALTHY;
+    appendSandboxUpdateFailure(sandboxUpdateLogPath(layout), error);
+    throw new SandboxError(error);
+  }
+}
 
 /**
  * Updates the sandbox to `version` from outside it. The sandbox's own API runs this when the
@@ -1383,12 +1615,25 @@ const SANDBOX_UPDATE_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 export async function handOffSandboxUpdate(
   opts: { home: string; defaultHome: string; version: string },
   deps: SandboxDeps = defaultSandboxDeps(),
-): Promise<{ via: 'systemd' | 'detached'; logPath: string; version: string }> {
+): Promise<{ via: 'systemd' | 'detached' | 'supervisor'; logPath: string; version: string }> {
   if (!SANDBOX_UPDATE_VERSION.test(opts.version)) {
     throw new SandboxError(`Not a release version: '${opts.version}'`);
   }
   const layout = sandboxLayout(opts.home);
   const state = requireState(layout);
+  assertNoSandboxUpdate(layout, deps);
+  if (deps.platform === 'linux') {
+    const pid = livePid(layout, deps);
+    if (pid !== null) {
+      const cgroup = deps.readCgroup(pid);
+      if (cgroup === null) return refuseExternalUpdate(layout);
+      const unit = externalSystemUnit(cgroup);
+      if (unit) {
+        await queueSupervisedUpdate(layout, state, pid, unit, opts.version, deps);
+        return { via: 'supervisor', logPath: sandboxUpdateLogPath(layout), version: opts.version };
+      }
+    }
+  }
   const cmd = [
     state.bun,
     'x',
@@ -1401,7 +1646,7 @@ export async function handOffSandboxUpdate(
     '--json',
   ];
   const env = sandboxBaseEnv(layout, deps.env);
-  const logPath = join(layout.logsDir, 'update.log');
+  const logPath = sandboxUpdateLogPath(layout);
   if (deps.platform === 'linux') {
     const names = sandboxUnitNames(layout.home, unitDefaultHome(state, opts.defaultHome));
     const unit = names.sessionUnit.replace(/-session\.service$/, `-update-${deps.now().getTime()}.service`);

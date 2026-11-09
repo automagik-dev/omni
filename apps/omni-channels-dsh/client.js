@@ -15422,6 +15422,45 @@ function useChatPoll(chatId, on2) {
   }, [chatId, on2]);
   return read.chatId === chatId ? read : { chatId, messages: null, error: null };
 }
+var sendsAllowed = (thread) => thread?.permissions?.sends === "allow";
+function SendSwitch({ thread }) {
+  const on2 = sendsAllowed(thread);
+  const [wanted, setWanted] = (0, import_react13.useState)(null);
+  const [problem, setProblem] = (0, import_react13.useState)(null);
+  (0, import_react13.useEffect)(() => {
+    setWanted(null);
+  }, [on2]);
+  const shown = wanted ?? on2;
+  const flip = () => {
+    const next = !shown;
+    setWanted(next);
+    setProblem(null);
+    call("omni-thread-permissions", { threadId: thread.id, sends: next ? "allow" : "ask" }).catch((error) => {
+      console.warn("Could not change the chat settings:", error);
+      setWanted(null);
+      setProblem(t("Could not change this chat's settings. Try again."));
+    });
+  };
+  return (0, import_react13.createElement)(
+    "div",
+    { className: "op-send" },
+    (0, import_react13.createElement)(
+      "label",
+      { className: "op-send-row" },
+      (0, import_react13.createElement)("span", null, t("Always allow send")),
+      (0, import_react13.createElement)("button", {
+        type: "button",
+        role: "switch",
+        "aria-checked": shown,
+        className: "op-switch",
+        "data-thread-id": thread.id,
+        title: shown ? t("Sends into this chat go without asking you") : t("Each send into this chat asks you first"),
+        onClick: flip
+      }, (0, import_react13.createElement)("span"))
+    ),
+    problem ? (0, import_react13.createElement)("span", { className: "op-send-problem", role: "alert" }, hostText(problem)) : null
+  );
+}
 function PhonePane({ params, sessionId, useRoster, visible = true }) {
   const thread = useRoster((roster) => phoneThreadOf(roster, params, sessionId));
   const read = useChatPoll(thread?.chatId ?? null, visible);
@@ -15443,7 +15482,8 @@ function PhonePane({ params, sessionId, useRoster, visible = true }) {
         "header",
         { className: "op-head" },
         (0, import_react13.createElement)("strong", null, name),
-        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, threadReason(thread)) : null
+        thread.connected === false && thread.reason ? (0, import_react13.createElement)("span", null, threadReason(thread)) : null,
+        (0, import_react13.createElement)(SendSwitch, { thread })
       ),
       (0, import_react13.createElement)(
         "div",
@@ -15532,7 +15572,14 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
 .op-head{display:flex;flex-direction:column;align-items:center;gap:1px;padding:28px 12px 8px;border-bottom:1px solid var(--bt-line, rgba(127,127,127,.2));text-align:center}
 .op-head strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
-.op-head span{font-size:11px;color:var(--bt-ink-3)}
+.op-head > span{font-size:11px;color:var(--bt-ink-3)}
+.op-send{display:flex;flex-direction:column;align-items:center;gap:2px;margin-top:4px}
+.op-send-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--bt-ink-2, var(--bt-ink-3));cursor:pointer}
+.op-send-problem{font-size:11px;color:var(--bt-danger, #dc2626)}
+.op-switch{position:relative;flex:none;width:26px;height:15px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2, rgba(127,127,127,.35));cursor:pointer;transition:background-color .15s ease}
+.op-switch span{position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
+.op-switch[aria-checked=true]{background:var(--bt-accent, #22d3ee)}
+.op-switch[aria-checked=true] span{transform:translateX(11px)}
 .op-screen .oc-thread-in{max-width:none;padding:8px 8px 14px}
 .op-screen .oc-msg{max-width:86%}
 .op-screen .oc-bubble{padding:6px 10px 5px;border-radius:16px;font-size:13px;line-height:18px}
@@ -16379,7 +16426,9 @@ function ThreadPicker({ channel, onPick, onClose }) {
     event.stopPropagation();
     onClose();
   };
-  const empty = list.status === "ready" && list.chats.length === 0;
+  const availableChats = list.chats.filter((chat) => chat.added !== true);
+  const empty = list.status === "ready" && availableChats.length === 0;
+  const emptyText = list.chats.length > 0 ? t("No chats to add here. Search for another chat.") : words ? t("No chats match.") : t("No chats yet");
   return (0, import_react16.createElement)(
     "div",
     { className: "ot-picker", role: "group", "aria-label": t("Add a chat from {name}", { name: channel.name }), onKeyDown },
@@ -16400,11 +16449,11 @@ function ThreadPicker({ channel, onPick, onClose }) {
     problem ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
     list.status === "loading" ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, t("Loading…")) : null,
     list.status === "failed" ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(list.error)) : null,
-    empty ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, query.trim() ? t("No chats match.") : t("No chats yet")) : null,
-    list.chats.length > 0 ? (0, import_react16.createElement)(
+    empty ? (0, import_react16.createElement)("p", { className: "ot-picker-note" }, emptyText) : null,
+    availableChats.length > 0 ? (0, import_react16.createElement)(
       "div",
       { className: "ot-picker-list" },
-      list.chats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
+      availableChats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
     ) : null
   );
 }
@@ -17131,10 +17180,8 @@ var STRINGS = {
   "Confirm on WhatsApp: your Omni sent you a code. Reply update and that code in your chat with yourself.": "在 WhatsApp 上确认：你的 Omni 给你发了一个验证码。在你和自己的聊天里回复 update 加上这个验证码。",
   "Updating to {version}. Omni restarts by itself in a minute or two.": "正在更新到 {version}。Omni 会在一两分钟内自行重启。",
   "Update the Omni on this computer to {version}? It stops for a minute or two and comes back by itself.": "要把这台电脑上的 Omni 更新到 {version} 吗？它会停一两分钟，然后自行恢复。",
-  "Update now": "立即更新",
   "Not now": "暂不",
   "Setup steps": "设置步骤",
-  "Welcome": "欢迎",
   "Connect Omni": "连接 Omni",
   "Connect AI": "连接 AI",
   "Omni connected": "Omni 已连接",
@@ -17211,7 +17258,6 @@ var STRINGS = {
   "Tap “Link with phone number instead”": "点按“改用手机号关联”",
   "Tap Settings, then Linked devices": "点按“设置”，然后点按“已关联的设备”",
   "This channel stopped working": "此渠道已停止工作",
-  "Today": "今天",
   "Token": "Token",
   "Type this code": "输入这个代码",
   "typical reply": "通常回复用时",
@@ -17433,7 +17479,6 @@ var STRINGS = {
   "Phone number ID": "电话号码 ID",
   "WhatsApp Business Account ID": "WhatsApp 企业账户 ID",
   "The token stays with your Omni. Omni only gets that number's messages.": "令牌只保存在你的 Omni 中。Omni 只会收到该号码的消息。",
-  "{version} is available": "{version} 已发布",
   "{version} is available · you're on {current}": "{version} 已发布 · 你当前使用 {current}",
   "{version} is available. Its admin updates this Omni.": "{version} 已发布。由管理员更新这个 Omni。",
   "Hide until the next version": "在下个版本前隐藏",
@@ -17461,6 +17506,7 @@ var STRINGS = {
   "Add a chat from {name}": "从 {name} 添加聊天",
   "Search chats or numbers": "搜索聊天或号码",
   "No chats match.": "没有匹配的聊天。",
+  "No chats to add here. Search for another chat.": "这里没有可添加的聊天。请搜索其他聊天。",
   "Added": "已添加",
   "Other chats": "其他聊天",
   "Adding…": "正在添加…",
@@ -17522,6 +17568,9 @@ var STRINGS = {
   "Ask an admin to configure META_APP_SECRET on the Omni server before receiving webhooks.": "接收 Webhook 前，请管理员在 Omni 服务器上配置 META_APP_SECRET。",
   "Open Meta Developers, choose your app and its WhatsApp webhook configuration. Paste Callback URL and Verify token into the matching fields, then verify and save.": "打开 Meta 开发者平台，选择应用及其 WhatsApp Webhook 配置。将回调 URL 和验证令牌粘贴到对应字段，然后验证并保存。",
   "Open Meta Developers": "打开 Meta 开发者平台",
+  "Always allow send": "始终允许发送",
+  "Sends into this chat go without asking you": "发送到这个聊天的消息不再询问你",
+  "Each send into this chat asks you first": "每次发送到这个聊天都会先询问你",
   "The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.": "验证令牌不是 Graph API 访问令牌。连接成功不代表 Webhook 已验证；Meta 必须能够访问此 HTTPS URL。"
 };
 

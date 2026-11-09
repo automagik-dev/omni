@@ -136,7 +136,7 @@ function getExtensionFromMime(mimeType: string): string {
  */
 export const PRESIGNED_URL_TTL_CEILING_SECONDS = 60;
 
-/** RFC-4122 shape — the only value admissible as a tenant-context key segment. */
+/** RFC 4122 shape — the only value admissible as a tenant-context key segment. */
 const KEY_SEGMENT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**

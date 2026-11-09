@@ -249,7 +249,7 @@ test('a folded channel keeps its thread rows out of the tab order', (t) => {
   assert.deepEqual([one(root, 'bt-thread').props.tabIndex, one(root, 'ot-thread-remove').props.tabIndex], [undefined, undefined])
 })
 
-test('the + lists that channel\'s chats; a chat that is a thread already cannot be picked again (:185)', async (t) => {
+test('the + lists only chats not already in the sidebar, including search results (:185)', async (t) => {
   linked()
   const roster = hooked({ omniThreads: [THREAD(1)] })
   const { view } = tree(t, { roster })
@@ -266,9 +266,8 @@ test('the + lists that channel\'s chats; a chat that is a thread already cannot 
   const picker = one(channelOf(root, CHANNEL_A), 'ot-picker')
   assert.ok(picker)
   assert.equal(all(channelOf(root, CHANNEL_B), 'ot-picker').length, 0)
-  const [taken, free] = all(picker, 'ot-picker-chat')
-  assert.deepEqual([taken.props['data-chat-id'], taken.props.disabled, text(one(taken, 'ot-picker-tag'))], ['c1', true, 'Added'])
-  assert.deepEqual([free.props['data-chat-id'], free.props.disabled], ['c2', false])
+  assert.deepEqual(all(picker, 'ot-picker-chat').map(row => [row.props['data-chat-id'], row.props.disabled]), [['c2', false]])
+  assert.deepEqual(all(channelOf(root, CHANNEL_A), 'bt-thread').map(row => row.props['data-thread-id']), ['t1'])
   // A search asks the host again, once the typing stops.
   one(picker, 'ot-picker-search').props.onChange({ target: { value: ' Mar ' } })
   view.draw()
@@ -276,6 +275,30 @@ test('the + lists that channel\'s chats; a chat that is a thread already cannot 
   assert.equal(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats').length, 1, 'nothing is asked while the typing goes on')
   await new Promise(resolve => setTimeout(resolve, 300))
   assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'omni-thread-chats').at(-1), ['omni-thread-chats', { channelId: CHANNEL_A.id, query: 'Mar' }])
+  assert.deepEqual(all(one(view.draw(), 'ot-picker'), 'ot-picker-chat').map(row => row.props['data-chat-id']), ['c2'])
+})
+
+test('when the returned chats are already added, the picker explains and keeps search available', async (t) => {
+  linked()
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1)] }) })
+  answer = (endpoint, payload) => (endpoint === 'omni-thread-chats'
+    ? { chats: payload.query === 'Other' ? [{ id: 'c2', name: 'Other chat', added: false }] : [{ id: 'c1', name: 'Chat 1', added: true }] }
+    : {})
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  const picker = one(view.draw(), 'ot-picker')
+  assert.equal(all(picker, 'ot-picker-chat').length, 0)
+  assert.equal(all(picker, 'ot-picker-list').length, 0)
+  assert.equal(text(one(picker, 'ot-picker-note')), 'No chats to add here. Search for another chat.')
+  const search = one(picker, 'ot-picker-search')
+  assert.ok(search)
+  search.props.onChange({ target: { value: 'Other' } })
+  view.draw()
+  await new Promise(resolve => setTimeout(resolve, 300))
+  const results = one(view.draw(), 'ot-picker')
+  assert.deepEqual(all(results, 'ot-picker-chat').map(row => row.props['data-chat-id']), ['c2'])
+  assert.equal(one(results, 'ot-picker-note'), undefined)
 })
 
 test('the picker draws each chat as the chat list does: picture or initials, name, time, a direct chat\'s number and its last message', async (t) => {
@@ -284,7 +307,7 @@ test('the picker draws each chat as the chat list does: picture or initials, nam
   const at = Date.now() - 5 * 60_000
   answer = endpoint => (endpoint === 'omni-thread-chats'
     ? { chats: [
-      { id: 'c1', name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at, avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: '5511988887777@s.whatsapp.net', added: true },
+      { id: 'c1', name: 'Marina', initials: 'MA', kind: 'direct', preview: 'Pode mandar o orçamento?', at, avatarUrl: 'https://pps.whatsapp.net/marina.jpg', number: '+5511988887777', jid: '5511988887777@s.whatsapp.net', added: false },
       { id: 'c2', name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at, avatarUrl: null, number: null, jid: '120363000000000000@g.us', added: false },
       { id: 'c3', name: null, initials: 'GR', kind: 'group', preview: '', at, avatarUrl: null, number: null, jid: '120363000000000001@g.us', added: false },
       { id: 'c7', name: null, kind: 'direct', initials: 'CH', number: null, added: false },
@@ -299,15 +322,15 @@ test('the picker draws each chat as the chat list does: picture or initials, nam
   assert.deepEqual([picture.props.src, picture.props.referrerPolicy, text(one(dm, 'oc-ava-face'))], ['https://pps.whatsapp.net/marina.jpg', 'no-referrer', 'MA'])
   assert.deepEqual([one(group, 'oc-ava-img'), text(one(group, 'oc-ava-face'))], [undefined, 'OB'])
   assert.deepEqual([text(one(dm, 'ot-picker-name')), text(one(dm, 'ot-picker-number')), text(one(dm, 'ot-picker-preview'))], ['Marina', '+5511988887777', 'Pode mandar o orçamento?'])
-  // An added chat says so where its time would be; the others show the time.
-  assert.deepEqual([text(one(dm, 'ot-picker-tag')), one(dm, 'ot-picker-at')], ['Added', undefined])
+  assert.equal(one(dm, 'ot-picker-tag'), undefined)
+  assert.equal(text(one(dm, 'ot-picker-at')), ui.relativeShort(at))
   assert.equal(text(one(group, 'ot-picker-at')), ui.relativeShort(at))
   assert.deepEqual([one(group, 'ot-picker-number'), text(one(group, 'ot-picker-preview'))], [undefined, 'You: fotos no drive'])
   // A group with no name is called one.
   assert.deepEqual([text(one(nameless, 'ot-picker-name')), one(nameless, 'ot-picker-preview')], ['Group', undefined])
   assert.deepEqual([namelessDirect, nameless].map(row => text(one(row, 'ot-picker-name'))), ['Chat', 'Group'])
   // Each button is named by its chat's name, number and state, not by the initials or preview.
-  assert.deepEqual([dm, group, nameless].map(row => row.props['aria-label']), ['Marina, +5511988887777, Added', 'Obra', 'Group'])
+  assert.deepEqual([dm, group, nameless].map(row => row.props['aria-label']), ['Marina, +5511988887777', 'Obra', 'Group'])
 })
 
 test('picking a chat adds it on the host and closes the picker; a failed mint shows a friendly message and adds no row (:187)', async (t) => {
@@ -734,16 +757,16 @@ test('the board\'s notes on an automation whose worker moved to its chats\' thre
 // The Bot team's sidebar (bots-dsh sidebar.js, the same in the pinned 3.32.1 and in 3.47.0):
 // BotChildren hands each entry the props of the Bot's own rows and `wide`. Its landing rule
 // (useLandOnMainBot) sends a main view that holds no Bot, group or DSH bot back to the Main
-// Bot while DSH lists that Session as blank (no turn yet): a thread that never ran stays open
-// only once the team counts the threads' Sessions as its own destinations, which is the
-// team's change to make. This pins the rule as the pinned team has it, so a team that changes
-// it shows here.
+// Bot while DSH lists that Session as blank (no turn yet), unless the user opened that Session
+// on purpose (openedOnPurpose, since bots-dsh 3.87): a thread that never ran stays open when
+// the user picked it. This pins the rule as the pinned team has it, so a team that changes it
+// shows here.
 const teamSidebar = readFileSync(new URL('src/client/sidebar.js', `${pathToFileURL(process.env.OMNI_DSH_CORE).href}/`), 'utf8')
 
 test('the pinned Bot team passes BotChildren entries the row props and wide; its landing rule, which a never-run thread depends on, is as documented', () => {
   assert.match(teamSidebar, /const rowProps = \{ roster, actions: rowActions, useSessions, useUi, useSessionStatus: props\.useSessionStatus, useSessionRetainInfo: props\.useSessionRetainInfo, useActivity: props\.useActivity, useWork: props\.useWork, wide \}/)
   assert.match(teamSidebar, /function BotChildren\(\{ wide, \.\.\.props \}\) \{[^}]*h\(entry\.Component, \{ key: entry\.id, \.\.\.props, wide \}\)/)
-  assert.match(teamSidebar, /roster\.roomsById\[id\] \|\| \(actions\.isAgentSession\?\.\(id\) \?\? roster\.agentOf\[id\] !== undefined\) \|\| blank !== '1'/)
+  assert.match(teamSidebar, /Boolean\(roster\.roomsById\[id\]\) \|\| actions\.ownershipPending\?\.\(id\) === true \|\| \(actions\.isAgentSession\?\.\(id\) \?\? roster\.agentOf\[id\] !== undefined\) \|\| !blank \|\| actions\.openedOnPurpose\?\.\(id\) === true/)
 })
 
 test('on the props the Bot team passes, a click on a thread row opens its Session at once, through the team\'s row action', (t) => {

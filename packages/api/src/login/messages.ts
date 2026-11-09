@@ -65,8 +65,11 @@ export function updateCodeWrongMessage(cancelled: boolean): string {
     : "🐙 That update code doesn't match. Check it and reply again.";
 }
 
-export function updateFinishedMessage(to: string, running: string, ok: boolean): string {
-  return ok ? `🐙 *Omni updated to ${to}.*` : `🐙 The update to ${to} did not complete; Omni is still on ${running}.`;
+/** `reason`, when known, is one fixed line of its own (system/update-log.ts), never text from a log. */
+export function updateFinishedMessage(to: string, running: string, ok: boolean, reason?: string): string {
+  if (ok) return `🐙 *Omni updated to ${to}.*`;
+  const line = `🐙 The update to ${to} did not complete; Omni is still on ${running}.`;
+  return reason ? `${line}\n${reason}` : line;
 }
 
 /** The answer to "connect" when this Omni has no fixed address to put in a link. */

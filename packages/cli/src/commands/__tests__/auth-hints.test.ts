@@ -1,6 +1,6 @@
 /** Real auth hints in isolated children; recovery never touches real PM2, APIs or user config. */
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,12 +9,15 @@ const authPath = fileURLToPath(new URL('../auth.ts', import.meta.url));
 const clientPath = fileURLToPath(new URL('../../client.ts', import.meta.url));
 const serverPath = fileURLToPath(new URL('../server.ts', import.meta.url));
 const configPath = fileURLToPath(new URL('../config.ts', import.meta.url));
+const outputPath = fileURLToPath(new URL('../../output.ts', import.meta.url));
 const pm2Path = fileURLToPath(new URL('../../pm2.ts', import.meta.url));
 
 type Scenario =
   | 'missing-auth'
   | 'missing-pm2'
   | 'failed-rotation'
+  | 'validation-failed'
+  | 'pm2-set-failed'
   | 'auth-status'
   | 'server-add'
   | 'config-key'
@@ -27,6 +30,8 @@ function invocation(scenario: Scenario, name: string): string {
   const commands = {
     'missing-pm2': [authPath, 'createAuthCommand', ['recover']],
     'failed-rotation': [authPath, 'createAuthCommand', ['recover', '--rotate']],
+    'validation-failed': [authPath, 'createAuthCommand', ['recover', '--rotate']],
+    'pm2-set-failed': [authPath, 'createAuthCommand', ['recover', '--rotate']],
     'auth-status': [authPath, 'createAuthCommand', ['status']],
     'server-add': [serverPath, 'createServerCommand', ['add', name, 'https://prod.invalid', '--skip-verify']],
     'server-remove': [serverPath, 'createServerCommand', ['remove', name]],
@@ -51,14 +56,48 @@ async function hint(scenario: Scenario, name = 'prod', json = false) {
       },
     }),
   );
+  const realPm2Helper = scenario === 'validation-failed' || scenario === 'pm2-set-failed';
+  if (realPm2Helper) {
+    // Exercise real PM2 stdio handling with an isolated executable that echoes the fixture key.
+    writeFileSync(
+      join(dir, 'pm2'),
+      `#!${process.execPath}
+const [command, , key] = process.argv.slice(2);
+if (command === '--version') console.log('fixture');
+else if (command === 'jlist') console.log(JSON.stringify([{ name: 'omni-api' }]));
+else if (command === 'set') {
+  console.log('pm2 stdout: ' + key);
+  console.error('pm2 stderr: ' + key);
+  process.exit(${scenario === 'pm2-set-failed' ? 1 : 0});
+} else if (command === 'restart') {
+  console.log('fixture restart');
+} else process.exit(99);
+`,
+      { mode: 0o755 },
+    );
+  }
   const child = Bun.spawn(
     [
       process.execPath,
       '--eval',
       `
-import { mock } from 'bun:test';
-mock.module('@omni/sdk', () => ({ createOmniClient: () => { throw new Error('unexpected API call'); } }));
-mock.module(${JSON.stringify(pm2Path)}, () => ({
+import { mock, spyOn } from 'bun:test';
+import { readFileSync, writeFileSync } from 'node:fs';
+const output = await import(${JSON.stringify(outputPath)});
+const raw = output.raw;
+spyOn(output, 'raw').mockImplementation((line) => {
+  if (line.includes('omni server list --reveal')) {
+    const saved = JSON.parse(readFileSync(${JSON.stringify(join(dir, 'config.json'))}, 'utf8'));
+    writeFileSync(${JSON.stringify(join(dir, 'reveal-key.json'))}, JSON.stringify(saved.servers.list.default?.apiKey ?? null));
+  }
+  raw(line);
+});
+if (${realPm2Helper}) spyOn(Bun, 'sleep').mockResolvedValue(undefined);
+mock.module('@omni/sdk', () => ({ createOmniClient: () => {
+  if (!${realPm2Helper}) throw new Error('unexpected API call');
+  return { auth: { validate: async () => ({ valid: false }) } };
+} }));
+if (!${realPm2Helper}) mock.module(${JSON.stringify(pm2Path)}, () => ({
   PM2_PROCESSES: { api: 'omni-api' },
   isPm2Available: async () => ${scenario === 'failed-rotation'},
   capturePm2: async () => ({ code: 0, stdout: '[]' }),
@@ -68,7 +107,12 @@ ${invocation(scenario, name)}
 `,
     ],
     {
-      env: { PATH: process.env.PATH, HOME: dir, OMNI_CONFIG_DIR: dir, OMNI_FORMAT: json ? 'json' : 'human' },
+      env: {
+        PATH: `${dir}:${process.env.PATH}`,
+        HOME: dir,
+        OMNI_CONFIG_DIR: dir,
+        OMNI_FORMAT: json ? 'json' : 'human',
+      },
       stdin: 'ignore',
       stdout: 'pipe',
       stderr: 'pipe',
@@ -80,7 +124,11 @@ ${invocation(scenario, name)}
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
-    return { exitCode, stdout, stderr };
+    const savedKey: unknown = JSON.parse(readFileSync(join(dir, 'config.json'), 'utf8')).servers.list.default?.apiKey;
+    const revealKey: unknown = existsSync(join(dir, 'reveal-key.json'))
+      ? JSON.parse(readFileSync(join(dir, 'reveal-key.json'), 'utf8'))
+      : null;
+    return { exitCode, stdout, stderr, savedKey, revealKey };
   } finally {
     if (child.exitCode === null) child.kill();
     await child.exited;
@@ -113,6 +161,7 @@ describe('credential hints without keys on argv', () => {
       ).toHaveLength(2);
       expect(result.stdout + result.stderr).not.toMatch(/--api-key(?:\s|=)/);
       expect(result.stdout).not.toContain('omni auth login --server prod');
+      expect(result.stdout.includes('omni server list --reveal')).toBe(scenario === 'failed-rotation');
     });
   }
 });
@@ -161,3 +210,53 @@ describe('shell-safe credential hint leftovers', () => {
     );
   });
 });
+
+// Process-spawning regressions need headroom on loaded CI workers.
+for (const json of [false, true]) {
+  test(`failed rotation hides the generated key in ${json ? 'JSON' : 'human'} output`, async () => {
+    const result = await hint('failed-rotation', 'prod', json);
+    expect(result.exitCode).toBe(0);
+    const key = result.savedKey;
+    if (typeof key !== 'string') throw new Error('Failed rotation must save the generated key in the local entry');
+    expect(key).toMatch(/^omni_sk_[0-9a-f]{32}$/);
+    const printed = result.stdout + result.stderr;
+    expect(printed).not.toContain(key);
+    expect(result.stdout).toContain('c. Restart:       OMNI_API_KEY=<your-new-key> omni start');
+    expect(result.stdout).toContain('omni server list --reveal');
+    expect(printed).toContain(`Config updated with new key (${key.slice(0, 12)}...) but API restart failed.`);
+  }, 30_000);
+}
+
+// Each case spawns an isolated CLI plus fake PM2 processes; allow loaded CI workers time to finish.
+for (const json of [false, true]) {
+  test(`failed rotation saves the default key before its reveal hint (${json ? 'JSON' : 'human'})`, async () => {
+    const result = await hint('failed-rotation', 'prod', json);
+    expect(result.exitCode).toBe(0);
+    expect(result.savedKey).toEqual(expect.any(String));
+    expect(result.revealKey).toBe(result.savedKey);
+  }, 30_000);
+
+  for (const scenario of ['validation-failed', 'pm2-set-failed'] as const) {
+    test(`${scenario} never prints PM2's key echo (${json ? 'JSON' : 'human'})`, async () => {
+      const result = await hint(scenario, 'prod', json);
+      expect(result.exitCode).toBe(0);
+      const key = result.savedKey;
+      if (typeof key !== 'string') throw new Error('Rotation must save the fixture key');
+      expect(key).toMatch(/^omni_sk_[0-9a-f]{32}$/);
+      const printed = result.stdout + result.stderr;
+      expect(printed).not.toContain(key);
+      expect(printed).not.toContain('pm2 stdout:');
+      expect(printed).not.toContain('pm2 stderr:');
+      expect(printed).toContain(`${key.slice(0, 12)}...`);
+      expect(result.stdout).toContain('omni server list --reveal');
+      expect(result.revealKey).toBe(key);
+      if (scenario === 'validation-failed') {
+        expect(printed).toContain('Config updated with new key, but validation failed.');
+        expect(result.stdout).toContain('default row');
+      } else {
+        expect(printed).toContain(`Could not save the PM2 key (${key.slice(0, 12)}...).`);
+        expect(printed).not.toContain('fixture restart');
+      }
+    }, 30_000);
+  }
+}
