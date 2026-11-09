@@ -31,7 +31,7 @@ import {
   type ZenviaReferral,
   type ZenviaSendResponse,
 } from './types';
-import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
+import { ZenviaApiError, ZenviaErrorCode, isDefinitiveRefusal } from './utils/errors';
 import {
   HANDOFF_NOT_CONFIGURED_ERROR,
   buildHandoffNote,
@@ -51,7 +51,9 @@ interface ZenviaInstanceState {
   dedupeCache: DedupeCache;
 }
 
-type TransferOutcome = { ok: true } | { ok: false; error: string; errorCode?: string; retryable: boolean };
+type TransferOutcome =
+  | { ok: true }
+  | { ok: false; error: string; errorCode?: string; retryable: boolean; rejected?: true };
 
 export class ZenviaPlugin extends BaseChannelPlugin {
   readonly id = 'zenvia' as ChannelType;
@@ -145,24 +147,14 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     const { content, to, replyTo, metadata } = message;
 
     const built = buildOutbound(state.config, message);
-    if (!built.ok) {
-      return { success: false, error: built.error, retryable: false, timestamp: Date.now() };
-    }
+    if (!built.ok) return failedResult({ error: built.error, retryable: false, rejected: built.rejected });
 
     const correlationId = metadata?.correlationId as string | undefined;
 
     let transferred = false;
     if (metadata?.isHandoff === true && state.salesClient && resolveHandoffMode(state.config) === 'transfer') {
       const outcome = await this.transferToHuman(instanceId, state, to, metadata);
-      if (!outcome.ok) {
-        return {
-          success: false,
-          error: outcome.error,
-          errorCode: outcome.errorCode,
-          retryable: outcome.retryable,
-          timestamp: Date.now(),
-        };
-      }
+      if (!outcome.ok) return failedResult(outcome);
       transferred = true;
     }
 
@@ -225,7 +217,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
   ): Promise<TransferOutcome> {
     const sales = state.salesClient;
     const groupId = state.config.handoffGroupId;
-    if (!sales || !groupId) return { ok: false, error: HANDOFF_NOT_CONFIGURED_ERROR, retryable: false };
+    if (!sales || !groupId) return { ok: false, error: HANDOFF_NOT_CONFIGURED_ERROR, retryable: false, rejected: true };
 
     try {
       const prospect = await sales.findProspectByPhone(to);
@@ -235,6 +227,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
           error:
             'Zenvia handoff failed: no Sales prospect exists for this contact, so there is no conversation to transfer',
           retryable: false,
+          rejected: true,
         };
       }
 
@@ -260,6 +253,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
         error: err instanceof Error ? err.message : String(err),
         errorCode: isZenvia ? err.channelCode : undefined,
         retryable: isZenvia ? err.retryable : false,
+        ...(isDefinitiveRefusal(err) ? { rejected: true as const } : {}),
       };
     }
   }
@@ -492,7 +486,23 @@ export class ZenviaPlugin extends BaseChannelPlugin {
   }
 }
 
-type OutboundBuildResult = { ok: true; payload: ZenviaOutboundMessage } | { ok: false; error: string };
+type OutboundBuildResult = { ok: true; payload: ZenviaOutboundMessage } | { ok: false; error: string; rejected?: true };
+
+function failedResult(failure: {
+  error: string;
+  errorCode?: string;
+  retryable: boolean;
+  rejected?: boolean;
+}): SendResult {
+  return {
+    success: false,
+    error: failure.error,
+    errorCode: failure.errorCode,
+    retryable: failure.retryable,
+    ...(failure.rejected ? { rejected: true } : {}),
+    timestamp: Date.now(),
+  };
+}
 
 function buildOutbound(config: ZenviaConfig, message: OutgoingMessage): OutboundBuildResult {
   const contentResult = buildOutboundContent(message);
@@ -508,7 +518,7 @@ function buildOutbound(config: ZenviaConfig, message: OutgoingMessage): Outbound
   const meta = message.metadata ?? {};
   if (meta.isHandoff === true) {
     const mode = resolveHandoffMode(config);
-    if (!mode) return { ok: false, error: HANDOFF_NOT_CONFIGURED_ERROR };
+    if (!mode) return { ok: false, error: HANDOFF_NOT_CONFIGURED_ERROR, rejected: true };
     if (mode === 'routing' && config.handoffSolution) {
       payload.conversation = buildHandoffRouting(config.handoffSolution, meta);
     }

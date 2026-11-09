@@ -103,6 +103,27 @@ With neither configured the plugin refuses the handoff instead of pausing the
 agent on a conversation no human will see. `canCloseContact` is `false`:
 neither API has an operation to close a conversation from here.
 
+### Failure to HTTP status
+
+The plugin tells a **definitive refusal** (repeating the same request cannot
+succeed, so the caller should keep the conversation) from a **transient
+failure** (worth retrying, or worth treating as unknown). A definitive refusal
+returns `SendResult.rejected = true`, which `POST /messages/send/handoff`
+answers as `422 CHANNEL_SEND_REJECTED` with `recoverable: false`. Every other
+failed send, on every channel, keeps answering `502 CHANNEL_SEND_FAILED`.
+Neither failure pauses the agent, writes an audit row or disarms follow-ups.
+
+| Failure                                                                   | `rejected` | `retryable` | HTTP                         |
+| ------------------------------------------------------------------------- | ---------- | ----------- | ---------------------------- |
+| Handoff not configured (no transfer pair, no routing solution)            | `true`     | `false`     | 422 `CHANNEL_SEND_REJECTED`  |
+| No Sales prospect for the contact's number                                | `true`     | `false`     | 422 `CHANNEL_SEND_REJECTED`  |
+| Sales API refuses the lookup or the transfer with a 4xx other than 401, 403 and 429 | `true` | `false` | 422 `CHANNEL_SEND_REJECTED`  |
+| Sales API answers the transfer with `success: false`                      | `true`     | `false`     | 422 `CHANNEL_SEND_REJECTED`  |
+| Sales key refused (401, 403): a credential problem, not a refusal of the lead | absent | `false`     | 502 `CHANNEL_SEND_FAILED`    |
+| Rate limit (429)                                                          | absent     | `true`      | 502 `CHANNEL_SEND_FAILED`    |
+| Sales or Zenvia 5xx, timeout, network failure                             | absent     | `true`      | 502 `CHANNEL_SEND_FAILED`    |
+| Farewell fails in routing mode (no Sales transfer)                        | absent     | by cause    | 502 `CHANNEL_SEND_FAILED`    |
+
 ## v1 scope
 
 **Outbound:**

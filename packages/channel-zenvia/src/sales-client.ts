@@ -90,7 +90,7 @@ export class ZenviaSalesClient {
     });
     const parsed = parseJsonOrUndefined(text) as { success?: unknown } | undefined;
     if (parsed && typeof parsed === 'object' && parsed.success === false) {
-      throw new ZenviaApiError(ZenviaErrorCode.UNKNOWN, 'Zenvia did not confirm the transfer (success=false)', {
+      throw new ZenviaApiError(ZenviaErrorCode.REFUSED, 'Zenvia did not confirm the transfer (success=false)', {
         operation: 'transferProspect',
       });
     }

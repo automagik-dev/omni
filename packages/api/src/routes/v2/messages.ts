@@ -449,13 +449,15 @@ function handleSendResult(
     error?: string;
     errorCode?: string;
     retryable?: boolean;
+    rejected?: boolean;
     timestamp?: number;
   },
   context: { channelType: string; instanceId: string; operation: string },
 ): void {
   if (!result.success) {
+    const rejected = result.rejected === true;
     throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      code: rejected ? ERROR_CODES.CHANNEL_SEND_REJECTED : ERROR_CODES.CHANNEL_SEND_FAILED,
       message: result.error ?? `Failed to ${context.operation}`,
       context: {
         channelType: context.channelType,
@@ -463,7 +465,7 @@ function handleSendResult(
         errorCode: result.errorCode,
         retryable: result.retryable,
       },
-      recoverable: result.retryable ?? false,
+      recoverable: rejected ? false : (result.retryable ?? false),
     });
   }
 }

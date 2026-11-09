@@ -250,6 +250,163 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(result.error).toMatch(/did not confirm the transfer/);
   });
 
+  describe('definitive refusal versus transient failure', () => {
+    it('marks the handoff rejected when no Sales prospect exists for the number', async () => {
+      await connect();
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response('', { status: 404 }))
+        .mockResolvedValueOnce(new Response('', { status: 404 }));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBe(true);
+      expect(result.retryable).toBe(false);
+    });
+
+    it('marks the handoff rejected when the Sales API refuses the transfer with a definitive 4xx', async () => {
+      for (const status of [400, 404, 409, 422]) {
+        await connect();
+        spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+          .mockResolvedValueOnce(jsonResponse({ message: 'refused' }, status));
+
+        const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+        expect(result.success).toBe(false);
+        expect(result.rejected).toBe(true);
+        expect(result.retryable).toBe(false);
+        spyOn(globalThis, 'fetch').mockRestore();
+      }
+    });
+
+    it('marks the handoff rejected when Zenvia answers success=false', async () => {
+      await connect();
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockResolvedValueOnce(jsonResponse({ success: false }));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBe(true);
+    });
+
+    it('does not mark credential failures (401, 403) or rate limits (429) as rejected', async () => {
+      for (const [status, retryable] of [
+        [401, false],
+        [403, false],
+        [429, true],
+      ] as const) {
+        await connect();
+        spyOn(globalThis, 'fetch')
+          .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+          .mockResolvedValueOnce(jsonResponse({ message: 'nope' }, status));
+
+        const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+        expect(result.success).toBe(false);
+        expect(result.rejected).toBeUndefined();
+        expect(result.retryable).toBe(retryable);
+        spyOn(globalThis, 'fetch').mockRestore();
+      }
+    });
+
+    it('does not mark a Sales 5xx on the transfer as rejected and keeps it retryable', async () => {
+      await connect();
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockResolvedValueOnce(jsonResponse({ message: 'boom' }, 503));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBeUndefined();
+      expect(result.retryable).toBe(true);
+    });
+
+    it('does not mark a Sales 5xx on the prospect lookup as rejected', async () => {
+      await connect();
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: 'boom' }, 500));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBeUndefined();
+      expect(result.retryable).toBe(true);
+    });
+
+    it('does not mark a network failure on the transfer as rejected and keeps it retryable', async () => {
+      await connect();
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockRejectedValueOnce(new TypeError('socket closed'));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBeUndefined();
+      expect(result.retryable).toBe(true);
+    });
+
+    it('does not mark a timeout on the transfer as rejected and keeps it retryable', async () => {
+      await connect();
+      const timeout = new Error('timed out');
+      timeout.name = 'TimeoutError';
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockRejectedValueOnce(timeout);
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBeUndefined();
+      expect(result.retryable).toBe(true);
+    });
+
+    it('marks a handoff with only half of the transfer pair configured as rejected', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
+      await connectPlugin(plugin, { zenviaSalesApiKey: SALES_KEY });
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe(HANDOFF_NOT_CONFIGURED_ERROR);
+      expect(result.rejected).toBe(true);
+    });
+
+    it('marks a handoff with neither a transfer target nor a routing solution as rejected', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
+      await connectPlugin(plugin);
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBe(true);
+    });
+
+    it('never sets rejected on a successful handoff or on an ordinary send failure', async () => {
+      await connect();
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockResolvedValueOnce(jsonResponse({ success: true }))
+        .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
+        .mockResolvedValueOnce(sendResponse());
+      const ok = await plugin.sendMessage(instanceId, handoffMessage);
+
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: 'bad number' }, 400));
+      const plain = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'text', text: 'hi' } });
+
+      expect(ok.rejected).toBeUndefined();
+      expect(plain.success).toBe(false);
+      expect(plain.rejected).toBeUndefined();
+    });
+  });
+
   it('keeps the handoff done when the note cannot be written', async () => {
     await connect();
     const fetchSpy = spyOn(globalThis, 'fetch')

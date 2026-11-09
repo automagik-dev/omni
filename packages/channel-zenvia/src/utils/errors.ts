@@ -4,6 +4,7 @@ type ZenviaErrorCodeName =
   | 'AUTH_FAILED'
   | 'INVALID_REQUEST'
   | 'RATE_LIMITED'
+  | 'REFUSED'
   | 'NOT_CONNECTED'
   | 'UPSTREAM_ERROR'
   | 'UNKNOWN';
@@ -12,6 +13,7 @@ export const ZenviaErrorCode: Record<ZenviaErrorCodeName, string> = {
   AUTH_FAILED: 'ZENVIA_AUTH_FAILED',
   INVALID_REQUEST: 'ZENVIA_INVALID_REQUEST',
   RATE_LIMITED: 'ZENVIA_RATE_LIMITED',
+  REFUSED: 'ZENVIA_REFUSED',
   NOT_CONNECTED: 'ZENVIA_NOT_CONNECTED',
   UPSTREAM_ERROR: 'ZENVIA_UPSTREAM_ERROR',
   UNKNOWN: 'ZENVIA_UNKNOWN',
@@ -25,6 +27,7 @@ const CORE_CODE_MAP: Record<string, CoreErrorCode> = {
   [ZenviaErrorCode.AUTH_FAILED]: ERROR_CODES.CHANNEL_AUTH_FAILED,
   [ZenviaErrorCode.INVALID_REQUEST]: ERROR_CODES.VALIDATION,
   [ZenviaErrorCode.RATE_LIMITED]: ERROR_CODES.CHANNEL_RATE_LIMITED,
+  [ZenviaErrorCode.REFUSED]: ERROR_CODES.CHANNEL_SEND_REJECTED,
   [ZenviaErrorCode.NOT_CONNECTED]: ERROR_CODES.CHANNEL_NOT_CONNECTED,
   [ZenviaErrorCode.UPSTREAM_ERROR]: ERROR_CODES.CHANNEL_SEND_FAILED,
   [ZenviaErrorCode.UNKNOWN]: ERROR_CODES.UNKNOWN,
@@ -71,4 +74,11 @@ export function mapHttpStatusToZenviaError(status: number): ZenviaErrorCodeType 
 
 export function isRetryable(error: unknown): boolean {
   return error instanceof ZenviaApiError && error.retryable;
+}
+
+export function isDefinitiveRefusal(error: unknown): boolean {
+  return (
+    error instanceof ZenviaApiError &&
+    (error.channelCode === ZenviaErrorCode.INVALID_REQUEST || error.channelCode === ZenviaErrorCode.REFUSED)
+  );
 }
