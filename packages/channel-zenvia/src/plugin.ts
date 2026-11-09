@@ -147,7 +147,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       return { success: false, error: 'Zenvia instance not connected', retryable: false, timestamp: Date.now() };
     }
 
-    const { content, to, replyTo, metadata } = message;
+    const { to, metadata } = message;
 
     const built = buildOutbound(state.config, message);
     if (!built.ok) return failedResult({ error: built.error, retryable: false, rejected: built.rejected });
@@ -163,8 +163,21 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
     if (correlationId) this.captureT10(correlationId);
 
+    return this.deliver(instanceId, state, message, built.payload, transferred);
+  }
+
+  private async deliver(
+    instanceId: string,
+    state: ZenviaInstanceState,
+    message: OutgoingMessage,
+    payload: ZenviaOutboundMessage,
+    transferred: boolean,
+  ): Promise<SendResult> {
+    const { content, to, replyTo, metadata } = message;
+    const correlationId = metadata?.correlationId as string | undefined;
+
     try {
-      const response: ZenviaSendResponse = await state.client.sendMessage(built.payload);
+      const response: ZenviaSendResponse = await state.client.sendMessage(payload);
 
       if (correlationId) this.captureT11(correlationId);
 
@@ -172,7 +185,10 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       if (!messageId) {
         const err = 'Zenvia did not return a message id on successful send (malformed response)';
         await this.emitMessageFailed({ instanceId, chatId: to, error: err, retryable: false });
-        if (transferred) return { success: true, timestamp: Date.now() };
+        if (transferred) {
+          this.logFarewellFailure(instanceId, ZenviaErrorCode.UPSTREAM_ERROR, err);
+          return { success: true, timestamp: Date.now() };
+        }
         return { success: false, error: err, retryable: false, timestamp: Date.now() };
       }
 
@@ -195,20 +211,15 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
 
       if (transferred) {
-        this.logger.warn('Zenvia handoff transferred but the farewell message failed', {
-          instanceId,
-          error: errorMessage,
-        });
+        this.logFarewellFailure(instanceId, isZenvia ? err.channelCode : undefined, errorMessage);
         return { success: true, timestamp: Date.now() };
       }
 
-      return {
-        success: false,
+      return failedResult({
         error: errorMessage,
         errorCode: isZenvia ? err.channelCode : undefined,
         retryable,
-        timestamp: Date.now(),
-      };
+      });
     }
   }
 
@@ -263,6 +274,14 @@ export class ZenviaPlugin extends BaseChannelPlugin {
         ...(isDefinitiveRefusal(err) ? { rejected: true as const } : {}),
       };
     }
+  }
+
+  private logFarewellFailure(instanceId: string, errorCode: string | undefined, error: string): void {
+    this.logger.error('Zenvia handoff transferred but the farewell failed: no phrase reached the contact', {
+      instanceId,
+      errorCode,
+      error,
+    });
   }
 
   private logRoutingMiss(instanceId: string, miss: HandoffRoutingMiss, usingDefaultGroup: boolean): void {

@@ -700,6 +700,107 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     expect(result.messageId).toBeUndefined();
   });
 
+  describe('farewell failing after a completed transfer', () => {
+    async function connectWith(bus: MockEventBus) {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(bus));
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse([]))
+        .mockResolvedValueOnce(jsonResponse([{ id: GROUP_ID }]));
+      await connectPlugin(plugin, { zenviaSalesApiKey: SALES_KEY, zenviaHandoffGroupId: GROUP_ID });
+    }
+
+    function queueTransferThenFarewell(farewell: Response | Error) {
+      const fetchSpy = spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockResolvedValueOnce(jsonResponse({ success: true }))
+        .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]));
+      if (farewell instanceof Error) fetchSpy.mockRejectedValueOnce(farewell);
+      else fetchSpy.mockResolvedValueOnce(farewell);
+    }
+
+    function errorLogs(logger: ReturnType<typeof spyOn>) {
+      return logger.mock.calls.map((args: unknown[]) => args[1] as Record<string, unknown>);
+    }
+
+    it('keeps success, leaves messageId out, logs an error with the instance and the code, and emits message.failed', async () => {
+      const bus = new MockEventBus();
+      await connectWith(bus);
+      const logError = spyOn(plugin.getLogger(), 'error');
+      queueTransferThenFarewell(jsonResponse({ message: 'down' }, 503));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(true);
+      expect(result.messageId ?? null).toBeNull();
+      expect(result.error).toBeUndefined();
+      expect(errorLogs(logError)).toEqual([
+        expect.objectContaining({ instanceId, errorCode: 'ZENVIA_UPSTREAM_ERROR' }),
+      ]);
+      const failed = bus.published.filter((event) => event.type === 'message.failed');
+      expect(failed).toHaveLength(1);
+      expect(failed[0]?.payload).toMatchObject({ chatId: CONTACT, retryable: true });
+      expect(bus.published.some((event) => event.type === 'message.sent')).toBe(false);
+    });
+
+    it('logs the Zenvia code of a refused farewell', async () => {
+      await connect();
+      const logError = spyOn(plugin.getLogger(), 'error');
+      queueTransferThenFarewell(jsonResponse({ message: 'bad number' }, 400));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(true);
+      expect(errorLogs(logError)).toEqual([
+        expect.objectContaining({ instanceId, errorCode: 'ZENVIA_INVALID_REQUEST' }),
+      ]);
+    });
+
+    it('treats a network failure of the farewell the same way', async () => {
+      const bus = new MockEventBus();
+      await connectWith(bus);
+      const logError = spyOn(plugin.getLogger(), 'error');
+      queueTransferThenFarewell(new TypeError('socket closed'));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(true);
+      expect(result.messageId ?? null).toBeNull();
+      expect(errorLogs(logError)).toEqual([
+        expect.objectContaining({ instanceId, errorCode: 'ZENVIA_UPSTREAM_ERROR' }),
+      ]);
+      expect(bus.published.some((event) => event.type === 'message.failed')).toBe(true);
+    });
+
+    it('treats a 2xx farewell without a message id the same way', async () => {
+      const bus = new MockEventBus();
+      await connectWith(bus);
+      const logError = spyOn(plugin.getLogger(), 'error');
+      queueTransferThenFarewell(jsonResponse({ from: SENDER_ID }));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(true);
+      expect(result.messageId ?? null).toBeNull();
+      expect(errorLogs(logError)).toEqual([expect.objectContaining({ instanceId })]);
+      expect(bus.published.some((event) => event.type === 'message.failed')).toBe(true);
+    });
+
+    it('does not log that error, and reports the failure, when no transfer happened', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
+      await connectPlugin(plugin, { zenviaHandoffSolution: 'conversion' });
+      const logError = spyOn(plugin.getLogger(), 'error');
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ message: 'down' }, 503));
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(logError).not.toHaveBeenCalled();
+    });
+  });
+
   it('prefers the transfer over conversation routing when both are configured', async () => {
     await connect({ zenviaHandoffSolution: 'conversion' });
     const fetchSpy = spyOn(globalThis, 'fetch')

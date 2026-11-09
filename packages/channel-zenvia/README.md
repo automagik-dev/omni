@@ -95,6 +95,23 @@ Setting the Sales key without a group (`zenviaHandoffGroupId` or
 `zenviaHandoffRouting`), or a group without the key, leaves the transfer off
 (logged) instead of failing the connect.
 
+### What `data.messageId` tells the caller
+
+On `POST /messages/send/handoff` and `POST /messages/send/close-contact`,
+`data.messageId == null` means **no phrase reached the contact**. Read it that
+way, not as an error:
+
+- **Handoff by transfer, farewell failed.** The transfer already happened, so
+  the contact belongs to a person and the call stays a success (201). Only the
+  farewell is missing: `messageId` is `null`, the plugin logs an `error` with
+  `instanceId` and `errorCode`, and a `message.failed` event is emitted. The
+  caller must not resend the handoff; it can tell the contact itself.
+- **Handoff by conversation routing, farewell failed.** The farewell is the
+  handoff, so this is a failure (502 for a transient cause, see the table).
+- **Close contact.** `canCloseContact` is `false`: the route sends nothing to
+  Zenvia, applies its side effects and answers `messageId: null`. The caller
+  must treat that as a farewell **not sent**.
+
 ### Routing a handoff to a group
 
 By default every handoff goes to `zenviaHandoffGroupId`. When the emitter
