@@ -167,6 +167,26 @@ test('repair rereads normalized Meta state even after partial failure; later sav
   }
 })
 
+test('the assigned agent line names who answers, and "No agent" only when nobody does', async () => {
+  const cases = [
+    [{ source: 'instance', agents: [{ id: AGENT, name: 'Helper' }] },
+      'Assigned — this channel answers with Helper; its chats inherit it.', 'No channel override', AGENT],
+    [{ source: 'route', agents: [{ id: AGENT, name: 'Helper' }, { id: 'other-agent', name: 'Triage' }] },
+      'Assigned — chats here answer through routes: Helper, Triage.', 'No channel override', null],
+    [{ source: 'none', agents: [] },
+      'No agent — messages on this channel wait for you.', 'No agent', null],
+  ]
+  for (const [answerers, line, option, agentId] of cases) {
+    const { draw, view } = world({ answer: endpoint => endpoint === 'omni-channel-settings'
+      ? { settings: { ...initial, agentId }, answerers }
+      : { items: [{ id: AGENT, name: 'Helper' }] } })
+    const tree = await draw()
+    assert.ok(text(tree).includes(line), `expected ${line}`)
+    assert.ok(text(byLabel(tree, 'agentId')).includes(option), `expected the empty choice to read ${option}`)
+    view.unmount()
+  }
+})
+
 test('input and host schemas preserve meaningful values and reject unknown/provider/token fields', () => {
   assert.equal(inputValue(FIELDS.processAudio, 'false'), false)
   assert.equal(inputValue(FIELDS.inboundMaxAgeMinutes, '0'), 0)
