@@ -201,7 +201,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       const messageId = response.id;
       if (!messageId) {
         const err = 'Zenvia did not return a message id on successful send (malformed response)';
-        await this.emitMessageFailed({ instanceId, chatId: to, error: err, retryable: false });
+        await this.emitMessageFailed({ instanceId, chatId: payload.to, error: err, retryable: false });
         if (transferred) {
           this.logFarewellFailure(instanceId, ZenviaErrorCode.UPSTREAM_ERROR, err);
           return { success: true, timestamp: Date.now() };
@@ -214,7 +214,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       await this.emitMessageSent({
         instanceId,
         externalId: messageId,
-        chatId: to,
+        chatId: payload.to,
         to,
         content: { type: content.type, text: content.text, mediaUrl: content.mediaUrl },
         replyToId: replyTo,
@@ -227,7 +227,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       const errorMessage = err instanceof Error ? err.message : String(err);
       const retryable = isZenvia ? err.retryable : false;
 
-      await this.emitMessageFailed({ instanceId, chatId: to, error: errorMessage, retryable });
+      await this.emitMessageFailed({ instanceId, chatId: payload.to, error: errorMessage, retryable });
 
       if (transferred) {
         this.logFarewellFailure(instanceId, isZenvia ? err.channelCode : undefined, errorMessage);

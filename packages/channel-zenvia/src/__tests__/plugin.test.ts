@@ -371,6 +371,58 @@ describe('ZenviaPlugin', () => {
     });
   });
 
+  describe('outbound event chat id', () => {
+    const FORMATTED = '+55 (11) 90000-0001';
+    const JID = `${CONTACT}@s.whatsapp.net`;
+
+    function outbound(type: 'message.sent' | 'message.failed'): Record<string, unknown> {
+      const event = eventBus.published.find((e) => e.type === type);
+      return (event?.payload ?? {}) as Record<string, unknown>;
+    }
+
+    it('uses the normalized recipient as the chat id of message.sent and keeps the raw to', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(sendResponse());
+      await plugin.sendMessage(instanceId, { to: FORMATTED, content: { type: 'text', text: 'hi' } });
+      expect(outbound('message.sent')).toMatchObject({ externalId: MESSAGE_ID, chatId: CONTACT, to: FORMATTED });
+    });
+
+    it('turns a JID recipient into the phone chat id of message.sent', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(sendResponse());
+      await plugin.sendMessage(instanceId, { to: JID, content: { type: 'text', text: 'hi' } });
+      expect(outbound('message.sent')).toMatchObject({ chatId: CONTACT, to: JID });
+    });
+
+    it('uses the normalized recipient as the chat id of message.failed after an API failure', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse({ code: 'VALIDATION_ERROR', message: 'bad' }, 400));
+      await plugin.sendMessage(instanceId, { to: FORMATTED, content: { type: 'text', text: 'hi' } });
+      expect(outbound('message.failed')).toMatchObject({ chatId: CONTACT });
+    });
+
+    it('uses the normalized recipient as the chat id of message.failed after a malformed response', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('accepted', { status: 200 }));
+      await plugin.sendMessage(instanceId, { to: JID, content: { type: 'text', text: 'hi' } });
+      expect(outbound('message.failed')).toMatchObject({ chatId: CONTACT });
+    });
+
+    it('lands the sent event and the later delivery status in the same chat', async () => {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(sendResponse());
+      await plugin.sendMessage(instanceId, { to: FORMATTED, content: { type: 'text', text: 'hi' } });
+      await plugin.handleStatusUpdate(instanceId, {
+        type: 'MESSAGE_STATUS',
+        messageId: MESSAGE_ID,
+        message: { id: MESSAGE_ID, from: SENDER_ID, direction: 'OUT' },
+        messageStatus: { code: 'DELIVERED', timestamp: '2026-09-22T12:00:05.000Z' },
+      } as never);
+
+      const sent = outbound('message.sent');
+      const delivered = (eventBus.published.find((e) => e.type === 'message.delivered')?.payload ?? {}) as Record<
+        string,
+        unknown
+      >;
+      expect(delivered.chatId).toBe(sent.chatId as string);
+    });
+  });
+
   it('reports not-connected sends without calling the API', async () => {
     const result = await plugin.sendMessage('unknown-instance', { to: CONTACT, content: { type: 'text', text: 'x' } });
     expect(result).toMatchObject({ success: false, error: 'Zenvia instance not connected' });
