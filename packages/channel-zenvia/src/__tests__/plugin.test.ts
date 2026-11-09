@@ -261,6 +261,66 @@ describe('ZenviaPlugin', () => {
     });
   });
 
+  describe('sender id', () => {
+    async function reconnectWith(senderId: string): Promise<void> {
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
+      await connectPlugin(plugin, { zenviaSenderId: senderId });
+    }
+
+    function inbound(to: string) {
+      return {
+        id: `in-${to}`,
+        from: CONTACT,
+        to,
+        direction: 'IN' as const,
+        contents: [{ type: 'text' as const, text: 'hi' }],
+      };
+    }
+
+    it('keeps a sender that is not a phone number exactly as configured', async () => {
+      await reconnectWith('sender2');
+      const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(sendResponse());
+
+      await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'text', text: 'hi' } });
+
+      expect(plugin.getInstanceState(instanceId)?.config.senderId).toBe('sender2');
+      expect(lastSentBody(fetchSpy).from).toBe('sender2');
+    });
+
+    it('keeps a sender that mixes letters, digits and separators', async () => {
+      await reconnectWith('Sender-2 b');
+
+      expect(plugin.getInstanceState(instanceId)?.config.senderId).toBe('Sender-2 b');
+    });
+
+    it('reduces a formatted phone number to its digits', async () => {
+      for (const formatted of ['+55 (11) 4000-0000', '55 11 4000 0000', '+5511-4000-0000']) {
+        await reconnectWith(formatted);
+
+        expect(plugin.getInstanceState(instanceId)?.config.senderId).toBe('551140000000');
+      }
+    });
+
+    it('still reduces a JID to its digits', async () => {
+      await reconnectWith('551140000000@s.whatsapp.net');
+
+      expect(plugin.getInstanceState(instanceId)?.config.senderId).toBe('551140000000');
+    });
+
+    it('accepts inbound messages addressed to a sender that is not a phone number, and drops other senders', async () => {
+      await reconnectWith('sender2');
+
+      expect(await plugin.handleInboundMessage(instanceId, inbound('sender2'))).toBe(true);
+      expect(await plugin.handleInboundMessage(instanceId, inbound('other-sender'))).toBe(false);
+      expect(await plugin.handleInboundMessage(instanceId, inbound('551140000000'))).toBe(false);
+    });
+
+    it('still matches inbound messages to a phone sender whatever their format', async () => {
+      expect(await plugin.handleInboundMessage(instanceId, inbound(`+${SENDER_ID}`))).toBe(true);
+      expect(await plugin.handleInboundMessage(instanceId, inbound(`${SENDER_ID}@s.whatsapp.net`))).toBe(true);
+    });
+  });
+
   describe('send failures', () => {
     it('treats a 2xx whose body is not JSON as a malformed response, not a crash', async () => {
       spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('accepted', { status: 200 }));

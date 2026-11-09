@@ -46,7 +46,7 @@ import {
   buildHandoffRouting,
   resolveHandoffMode,
 } from './utils/handoff';
-import { toZenviaPhone } from './utils/identity';
+import { toSenderId, toZenviaPhone } from './utils/identity';
 
 const ZENVIA_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document']);
 
@@ -436,7 +436,7 @@ export class ZenviaPlugin extends BaseChannelPlugin {
       return false;
     }
 
-    const addressedTo = msg.to ? toZenviaPhone(msg.to) || msg.to : undefined;
+    const addressedTo = msg.to ? toSenderId(msg.to) : undefined;
     if (addressedTo && addressedTo !== state.config.senderId) {
       this.logger.debug('[zenvia] inbound message addressed to another sender dropped', {
         instanceId,
@@ -732,7 +732,7 @@ function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
 
   return {
     apiToken,
-    senderId: toZenviaPhone(senderId) || senderId,
+    senderId: toSenderId(senderId),
     handoffSolution: handoffSolution as ZenviaHandoffSolution | undefined,
     webhookVerifyToken,
     salesApiKey,

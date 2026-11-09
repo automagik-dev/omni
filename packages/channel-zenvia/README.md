@@ -30,7 +30,7 @@ official Meta BSP with its own API format (not a Cloud API mirror).
 | Key                     | Required | Notes                                                                                       |
 | ----------------------- | -------- | ------------------------------------------------------------------------------------------- |
 | `zenviaApiToken`        | yes      | `X-API-TOKEN` header of the Zenvia API v2. Sealed at rest.                                  |
-| `zenviaSenderId`        | yes      | The sender registered at Zenvia (the WhatsApp number).                                      |
+| `zenviaSenderId`        | yes      | The sender registered at Zenvia (the WhatsApp number). A phone-like value (digits, `+`, spaces, parentheses, hyphens) or a JID is reduced to its digits; any other value is kept exactly as written. |
 | `zenviaSalesApiKey`     | no       | Key of the Zenvia Sales APIs (`api-key` query parameter). **Not** the same token as above. Sealed at rest. |
 | `zenviaHandoffGroupId`  | no       | Sales group dedicated to the chatbot. With `zenviaSalesApiKey` it is required, unless `zenviaHandoffRouting` is set; then it is the default group. |
 | `zenviaHandoffRouting`  | no       | JSON `{ "field": "<handoffFields key>", "groups": { "<value>": "<groupId>" } }`: the value of that key picks the Sales group (see Routing a handoff to a group). Needs `zenviaSalesApiKey`. |
