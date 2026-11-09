@@ -23,6 +23,7 @@ function fixtureManifest(id = 'fixture'): ConnectorManifest {
       {
         key: 'do_thing',
         label: 'Do thing',
+        access: 'write',
         inputSchema: z.object({ id: z.string() }).strict(),
         async run() {
           return { ok: true };
@@ -68,6 +69,22 @@ describe('ConnectorRegistry', () => {
     }
   });
 
+  test("access is 'read' or 'write' when declared, and left out of the catalog when it is not", () => {
+    const undeclared = { ...fixtureManifest().actions[0] };
+    Reflect.deleteProperty(undeclared, 'access');
+    const manifest = { ...fixtureManifest(), actions: [undeclared] };
+    expect(new ConnectorRegistry([manifest]).assertValid()).toEqual([]);
+    // A caller must be able to tell "declared a write" from "declared nothing": the field is absent.
+    expect(providerSummary(manifest).actions).toEqual([{ key: 'do_thing', label: 'Do thing' }]);
+    expect(providerDetail(manifest).actions[0]).not.toHaveProperty('access');
+    expect(
+      () =>
+        new ConnectorRegistry([
+          { ...fixtureManifest(), actions: [{ ...fixtureManifest().actions[0], access: 'readwrite' as never }] },
+        ]),
+    ).toThrow(/access must be 'read' or 'write'/);
+  });
+
   test('an unsafe id or a missing schema fails at registration', () => {
     expect(() => new ConnectorRegistry([{ ...fixtureManifest(), id: 'Not Safe' }])).toThrow(ConnectorRegistryError);
     expect(
@@ -85,9 +102,10 @@ describe('ConnectorRegistry', () => {
       label: 'Fixture',
       version: '1.0.0',
       events: [{ key: 'thing.created', label: 'Thing created' }],
-      actions: [{ key: 'do_thing', label: 'Do thing' }],
+      actions: [{ key: 'do_thing', label: 'Do thing', access: 'write' }],
     });
     const detail = providerDetail(manifest);
+    expect(detail.actions[0]?.access).toBe('write');
     expect(detail.credentialFields[0]?.key).toBe('token');
     expect(detail.actions[0]?.inputSchema).toMatchObject({
       type: 'object',

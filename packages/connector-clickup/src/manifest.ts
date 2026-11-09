@@ -282,6 +282,7 @@ export const clickupManifest: ConnectorManifest = {
   actions: [
     {
       key: 'create_task',
+      access: 'write',
       label: 'Create task',
       description: 'POST /list/{listId}/task',
       inputSchema: CreateTaskInputSchema,
@@ -299,6 +300,7 @@ export const clickupManifest: ConnectorManifest = {
     },
     {
       key: 'update_task',
+      access: 'write',
       label: 'Update task',
       description: 'PUT /task/{taskId} — fields and status',
       inputSchema: UpdateTaskInputSchema,
@@ -317,6 +319,7 @@ export const clickupManifest: ConnectorManifest = {
     },
     {
       key: 'add_comment',
+      access: 'write',
       label: 'Add comment',
       description: 'POST /task/{taskId}/comment',
       inputSchema: AddCommentInputSchema,
@@ -336,6 +339,7 @@ export const clickupManifest: ConnectorManifest = {
     },
     {
       key: 'list_tasks',
+      access: 'read',
       label: 'List tasks',
       description: 'GET /list/{listId}/task?archived=false&subtasks=false',
       inputSchema: ListTasksInputSchema,
@@ -349,6 +353,7 @@ export const clickupManifest: ConnectorManifest = {
     },
     {
       key: 'list_spaces',
+      access: 'read',
       label: 'List spaces',
       description:
         'GET /team/{teamId}/space?archived=false — uses the configured team by default; without one, every team GET /team returns',
@@ -368,6 +373,7 @@ export const clickupManifest: ConnectorManifest = {
     },
     {
       key: 'list_folders',
+      access: 'read',
       label: 'List folders',
       description: 'GET /space/{spaceId}/folder?archived=false',
       inputSchema: ListFoldersInputSchema,
@@ -382,6 +388,7 @@ export const clickupManifest: ConnectorManifest = {
     },
     {
       key: 'list_lists',
+      access: 'read',
       label: 'List lists',
       description:
         'GET /space/{spaceId}/list?archived=false, or GET /folder/{folderId}/list?archived=false when folderId is set',
