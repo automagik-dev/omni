@@ -1528,7 +1528,7 @@ export interface paths {
                         /** @enum {string} */
                         chatType: "dm" | "group" | "channel" | "thread" | "forum" | "voice" | "broadcast" | "community" | "announcement" | "stage";
                         /** @enum {string} */
-                        channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+                        channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
                         name?: string;
                         description?: string;
                         /** Format: uri */
@@ -3707,6 +3707,26 @@ export interface paths {
         get: operations["listChannelCapabilities"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/zenvia/{instanceId}/webhook": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Zenvia subscription webhook (public)
+         * @description Receives the events of a Zenvia subscription for one instance. Unauthenticated by contract: Zenvia signs nothing, so authenticity rests on the unguessable instance id in the path plus the instance webhookVerifyToken, which the subscription echoes as the fixed x-webhook-token header and the plugin requires on every request. MESSAGE events with direction IN become message.received and MESSAGE_STATUS events become delivered, read or failed. Every other event is acknowledged with 200 and ignored.
+         */
+        post: operations["receiveZenviaWebhook"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5895,7 +5915,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
             /** @description Whether instance is active */
             isActive: boolean;
             /** @description Whether this is the default instance for channel */
@@ -5988,7 +6008,7 @@ export interface components {
              * @description Channel type
              * @enum {string}
              */
-            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+            channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
             /**
              * Format: uuid
              * @description Agent UUID (agents table)
@@ -6257,7 +6277,7 @@ export interface components {
              * @description Channel type ID
              * @enum {string}
              */
-            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
             /** @description Human-readable channel name */
             name: string;
             /** @description Plugin version */
@@ -12480,7 +12500,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+                    channel: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
                     /**
                      * Format: uuid
                      * @description Agent UUID (agents table)
@@ -12757,7 +12777,7 @@ export interface operations {
                              * @description Channel type ID
                              * @enum {string}
                              */
-                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+                            id: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
                             /** @description Human-readable channel name */
                             name: string;
                             /** @description Plugin version */
@@ -12887,7 +12907,7 @@ export interface operations {
                      * @description Channel type
                      * @enum {string}
                      */
-                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "internal" | "harness" | "webchat";
+                    channel?: "whatsapp-baileys" | "whatsapp-business" | "discord" | "slack" | "telegram" | "a2a" | "gupshup" | "hermes" | "asc" | "asc-flow" | "twilio-whatsapp" | "zenvia" | "internal" | "harness" | "webchat";
                     /** Format: uuid */
                     agentId?: string | null;
                     /**
@@ -15649,6 +15669,27 @@ export interface operations {
             };
             /** @description Instance or chat not found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description CHANNEL_SEND_REJECTED: the channel refused the handoff for good (retrying the same request cannot succeed). The chat is NOT paused and nothing else changed, so the agent can keep the conversation. Transient channel failures stay 502 CHANNEL_SEND_FAILED. */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -22904,6 +22945,48 @@ export interface operations {
                         }[];
                     };
                 };
+            };
+        };
+    };
+    receiveZenviaWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                instanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Event acknowledged */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "text/plain": string;
+                };
+            };
+            /** @description The x-webhook-token header is missing or does not match the instance webhookVerifyToken */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No connected Zenvia instance with this id yet (Zenvia may redeliver), or the Zenvia plugin is not loaded */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };
