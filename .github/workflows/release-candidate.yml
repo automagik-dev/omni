@@ -15,7 +15,12 @@
 #         workflow_dispatch, status in_progress, head SHA = the tag), and
 #         build-push binds GITHUB_REF to the exact tag. Under a call those would
 #         be this workflow, a push, and refs/heads/dev.
-#   pin   workflow_call into pin-candidate.yml once the mint succeeded.
+#   pin   workflow_call into pin-candidate.yml once the stable release exists
+#         at the tag, even when the mint failed later in its stable npm step:
+#         the pin re-verifies the tag, the attested alias and the public stable
+#         release, none of which depend on npm. (image-build.yml dispatches the
+#         same pin itself right after the release; this call is the in-run
+#         second pass and commits nothing when dev already pins the candidate.)
 #
 # Trigger: the auto-bump push version.yml makes after every merged PR
 # (`chore(version): bump to <version>` by github-actions[bot]). Everything
@@ -35,7 +40,10 @@
 # signer (a mismatch fails loudly), dispatches nothing, and instead resumes the
 # existing image-build.yml run for the tag: a succeeded run is accepted, a
 # running one is watched, a failed one gets `gh run rerun --failed` (the same
-# run id the stable publishers re-verify as in_progress).
+# run id the stable publishers re-verify as in_progress). That re-run verifies
+# an already published npm package in place: the CLI package rebuilds
+# byte-identically (scripts/pack-market.ts stamps the commit time, not the
+# clock), and a registry that is merely slow (exit 75) is retried, not failed.
 #
 # Recovery: see docs/deployment/public-launch-readiness.md
 # "Recovering a failed orchestrated release".
@@ -88,6 +96,7 @@ jobs:
       attestations: read # verify its provenance before resuming
     outputs:
       version: ${{ needs.cut.outputs.version }}
+      stable_released: ${{ steps.release.outputs.stable_released }}
     steps:
       - name: Log in to GHCR to inspect an existing candidate alias
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
@@ -175,13 +184,38 @@ jobs:
           {
             echo "### Minting candidate ${tag}"
             echo "- mint run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
-            echo "- if it fails: gh run rerun ${run_id} --failed, then gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}"
+            echo "- if it fails: gh run rerun ${run_id} --failed (the pin is dispatched as soon as the stable release exists; a re-run verifies the published npm package in place)"
           } >> "${GITHUB_STEP_SUMMARY}"
           gh run watch "${run_id}" --repo "${GITHUB_REPOSITORY}" --exit-status
+
+      # The pin needs the stable release and the attested image, not npm
+      # (pin-candidate.yml re-verifies both): record whether the release exists
+      # once the mint settled, so a mint that failed only in its stable npm
+      # step still pins. Not always(): a cancelled run (a newer tip) pins
+      # nothing, and a mint that never released reports false.
+      - name: Check whether the stable release exists at the tag
+        id: release
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.cut.outputs.version }}
+        run: |
+          set -euo pipefail
+          state=$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/v${VERSION}" \
+            --jq '[.draft,.prerelease] | @tsv' 2>/dev/null || true)
+          if [[ "${state}" == $'false\tfalse' ]]; then
+            echo "stable_released=true" >> "$GITHUB_OUTPUT"
+            echo "public stable release v${VERSION} exists; the pin runs"
+          else
+            echo "stable_released=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::no public stable release at v${VERSION} (state: '${state}'); the pin is skipped"
+          fi
 
   pin:
     name: Pin candidate on dev
     needs: mint
+    # Gated on the stable release, not on the mint's npm step; not always().
+    if: ${{ !cancelled() && needs.mint.outputs.stable_released == 'true' }}
     uses: ./.github/workflows/pin-candidate.yml
     permissions:
       contents: read

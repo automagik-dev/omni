@@ -22,21 +22,27 @@
 #   → finalize: independently re-verify the digest, index, platforms, and
 #     provenance; require the active v* tag ruleset; wait for any running
 #     release.yml run at the tag, refuse a dev prerelease at the tag; dispatch
-#     release.yml (channel=stable) and version.yml (stable_publish_only=true)
-#     at the same tag and wait for both; write the candidate receipt as soon
-#     as the stable release exists (before the npm step, so a registry race
-#     never hides the digest); dispatch pin-candidate.yml, which commits the
-#     public channel pins (.well-known/*.json, Helm image.tag) to dev.
-#     image-publish.yml and the CI promotion gate derive the candidate from
-#     the tree (package version → v<version> tag → attested alias); nothing is
-#     hand-pasted.
+#     release.yml (channel=stable) at the tag and wait for it; write the
+#     candidate receipt and dispatch pin-candidate.yml, which commits the
+#     public channel pins (.well-known/*.json, Helm image.tag) to dev, as soon
+#     as the stable release exists; only then dispatch version.yml
+#     (stable_publish_only=true) at the same tag and wait for it. The pin
+#     needs the stable release and the attested image, not npm, so a slow or
+#     failing registry neither hides the digest nor skips the pin; the npm
+#     step still fails the run. image-publish.yml and the CI promotion gate
+#     derive the candidate from the tree (package version → v<version> tag →
+#     attested alias) and re-check npm themselves; nothing is hand-pasted.
 #
 # Recovery: if finalize fails after build-push succeeded (ruleset check,
 # run-resolution timeout, concurrent dispatch, a failed release.yml run), a
 # fresh dispatch is refused by design — the v<version> alias now exists. Use
 # "Re-run failed jobs" on the SAME run: it keeps GITHUB_RUN_ID (the
 # orchestrator_run_id the stable publishers re-verify), the build-push outputs,
-# and the in_progress state those publishers require.
+# and the in_progress state those publishers require. A failure in the stable
+# npm step leaves the release, the receipt and the pin dispatch done: the
+# re-run verifies an already published package in place (the CLI package
+# rebuilds byte-identically; scripts/pack-market.ts stamps the commit time, not
+# the clock) and re-dispatches the pin, a no-op once dev carries it.
 #
 # Both jobs run in the `release` environment. Configure it with required
 # reviewers (repository settings; this file cannot create it) so that a write
@@ -252,7 +258,11 @@ jobs:
     name: Verify candidate and orchestrate stable publication
     needs: build-push
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # Must outlive the stable npm retry loop: up to three dispatched publisher
+    # runs (version.yml publish-stable, 40 min each) plus their backoffs, after
+    # the release.yml wait and the CLI build. The release, receipt and pin are
+    # done before that loop starts, so a timeout here loses only the npm step.
+    timeout-minutes: 180
     environment: release
     permissions:
       contents: read
@@ -544,10 +554,10 @@ jobs:
             echo "- version: \`${VERSION}\`"
             echo "- OCI digest: \`${DIGEST}\`"
             echo "- release published at: \`${published_at}\`"
-            echo "- next: pin-candidate.yml commits the public channel pins to dev once"
-            echo "  the stable npm step below succeeds; then open the dev → main promotion."
-            echo "  image-publish.yml and the CI promotion gate derive the candidate from"
-            echo "  the tree, so nothing is pasted by hand."
+            echo "- next: pin-candidate.yml (dispatched below, before the stable npm step)"
+            echo "  commits the public channel pins to dev; then open the dev → main"
+            echo "  promotion. image-publish.yml and the CI promotion gate derive the"
+            echo "  candidate from the tree and re-check npm, so nothing is pasted by hand."
             echo "- mutation boundary: no tag, branch, production pin, or cluster write"
           } >> "${GITHUB_STEP_SUMMARY}"
           echo "CANDIDATE_VERSION=${VERSION}"
@@ -555,12 +565,36 @@ jobs:
           echo "CANDIDATE_DIGEST=${DIGEST}"
           echo "RELEASE_PUBLISHED_AT=${published_at}"
 
+      # Dispatched right after the receipt, BEFORE the stable npm step: the pin
+      # re-verifies the tag, the attested alias and the public stable release,
+      # none of which depend on npm, so a slow registry cannot leave a minted
+      # candidate unpinned (2.261106.8, 2.261108.2). It is idempotent: a re-run
+      # of this job dispatches it again and it commits nothing when dev already
+      # pins the candidate. The pin is a dev branch write, so it lives in its
+      # own workflow with its own credential; this job stays unable to move a
+      # Git ref. The dispatch resolves pin-candidate.yml on the default branch,
+      # so until the first promotion carrying that file lands it 404s: warn
+      # with the manual command instead of failing an otherwise complete mint.
+      - name: Dispatch the candidate pin to dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run pin-candidate.yml \
+            --repo "${GITHUB_REPOSITORY}" \
+            --ref dev \
+            --field version="${VERSION}" || {
+            echo "::warning::could not dispatch pin-candidate.yml (not on the default branch yet?); run: gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}"
+          }
+
       # Idempotent re-run (#1209): verify an already published stable package
       # here with the same reconciler the publish job runs, in --verify-only
       # mode (this job has no id-token and no npm credential, so it cannot
       # publish). Exact bytes, signatures, and provenance verified -> skip the
       # dispatch. Anything else still needing a mutation (exit 3) or a transient
       # registry failure (exit 75) falls through to the dispatched publisher.
+      # The rebuild compares byte for byte because scripts/pack-market.ts
+      # stamps market.json with the commit time, not the build clock.
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.4
@@ -649,20 +683,3 @@ jobs:
         run: |
           scripts/release/verify-oci-alias.sh \
             --image "${IMAGE}" --version "${VERSION}" --expected-digest "${DIGEST}"
-
-      # The pin is a dev branch write, so it lives in its own workflow with its
-      # own credential; this job stays unable to move a Git ref. The dispatch
-      # resolves pin-candidate.yml on the default branch, so until the first
-      # promotion carrying that file lands it 404s: warn with the manual
-      # command instead of failing an otherwise complete mint.
-      - name: Dispatch the candidate pin to dev
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          gh workflow run pin-candidate.yml \
-            --repo "${GITHUB_REPOSITORY}" \
-            --ref dev \
-            --field version="${VERSION}" || {
-            echo "::warning::could not dispatch pin-candidate.yml (not on the default branch yet?); run: gh workflow run pin-candidate.yml --ref dev -f version=${VERSION}"
-          }

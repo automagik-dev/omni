@@ -104,6 +104,11 @@ PY
     ;;
   publish*)
     [[ -z "${NPM_RECOVERY_TOKEN:-}" && -z "${NODE_AUTH_TOKEN:-}" ]] || exit 94
+    if [[ "${MOCK_PUBLISH_OVER:-false}" == "true" ]]; then
+      echo 'npm error code E403' >&2
+      echo 'npm error 403 403 Forbidden - PUT https://registry.npmjs.org/@automagik%2fomni - You cannot publish over the previously published versions: 2.260830.2.' >&2
+      exit 1
+    fi
     printf 'publish\n' >> "${state}/mutations"
     printf '2.260830.2\n' > "${state}/published"
     if [[ "${MOCK_NO_CONVERGE:-false}" != "true" ]]; then
@@ -159,6 +164,7 @@ PY
 elif [[ "${url}" == "https://registry.npmjs.org/@automagik%2fomni" ]]; then
   printf '{"time":{"2.260830.2":"2026-08-30T21:45:27Z"}}\n' > "${output}"
 else
+  [[ "${MOCK_TARBALL_404:-false}" != "true" ]] || exit 22
   cp "${MOCK_STATE_DIR}/expected.tgz" "${output}"
 fi
 SH
@@ -209,13 +215,51 @@ if run_case "${no_token}" >"${work}/no-token.out" 2>"${work}/no-token.err"; then
 fi
 
 no_converge="${work}/no-converge"
-if MOCK_NO_CONVERGE=true run_case "${no_converge}" >"${work}/no-converge.out" 2>"${work}/no-converge.err"; then
-  fail "publish succeeded without exact post-mutation readback convergence"
-fi
+set +e
+MOCK_NO_CONVERGE=true run_case "${no_converge}" >"${work}/no-converge.out" 2>"${work}/no-converge.err"
+status=$?
+set -e
+[[ "${status}" -ne 0 ]] || fail "publish succeeded without exact post-mutation readback convergence"
 # npm propagation takes minutes (#1057): the readback must keep polling for
 # at least ten minutes of accumulated backoff before giving up.
 waited="$(awk '{ total += $1 } END { print total + 0 }' "${no_converge}/sleeps")"
 (( waited >= 600 )) || fail "non-convergence was declared after only ${waited}s of backoff"
+# The publish was accepted and only the readback lags: transient, so the mint's
+# bounded retry re-dispatches instead of failing (2.261106.8, 2.261108.2).
+[[ "${status}" -eq 75 ]] || fail "post-publish non-convergence exited ${status}, expected the transient 75"
+grep -q 'npm_registry_transient' "${work}/no-converge.err" || fail "post-publish non-convergence has no retry marker"
+grep -q 'did not converge after publish (published=2.260830.2 latest=<none>' "${work}/no-converge.err" || \
+  fail "non-convergence does not report the observed registry state"
+# Every poll logs what the registry returned, so a slow registry is diagnosable.
+polls="$(grep -c '^npm readback [0-9]*/[0-9]* after publish: published=2.260830.2 latest=<none> (expected 2.260830.2)$' "${work}/no-converge.err" || true)"
+(( polls >= 10 )) || fail "only ${polls} readback polls were logged with the observed published/latest state"
+
+# A retry after the registry accepted the publish but still 404s the version:
+# npm refuses to publish over it; the reconciler converges instead of failing.
+publish_over="${work}/publish-over"
+mkdir -p "${publish_over}"
+printf '2.260830.2\n' > "${publish_over}/published"
+printf '2.260830.2\n' > "${publish_over}/latest"
+printf '2\n' > "${publish_over}/published-stale"
+out="$(MOCK_PUBLISH_OVER=true run_case "${publish_over}" 2>"${work}/publish-over.err")"
+grep -q '^npm_action=publish$' <<<"${out}" || fail "a publish refused as already published did not converge"
+[[ ! -e "${publish_over}/mutations" ]] || fail "a refused publish was recorded as a mutation"
+grep -q 'already on the registry' "${work}/publish-over.err" || fail "a refused publish over an existing version is not explained"
+
+# The packument converged but the tarball URL stays 404 past the poll budget:
+# transient as well, with the same marker.
+tarball_404="${work}/tarball-404"
+mkdir -p "${tarball_404}"
+printf '2.260830.2\n' > "${tarball_404}/published"
+printf '2.260830.2\n' > "${tarball_404}/latest"
+set +e
+MOCK_TARBALL_404=true run_case "${tarball_404}" >"${work}/tarball-404.out" 2>"${work}/tarball-404.err"
+status=$?
+set -e
+[[ "${status}" -eq 75 ]] || fail "a tarball that never became downloadable exited ${status}, expected the transient 75"
+grep -q 'npm_registry_transient' "${work}/tarball-404.err" || fail "tarball download timeout has no retry marker"
+waited="$(awk '{ total += $1 } END { print total + 0 }' "${tarball_404}/sleeps")"
+(( waited >= 600 )) || fail "the tarball download gave up after only ${waited}s of backoff"
 
 eventual="${work}/eventual"
 out="$(MOCK_STALE_READS=2 run_case "${eventual}")"
@@ -287,4 +331,4 @@ set -e
 [[ "${status}" -eq 75 ]] || fail "registry 404 during the signature audit install exited ${status}, expected 75"
 grep -q 'npm_registry_transient' "${work}/transient.err" || fail "transient registry failure has no retry marker"
 
-printf 'PASS: token-isolated npm publish, latest repair, and exact signed artifact readback contract\n'
+printf 'PASS: token-isolated npm publish, latest repair, transient slow-registry exits, and exact signed artifact readback contract\n'
