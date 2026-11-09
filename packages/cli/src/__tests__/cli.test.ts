@@ -509,6 +509,43 @@ describe('CLI Integration Tests', () => {
       expect(instance.data).toHaveProperty('gupshupHandoffOptions', null);
     });
 
+    test('instances update --zenvia-handoff-routing forwards the parsed JSON object', async () => {
+      if (!testInstanceId) return;
+
+      const routing = { field: 'queue_field', groups: { 'queue-a': 'group-1', 'queue-b': 'group-2' } };
+      const result = await runCli(
+        ['instances', 'update', testInstanceId, '--zenvia-handoff-routing', JSON.stringify(routing)],
+        { OMNI_FORMAT: 'json' },
+      );
+
+      assertSuccess(result, 'instances update --zenvia-handoff-routing');
+      const parsed = JSON.parse(result.stdout);
+      expect(parsed.zenviaHandoffRouting).toEqual(routing);
+
+      const stored = await fetch(`${MOCK_URL}/api/v2/instances/${testInstanceId}`, {
+        headers: { 'x-api-key': MOCK_API_KEY },
+      });
+      const instance = (await stored.json()) as { data: { zenviaHandoffRouting?: unknown } };
+      expect(instance.data.zenviaHandoffRouting).toEqual(routing);
+    });
+
+    test('instances update --zenvia-handoff-routing null clears the field', async () => {
+      if (!testInstanceId) return;
+
+      const result = await runCli(['instances', 'update', testInstanceId, '--zenvia-handoff-routing', 'null'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'instances update --zenvia-handoff-routing null');
+      expect(JSON.parse(result.stdout)).toHaveProperty('zenviaHandoffRouting', null);
+
+      const stored = await fetch(`${MOCK_URL}/api/v2/instances/${testInstanceId}`, {
+        headers: { 'x-api-key': MOCK_API_KEY },
+      });
+      const instance = (await stored.json()) as { data: { zenviaHandoffRouting?: unknown } };
+      expect(instance.data).toHaveProperty('zenviaHandoffRouting', null);
+    });
+
     test('instances delete removes instance', async () => {
       if (!testInstanceId) {
         return;

@@ -407,6 +407,257 @@ describe('ZenviaPlugin handoff through the Sales API', () => {
     });
   });
 
+  describe('group routing by queue', () => {
+    const ROUTING = { field: 'queue_field', groups: { 'queue-a': 'group-1', 'Queue B': 'group-2' } };
+    const NO_DEFAULT = { zenviaHandoffGroupId: undefined };
+
+    function routedMessage(queue: unknown, extra: Record<string, unknown> = {}) {
+      return {
+        ...handoffMessage,
+        metadata: { ...handoffMessage.metadata, handoffFields: { queue_field: queue, ...extra } },
+      };
+    }
+
+    function queueTransfer(fetchSpy: ReturnType<typeof spyOn>) {
+      fetchSpy
+        .mockResolvedValueOnce(jsonResponse({ id: PROSPECT_ID }))
+        .mockResolvedValueOnce(jsonResponse({ success: true }))
+        .mockResolvedValueOnce(jsonResponse([{ id: 'n1' }]))
+        .mockResolvedValueOnce(sendResponse());
+    }
+
+    it('transfers to the group mapped to the queue the emitter chose', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, routedMessage('queue-a'));
+
+      expect(result.success).toBe(true);
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: 'group-1' });
+    });
+
+    it('sends different queues to different groups', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      await plugin.sendMessage(instanceId, routedMessage('queue-a'));
+      await plugin.sendMessage(instanceId, routedMessage('queue b'));
+
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: 'group-1' });
+      expect(bodyOf(fetchSpy, before + 5)).toEqual({ group: 'group-2' });
+    });
+
+    it('matches the queue after trimming, collapsing spaces and ignoring case', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      await plugin.sendMessage(instanceId, routedMessage('  QUEUE \t  b '));
+
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: 'group-2' });
+    });
+
+    it('keeps the queue in the note for the human attendant', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      await plugin.sendMessage(instanceId, routedMessage('queue-a'));
+
+      const content = String(bodyOf(fetchSpy, before + 2).content);
+      expect(content).toContain('queue_field: queue-a');
+      expect(content).toContain('Motivo do handoff: asked for a person');
+    });
+
+    it('keeps zenviaHandoffUserId inside the chosen group', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING, zenviaHandoffUserId: USER_ID });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      await plugin.sendMessage(instanceId, routedMessage('queue b'));
+
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ user: USER_ID, group: 'group-2' });
+    });
+
+    it('falls back to the default group, warning with the value but without lead data', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const warn = spyOn(plugin.getLogger(), 'warn');
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, routedMessage('queue-z'));
+
+      expect(result.success).toBe(true);
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: GROUP_ID });
+      const logged = warn.mock.calls.map((args) => JSON.stringify(args));
+      const routingWarning = logged.find((line) => line.includes('queue-z'));
+      expect(routingWarning).toBeDefined();
+      expect(routingWarning).toContain('queue_field');
+      expect(routingWarning).not.toContain('Fortaleza');
+      expect(routingWarning).not.toContain('asked for a person');
+    });
+
+    it('falls back to the default group when the emitter sent no queue at all', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(true);
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: GROUP_ID });
+    });
+
+    it('falls back on a queue value that is not a string, naming the type only', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING });
+      const warn = spyOn(plugin.getLogger(), 'warn');
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, routedMessage(12));
+
+      expect(result.success).toBe(true);
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: GROUP_ID });
+      expect(warn.mock.calls.map((args) => JSON.stringify(args)).some((line) => line.includes('number'))).toBe(true);
+    });
+
+    it('refuses for good, calling nothing, when the queue has no group and there is no default', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING, ...NO_DEFAULT });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, routedMessage('queue-z'));
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBe(true);
+      expect(result.retryable).toBe(false);
+      expect(result.error).toContain('queue_field');
+      expect(fetchSpy.mock.calls.length).toBe(before);
+    });
+
+    it('refuses for good when the emitter sent no queue and there is no default', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING, ...NO_DEFAULT });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, handoffMessage);
+
+      expect(result.success).toBe(false);
+      expect(result.rejected).toBe(true);
+      expect(fetchSpy.mock.calls.length).toBe(before);
+    });
+
+    it('still routes the matching queue when there is no default group', async () => {
+      await connect({ zenviaHandoffRouting: ROUTING, ...NO_DEFAULT });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, routedMessage('queue b'));
+
+      expect(result.success).toBe(true);
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: 'group-2' });
+    });
+
+    it('leaves the behavior untouched without a routing map: the queue only reaches the note', async () => {
+      await connect();
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      await plugin.sendMessage(instanceId, routedMessage('queue-a'));
+
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: GROUP_ID });
+      expect(String(bodyOf(fetchSpy, before + 2).content)).toContain('queue_field: queue-a');
+    });
+
+    it('accepts the routing map as a JSON string', async () => {
+      await connect({ zenviaHandoffRouting: JSON.stringify(ROUTING) });
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      queueTransfer(fetchSpy);
+      const before = fetchSpy.mock.calls.length;
+
+      await plugin.sendMessage(instanceId, routedMessage('queue-a'));
+
+      expect(bodyOf(fetchSpy, before + 1)).toEqual({ group: 'group-1' });
+    });
+
+    it('refuses to connect with an invalid routing map, before calling Zenvia', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      const before = fetchSpy.mock.calls.length;
+
+      for (const zenviaHandoffRouting of [
+        { field: '', groups: { a: 'g' } },
+        { field: 'queue_field', groups: {} },
+        { field: 'queue_field', groups: { a: 12 } },
+        { field: 'queue_field', groups: { 'Queue A': 'g1', 'queue  a': 'g2' } },
+        '{broken',
+      ]) {
+        await expect(connectPlugin(plugin, { zenviaHandoffRouting })).rejects.toThrow(/zenviaHandoffRouting/);
+      }
+      expect(fetchSpy.mock.calls.length).toBe(before);
+    });
+
+    it('checks the mapped groups on connect, warning about the ones the Sales key does not list', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      const warn = spyOn(plugin.getLogger(), 'warn');
+      spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse([]))
+        .mockResolvedValueOnce(jsonResponse([{ id: GROUP_ID }, { id: 'group-1' }]));
+
+      await connectPlugin(plugin, {
+        zenviaSalesApiKey: SALES_KEY,
+        zenviaHandoffGroupId: GROUP_ID,
+        zenviaHandoffRouting: ROUTING,
+      });
+
+      const lines = warn.mock.calls.map((args) => JSON.stringify(args));
+      expect(lines.filter((line) => line.includes('group-2'))).toHaveLength(1);
+      expect(lines.some((line) => line.includes('group-1'))).toBe(false);
+      expect(plugin.getInstanceState(instanceId)).toBeDefined();
+    });
+
+    it('verifies the Sales key on connect when only the routing map is set', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      const fetchSpy = spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(jsonResponse([]))
+        .mockResolvedValueOnce(jsonResponse([{ id: 'group-1' }, { id: 'group-2' }]));
+
+      await connectPlugin(plugin, { zenviaSalesApiKey: SALES_KEY, zenviaHandoffRouting: ROUTING });
+
+      const { url } = call(fetchSpy, fetchSpy.mock.calls.length - 1);
+      expect(url.pathname).toBe('/api/v1/groups');
+      expect(plugin.getInstanceState(instanceId)?.salesClient).toBeDefined();
+    });
+
+    it('keeps the transfer off, without blocking the connection, when the map has no Sales key', async () => {
+      plugin = new ZenviaPlugin();
+      await plugin.initialize(createContext(new MockEventBus()));
+      const warn = spyOn(plugin.getLogger(), 'warn');
+      spyOn(globalThis, 'fetch').mockResolvedValueOnce(jsonResponse([]));
+
+      await connectPlugin(plugin, { zenviaHandoffRouting: ROUTING });
+
+      expect(plugin.getInstanceState(instanceId)?.salesClient).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+    });
+  });
+
   it('keeps the handoff done when the note cannot be written', async () => {
     await connect();
     const fetchSpy = spyOn(globalThis, 'fetch')

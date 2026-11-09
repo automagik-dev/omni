@@ -15,6 +15,14 @@ export type { ZenviaSalesClientOptions, ZenviaTransferTarget } from './sales-cli
 export { handleZenviaEvent, handleZenviaWebhookRequest } from './handlers/webhook';
 
 export {
+  normalizeRoutingValue,
+  parseHandoffRouting,
+  resolveHandoffGroup,
+  zenviaHandoffRoutingSchema,
+} from './handoff-routing';
+export type { HandoffGroupResolution, HandoffRoutingMiss, ZenviaHandoffRouting } from './handoff-routing';
+
+export {
   buildHandoffNote,
   buildHandoffRouting,
   resolveHandoffMode,

@@ -175,6 +175,9 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'zenviaHandoffGroupId', opts.zenviaHandoffGroupId);
   setVal(body, 'zenviaHandoffUserId', opts.zenviaHandoffUserId);
   setVal(body, 'zenviaHandoffSolution', opts.zenviaHandoffSolution);
+  if (typeof opts.zenviaHandoffRouting === 'string' && opts.zenviaHandoffRouting.length > 0) {
+    body.zenviaHandoffRouting = JSON.parse(opts.zenviaHandoffRouting);
+  }
   setVal(body, 'twilioAccountSid', opts.twilioAccountSid);
   setVal(body, 'twilioAuthToken', opts.twilioAuthToken);
   setVal(body, 'twilioFrom', opts.twilioFrom);
@@ -530,6 +533,10 @@ export function createInstancesCommand(): Command {
     .option('--zenvia-handoff-group-id <id>', 'Zenvia Sales group dedicated to the chatbot; handoffs transfer to it')
     .option('--zenvia-handoff-user-id <id>', 'Optional agent inside the Zenvia handoff group')
     .option('--zenvia-handoff-solution <solution>', 'Zenvia fallback routing: conversion, zenvia_chat or nlu')
+    .option(
+      '--zenvia-handoff-routing <json>',
+      'Zenvia queue-to-group map (JSON): {"field":"<handoffFields key>","groups":{"<value>":"<groupId>"}}; --zenvia-handoff-group-id is the fallback',
+    )
     // Twilio WhatsApp
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
     .option('--twilio-auth-token <token>', 'Twilio Auth Token')
@@ -1245,6 +1252,10 @@ export function createInstancesCommand(): Command {
     .option('--zenvia-handoff-group-id <id>', 'Zenvia Sales handoff group (use "null" to clear)')
     .option('--zenvia-handoff-user-id <id>', 'Agent inside the Zenvia handoff group (use "null" to clear)')
     .option('--zenvia-handoff-solution <solution>', 'Zenvia fallback routing (use "null" to clear)')
+    .option(
+      '--zenvia-handoff-routing <json>',
+      'Zenvia queue-to-group map (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')
     // WhatsApp profile name (separate endpoint)

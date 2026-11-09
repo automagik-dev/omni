@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { ZenviaHandoffRouting } from './handoff-routing';
+
 export const ZENVIA_HANDOFF_SOLUTIONS = ['conversion', 'zenvia_chat', 'nlu'] as const;
 export type ZenviaHandoffSolution = (typeof ZENVIA_HANDOFF_SOLUTIONS)[number];
 
@@ -11,6 +13,7 @@ export interface ZenviaConfig {
   salesApiKey?: string;
   handoffGroupId?: string;
   handoffUserId?: string;
+  handoffRouting?: ZenviaHandoffRouting;
 }
 
 export const ZenviaSalesProspectSchema = z.object({ id: z.string().min(1) }).passthrough();

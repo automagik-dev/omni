@@ -75,6 +75,39 @@ export const GupshupHandoffOptionsSchema = z
   })
   .strict();
 
+const zenviaRoutingValue = z.string().min(1).max(256);
+const zenviaRoutingGroupId = z.string().trim().min(1).max(64);
+export const ZenviaHandoffRoutingSchema = z
+  .object({
+    field: z.string().trim().min(1).max(128).describe('Key of handoffFields whose value picks the Sales group'),
+    groups: z
+      .record(zenviaRoutingValue, zenviaRoutingGroupId)
+      .describe(
+        'Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match',
+      ),
+  })
+  .strict()
+  .superRefine((routing, ctx) => {
+    const keys = Object.keys(routing.groups);
+    if (keys.length === 0 || keys.length > 256) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['groups'], message: 'needs 1 to 256 entries' });
+    }
+    const seen = new Set<string>();
+    for (const key of keys) {
+      const normalized = key.trim().replace(/\s+/g, ' ').toLowerCase();
+      if (!normalized) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', key], message: 'a value cannot be blank' });
+      } else if (seen.has(normalized)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['groups', key],
+          message: 'duplicate value: it is the same as another one after trimming, collapsing spaces and ignoring case',
+        });
+      }
+      seen.add(normalized);
+    }
+  });
+
 /**
  * Close-contact cooldown/escalation overrides (instances.close_contact_config).
  * One definition shared by the POST/PATCH validators and the OpenAPI document.

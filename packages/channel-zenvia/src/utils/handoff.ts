@@ -1,7 +1,7 @@
 import type { ZenviaConfig, ZenviaConversationRouting, ZenviaHandoffSolution } from '../types';
 
 export const HANDOFF_NOT_CONFIGURED_ERROR =
-  'Zenvia handoff refused: configure zenviaSalesApiKey and zenviaHandoffGroupId (transfer through the Sales API) or zenviaHandoffSolution (conversation routing), so there is somewhere to send the conversation';
+  'Zenvia handoff refused: configure zenviaSalesApiKey with zenviaHandoffGroupId or zenviaHandoffRouting (transfer through the Sales API) or zenviaHandoffSolution (conversation routing), so there is somewhere to send the conversation';
 
 const NOTE_REASON_LABEL = 'Motivo do handoff';
 const NOTE_LEAD_LABEL = 'Dados do lead';
@@ -9,7 +9,7 @@ const NOTE_LEAD_LABEL = 'Dados do lead';
 export type ZenviaHandoffMode = 'transfer' | 'routing';
 
 export function resolveHandoffMode(config: ZenviaConfig): ZenviaHandoffMode | null {
-  if (config.salesApiKey && config.handoffGroupId) return 'transfer';
+  if (config.salesApiKey && (config.handoffGroupId || config.handoffRouting)) return 'transfer';
   if (config.handoffSolution) return 'routing';
   return null;
 }

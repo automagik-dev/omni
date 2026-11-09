@@ -1,6 +1,6 @@
 -- Zenvia channel — per-instance configuration.
 --
--- Adds the six instance columns the `@omni/channel-zenvia` plugin reads:
+-- Adds the seven instance columns the `@omni/channel-zenvia` plugin reads:
 --   * zenvia_api_token         — API v2 token (`X-API-TOKEN` header); sealed
 --                                at rest by the instances service
 --   * zenvia_sender_id         — sender registered at Zenvia (the WhatsApp
@@ -13,6 +13,9 @@
 --   * zenvia_handoff_group_id  — Sales group dedicated to the chatbot, the
 --                                target of the handoff transfer
 --   * zenvia_handoff_user_id   — optional agent inside that group
+--   * zenvia_handoff_routing   — jsonb { field, groups }: the value of that
+--                                handoffFields key picks the Sales group;
+--                                the group above becomes the fallback
 -- With the Sales key and group set the handoff transfers the prospect; with
 -- only a solution it routes the conversation; with neither it is refused.
 -- The required webhook verify token reuses the shared webhook_verify_token
@@ -31,4 +34,5 @@ ALTER TABLE "instances"
   ADD COLUMN IF NOT EXISTS "zenvia_handoff_solution" varchar(32),
   ADD COLUMN IF NOT EXISTS "zenvia_sales_api_key" text,
   ADD COLUMN IF NOT EXISTS "zenvia_handoff_group_id" varchar(64),
-  ADD COLUMN IF NOT EXISTS "zenvia_handoff_user_id" varchar(64);
+  ADD COLUMN IF NOT EXISTS "zenvia_handoff_user_id" varchar(64),
+  ADD COLUMN IF NOT EXISTS "zenvia_handoff_routing" jsonb;

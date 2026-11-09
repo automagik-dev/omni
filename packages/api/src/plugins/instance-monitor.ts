@@ -38,7 +38,7 @@
  */
 
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
-import type { Database, GupshupHandoffOptions } from '@omni/db';
+import type { Database, GupshupHandoffOptions, ZenviaHandoffRouting } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
@@ -238,6 +238,7 @@ export function buildInstanceConnectOptions(instance: {
   zenviaSalesApiKey?: string | null;
   zenviaHandoffGroupId?: string | null;
   zenviaHandoffUserId?: string | null;
+  zenviaHandoffRouting?: ZenviaHandoffRouting | null;
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
@@ -370,6 +371,7 @@ function applyZenviaOptions(
     zenviaSalesApiKey?: string | null;
     zenviaHandoffGroupId?: string | null;
     zenviaHandoffUserId?: string | null;
+    zenviaHandoffRouting?: ZenviaHandoffRouting | null;
     webhookVerifyToken?: string | null;
   },
 ): void {
@@ -379,6 +381,7 @@ function applyZenviaOptions(
   if (instance.zenviaSalesApiKey) options.zenviaSalesApiKey = instance.zenviaSalesApiKey;
   if (instance.zenviaHandoffGroupId) options.zenviaHandoffGroupId = instance.zenviaHandoffGroupId;
   if (instance.zenviaHandoffUserId) options.zenviaHandoffUserId = instance.zenviaHandoffUserId;
+  if (instance.zenviaHandoffRouting) options.zenviaHandoffRouting = instance.zenviaHandoffRouting;
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 

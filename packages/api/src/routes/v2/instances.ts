@@ -13,7 +13,7 @@ import {
   NotFoundError,
   createLogger,
 } from '@omni/core';
-import type { Database, GupshupHandoffOptions } from '@omni/db';
+import type { Database, GupshupHandoffOptions, ZenviaHandoffRouting } from '@omni/db';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import { accessCache } from '../../cache/cache-keys';
@@ -33,6 +33,7 @@ import {
   SelfHistorySchema,
   SelfMessagesSchema,
   SelfReceiptSchema,
+  ZenviaHandoffRoutingSchema,
 } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
@@ -279,6 +280,11 @@ const createInstanceSchema = z.object({
     .optional()
     .nullable()
     .describe('Optional agent inside the handoff group the prospect is transferred to'),
+  zenviaHandoffRouting: ZenviaHandoffRoutingSchema.optional()
+    .nullable()
+    .describe(
+      'Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it',
+    ),
   ascFlowBaseUrl: z
     .string()
     .optional()
@@ -773,6 +779,7 @@ type InstanceConnectionOptionsInput = {
   zenviaSalesApiKey?: string | null;
   zenviaHandoffGroupId?: string | null;
   zenviaHandoffUserId?: string | null;
+  zenviaHandoffRouting?: ZenviaHandoffRouting | null;
   metaAccessToken?: string | null;
   metaPhoneNumberId?: string | null;
   metaWabaId?: string | null;
@@ -877,6 +884,7 @@ function applyZenviaConnectionOptions(
     zenviaSalesApiKey?: string | null;
     zenviaHandoffGroupId?: string | null;
     zenviaHandoffUserId?: string | null;
+    zenviaHandoffRouting?: ZenviaHandoffRouting | null;
     webhookVerifyToken?: string | null;
   },
 ): void {
@@ -886,6 +894,7 @@ function applyZenviaConnectionOptions(
   if (input.zenviaSalesApiKey) options.zenviaSalesApiKey = input.zenviaSalesApiKey;
   if (input.zenviaHandoffGroupId) options.zenviaHandoffGroupId = input.zenviaHandoffGroupId;
   if (input.zenviaHandoffUserId) options.zenviaHandoffUserId = input.zenviaHandoffUserId;
+  if (input.zenviaHandoffRouting) options.zenviaHandoffRouting = input.zenviaHandoffRouting;
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
@@ -1305,6 +1314,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     zenviaSalesApiKey: instance.zenviaSalesApiKey,
     zenviaHandoffGroupId: instance.zenviaHandoffGroupId,
     zenviaHandoffUserId: instance.zenviaHandoffUserId,
+    zenviaHandoffRouting: instance.zenviaHandoffRouting,
     // No meta* threading here: createInstanceSchema carries no Meta fields, so
     // a whatsapp-business row is never credentialed at create — credentials
     // arrive via the whatsapp-cloud connect/OAuth route.
@@ -1877,6 +1887,9 @@ const connectInstanceSchema = z.object({
     .string()
     .optional()
     .describe('Optional agent inside the handoff group the prospect is transferred to'),
+  zenviaHandoffRouting: ZenviaHandoffRoutingSchema.optional().describe(
+    'Routes a handoff to a Sales group by the value of one handoffFields key (see POST /instances)',
+  ),
   ascFlowBaseUrl: z.string().optional().describe('ASC platform base URL'),
   ascFlowLogin: z.string().optional().describe('ASC platform /authuser login'),
   ascFlowChave: z.string().optional().describe('ASC platform /authuser chave (secret)'),
@@ -1934,6 +1947,7 @@ function mergeZenviaFields(
     | 'zenviaSalesApiKey'
     | 'zenviaHandoffGroupId'
     | 'zenviaHandoffUserId'
+    | 'zenviaHandoffRouting'
   >,
   body: Pick<
     ConnectInstanceBody,
@@ -1943,6 +1957,7 @@ function mergeZenviaFields(
     | 'zenviaSalesApiKey'
     | 'zenviaHandoffGroupId'
     | 'zenviaHandoffUserId'
+    | 'zenviaHandoffRouting'
   >,
 ) {
   return {
@@ -1952,6 +1967,7 @@ function mergeZenviaFields(
     zenviaSalesApiKey: body.zenviaSalesApiKey ?? instance.zenviaSalesApiKey,
     zenviaHandoffGroupId: body.zenviaHandoffGroupId ?? instance.zenviaHandoffGroupId,
     zenviaHandoffUserId: body.zenviaHandoffUserId ?? instance.zenviaHandoffUserId,
+    zenviaHandoffRouting: body.zenviaHandoffRouting ?? instance.zenviaHandoffRouting,
   };
 }
 

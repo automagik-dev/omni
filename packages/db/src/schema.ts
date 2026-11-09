@@ -113,6 +113,11 @@ export interface GupshupHandoffOptions {
   customerFields?: Array<{ apiKey: string; value?: string; from?: string }>;
 }
 
+export interface ZenviaHandoffRouting {
+  field: string;
+  groups: Record<string, string>;
+}
+
 /**
  * Per-instance overrides for the close-contact cooldown/escalation config.
  * Values are milliseconds / counts; `null` disables that mechanism for the
@@ -993,6 +998,7 @@ export const instances = pgTable(
     zenviaSalesApiKey: text('zenvia_sales_api_key'),
     zenviaHandoffGroupId: varchar('zenvia_handoff_group_id', { length: 64 }),
     zenviaHandoffUserId: varchar('zenvia_handoff_user_id', { length: 64 }),
+    zenviaHandoffRouting: jsonb('zenvia_handoff_routing').$type<ZenviaHandoffRouting>(),
 
     // ---- ASC platform Flow Configuration ----
     // Per-instance credentials for the ASC platform REST API (/rest/v2), the

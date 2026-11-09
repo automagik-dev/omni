@@ -18,6 +18,7 @@ import type { ChannelType, ContentType } from '@omni/core/types';
 import { ZENVIA_CAPABILITIES } from './capabilities';
 import { ZenviaClient } from './client';
 import { handleZenviaWebhookRequest } from './handlers/webhook';
+import { type HandoffRoutingMiss, parseHandoffRouting, resolveHandoffGroup } from './handoff-routing';
 import { ZenviaSalesClient } from './sales-client';
 import {
   ZENVIA_HANDOFF_SOLUTIONS,
@@ -93,13 +94,15 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     }
 
     let salesClient: ZenviaSalesClient | undefined;
-    if (zenviaConfig.salesApiKey && zenviaConfig.handoffGroupId) {
+    const hasTransferTarget = Boolean(zenviaConfig.handoffGroupId || zenviaConfig.handoffRouting);
+    if (zenviaConfig.salesApiKey && hasTransferTarget) {
       salesClient = new ZenviaSalesClient({ apiKey: zenviaConfig.salesApiKey });
-      await this.verifySalesAccess(instanceId, salesClient, zenviaConfig.handoffGroupId);
-    } else if (zenviaConfig.salesApiKey || zenviaConfig.handoffGroupId || zenviaConfig.handoffUserId) {
-      this.logger.warn('Zenvia Sales transfer needs both zenviaSalesApiKey and zenviaHandoffGroupId; it stays off', {
-        instanceId,
-      });
+      await this.verifySalesAccess(instanceId, salesClient, zenviaConfig);
+    } else if (zenviaConfig.salesApiKey || hasTransferTarget || zenviaConfig.handoffUserId) {
+      this.logger.warn(
+        'Zenvia Sales transfer needs zenviaSalesApiKey and a group (zenviaHandoffGroupId or zenviaHandoffRouting); it stays off',
+        { instanceId },
+      );
     }
 
     this.zenviaInstances.get(instanceId)?.dedupeCache.dispose();
@@ -216,8 +219,12 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     metadata: Record<string, unknown>,
   ): Promise<TransferOutcome> {
     const sales = state.salesClient;
-    const groupId = state.config.handoffGroupId;
-    if (!sales || !groupId) return { ok: false, error: HANDOFF_NOT_CONFIGURED_ERROR, retryable: false, rejected: true };
+    if (!sales) return { ok: false, error: HANDOFF_NOT_CONFIGURED_ERROR, retryable: false, rejected: true };
+
+    const resolution = resolveHandoffGroup(state.config.handoffRouting, state.config.handoffGroupId, metadata);
+    if (resolution.miss) this.logRoutingMiss(instanceId, resolution.miss, resolution.ok);
+    if (!resolution.ok) return { ok: false, error: resolution.error, retryable: false, rejected: true };
+    const groupId = resolution.groupId;
 
     try {
       const prospect = await sales.findProspectByPhone(to);
@@ -258,13 +265,37 @@ export class ZenviaPlugin extends BaseChannelPlugin {
     }
   }
 
-  private async verifySalesAccess(instanceId: string, sales: ZenviaSalesClient, groupId: string): Promise<void> {
+  private logRoutingMiss(instanceId: string, miss: HandoffRoutingMiss, usingDefaultGroup: boolean): void {
+    this.logger.warn(
+      usingDefaultGroup
+        ? 'Zenvia handoff queue has no mapped group; transferring to the default group'
+        : 'Zenvia handoff queue has no mapped group and there is no default group; refusing',
+      {
+        instanceId,
+        field: miss.field,
+        reason: miss.reason,
+        ...(miss.reason === 'unmatched' ? { value: miss.value } : {}),
+        ...(miss.reason === 'not-a-string' ? { valueType: miss.valueType } : {}),
+      },
+    );
+  }
+
+  private async verifySalesAccess(instanceId: string, sales: ZenviaSalesClient, config: ZenviaConfig): Promise<void> {
     try {
-      const groups = await sales.listGroups();
-      if (!groups.some((group) => group.id === groupId)) {
+      const listed = new Set((await sales.listGroups()).map((group) => group.id));
+      if (config.handoffGroupId && !listed.has(config.handoffGroupId)) {
         this.logger.warn('Zenvia handoff group not among the groups listed for the Sales key; transfers may fail', {
           instanceId,
         });
+      }
+      const unlisted = [...new Set(Object.values(config.handoffRouting?.groups ?? {}))].filter(
+        (groupId) => !listed.has(groupId),
+      );
+      if (unlisted.length > 0) {
+        this.logger.warn(
+          'Zenvia handoff routing groups not among the groups listed for the Sales key; transfers to them may fail',
+          { instanceId, groups: unlisted },
+        );
       }
     } catch (err) {
       this.logger.warn('Zenvia Sales API check failed on connect; handoff transfer is unverified', {
@@ -610,6 +641,7 @@ function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
   const salesApiKey = pick('zenviaSalesApiKey');
   const handoffGroupId = pick('zenviaHandoffGroupId');
   const handoffUserId = pick('zenviaHandoffUserId');
+  const handoffRouting = parseHandoffRouting(creds.zenviaHandoffRouting ?? opts.zenviaHandoffRouting);
 
   if (!apiToken) {
     throw new ZenviaApiError(ZenviaErrorCode.AUTH_FAILED, 'zenviaApiToken is required to connect a zenvia instance');
@@ -642,6 +674,7 @@ function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
     salesApiKey,
     handoffGroupId,
     handoffUserId,
+    handoffRouting,
   };
 }
 

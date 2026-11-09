@@ -220,6 +220,7 @@ let dynamicInstances: Array<{
   isActive: boolean;
   profileName: string | null;
   gupshupHandoffOptions?: Record<string, unknown> | null;
+  zenviaHandoffRouting?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
 }> = [];
@@ -312,6 +313,9 @@ async function handleUpdateInstance(req: Request, path: string): Promise<Respons
   if (body.name !== undefined) found.name = body.name as string;
   if (body.gupshupHandoffOptions !== undefined) {
     found.gupshupHandoffOptions = body.gupshupHandoffOptions as Record<string, unknown> | null;
+  }
+  if (body.zenviaHandoffRouting !== undefined) {
+    found.zenviaHandoffRouting = body.zenviaHandoffRouting as Record<string, unknown> | null;
   }
   found.updatedAt = new Date().toISOString();
   return json({ data: found });
