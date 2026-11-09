@@ -8,6 +8,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { MOCK_API_KEY, startMockApi, stopMockApi } from '../../../cli/src/__tests__/mock-api';
 import { createOmniClient } from '../index';
+import type { ConnectInstanceBody, CreateInstanceBody } from '../index';
 
 // ── Compile-time type checks (always run, no API needed) ──
 describe('SDK Type Safety (compile-time)', () => {
@@ -41,6 +42,33 @@ describe('SDK Type Safety (compile-time)', () => {
     };
 
     expect(pathTypeCheck).toBeDefined();
+  });
+
+  test('instance create and connect bodies accept the Zenvia configuration', () => {
+    const create: CreateInstanceBody = {
+      name: 'zenvia-line',
+      channel: 'zenvia',
+      zenviaApiToken: 'api-token',
+      zenviaSenderId: '5511900000000',
+      webhookVerifyToken: 'verify-token',
+      zenviaSalesApiKey: 'sales-key',
+      zenviaHandoffGroupId: 'group-1',
+      zenviaHandoffUserId: 'agent-1',
+      zenviaHandoffSolution: 'zenvia_chat',
+      zenviaHandoffRouting: { field: 'queue', groups: { 'queue-a': 'group-1' } },
+    };
+    const connect: ConnectInstanceBody = {
+      zenviaApiToken: 'api-token',
+      zenviaSenderId: '5511900000000',
+      zenviaSalesApiKey: 'sales-key',
+      zenviaHandoffGroupId: 'group-1',
+      zenviaHandoffUserId: 'agent-1',
+      zenviaHandoffSolution: 'nlu',
+      zenviaHandoffRouting: { field: 'queue', groups: { 'queue-a': 'group-1' } },
+    };
+
+    expect(create.channel).toBe('zenvia');
+    expect(connect.zenviaHandoffSolution).toBe('nlu');
   });
 
   test('raw client provides typed path params for /instances/{id}', () => {

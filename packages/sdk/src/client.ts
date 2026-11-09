@@ -361,6 +361,14 @@ export interface CreateInstanceBody {
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
   gupshupHandoffOptions?: components['schemas']['CreateInstanceRequest']['gupshupHandoffOptions'];
+  zenviaApiToken?: string;
+  zenviaSenderId?: string;
+  webhookVerifyToken?: string;
+  zenviaSalesApiKey?: string;
+  zenviaHandoffGroupId?: string;
+  zenviaHandoffUserId?: string;
+  zenviaHandoffSolution?: 'conversion' | 'zenvia_chat' | 'nlu';
+  zenviaHandoffRouting?: { field: string; groups: Record<string, string> };
 }
 
 /**
@@ -1148,6 +1156,13 @@ export interface ConnectInstanceBody {
   twilioStatusCallbackUrl?: string;
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
+  zenviaApiToken?: string;
+  zenviaSenderId?: string;
+  zenviaSalesApiKey?: string;
+  zenviaHandoffGroupId?: string;
+  zenviaHandoffUserId?: string;
+  zenviaHandoffSolution?: 'conversion' | 'zenvia_chat' | 'nlu';
+  zenviaHandoffRouting?: { field: string; groups: Record<string, string> };
   /** WhatsApp-specific connection options */
   whatsapp?: {
     /** Sync full message history on connect (default: true) */
