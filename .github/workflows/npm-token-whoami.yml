@@ -1,0 +1,20 @@
+name: npm token check (temporary)
+on:
+  push:
+    branches: [ci/npm-token-whoami]
+permissions:
+  contents: read
+jobs:
+  whoami:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+      - name: npm whoami with NPM_TOKEN
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm whoami
+          npm access list collaborators @automagik/omni
