@@ -1958,6 +1958,7 @@ function mergeZenviaFields(
   >,
   body: Pick<
     ConnectInstanceBody,
+    | 'token'
     | 'zenviaApiToken'
     | 'zenviaSenderId'
     | 'zenviaHandoffSolution'
@@ -1968,7 +1969,7 @@ function mergeZenviaFields(
   >,
 ) {
   return {
-    zenviaApiToken: body.zenviaApiToken ?? instance.zenviaApiToken,
+    zenviaApiToken: body.zenviaApiToken ?? body.token ?? instance.zenviaApiToken,
     zenviaSenderId: body.zenviaSenderId ?? instance.zenviaSenderId,
     zenviaHandoffSolution: body.zenviaHandoffSolution ?? instance.zenviaHandoffSolution,
     zenviaSalesApiKey: body.zenviaSalesApiKey ?? instance.zenviaSalesApiKey,
