@@ -146,6 +146,36 @@ function applyGateFields(body: Record<string, unknown>, opts: Record<string, unk
   setVal(body, 'agentGatePrompt', opts.agentGatePrompt);
 }
 
+function applyWebhookVerifyToken(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  if (opts.gupshupWebhookVerifyToken !== undefined && opts.zenviaWebhookVerifyToken !== undefined) {
+    throw new Error(
+      '--gupshup-webhook-verify-token and --zenvia-webhook-verify-token both write webhookVerifyToken; use only one',
+    );
+  }
+  setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
+  setVal(body, 'webhookVerifyToken', opts.zenviaWebhookVerifyToken);
+}
+
+function parseZenviaHandoffRouting(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    throw new Error('--zenvia-handoff-routing must be valid JSON (or "null" to clear)');
+  }
+}
+
+function applyZenviaFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
+  setVal(body, 'zenviaApiToken', opts.zenviaApiToken);
+  setVal(body, 'zenviaSenderId', opts.zenviaSenderId);
+  setVal(body, 'zenviaSalesApiKey', opts.zenviaSalesApiKey);
+  setVal(body, 'zenviaHandoffGroupId', opts.zenviaHandoffGroupId);
+  setVal(body, 'zenviaHandoffUserId', opts.zenviaHandoffUserId);
+  setVal(body, 'zenviaHandoffSolution', opts.zenviaHandoffSolution);
+  if (typeof opts.zenviaHandoffRouting === 'string' && opts.zenviaHandoffRouting.length > 0) {
+    body.zenviaHandoffRouting = parseZenviaHandoffRouting(opts.zenviaHandoffRouting);
+  }
+}
+
 /** Extract TTS, access, token, trigger fields from CLI options into body */
 function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setVal(body, 'ttsVoiceId', opts.ttsVoice);
@@ -167,17 +197,8 @@ function applyMiscFields(body: Record<string, unknown>, opts: Record<string, unk
   if (typeof opts.gupshupHandoffOptions === 'string' && opts.gupshupHandoffOptions.length > 0) {
     body.gupshupHandoffOptions = JSON.parse(opts.gupshupHandoffOptions);
   }
-  setVal(body, 'webhookVerifyToken', opts.gupshupWebhookVerifyToken);
-  setVal(body, 'zenviaApiToken', opts.zenviaApiToken);
-  setVal(body, 'zenviaSenderId', opts.zenviaSenderId);
-  setVal(body, 'webhookVerifyToken', opts.zenviaWebhookVerifyToken);
-  setVal(body, 'zenviaSalesApiKey', opts.zenviaSalesApiKey);
-  setVal(body, 'zenviaHandoffGroupId', opts.zenviaHandoffGroupId);
-  setVal(body, 'zenviaHandoffUserId', opts.zenviaHandoffUserId);
-  setVal(body, 'zenviaHandoffSolution', opts.zenviaHandoffSolution);
-  if (typeof opts.zenviaHandoffRouting === 'string' && opts.zenviaHandoffRouting.length > 0) {
-    body.zenviaHandoffRouting = JSON.parse(opts.zenviaHandoffRouting);
-  }
+  applyWebhookVerifyToken(body, opts);
+  applyZenviaFields(body, opts);
   setVal(body, 'twilioAccountSid', opts.twilioAccountSid);
   setVal(body, 'twilioAuthToken', opts.twilioAuthToken);
   setVal(body, 'twilioFrom', opts.twilioFrom);
@@ -1245,13 +1266,34 @@ export function createInstancesCommand(): Command {
       '--gupshup-handoff-options <json>',
       'Gupshup HANDOFF routing defaults and customerFields template (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
     )
-    .option('--zenvia-api-token <token>', 'Zenvia API token (use "null" to clear)')
-    .option('--zenvia-sender-id <number>', 'Sender registered at Zenvia (use "null" to clear)')
-    .option('--zenvia-webhook-verify-token <token>', 'Secret the Zenvia subscription sends as x-webhook-token')
-    .option('--zenvia-sales-api-key <key>', 'Zenvia Sales API key (use "null" to clear)')
-    .option('--zenvia-handoff-group-id <id>', 'Zenvia Sales handoff group (use "null" to clear)')
-    .option('--zenvia-handoff-user-id <id>', 'Agent inside the Zenvia handoff group (use "null" to clear)')
-    .option('--zenvia-handoff-solution <solution>', 'Zenvia fallback routing (use "null" to clear)')
+    .option(
+      '--zenvia-api-token <token>',
+      'Zenvia API token (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-sender-id <number>',
+      'Sender registered at Zenvia (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-webhook-verify-token <token>',
+      'Secret the Zenvia subscription sends as x-webhook-token; required to connect (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-sales-api-key <key>',
+      'Zenvia Sales API key (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-handoff-group-id <id>',
+      'Zenvia Sales handoff group (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-handoff-user-id <id>',
+      'Agent inside the Zenvia handoff group (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-handoff-solution <solution>',
+      'Zenvia fallback routing (use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
     .option(
       '--zenvia-handoff-routing <json>',
       'Zenvia queue-to-group map (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
