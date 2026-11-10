@@ -126,6 +126,160 @@ describe('ZenviaPlugin', () => {
     ]);
   });
 
+  describe('wire payload of location, audio and video', () => {
+    function mockSend(): ReturnType<typeof spyOn> {
+      return spyOn(globalThis, 'fetch').mockResolvedValueOnce(sendResponse());
+    }
+
+    it('sends a location with its coordinates, name and address', async () => {
+      const fetchSpy = mockSend();
+
+      const result = await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: {
+          type: 'location',
+          location: { latitude: -23.5505, longitude: -46.6333, name: 'Office', address: '1 Main Street' },
+        },
+      });
+
+      expect(result).toMatchObject({ success: true, messageId: MESSAGE_ID });
+      expect(fetchCall(fetchSpy, 1).url).toBe('https://api.zenvia.com/v2/channels/whatsapp/messages');
+      expect(sentBody(fetchSpy, 1)).toEqual({
+        from: SENDER_ID,
+        to: CONTACT,
+        contents: [
+          { type: 'location', latitude: -23.5505, longitude: -46.6333, name: 'Office', address: '1 Main Street' },
+        ],
+      });
+    });
+
+    it('leaves the name and the address out of a location that has none, and keeps zero coordinates', async () => {
+      const fetchSpy = mockSend().mockResolvedValueOnce(sendResponse());
+
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: { type: 'location', location: { latitude: -23.5505, longitude: -46.6333 } },
+      });
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: { type: 'location', location: { latitude: 0, longitude: 0, name: '', address: '' } },
+      });
+
+      expect(sentBody(fetchSpy, 1).contents).toEqual([{ type: 'location', latitude: -23.5505, longitude: -46.6333 }]);
+      expect(sentBody(fetchSpy, 2).contents).toEqual([{ type: 'location', latitude: 0, longitude: 0 }]);
+    });
+
+    it('quotes the replied message on a location through idRef', async () => {
+      const fetchSpy = mockSend();
+
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: { type: 'location', location: { latitude: 1, longitude: 2 } },
+        replyTo: 'in-7',
+      });
+
+      expect(sentBody(fetchSpy, 1).idRef).toBe('in-7');
+    });
+
+    it('refuses a location without coordinates without calling the API', async () => {
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      const callsBefore = fetchSpy.mock.calls.length;
+
+      const result = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'location' } });
+
+      expect(result.success).toBe(false);
+      expect(result.retryable).toBe(false);
+      expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+    });
+
+    it('sends audio as a file by public url with its mime type and never a caption or a file name', async () => {
+      const fetchSpy = mockSend().mockResolvedValueOnce(sendResponse());
+
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: {
+          type: 'audio',
+          mediaUrl: 'https://cdn.example.com/voice.ogg',
+          mimeType: 'audio/ogg',
+          caption: 'ignored',
+          text: 'ignored too',
+          filename: 'voice.ogg',
+        },
+      });
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: { type: 'audio', mediaUrl: 'https://cdn.example.com/voice.mp3' },
+      });
+
+      expect(sentBody(fetchSpy, 1)).toEqual({
+        from: SENDER_ID,
+        to: CONTACT,
+        contents: [{ type: 'file', fileUrl: 'https://cdn.example.com/voice.ogg', fileMimeType: 'audio/ogg' }],
+      });
+      expect(sentBody(fetchSpy, 2).contents).toEqual([{ type: 'file', fileUrl: 'https://cdn.example.com/voice.mp3' }]);
+    });
+
+    it('sends video as a file by public url with its mime type and the caption, but no file name', async () => {
+      const fetchSpy = mockSend();
+
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: {
+          type: 'video',
+          mediaUrl: 'https://cdn.example.com/clip.mp4',
+          mimeType: 'video/mp4',
+          caption: 'watch this',
+          filename: 'clip.mp4',
+        },
+      });
+
+      expect(sentBody(fetchSpy, 1)).toEqual({
+        from: SENDER_ID,
+        to: CONTACT,
+        contents: [
+          {
+            type: 'file',
+            fileUrl: 'https://cdn.example.com/clip.mp4',
+            fileMimeType: 'video/mp4',
+            fileCaption: 'watch this',
+          },
+        ],
+      });
+    });
+
+    it('takes the video caption from the text when there is no caption, and sends none when both are empty', async () => {
+      const fetchSpy = mockSend().mockResolvedValueOnce(sendResponse());
+
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: { type: 'video', mediaUrl: 'https://cdn.example.com/clip.mp4', text: 'from the text' },
+      });
+      await plugin.sendMessage(instanceId, {
+        to: CONTACT,
+        content: { type: 'video', mediaUrl: 'https://cdn.example.com/clip.mp4', caption: '', text: '' },
+      });
+
+      expect(sentBody(fetchSpy, 1).contents).toEqual([
+        { type: 'file', fileUrl: 'https://cdn.example.com/clip.mp4', fileCaption: 'from the text' },
+      ]);
+      expect(sentBody(fetchSpy, 2).contents).toEqual([{ type: 'file', fileUrl: 'https://cdn.example.com/clip.mp4' }]);
+    });
+
+    it('refuses audio and video without a media url without calling the API', async () => {
+      const fetchSpy = spyOn(globalThis, 'fetch');
+      const callsBefore = fetchSpy.mock.calls.length;
+
+      const audio = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'audio' } });
+      const video = await plugin.sendMessage(instanceId, { to: CONTACT, content: { type: 'video', caption: 'x' } });
+
+      expect(audio.success).toBe(false);
+      expect(audio.error).toMatch(/mediaUrl/);
+      expect(video.success).toBe(false);
+      expect(video.error).toMatch(/mediaUrl/);
+      expect(fetchSpy.mock.calls.length).toBe(callsBefore);
+    });
+  });
+
   it('sends a template by id with named fields and refuses positional parameters', async () => {
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValueOnce(sendResponse());
 
