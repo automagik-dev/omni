@@ -12,7 +12,7 @@ Build or debug an event-driven workflow, including message handlers, agent calls
 
 ## Flow
 
-1. Read [ground rules](../omni-ops/references/ground-rules.md) and [automation operations](../omni-ops/references/automations.md). Discover options with `omni automations --help` and the relevant action's help; custom ingress uses [webhooks](../omni-ops/references/webhooks.md). Idle-chat follow-up has a separate surface: `omni follow-up --help`.
+1. Read `omni --help`, [ground rules](../omni-ops/references/ground-rules.md) and [automation operations](../omni-ops/references/automations.md). Discover options with `omni automations --help` and the relevant action's help before using a reference example; custom ingress uses [webhooks](../omni-ops/references/webhooks.md). Discover idle-chat follow-up through installed help.
 2. Inspect `omni automations list --json` and observed trigger types via `omni events list --json`; update an existing workflow instead of duplicating it.
 3. Create disabled, then mock-test with `omni automations test <id> --event '<json>'`. Without `--execute`, testing runs no actions.
 4. With authorization, enable, trigger a real event and confirm a matching successful action in `omni automations logs <id>`.

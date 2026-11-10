@@ -13,7 +13,7 @@ Inspect or configure a provider, an agent definition, its manifest, or agent-to-
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [provider operations](../omni-ops/references/providers.md).
-2. Discover current options with `omni providers --help`, `omni agents --help`, `omni agents manifest --help` or `omni a2a --help` for the requested surface.
+2. Read `omni --help`, choose the group for the requested provider or agent operation, then inspect its help and the relevant action's help before using a reference example.
 3. Inspect existing definitions before creating duplicates; verify the saved config and requested health checks after an authorized change.
 
 ## Rules

@@ -13,7 +13,7 @@ Inspect or change a platform prompt used for gates, descriptions, image generati
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [prompt operations](../omni-ops/references/prompts.md).
-2. Discover installed options with `omni prompts --help`; inspect the current prompt before editing.
+2. Read `omni --help`, then `omni prompts --help` and the relevant action's help before using a reference example; inspect the current prompt before editing.
 3. Apply the authorized change and read it back; use only authorized tests for generated content or sends.
 
 ## Rules

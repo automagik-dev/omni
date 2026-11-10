@@ -37,31 +37,9 @@ Choose by the requested outcome. Connecting a new channel or wiring an agent is 
 
 For an uncovered capability, inspect `omni --help` and the relevant group's help. Use the agent peer when the request is to communicate; do not reinterpret an unfamiliar administration request as a send.
 
-## Other surfaces
+## Discover the installed surface
 
-Use these discovery paths when a peer does not expand the requested capability; inspect the group help before acting.
-
-| Surface | Discovery |
-|---------|-----------|
-| Isolated local runtime | `omni sandbox --help` |
-| Integration accounts and subscriptions | `omni connectors --help` |
-| GitHub and other external event sources | `omni sources --help` |
-| Host fingerprint trust | `omni trust --help` |
-| Tenant control plane | `omni tenants --help` |
-| Multitenancy mode | `omni multitenancy --help` |
-| Desktop app | `omni desktop --help` |
-| Agent-to-agent discovery and invocation | `omni a2a --help` |
-| Agent accepts/publishes declarations | `omni agents manifest --help` |
-| Scheduled messages | `omni schedule --help` |
-| Voice sessions | `omni voice --help` |
-| Media browsing and downloads | `omni media --help` |
-| Turn management | `omni turns --help` |
-| Configuration audit | `omni audit --help` |
-| Idle-chat follow-up | `omni follow-up --help` |
-| Slack-specific operations | `omni slack --help` |
-| Channel event guarantees | `omni channels capabilities --help` |
-| Video generation | `omni film --help` |
-| Music generation | `omni music --help` |
+The routing table selects skills by intent; it is not a CLI command inventory. Read `omni --help` at use time, select the group matching the requested outcome, then read that group's and action's help. A reference example applies only when the installed help exposes its command and options. If an interface is missing, report the installed version and limitation instead of guessing a replacement.
 
 ## Always
 

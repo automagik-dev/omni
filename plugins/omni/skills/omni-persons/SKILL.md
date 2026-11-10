@@ -13,7 +13,7 @@ Find a person by phone or identity, inspect their channel contacts/presence, or 
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [person operations](../omni-ops/references/persons.md).
-2. Discover installed options with `omni persons --help`; resolve the intended identity before any mutation.
+2. Read `omni --help`, then `omni persons --help` and the relevant action's help before using a reference example; resolve the intended identity before any mutation.
 3. Inspect the requested records and verify authorized changes with a follow-up read.
 
 ## Rules

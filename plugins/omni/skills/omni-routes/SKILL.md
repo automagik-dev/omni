@@ -13,7 +13,7 @@ Inspect which agent handles a conversation or change an authorized routing rule,
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [routing operations](../omni-ops/references/routes.md).
-2. Discover installed options with `omni routes --help` and `omni instances --help`; inspect the current target and bindings before editing.
+2. Read `omni --help`, then `omni routes --help` and the relevant action's help before using a reference example; inspect the current target and bindings before editing.
 3. Apply the requested change and read the resulting configuration to verify it.
 
 ## Rules
