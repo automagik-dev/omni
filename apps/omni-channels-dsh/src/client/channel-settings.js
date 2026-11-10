@@ -17,11 +17,17 @@ function validationProblem(error, fallback) {
     ? t(VALIDATION_PROBLEMS[error.code], { field: FIELDS[error.field].key }) : t(fallback)
 }
 
+// The names of the agents behind an answer, by name where Omni gave one.
+const namesOf = answerers => answerers.agents.map(agent => agent.name ?? agent.id).join(', ')
+
 // Keyed by channel id by the parent: a late response can never edit a different channel.
 export function ChannelSettings({ channel, writable, request = call, refresh = () => refreshLive(call) }) {
   const [record, setRecord] = useState(null)
   const [draft, setDraft] = useState({})
   const [agents, setAgents] = useState([])
+  // Who answers in fact, and where Omni decided it: the channel's own agent, a route on its
+  // chats, or nobody. Null until the host answers, or on a host from before this field.
+  const [answerers, setAnswerers] = useState(null)
   const [agentError, setAgentError] = useState('')
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
@@ -32,7 +38,9 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
   useEffect(() => {
     alive.current = true
     request('omni-channel-settings', { id: channel.id }).then(reply => {
-      if (alive.current) setRecord(reply.settings)
+      if (!alive.current) return
+      setRecord(reply.settings)
+      setAnswerers(reply.answerers ?? null)
     }, failure => {
       console.warn('Could not load channel settings:', failure)
       if (alive.current) setError(t('Could not load channel settings. Try again.'))
@@ -54,6 +62,7 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
       const reply = await request('omni-channel-settings', { id: channel.id })
       if (!alive.current) return
       setRecord(reply.settings)
+      setAnswerers(reply.answerers ?? null)
       setDraft(before => endpoint === 'omni-channel-settings-save' ? {} : Object.fromEntries(Object.entries(before).filter(([key]) => !key.startsWith('meta'))))
       setSaved(true)
       await refresh().catch(() => { if (alive.current) setError(t('Settings saved, but the channel overview could not refresh.')) })
@@ -126,10 +135,18 @@ export function ChannelSettings({ channel, writable, request = call, refresh = (
     !record ? h('p', null, error ? t('Settings unavailable') : t('Loading settings…')) : h('div', null,
       h('label', { className: 'oc-field' }, h('span', null, t('Assigned agent')),
         h('select', { 'aria-label': 'agentId', value: value('agentId') ?? '', disabled: !writable || busy, onChange: event => edit('agentId', event.target.value || null) },
-          h('option', { value: '' }, t('No agent')),
+          // "No agent" only when nobody answers: otherwise the empty choice is the channel
+          // override, and the line below names the agent that does answer.
+          h('option', { value: '' }, answerers?.source === 'none' ? t('No agent') : t('No channel override')),
           value('agentId') && !agents.some(agent => agent.id === value('agentId')) ? h('option', { value: value('agentId') }, value('agentId')) : null,
           agents.map(agent => h('option', { key: agent.id, value: agent.id }, `${agent.name} · ${agent.id}`)))),
       h('label', { className: 'oc-field' }, t('Agent UUID (empty unassigns; list shows up to 200 agents)'), h('input', { 'aria-label': 'Agent UUID', value: value('agentId') ?? '', disabled: !writable || busy, onChange: event => edit('agentId', event.target.value.trim() || null) })),
+      answerers ? h('p', { className: 'oc-fine', role: 'status' },
+        answerers.source === 'none'
+          ? t('No agent — messages on this channel wait for you.')
+          : answerers.source === 'instance'
+            ? t('Assigned — this channel answers with {names}; its chats inherit it.', { names: namesOf(answerers) })
+            : t('Assigned — chats here answer through routes: {names}.', { names: namesOf(answerers) })) : null,
       agentError ? h('p', { role: 'status' }, agentError) : null,
       GROUPS.filter(group => group.label !== 'Meta connection' || channel.type === 'whatsapp-business').map(group => h('details', { key: group.label },
         h('summary', null, t(group.label)), group.keys.map(control))),

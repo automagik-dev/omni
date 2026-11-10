@@ -74,20 +74,28 @@ The WISH assigns one issue/PR per group; the snapshot does not map all group num
 
 1. Foundation: identity columns/settings/events. Acceptance: connected identity
    persists. Rollback: revert compatible code and retain additive columns.
+   Done 2026-09-22 https://github.com/automagik-si/omni/pull/1233
 2. Receiver expansion. Acceptance: attachments share one receiver without changing
    the old path. Rollback: remove the unused module before the switch.
+   Done 2026-09-22 https://github.com/automagik-si/omni/pull/1233
 3. Plugin switch. Acceptance: manual instances receive the same events.
    Rollback: restore the compatible receiver, retaining identity columns.
+   Done 2026-09-22 https://github.com/automagik-si/omni/pull/1250
 4. API/SDK. Acceptance: repeat OAuth reuses the same identity with a single-use
    result. Rollback: stop new starts; code reverts do not revoke Slack grants.
+   Done 2026-09-23 https://github.com/automagik-si/omni/pull/1255
 5. Fan-out/revocation. Acceptance: users receive only authorized events and revoked
    identities disconnect. Rollback: explicitly detach/revoke shared connections.
+   Done 2026-09-22 https://github.com/automagik-si/omni/pull/1250
 6. CLI. Acceptance: connect completes after browser consent.
    Rollback: restore manual instructions; preserve existing credentials safely.
+   Done 2026-09-22 https://github.com/automagik-si/omni/pull/1233
 7. Product button. Acceptance: complete connection from the current UI, verified
    separately from the retired UI. Rollback: use the CLI/manual path.
+   Open: complete connection from the current UI (needs judgment); waits on: owner
 8. Docs/integration. Acceptance: documented setup matches the integrated flow.
    Rollback: correct the guide without changing stored authorizations.
+   Open: documented setup matches the integrated flow (guide still describes retired dashboard redirects); waits on: team
 
 ## Progress
 

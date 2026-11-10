@@ -13,6 +13,9 @@ export const KEY = 'OMNI_API_KEY'
 const TIMEOUT_MS = 10_000
 const CHATS_LIMIT = 100
 const MESSAGES_LIMIT = 80
+// The routes of a channel, kept a minute: the page asks for the overview every 15 s.
+const ROUTES_TTL_MS = 60_000
+const ROUTES_CACHE_MAX = 500
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // The media endpoint's cache: the files the chat view showed last, so its 15 s poll asks
 // Omni nothing for a file it has.
@@ -58,8 +61,38 @@ export function statusOf(instance, live) {
 // A WhatsApp owner is a JID; the view shows the number.
 const ownerText = owner => (typeof owner === 'string' ? owner.replace(/[:@].*$/, '').replace(/^(\d{6,})$/, '+$1') : '')
 
-export function channelOf(instance, live) {
+// Who answers on a channel, and where the assignment was made. Omni routes a message to the
+// agent of a route on the chat (agentRoutes, GET /instances/{id}/routes, scope "chat"), else
+// to the channel's own agent (instance.agentId). A route for a person needs the sender, which
+// a chat row does not carry, so it is not resolved here. `names` maps an agent id to its name
+// (GET /agents).
+export function answerersOf(instance, routes = [], names = new Map()) {
+  const named = id => ({ id, name: names.get(id) ?? null })
+  if (instance?.agentId) return { source: 'instance', agents: [named(instance.agentId)] }
+  const seen = new Set()
+  const agents = []
+  for (const route of routes) {
+    if (route?.isActive === false || route?.agentId === null || route?.agentId === undefined) continue
+    if (seen.has(route.agentId)) continue
+    seen.add(route.agentId)
+    agents.push(named(route.agentId))
+  }
+  return agents.length > 0 ? { source: 'route', agents } : { source: 'none', agents: [] }
+}
+
+// The agent of one chat: a route on the chat itself ("chat"), else the channel's agent
+// ("instance"), else nobody.
+export function agentOfChat(chat, { routes = [], instanceAgentId = null, names = new Map() } = {}) {
+  const route = routes.find(item => item?.isActive !== false && item?.scope === 'chat'
+    && item?.chatId === chat.id && item?.agentId !== null && item?.agentId !== undefined)
+  const id = route?.agentId ?? instanceAgentId ?? null
+  if (id === null) return null
+  return { id, name: names.get(id) ?? null, source: route === undefined ? 'instance' : 'chat' }
+}
+
+export function channelOf(instance, live, { routes = [], names = new Map() } = {}) {
   const status = statusOf(instance, live)
+  const answerers = answerersOf(instance, routes, names)
   return {
     id: instance.id,
     type: instance.channel,
@@ -67,7 +100,9 @@ export function channelOf(instance, live) {
     detail: instance.profileName || ownerText(instance.ownerIdentifier) || instance.channel,
     status,
     ...(status === 'attention' ? { problemCode: 'not_connected', problem: live?.message || 'omni does not report this channel as connected.' } : {}),
-    answeredBy: instance.agentId ? 'Omni' : 'You',
+    answeredBy: answerers.source === 'none' ? 'You' : 'Omni',
+    // The agents behind that answer, with where each assignment was made.
+    ...(answerers.source === 'none' ? {} : { answerers }),
     avatarUrl: instance.profilePicUrl ?? null,
     health: { lastEventAt: time(instance.lastMessageAt), lastSeenAt: time(instance.lastSeenAt), messagesToday: null, replyMedianSec: null, uptime: null, week: null },
   }
@@ -80,15 +115,20 @@ export function initialsOf(name) {
   return (words.length > 1 ? words[0][0] + words.at(-1)[0] : (words[0] ?? '?').slice(0, 2)).toUpperCase()
 }
 
-export function chatOf(chat) {
+// A chat row. Its last message, when the person did not send it, is the agent's: `agent`
+// (agentOfChat) names the one that answered, and its name opens the preview instead of "You".
+export function chatOf(chat, agent = null) {
   const name = chat.name || ownerText(chat.externalId) || 'Chat'
+  // An agent Omni did not name still did not write as the person.
+  const who = chat.lastMessageFromMe ? `${agent === null ? 'You' : (agent.name ?? 'Agent')}: ` : ''
   return {
     id: chat.id,
     channelId: chat.instanceId,
     name,
     initials: initialsOf(name),
     kind: chat.chatType === 'dm' ? 'direct' : 'group',
-    preview: `${chat.lastMessageFromMe ? 'You: ' : ''}${chat.lastMessagePreview ?? ''}`.replace(/\s+/g, ' ').trim(),
+    preview: `${who}${chat.lastMessagePreview ?? ''}`.replace(/\s+/g, ' ').trim(),
+    ...(agent === null ? {} : { agent }),
     at: time(chat.lastMessageAt) ?? time(chat.updatedAt) ?? 0,
     unread: chat.unreadCount ?? 0,
     avatarUrl: chat.avatarUrl ?? null,
@@ -212,22 +252,44 @@ export function install(rt) {
     return { ok: true, response, path, stored: ready.data.data }
   }
 
+  // A channel's agent routes (GET /instances/{id}/routes), read through a minute's cache: the
+  // page asks for the overview every 15 s, and a route changes by hand. A route read that
+  // fails is no route, never a page without its channels.
+  const routesFor = async (url, apiKey, instanceId) => {
+    const cacheKey = `${createHash('sha256').update(`${url}\n${apiKey}`).digest('hex')}|${instanceId}`
+    const kept = routesFor.cache.get(cacheKey)
+    if (kept !== undefined && Date.now() - kept.at < ROUTES_TTL_MS) return kept.items
+    const items = await get(url, apiKey, `/instances/${encodeURIComponent(instanceId)}/routes`)
+      .then(reply => (Array.isArray(reply?.items) ? reply.items : []), () => [])
+    routesFor.cache.set(cacheKey, { at: Date.now(), items })
+    if (routesFor.cache.size > ROUTES_CACHE_MAX) routesFor.cache.delete(routesFor.cache.keys().next().value)
+    return items
+  }
+  routesFor.cache = new Map()
+
   rt.omniEndpoint = async (endpoint, body) => {
     const url = base()
     const apiKey = await key()
     if (url === null || !apiKey) return { configured: false, missing: [url === null ? 'omni.url' : null, apiKey ? null : KEY].filter(Boolean), ...(rt.omniLinkEndpoint ? { link: await rt.omniLinkEndpoint('omni-link') } : {}) }
     if (endpoint === 'omni-overview') {
-      const [instances, chats] = await Promise.all([
+      const [instances, chats, agents] = await Promise.all([
         get(url, apiKey, '/instances?limit=100'),
         get(url, apiKey, `/chats?limit=${CHATS_LIMIT}&sort=activity`),
+        // An Omni that cannot list its agents still shows the channels and chats.
+        get(url, apiKey, '/agents?limit=200').then(reply => (Array.isArray(reply?.items) ? reply.items : []), () => []),
       ])
+      const names = new Map(agents.filter(agent => typeof agent?.id === 'string' && typeof agent?.name === 'string').map(agent => [agent.id, agent.name]))
       // A failed status read leaves that one channel in "needs attention", not the page empty.
       const statuses = await Promise.all(instances.items.map(instance => get(url, apiKey, `/instances/${instance.id}/status`).then(reply => reply.data, () => null)))
+      // Routes say which chats answer through an agent of their own; the rest inherit the
+      // channel's agent.
+      const routes = await Promise.all(instances.items.map(instance => routesFor(url, apiKey, instance.id)))
+      const channelOfChat = new Map(instances.items.map((instance, index) => [instance.id, { instanceAgentId: instance.agentId ?? null, routes: routes[index], names }]))
       return {
         configured: true,
         origin: new URL(url).host,
-        channels: instances.items.map((instance, index) => channelOf(instance, statuses[index])),
-        chats: chats.items.map(chatOf),
+        channels: instances.items.map((instance, index) => channelOf(instance, statuses[index], { routes: routes[index], names })),
+        chats: chats.items.map(chat => chatOf(chat, agentOfChat(chat, channelOfChat.get(chat.instanceId) ?? { names }))),
       }
     }
     if (endpoint === 'omni-messages') {
