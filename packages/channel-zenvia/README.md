@@ -207,10 +207,15 @@ neither API has an operation to close a conversation from here.
 The plugin tells a **definitive refusal** (repeating the same request cannot
 succeed, so the caller should keep the conversation) from a **transient
 failure** (worth retrying, or worth treating as unknown). A definitive refusal
-returns `SendResult.rejected = true`, which `POST /messages/send/handoff`
-answers as `422 CHANNEL_SEND_REJECTED` with `recoverable: false`. Every other
-failed send, on every channel, keeps answering `502 CHANNEL_SEND_FAILED`.
-Neither failure pauses the agent, writes an audit row or disarms follow-ups.
+returns `SendResult.rejected = true`, which every `POST /messages/send*` route
+answers as `422 CHANNEL_SEND_REJECTED` with `recoverable: false` and
+`retryable: false` in the error details, whatever `retryable` the channel set.
+Every other failed send, on every channel, keeps answering
+`502 CHANNEL_SEND_FAILED`. Neither failure pauses the agent, writes an audit
+row or disarms follow-ups.
+
+This plugin sets `rejected` only on the handoff path (the rows marked `true`
+below). A Zenvia 4xx on an ordinary send stays unflagged and answers 502.
 
 | Failure                                                                   | `rejected` | `retryable` | HTTP                         |
 | ------------------------------------------------------------------------- | ---------- | ----------- | ---------------------------- |
@@ -223,6 +228,7 @@ Neither failure pauses the agent, writes an audit row or disarms follow-ups.
 | Rate limit (429)                                                          | absent     | `true`      | 502 `CHANNEL_SEND_FAILED`    |
 | Sales or Zenvia 5xx, timeout, network failure                             | absent     | `true`      | 502 `CHANNEL_SEND_FAILED`    |
 | Farewell fails in routing mode (no Sales transfer)                        | absent     | by cause    | 502 `CHANNEL_SEND_FAILED`    |
+| Zenvia 4xx other than 401, 403 and 429 on an ordinary send (not a handoff) | absent    | `false`     | 502 `CHANNEL_SEND_FAILED`    |
 
 ## v1 scope
 

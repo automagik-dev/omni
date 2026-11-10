@@ -37,7 +37,7 @@ function mountHandoffRoute(channel: string, result: PluginResult) {
     await next();
   });
   app.route('/messages', messagesRoutes);
-  return { app, sendMessage, chatUpdates, disarm };
+  return { app, sendMessage, chatUpdates, disarm, insert };
 }
 
 function postHandoff(app: Hono<{ Variables: AppVariables }>) {
@@ -60,7 +60,7 @@ interface ErrorBody {
 
 describe('POST /messages/send/handoff - a definitive channel refusal is a 4xx', () => {
   test('a rejected send answers 422 CHANNEL_SEND_REJECTED with the channel message and no side effects', async () => {
-    const { app, chatUpdates, disarm } = mountHandoffRoute('zenvia', {
+    const { app, chatUpdates, disarm, insert } = mountHandoffRoute('zenvia', {
       success: false,
       error: 'no destination for this handoff',
       errorCode: 'ZENVIA_INVALID_REQUEST',
@@ -78,6 +78,7 @@ describe('POST /messages/send/handoff - a definitive channel refusal is a 4xx', 
     expect(body.error.details).toMatchObject({ channelType: 'zenvia', errorCode: 'ZENVIA_INVALID_REQUEST' });
     expect(chatUpdates).toEqual([]);
     expect(disarm).not.toHaveBeenCalled();
+    expect(insert).not.toHaveBeenCalled();
   });
 
   test('a failed send without the rejected flag stays 502 CHANNEL_SEND_FAILED on every channel', async () => {
@@ -111,7 +112,11 @@ describe('POST /messages/send/handoff - a definitive channel refusal is a 4xx', 
   });
 
   test('a successful send is unchanged: 201, messageId passed through, agent paused', async () => {
-    const { app, chatUpdates } = mountHandoffRoute('zenvia', { success: true, messageId: 'MSG-1', timestamp: 9 });
+    const { app, chatUpdates, insert } = mountHandoffRoute('zenvia', {
+      success: true,
+      messageId: 'MSG-1',
+      timestamp: 9,
+    });
 
     const res = await postHandoff(app);
 
@@ -120,6 +125,7 @@ describe('POST /messages/send/handoff - a definitive channel refusal is a 4xx', 
     expect(body.data.messageId).toBe('MSG-1');
     expect(body.data.status).toBe('sent');
     expect(chatUpdates).toEqual([{ settings: { agentPaused: true } }]);
+    expect(insert).toHaveBeenCalledTimes(1);
   });
 
   test('success without messageId answers 201 with messageId null', async () => {
