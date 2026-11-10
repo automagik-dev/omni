@@ -16,8 +16,8 @@ a new app.
 | Operator | `omni slack app setup` | **Once per deployment** — register the deployment's Slack app |
 | Member | `omni slack connect` | **Every time** — once per person, and again whenever they re-authorize |
 
-Members have two equivalent paths: `omni slack connect` from a terminal, or the
-dashboard's **Connect Slack** button on the Instances page.
+Members can connect from DSH's **Channels → Add channel → Slack** flow or run
+`omni slack connect` from a terminal.
 
 `omni slack app status` reports whether the app is configured, which settings
 are still missing, and the redirect and manifest links.
@@ -46,24 +46,39 @@ command-line flag).
 
 ### Connecting a member (every time)
 
-`omni slack connect` calls `POST /api/v2/slack/oauth/start`, opens the
-returned Slack authorize URL, and waits for the callback; the dashboard's
-**Connect Slack** button does the same thing and returns the person to the page
-they started from. The button sends that page's own address as the return
-address, so **the dashboard must be served from the `server.public_url`
-origin** — from anywhere else the API refuses the return address and the page
-shows that error instead of starting the install. The
-default mode is `user` — the member's own `xoxp` token, so the instance acts
-as them — and `--mode bot` installs the workspace bot instead. The instance is
-created (or re-authorized, if that person already installed) and connected for
-you; no token is ever shown, pasted, or written down.
+In DSH:
+
+1. Open **Channels → Add channel → Slack** on your linked Omni.
+2. Choose **As yourself** for your personal identity (`xoxp`), or **As a bot**
+   for the workspace bot. DSH initially selects **As a bot**.
+3. Click **Connect with Slack**. A new browser tab opens Slack; pick your
+   workspace and allow Omni. If no tab opens, use **Open Slack again**.
+4. Keep the DSH setup page open, then return to it after approving. It checks
+   the result through the host every two seconds and shows **Slack is connected**
+   when the install completes. **See its health** opens the channel's health page.
+
+The DSH host starts OAuth with `POST /api/v2/slack/oauth/start` using
+`{ mode, entry: 'ui' }` and polls `GET /api/v2/slack/oauth/result/:nonce`.
+It sends no `returnTo`: DSH does not need to share the `server.public_url`
+origin. That setting still supplies the API's public HTTPS callback URL, as
+described above. If DSH says **Slack isn't set up on this Omni yet**, ask the
+operator to complete `omni slack app setup` and check `omni slack app status`
+before trying again.
+
+From a terminal, `omni slack connect` starts the same OAuth flow with
+`entry: 'cli'`, opens the authorize URL and polls for the result. Its default
+mode is `user`; use `--mode bot` to install the workspace bot. After approving,
+close the browser tab and return to the terminal for the result.
+
+Either path creates (or re-authorizes, if that identity already installed) and
+connects the instance for you; members do not paste or handle tokens.
 
 The pending install lives in the API process that started it, for five minutes,
 and is consumed the first time the callback reads it. So the API must run as a
 single process, or route `/api/v2/slack/oauth/*` with sticky sessions: a
 callback that lands on a process which never issued that install is refused as
 an unknown install — nothing unsafe happens, the person simply has to click
-**Connect Slack** again.
+**Connect with Slack** again (or run `omni slack connect` again).
 
 Several members of one workspace share a single Bolt receiver and a single
 app-level token. Each event is delivered only to the instances Slack
@@ -101,8 +116,9 @@ mentions the person counts as a mention of the instance.
   scope on the app-level token; without it, such events do not arrive.
 - **Members who connected earlier re-authorize once.** Their instances were
   saved with the workspace bot token and keep running on it. Running
-  `omni slack connect` once more (or pressing **Connect Slack**) drops the
-  stored bot token and moves the instance to the person's token alone.
+  `omni slack connect` once more (or choosing **As yourself** and pressing
+  **Connect with Slack**) drops the stored bot token and moves the instance to
+  the person's token alone.
 
 #### Already connected? Re-authorize once for inbound files
 
@@ -112,10 +128,11 @@ in `authMode: 'user'` — the workspace bot need not be a member of the channel 
 file was shared in, and answers that download with a `403`.
 
 A token minted before this change does not carry the new scope. **Every member
-who connected earlier must run `omni slack connect` once more** (or press
-**Connect Slack** again) to re-authorize; the re-connect swaps their `xoxp`
-token for one that includes `files:read`. Until they do, their instance keeps
-receiving the message but the attachment download keeps failing with `403`.
+who connected earlier must run `omni slack connect` once more** (or choose
+**As yourself** and press **Connect with Slack** again) to re-authorize; the
+re-connect swaps their `xoxp` token for one that includes `files:read`. Until
+they do, their instance keeps receiving the message but the attachment download
+keeps failing with `403`.
 Nothing else about the instance changes, and bot-mode instances are unaffected
 — the bot token already had `files:read`.
 
