@@ -67,6 +67,14 @@ verify token in the subscription's fixed headers:
 
 Create one subscription per event type (`MESSAGE` and `MESSAGE_STATUS`).
 
+To rotate the verify token, send the new one as `webhookVerifyToken` in the body
+of `POST /instances/{id}/connect`: it replaces the stored token and is
+persisted once the connect succeeds. Without the field the stored token is
+kept and nothing is rewritten. The other route is `PATCH /instances/{id}`
+followed by a restart. Either way the token is sealed at rest and never
+returned, and the `x-webhook-token` header of both subscriptions must be
+updated to the same value: the webhook answers 401 until the two match.
+
 The webhook answers 200 to every authenticated event it processed or
 deliberately ignores, 401 to a missing or wrong token and 503 while the
 instance is not connected (during a restart), so Zenvia can redeliver. An
