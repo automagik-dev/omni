@@ -59,7 +59,13 @@ one more fails, and the list only shrinks.
 
 | # | Title | Status | Milestone | Issue | Design |
 |---|---|---|---|---|---|
-| RFC-0001 | Omni chat threads (reserved: being rebuilt) | Draft | — | — | Not tracked; the design was lost and is being rebuilt |
+| [RFC-0001](0001-chat-threads.md) | Omni chat threads | Draft | Dedicated agent beside each chat | #1629 | Reconstructed from issue and merged deliveries |
+| [RFC-0002](0002-paired-agents.md) | Paired agents | Draft | Agents receive only owned events | #1461 (related) | [DESIGN](../../.genie/brainstorms/paired-agents/DESIGN.md), [slice 2 WISH](../../.genie/wishes/paired-agents-slice-2/WISH.md) |
+| [RFC-0003](0003-gitlab-sdlc-connector.md) | GitLab SDLC connector | Draft | GitLab events reach their owning team | — | [DESIGN](../../.genie/brainstorms/gitlab-sdlc-connector/DESIGN.md), [WISH](../../.genie/wishes/gitlab-sdlc-connector/WISH.md) |
+| [RFC-0004](0004-slack-personal-oauth.md) | Slack personal OAuth | Draft | One-click personal Slack connection | #1235 (follow-up) | [DESIGN](../../.genie/brainstorms/slack-personal-oauth/DESIGN.md), [WISH](../../.genie/wishes/slack-personal-oauth/WISH.md) |
+| [RFC-0005](0005-omni-plugin-revamp.md) | Omni plugin revamp | Draft | Accurate CLI skill surface | #1461 (follow-up) | [DESIGN](../../.genie/brainstorms/omni-plugin-revamp/DESIGN.md), [WISH](../../.genie/wishes/omni-plugin-revamp/WISH.md) |
+| [RFC-0006](0006-full-multitenancy.md) | Full multitenancy | Draft | Bounded tenant administration and isolation | #908 (delivery) | [Purpose/design](../../.genie/wishes/omni-full-multitenancy/PURPOSE_SPEC.md), [WISH](../../.genie/wishes/omni-full-multitenancy/WISH.md) |
+| [RFC-0007](0007-saas-platform-auth.md) | SaaS platform auth | Draft | Platform-session login | — | [WISH](../../.genie/wishes/saas-platform-auth/WISH.md) (direct plan) |
 
 ## Earlier records
 
@@ -78,9 +84,5 @@ Decisions recorded before this index. They stay where they are.
 | ADR-0009 | Tenant egress broker and SSRF | Accepted | — | — | [ADR-0009](../../.genie/wishes/omni-full-multitenancy/adrs/ADR-0009-tenant-egress-broker-ssrf.md) |
 | ADR-0010 | Shared runtime residual risk | Accepted | — | — | [ADR-0010](../../.genie/wishes/omni-full-multitenancy/adrs/ADR-0010-shared-runtime-residual-risk.md) |
 | ADR-LID-0003 | LID-first identity | Shipped | — | #919 | [adr-0003-lid-first-identity.md](../architecture/adr-0003-lid-first-identity.md) |
-| — | Paired agents | Accepted | — | — | [DESIGN](../../.genie/brainstorms/paired-agents/DESIGN.md), [slice 2 WISH](../../.genie/wishes/paired-agents-slice-2/WISH.md) |
-| — | GitLab SDLC connector | Accepted | — | — | Not tracked yet (the owner decides, #1622) |
-| — | Slack personal OAuth | Accepted | — | — | [DESIGN](../../.genie/brainstorms/slack-personal-oauth/DESIGN.md), [WISH](../../.genie/wishes/slack-personal-oauth/WISH.md) |
-| — | Omni plugin revamp | Accepted | — | — | [DESIGN](../../.genie/brainstorms/omni-plugin-revamp/DESIGN.md), [WISH](../../.genie/wishes/omni-plugin-revamp/WISH.md) |
 
 The multitenancy ADRs belong to the [full multitenancy wish](../../.genie/wishes/omni-full-multitenancy/WISH.md).
