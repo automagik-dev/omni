@@ -1890,6 +1890,13 @@ const connectInstanceSchema = z.object({
   zenviaHandoffRouting: ZenviaHandoffRoutingSchema.optional().describe(
     'Routes a handoff to a Sales group by the value of one handoffFields key (see POST /instances)',
   ),
+  webhookVerifyToken: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      'Zenvia webhook verify token the subscription sends as x-webhook-token. Replaces the stored one and is persisted on a successful connect, so it can be rotated; omit it to keep the stored token. Sealed at rest, never returned. Ignored for other channels',
+    ),
   ascFlowBaseUrl: z.string().optional().describe('ASC platform base URL'),
   ascFlowLogin: z.string().optional().describe('ASC platform /authuser login'),
   ascFlowChave: z.string().optional().describe('ASC platform /authuser chave (secret)'),
@@ -1971,6 +1978,24 @@ function mergeZenviaFields(
   };
 }
 
+function zenviaConnectPersistFields(
+  instance: Parameters<typeof mergeZenviaFields>[0],
+  body: Parameters<typeof mergeZenviaFields>[1] & Pick<ConnectInstanceBody, 'webhookVerifyToken'>,
+): Record<string, unknown> {
+  return {
+    ...mergeZenviaFields(instance, body),
+    ...(body.webhookVerifyToken ? { webhookVerifyToken: body.webhookVerifyToken } : {}),
+  };
+}
+
+function connectWebhookVerifyToken(
+  instance: Pick<InstanceRecord, 'channel' | 'webhookVerifyToken'>,
+  body: Pick<ConnectInstanceBody, 'webhookVerifyToken'>,
+): string | null {
+  if (instance.channel !== 'zenvia') return instance.webhookVerifyToken;
+  return body.webhookVerifyToken ?? instance.webhookVerifyToken;
+}
+
 function buildConnectConnectionOptions(
   instance: InstanceRecord,
   body: ConnectInstanceBody,
@@ -1993,7 +2018,7 @@ function buildConnectConnectionOptions(
     gupshupAuthToken: instance.gupshupAuthToken,
     gupshupEventId: instance.gupshupEventId,
     gupshupHandoffOptions: instance.gupshupHandoffOptions,
-    webhookVerifyToken: instance.webhookVerifyToken,
+    webhookVerifyToken: connectWebhookVerifyToken(instance, body),
     twilioAccountSid: body.twilioAccountSid ?? instance.twilioAccountSid,
     twilioAuthToken: body.twilioAuthToken ?? body.token ?? instance.twilioAuthToken,
     twilioFrom: body.twilioFrom ?? instance.twilioFrom,
@@ -2105,7 +2130,7 @@ function buildConnectPersistUpdates(instance: InstanceRecord, body: ConnectInsta
   }
 
   if (instance.channel === 'zenvia') {
-    return { ...updates, ...mergeZenviaFields(instance, body) };
+    return { ...updates, ...zenviaConnectPersistFields(instance, body) };
   }
 
   if (instance.channel === 'asc-flow') {
