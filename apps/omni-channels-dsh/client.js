@@ -12116,10 +12116,12 @@ var VALIDATION_PROBLEMS = Object.freeze({
 function validationProblem(error, fallback) {
   return typeof error?.code === "string" && Object.hasOwn(VALIDATION_PROBLEMS, error.code) && typeof error.field === "string" && Object.hasOwn(FIELDS, error.field) ? t(VALIDATION_PROBLEMS[error.code], { field: FIELDS[error.field].key }) : t(fallback);
 }
+var namesOf = (answerers) => answerers.agents.map((agent) => agent.name ?? agent.id).join(", ");
 function ChannelSettings({ channel, writable, request = call, refresh = () => refreshLive(call) }) {
   const [record, setRecord] = useState4(null);
   const [draft, setDraft] = useState4({});
   const [agents, setAgents] = useState4([]);
+  const [answerers, setAnswerers] = useState4(null);
   const [agentError, setAgentError] = useState4("");
   const [error, setError] = useState4("");
   const [saved, setSaved] = useState4(false);
@@ -12130,7 +12132,9 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
   useEffect5(() => {
     alive.current = true;
     request("omni-channel-settings", { id: channel.id }).then((reply) => {
-      if (alive.current) setRecord(reply.settings);
+      if (!alive.current) return;
+      setRecord(reply.settings);
+      setAnswerers(reply.answerers ?? null);
     }, (failure) => {
       console.warn("Could not load channel settings:", failure);
       if (alive.current) setError(t("Could not load channel settings. Try again."));
@@ -12161,6 +12165,7 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
       const reply = await request("omni-channel-settings", { id: channel.id });
       if (!alive.current) return;
       setRecord(reply.settings);
+      setAnswerers(reply.answerers ?? null);
       setDraft((before) => endpoint === "omni-channel-settings-save" ? {} : Object.fromEntries(Object.entries(before).filter(([key]) => !key.startsWith("meta"))));
       setSaved(true);
       await refresh().catch(() => {
@@ -12253,12 +12258,19 @@ function ChannelSettings({ channel, writable, request = call, refresh = () => re
         h5(
           "select",
           { "aria-label": "agentId", value: value("agentId") ?? "", disabled: !writable || busy, onChange: (event) => edit("agentId", event.target.value || null) },
-          h5("option", { value: "" }, t("No agent")),
+          // "No agent" only when nobody answers: otherwise the empty choice is the channel
+          // override, and the line below names the agent that does answer.
+          h5("option", { value: "" }, answerers?.source === "none" ? t("No agent") : t("No channel override")),
           value("agentId") && !agents.some((agent) => agent.id === value("agentId")) ? h5("option", { value: value("agentId") }, value("agentId")) : null,
           agents.map((agent) => h5("option", { key: agent.id, value: agent.id }, `${agent.name} · ${agent.id}`))
         )
       ),
       h5("label", { className: "oc-field" }, t("Agent UUID (empty unassigns; list shows up to 200 agents)"), h5("input", { "aria-label": "Agent UUID", value: value("agentId") ?? "", disabled: !writable || busy, onChange: (event) => edit("agentId", event.target.value.trim() || null) })),
+      answerers ? h5(
+        "p",
+        { className: "oc-fine", role: "status" },
+        answerers.source === "none" ? t("No agent — messages on this channel wait for you.") : answerers.source === "instance" ? t("Assigned — this channel answers with {names}; its chats inherit it.", { names: namesOf(answerers) }) : t("Assigned — chats here answer through routes: {names}.", { names: namesOf(answerers) })
+      ) : null,
       agentError ? h5("p", { role: "status" }, agentError) : null,
       GROUPS.filter((group) => group.label !== "Meta connection" || channel.type === "whatsapp-business").map((group) => h5(
         "details",
@@ -16917,6 +16929,10 @@ var STRINGS = {
   "Loading settings…": "正在加载设置…",
   "Assigned agent": "分配的智能体",
   "No agent": "无智能体",
+  "No channel override": "无渠道覆盖",
+  "No agent — messages on this channel wait for you.": "无智能体 — 此渠道的消息会等待你处理。",
+  "Assigned — this channel answers with {names}; its chats inherit it.": "已分配 — 此渠道由 {names} 回答；其聊天会继承该设置。",
+  "Assigned — chats here answer through routes: {names}.": "已分配 — 此渠道的聊天通过路由由 {names} 回答。",
   "Clear override (null)": "清除覆盖值（null）",
   "Not provided": "未提供",
   "Not set": "未设置",

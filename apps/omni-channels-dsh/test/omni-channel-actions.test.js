@@ -150,18 +150,28 @@ test('a reply goes to the chat\'s own instance and address; refusals say why', a
 test('settings whitelist reads and PATCH only validated dirty fields on the same id', async () => {
   const { run, calls } = host({
     [`GET /instances/${CHANNEL}`]: () => [200, { data: { id: CHANNEL, name: 'Existing', channel: 'whatsapp-business', processAudio: false, metaAppId: '12345678', agentId: null, agentProviderId: null, metaAccessToken: 'must-not-return', unknown: 'ignored' } }],
+    // The channel's own agent is empty; a route assigns one of its chats an agent, so the
+    // page can say who answers instead of "No agent".
+    [`GET /instances/${CHANNEL}/routes`]: () => [200, { items: [{ id: CHAT, scope: 'chat', chatId: CHAT, agentId: CHAT, isActive: true }] }],
     [`PATCH /instances/${CHANNEL}`]: () => [200, { data: { metaAccessToken: 'must-not-return' } }],
     'GET /agents?limit=200': () => [200, { items: [{ id: CHAT, name: 'Helper', apiKey: 'must-not-return' }] }],
   })
-  assert.deepEqual(await run('omni-channel-settings', { id: CHANNEL }), { settings: { processAudio: false, metaAppId: '12345678', agentId: null, agentProviderId: null } })
+  assert.deepEqual(await run('omni-channel-settings', { id: CHANNEL }), {
+    settings: { processAudio: false, metaAppId: '12345678', agentId: null, agentProviderId: null },
+    answerers: { source: 'route', agents: [{ id: CHAT, name: 'Helper' }] },
+  })
   const patch = { processAudio: false, inboundMaxAgeMinutes: 0, triggerReactions: [], sessionReset: null, agentId: CHAT }
   assert.deepEqual(await run('omni-channel-settings-save', { id: CHANNEL, patch }), { ok: true })
-  assert.deepEqual(calls[1], { method: 'PATCH', path: `/instances/${CHANNEL}`, body: patch, key: KEY })
+  assert.deepEqual(calls.find(call => call.method === 'PATCH'), { method: 'PATCH', path: `/instances/${CHANNEL}`, body: patch, key: KEY })
   assert.deepEqual(await run('omni-channel-agents'), { items: [{ id: CHAT, name: 'Helper' }] })
   for (const patch of [{ surprise: 1 }, { agentProviderId: CHAT }, { metaAccessToken: 'secret' }, { processAudio: null }, { agentId: 'wrong' }]) {
     await assert.rejects(run('omni-channel-settings-save', { id: CHANNEL, patch }), { code: 'bot/invalid' })
   }
-  assert.equal(calls.length, 3)
+  // One read of each: the channel, its routes and the agents, then the patch and the agents again.
+  assert.deepEqual(calls.map(call => `${call.method} ${call.path}`), [
+    `GET /instances/${CHANNEL}`, `GET /instances/${CHANNEL}/routes`, 'GET /agents?limit=200',
+    `PATCH /instances/${CHANNEL}`, 'GET /agents?limit=200',
+  ])
 })
 
 test('Business repair uses the existing id without creating or deleting even on failure', async () => {

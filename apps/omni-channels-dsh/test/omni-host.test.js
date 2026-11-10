@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { KEY, MEDIA_FILE_BYTES, channelOf, chatOf, initialsOf, install, messageOf, statusOf } from '../src/host/omni.js'
+import { KEY, MEDIA_FILE_BYTES, agentOfChat, answerersOf, channelOf, chatOf, initialsOf, install, messageOf, statusOf } from '../src/host/omni.js'
 import { install as installHooks } from '@automagik/bots-dsh/src/host/extend.js'
 
 test('omni connection states fold into the four the view shows', () => {
@@ -32,6 +32,46 @@ test('chats keep their unread count and mark previews the user sent', () => {
   assert.equal(initialsOf('#support'), '#')
   assert.equal(initialsOf('🦞 BuildWithFriends'), 'BU')
   assert.equal(initialsOf(''), '?')
+})
+
+test('the agent of a chat is the one on its route, else the channel\'s, and it names the preview', () => {
+  const names = new Map([['a1', 'Helper'], ['a2', 'Triage']])
+  const routes = [
+    { id: 'r1', scope: 'chat', chatId: 'c1', agentId: 'a2', isActive: true },
+    { id: 'r2', scope: 'chat', chatId: 'c2', agentId: 'a1', isActive: false },
+    { id: 'r3', scope: 'user', personId: 'p1', agentId: 'a1', isActive: true },
+  ]
+  const chat = { id: 'c1', instanceId: 'i1', name: 'Marina Lopes', lastMessageFromMe: true, lastMessagePreview: 'on my way', lastMessageAt: '2026-10-20T06:00:00.000Z' }
+  // A route on the chat answers, even with an agent of the channel's own.
+  const routed = chatOf(chat, agentOfChat(chat, { routes, instanceAgentId: 'a1', names }))
+  assert.deepEqual(routed.agent, { id: 'a2', name: 'Triage', source: 'chat' })
+  assert.equal(routed.preview, 'Triage: on my way')
+  // No route of its own: the channel's agent, inherited.
+  const inherited = chatOf(chat, agentOfChat({ ...chat, id: 'c3' }, { routes, instanceAgentId: 'a1', names }))
+  assert.deepEqual(inherited.agent, { id: 'a1', name: 'Helper', source: 'instance' })
+  assert.equal(inherited.preview, 'Helper: on my way')
+  // An inactive route is no assignment, and nobody assigned keeps the person's own preview.
+  const none = chatOf({ ...chat, id: 'c2' }, agentOfChat({ ...chat, id: 'c2' }, { routes, names }))
+  assert.equal(none.agent, undefined)
+  assert.equal(none.preview, 'You: on my way')
+  // What the person wrote stays the person's, whoever answers the chat.
+  assert.equal(chatOf({ ...chat, lastMessageFromMe: false }, inherited.agent).preview, 'on my way')
+})
+
+test('a channel answers through routes when it has no agent of its own', () => {
+  const names = new Map([['a1', 'Helper']])
+  const instance = { id: 'i1', channel: 'telegram', name: 'bot', isActive: true, agentId: null }
+  const routed = channelOf(instance, { state: 'connected' }, {
+    routes: [{ id: 'r1', scope: 'chat', chatId: 'c1', agentId: 'a1', isActive: true }], names,
+  })
+  assert.equal(routed.answeredBy, 'Omni')
+  assert.deepEqual(routed.answerers, { source: 'route', agents: [{ id: 'a1', name: 'Helper' }] })
+  // The channel's own agent wins, and a channel with neither answers "You".
+  assert.deepEqual(answerersOf({ agentId: 'a1' }, [{ scope: 'chat', chatId: 'c1', agentId: 'a2', isActive: true }], names),
+    { source: 'instance', agents: [{ id: 'a1', name: 'Helper' }] })
+  const bare = channelOf(instance, { state: 'connected' })
+  assert.equal(bare.answeredBy, 'You')
+  assert.equal(bare.answerers, undefined)
 })
 
 test('messages say who wrote them: the contact, Omni through the API, or the user on the phone', () => {
@@ -90,6 +130,8 @@ test('the overview reads instances, their status, and chats with the key, and on
     '/instances/a/status': { data: { state: 'connected' } },
     '/instances/b/status': 500,
     '/chats': { items: [{ id: 'c', instanceId: 'a', name: 'general', chatType: 'channel' }] },
+    '/agents': { items: [{ id: 'ag1', name: 'Helper' }] },
+    '/instances/a/routes': { items: [{ id: 'r1', scope: 'chat', chatId: 'c', agentId: 'ag1', isActive: true }] },
   } })
   const view = await rt.omniEndpoint('omni-overview', {})
   assert.equal(view.configured, true)
@@ -98,6 +140,35 @@ test('the overview reads instances, their status, and chats with the key, and on
   assert.equal(view.chats[0].kind, 'group')
   assert.ok(asked.every(call => call.key === 'omni_sk_test'))
   assert.ok(asked.every(call => call.address.startsWith('https://omni.test/api/v2/')))
+})
+
+test('the overview names the agent that answers a chat, and a failed routes read leaves the page whole', async () => {
+  const { rt } = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers: {
+    '/instances': { items: [{ id: 'a', channel: 'slack', name: 'team', isActive: true, agentId: null }] },
+    '/instances/a/status': { data: { state: 'connected' } },
+    '/instances/a/routes': { items: [{ id: 'r1', scope: 'chat', chatId: 'c1', agentId: 'ag1', isActive: true }] },
+    '/chats': { items: [
+      { id: 'c1', instanceId: 'a', name: 'general', chatType: 'channel', lastMessageFromMe: true, lastMessagePreview: 'all set' },
+      { id: 'c2', instanceId: 'a', name: 'ops', chatType: 'channel', lastMessageFromMe: true, lastMessagePreview: 'hello' },
+    ] },
+    '/agents': { items: [{ id: 'ag1', name: 'Helper' }] },
+  } })
+  const view = await rt.omniEndpoint('omni-overview', {})
+  assert.equal(view.channels[0].answeredBy, 'Omni')
+  assert.deepEqual(view.channels[0].answerers, { source: 'route', agents: [{ id: 'ag1', name: 'Helper' }] })
+  assert.deepEqual(view.chats.map(chat => chat.preview), ['Helper: all set', 'You: hello'])
+  assert.deepEqual(view.chats[0].agent, { id: 'ag1', name: 'Helper', source: 'chat' })
+  assert.equal(view.chats[1].agent, undefined)
+  // A routes read this Omni cannot answer is no route: the page still carries every channel.
+  const broken = runtime({ url: 'https://omni.test', key: 'omni_sk_test', answers: {
+    '/instances': { items: [{ id: 'a', channel: 'slack', name: 'team', isActive: true, agentId: null }] },
+    '/instances/a/status': { data: { state: 'connected' } },
+    '/chats': { items: [{ id: 'c1', instanceId: 'a', name: 'general', chatType: 'channel', lastMessageFromMe: true, lastMessagePreview: 'hi' }] },
+    '/agents': 500,
+  } })
+  const kept = await broken.rt.omniEndpoint('omni-overview', {})
+  assert.equal(kept.channels.length, 1)
+  assert.equal(kept.chats[0].preview, 'You: hi')
 })
 
 test('messages need a chat id shaped like omni ids, and a refused key says which key', async () => {
