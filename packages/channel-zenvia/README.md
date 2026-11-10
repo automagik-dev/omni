@@ -163,7 +163,7 @@ group:
 - No match, a missing key or a value that is not a string: the handoff goes to
   `zenviaHandoffGroupId` and a `warn` log names the key and, for a string, the
   value (nothing else from the lead). Without a default group the handoff is
-  refused for good (422, see the table above) before Zenvia is called.
+  refused for good (422, see the "Failure to HTTP status" table below) before Zenvia is called.
 - `zenviaHandoffUserId` is applied inside whichever group is chosen. An agent
   normally belongs to specific groups, so leave it unset when routing to
   several groups: whether Zenvia refuses a user that is not in the target group
