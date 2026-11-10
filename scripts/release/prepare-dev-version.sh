@@ -26,10 +26,6 @@ echo "Derived version: ${VERSION}" >&2
   # (scripts/lib/plugin-versions.ts). Also stamps the chart appVersion.
   bun scripts/sync-versions.ts "${VERSION}"
 
-  # The bump rewrites JSON; enforce Biome formatting before lint runs in
-  # other workflows.
-  bunx biome format --write package.json packages/*/package.json apps/*/package.json
-
   # bun.lock pins every workspace package's version explicitly, so a stale
   # lockfile makes `bun install --frozen-lockfile` fail in build-tarballs.yml.
   # A pure rewrite of workspace deps; no external resolution changes.
