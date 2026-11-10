@@ -98,8 +98,12 @@ and/or `zenviaHandoffRouting`). This is the ZCC flow. In order:
 2. `POST /api/v1/prospect/{id}/transfer` moves the prospect to the group, or
    to `zenviaHandoffUserId` inside it. A refusal, or an explicit
    `success: false`, fails the handoff before anything is written or sent,
-   so the agent keeps the chat. Any other 2xx, empty body included, counts as
-   done.
+   so the agent keeps the chat. Any other 2xx counts as done: an empty body, a
+   body that is not JSON, and a `success` that is not a boolean included. The
+   answer is read through a Zod schema that keeps only `success` and ignores
+   every other field. Error answers are read the same way: only a string `code`
+   and `message` are used, and anything else falls back to the first 200
+   characters of the raw body.
 3. `POST /api/v1/prospect/{id}/interactions` writes a `note` with the context
    the agent needs: `motivoHandoff`, `dadosLead` and every `handoffFields`
    key. It runs after the transfer, so a retried handoff never leaves an

@@ -1,3 +1,4 @@
+import { ZenviaErrorBodySchema } from '../types';
 import { ZenviaApiError, ZenviaErrorCode, mapHttpStatusToZenviaError } from './errors';
 
 function isTimeout(err: unknown): boolean {
@@ -48,9 +49,9 @@ export async function zenviaErrorFromResponse(res: Response, operation: string):
   } catch {
     bodyText = '';
   }
-  const parsed = parseJsonOrUndefined(bodyText) as { code?: unknown; message?: unknown } | undefined;
-  const vendorCode = typeof parsed?.code === 'string' ? parsed.code : undefined;
-  const vendorMessage = typeof parsed?.message === 'string' ? parsed.message : undefined;
+  const parsed = ZenviaErrorBodySchema.safeParse(parseJsonOrUndefined(bodyText));
+  const vendorCode = parsed.success ? parsed.data.code : undefined;
+  const vendorMessage = parsed.success ? parsed.data.message : undefined;
   const code = mapHttpStatusToZenviaError(res.status) ?? ZenviaErrorCode.UNKNOWN;
   const detail = vendorMessage ?? bodyText.slice(0, 200);
   const message = `HTTP ${res.status} from Zenvia ${operation}${vendorCode ? ` (${vendorCode})` : ''}${detail ? `: ${detail}` : ''}`;

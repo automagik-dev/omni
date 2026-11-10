@@ -24,6 +24,19 @@ export const ZenviaSalesGroupsSchema = z.array(
 );
 export type ZenviaSalesGroups = z.infer<typeof ZenviaSalesGroupsSchema>;
 
+export const ZenviaSalesTransferResponseSchema = z
+  .object({
+    success: z.boolean().optional().catch(undefined).describe('Only an explicit false refuses the transfer'),
+  })
+  .passthrough();
+
+export const ZenviaErrorBodySchema = z
+  .object({
+    code: z.string().optional().catch(undefined).describe('Vendor error code, kept when it is a string'),
+    message: z.string().optional().catch(undefined).describe('Vendor error message, kept when it is a string'),
+  })
+  .passthrough();
+
 export type ZenviaOutboundContent =
   | { type: 'text'; text: string }
   | { type: 'file'; fileUrl: string; fileMimeType?: string; fileName?: string; fileCaption?: string }

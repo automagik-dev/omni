@@ -5,6 +5,7 @@ import {
   ZenviaSalesGroupsSchema,
   type ZenviaSalesProspect,
   ZenviaSalesProspectSchema,
+  ZenviaSalesTransferResponseSchema,
 } from './types';
 import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
 import { parseJsonOrUndefined, readBodyText, zenviaErrorFromResponse, zenviaFetch } from './utils/http';
@@ -88,8 +89,8 @@ export class ZenviaSalesClient {
       operation: 'transferProspect',
       body: target.user ? { user: target.user, group: target.group } : { group: target.group },
     });
-    const parsed = parseJsonOrUndefined(text) as { success?: unknown } | undefined;
-    if (parsed && typeof parsed === 'object' && parsed.success === false) {
+    const parsed = ZenviaSalesTransferResponseSchema.safeParse(parseJsonOrUndefined(text));
+    if (parsed.success && parsed.data.success === false) {
       throw new ZenviaApiError(ZenviaErrorCode.REFUSED, 'Zenvia did not confirm the transfer (success=false)', {
         operation: 'transferProspect',
       });
