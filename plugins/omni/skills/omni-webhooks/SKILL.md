@@ -13,7 +13,7 @@ Configure an external event source or connector, or ingest a custom webhook even
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [webhook operations](../omni-ops/references/webhooks.md).
-2. Discover installed options with `omni webhooks --help`, `omni connectors --help` or `omni sources --help` for the requested integration.
+2. Read `omni --help`, choose the group matching the requested integration, then inspect its help and the relevant action's help before using a reference example.
 3. Inspect existing registrations, make the authorized change, then verify saved config and an authorized event's observed result.
 
 ## Rules

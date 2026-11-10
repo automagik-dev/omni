@@ -13,7 +13,7 @@ Backfill transcriptions/descriptions, extract historical media, or redownload me
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [batch operations](../omni-ops/references/batch.md).
-2. Discover current options with `omni batch --help`, `omni batch estimate --help` and `omni batch create --help`.
+2. Read `omni --help`, then `omni batch --help` and the relevant action's help before using a reference example.
 3. Estimate scope and cost before creating a job. With authorization, create it, monitor status and report processed items/errors.
 
 ## Rules

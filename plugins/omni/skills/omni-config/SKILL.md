@@ -13,8 +13,8 @@ Configure an existing server or CLI defaults, diagnose auth/health, inspect logs
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [configuration operations](../omni-ops/references/config.md).
-2. Discover current options with `omni server --help`, `omni auth --help` and `omni config --help`; check the selected server, reachability and credentials separately.
-3. For trust, tenancy or audit, inspect `omni trust --help`, `omni tenants --help`, `omni multitenancy --help` or `omni audit --help` before the requested operation.
+2. Read `omni --help`, choose the group for the requested setting, then inspect its help and the relevant action's help before using a reference example. Check the selected server, reachability and credentials separately.
+3. For trust, tenancy or audit, discover the corresponding group in installed help and inspect the current posture before the requested operation.
 4. Verify authorized changes with a follow-up read; report the actual result.
 
 ## Rules

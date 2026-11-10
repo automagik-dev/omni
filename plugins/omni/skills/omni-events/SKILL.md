@@ -13,7 +13,7 @@ Investigate what happened, trace a slow or failed message, inspect event contrac
 ## Flow
 
 1. Read [ground rules](../omni-ops/references/ground-rules.md) and [event operations](../omni-ops/references/events.md).
-2. Discover installed options with `omni events --help` and `omni journey --help`. Use an event ID for event causality and a message correlation ID for a channel-message journey.
+2. Read `omni --help`, then `omni events --help` or the group for the requested trace. Inspect the action's help before using a reference example. Use an event ID for event causality and a message correlation ID for a channel-message journey.
 3. Inspect contracts and consumer state before changing them. Dry-run a large replay range first; verify the authorized result through status/log output.
 
 ## Rules

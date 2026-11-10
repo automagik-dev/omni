@@ -1,96 +1,27 @@
 ---
 name: omni-agent
-description: "Agent communication toolkit — verb commands for WhatsApp, Telegram, Discord, Slack. Say, speak, imagine, react, listen, see, history, done."
+description: "Send and reply across Omni channels, browse conversations, use media and voice, and close agent turns."
 allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
-# Omni Agent — Verbs
+# Omni Agent
 
-Verb commands for agents replying inside a conversation. In turn-based mode the bridge pre-sets the context — no `omni use` / `omni open` needed; every verb routes automatically.
+## When to Use
 
-| Env var | Meaning |
-|---------|---------|
-| `OMNI_INSTANCE` | Channel instance ID (which WhatsApp/Telegram account) |
-| `OMNI_CHAT` | Chat JID (the conversation) |
-| `OMNI_MESSAGE` | Inbound message ID that triggered this turn |
-| `OMNI_TURN_ID` | Current turn ID, used by `omni done` to close the correct turn |
+Communicate through Omni, find conversation context, send media or voice, or finish a bridge-delivered turn.
 
-Out-of-turn (cron, manual): set context first — `omni use <instance-id>`, `omni open <chat-jid>`; check with `omni where`.
+## Flow
 
-## Verbs
+1. Read `omni --help`, then the relevant command's help. Read [ground rules](../omni-ops/references/ground-rules.md); use [communication examples](references/communication.md) and [message browsing and voices](references/messages.md) only after checking installed options.
+2. Resolve the authorized server, channel instance and recipient. For an out-of-turn send, confirm the intended instance is connected. For a bridge-delivered turn, preserve its preset context instead of changing the active instance or chat.
+3. Read only the conversation context needed for the task. Use installed help to choose the appropriate communication command and its flags; resolve message IDs before quoting or reacting. Audio, generated media and scheduled delivery need the same target authorization as text.
+4. Perform the requested communication and inspect its receipt. Exit 0 confirms command success; claim channel delivery only when a receipt or an observed message confirms it.
+5. In a turn-based dispatch, make `omni done` the last action: use `omni done "<final>"` for the final message or `omni done --skip --reason "<reason>"` to close silently. Inspect `omni done --help` for other supported final responses.
 
-```bash
-omni say "Your order shipped yesterday."             # text to the open chat; --reply [msg-id] quote-replies
-omni speak "Welcome!" --voice Kore --language pt-BR  # TTS voice note (providers: gemini, openai, elevenlabs)
-omni imagine "a city skyline at sunset"              # generate + send image
-omni film "waves crashing in slow motion"            # generate + send video (Veo)
-omni music "calm lo-fi with rain"                    # generate + send audio (Lyria)
-omni react "👍" --message <id>                       # emoji reaction; defaults to the trigger message
-omni see /path/img.jpg "what product is this?"       # describe image/video (Gemini Vision)
-omni listen /path/audio.ogg --language pt            # transcribe an audio file
-omni history --limit 20 --json                       # recent messages; --before <msg-id> paginates
-omni done "Final answer."                            # send final message + close turn — ATOMIC
-```
+## Rules
 
-## Closing the turn — omni done
-
-REQUIRED as the last action of every turn; without it the turn hangs until server timeout.
-
-- `omni done "<text>"` — sends `<text>` to the user as the final message AND closes the turn. Preferred.
-- `omni done --skip --reason "nothing to add"` — close silently.
-- `omni done --react "👍"` — close with a reaction only.
-- `omni done --media <path> --caption "<text>"` — close with media.
-
-## In-turn rules
-
-- When `OMNI_INSTANCE` is set, replies must use Omni verbs; bare assistant output is never delivered to the chat.
-- Never call `omni use` or `omni open` inside a turn: the bridge already set the context.
-- Get message IDs from `omni history --json` before reacting. Multiple outbound verbs may precede `omni done`, which must be the last action.
-
-## Turn lifecycle
-
-1. Bridge delivers the message (env vars set).
-2. `omni history --limit 5` if you need context.
-3. Reply with verbs (`say`, `speak`, `imagine`, ...) for mid-turn updates.
-4. `omni done "<final>"` — always last.
-
-Exit 0 confirms the command succeeded; report channel delivery only when its receipt or an observed message confirms it. Use `omni turns --help` to inspect turn-management commands, not to bypass the assigned turn context.
-
-## Send edge cases
-
-`omni send` targets any recipient (`--to` accepts a phone, WA JID, or chat/person UUID; `--instance <id>` picks the account). Inside a turn prefer verbs — `send` bypasses turn tracking.
-
-```bash
-omni send --to +5511999999999 --text "Hi" --instance <id>
-omni send --media ./doc.pdf --caption "The document" --to <chat>
-omni send --tts "Spoken version of this text" --to <chat>
-omni send --location --lat -23.5505 --lng -46.6333 --address "Av. Paulista" --to <chat>
-omni send --poll "Which option?" --options "A,B,C" --to <chat>      # Discord
-omni send --sticker <url-or-base64> --to <chat>
-omni send --contact --name "Ana" --phone +5511888887777 --to <chat>
-omni send --reaction "❤️" --message <id>
-omni send --to <chat> --text "Reply" --reply-to <message-id>
-omni send --to <chat> --forward --message <message-id> --from-chat <source-chat>
-omni send --to <chat> --text "Update" --sent-by agent
-omni send --to <chat> --embed --title "Status" --description "Ready"  # Discord
-omni send --to <chat> --presence typing
-```
-
-## Messages and chats
-
-```bash
-omni messages search "refund request" --since 7d   # full-text, includes transcriptions/descriptions
-omni messages get <id>                             # full message detail
-omni messages read <id>                            # send read receipt
-omni chats list --unread                           # also --sort activity|unread|name, --attention
-omni chats get <id>
-omni chats messages <chatId> --json                # read any chat, not just the open one
-```
-
-More via `omni messages --help` (`edit`, `delete`, `star`, `unstar`, `remove-reaction`, `close-contact`) and `omni chats --help` (`archive`, `pin`, `mute`, `label`, `participants`, `read`).
-
-For chat search/filter templates and TTS voice discovery, read [message browsing and voices](references/messages.md).
-
-`messages close-contact` records a terminal outcome or cooldown and may send a farewell: inspect `omni messages close-contact --help` and confirm the intended recipient/outcome before using it.
-
-For capabilities beyond these examples, discover options through `omni send --help`, `omni speak --help`, `omni film --help`, `omni music --help`, `omni schedule --help`, `omni voice --help`, `omni media --help`, `omni a2a --help`, or `omni slack --help`. Scheduled sends and other outbound actions need the same target/authorization checks as an immediate send. Use global `--server <name>` to select an existing credentialed server; see setup for registration and current keyless-login limitations.
+- The bridge supplies `OMNI_INSTANCE`, `OMNI_CHAT`, `OMNI_MESSAGE` and `OMNI_TURN_ID`. Inside that context, use Omni verbs for replies; bare assistant output does not reach the channel. Never change the active instance or chat mid-turn.
+- Every turn-based dispatch must close its turn; otherwise it remains open until timeout. Multiple mid-turn messages may precede the final action.
+- Out of turn, explicitly establish and check context using the installed CLI before sending; never inherit an unrelated recipient from a prior task.
+- Add `--json` to parsed output, preserve credential scopes and return only needed personal fields. Empty results do not authorize broader access.
+- Discovery and conversation history do not authorize outbound actions. Confirm the intended scope before destructive message actions or terminal contact outcomes.
