@@ -420,6 +420,82 @@ describe('Zenvia webhook', () => {
       };
     }
 
+    describe('status publication failure', () => {
+      const statusTypes = ['message.delivered', 'message.read', 'message.failed'];
+
+      function statusPublished(): Published[] {
+        return (eventBus.published as Published[]).filter((e) => statusTypes.includes(e.type));
+      }
+
+      it('answers 503 and emits nothing when a delivered status cannot be published', async () => {
+        spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+
+        const res = await plugin.handleWebhook(post(statusEvent('DELIVERED')));
+
+        expect(res.status).toBe(503);
+        expect(statusPublished()).toHaveLength(0);
+      });
+
+      it('answers 503 for read and failed statuses that cannot be published', async () => {
+        spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+        const read = await plugin.handleWebhook(post(statusEvent('READ')));
+
+        spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+        const failed = await plugin.handleWebhook(post(statusEvent('NOT_DELIVERED')));
+
+        expect(read.status).toBe(503);
+        expect(failed.status).toBe(503);
+        expect(statusPublished()).toHaveLength(0);
+      });
+
+      it('publishes the redelivery of a status whose publication failed and answers 200', async () => {
+        const payload = statusEvent('DELIVERED');
+        spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+
+        const first = await plugin.handleWebhook(post(payload));
+        const second = await plugin.handleWebhook(post(payload));
+
+        expect(first.status).toBe(503);
+        expect(second.status).toBe(200);
+        expect(statusPublished().map((e) => e.type)).toEqual(['message.delivered']);
+        expect(statusPublished()[0]?.payload).toMatchObject({ externalId: 'out-1', chatId: CONTACT });
+      });
+
+      it('logs the failed status publication before answering 503', async () => {
+        const warn = spyOn(plugin.getLogger(), 'warn');
+        spyOn(eventBus, 'publish').mockRejectedValueOnce(new Error('bus down'));
+
+        await plugin.handleWebhook(post(statusEvent('DELIVERED')));
+
+        const lines = warn.mock.calls.map((args) => JSON.stringify(args));
+        expect(lines.some((line) => line.includes('failed to emit status event') && line.includes(instanceId))).toBe(
+          true,
+        );
+      });
+
+      it('keeps answering 200 for a status payload that fails validation', async () => {
+        const invalid = await plugin.handleWebhook(
+          post({ type: 'MESSAGE_STATUS', messageId: 'out-1', messageStatus: { timestamp: 'x' } }),
+        );
+        const missingStatus = await plugin.handleWebhook(post({ type: 'MESSAGE_STATUS', messageId: 'out-1' }));
+
+        expect(invalid.status).toBe(200);
+        expect(missingStatus.status).toBe(200);
+        expect(statusPublished()).toHaveLength(0);
+      });
+
+      it('keeps answering 200 for statuses it deliberately does not publish', async () => {
+        const sent = await plugin.handleWebhook(post(statusEvent('SENT')));
+        const noId = await plugin.handleWebhook(
+          post({ type: 'MESSAGE_STATUS', messageStatus: { code: 'DELIVERED', timestamp: 'x' } }),
+        );
+
+        expect(sent.status).toBe(200);
+        expect(noId.status).toBe(200);
+        expect(statusPublished()).toHaveLength(0);
+      });
+    });
+
     it('maps DELIVERED, READ and NOT_DELIVERED to message events', async () => {
       await plugin.handleWebhook(post(statusEvent('SENT')));
       await plugin.handleWebhook(post(statusEvent('DELIVERED')));

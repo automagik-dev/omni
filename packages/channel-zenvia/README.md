@@ -72,7 +72,15 @@ deliberately ignores, 401 to a missing or wrong token and 503 while the
 instance is not connected (during a restart), so Zenvia can redeliver. An
 inbound `MESSAGE` that could not be published to the event bus also answers
 503: the message is not acknowledged, its id is not kept as seen, and the
-redelivery is processed. An inbound `MESSAGE` addressed to a different sender
+redelivery is processed. A `MESSAGE_STATUS` (delivered, read, failed) that could
+not be published answers 503 as well, so Zenvia redelivers it; the failure is
+logged first. The plugin keeps no seen-set for statuses, so a redelivery
+publishes the receipt again. That is safe because the persistence consumers
+are idempotent: a `delivered` or `read` receipt only moves a message forward
+and the first `deliveredAt`/`readAt` is kept, and a `failed` receipt never
+overwrites a message already reported delivered or read. A payload that fails
+validation is still acknowledged with 200, since redelivering it cannot help.
+An inbound `MESSAGE` addressed to a different sender
 of the same Zenvia account is acknowledged and dropped, so two instances on
 one account never answer each other's contacts.
 

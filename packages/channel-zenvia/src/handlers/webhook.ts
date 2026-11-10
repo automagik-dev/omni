@@ -123,5 +123,6 @@ async function dispatchStatusEvent(plugin: ZenviaPlugin, instanceId: string, pay
     await plugin.handleStatusUpdate(instanceId, parsed.data);
   } catch (err) {
     logger.warn('[zenvia] failed to emit status event', { instanceId, err: String(err) });
+    throw err;
   }
 }
