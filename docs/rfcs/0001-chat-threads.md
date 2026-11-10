@@ -65,13 +65,16 @@ confirmation and cannot retract messages already sent.
 1. Child keys and thread foundation (#1396, #1411).
    Acceptance: reopening a chat preserves its dedicated session and scoped key.
    Rollback: revert the host feature; additive key lineage and saved rows remain.
+   Done 2026-10-28 https://github.com/automagik-si/omni/pull/1411
 2. Conversation placement and automation continuity (#1439, #1452, #1453).
    Acceptance: one click opens the chat's agent and phone pane together.
    Rollback: revert placement/routing behavior; existing conversations remain.
+   Done 2026-10-30 https://github.com/automagik-si/omni/pull/1453
 3. Full tools, Auto review and the send switch (#1629; PRs #1630, #1631).
    Acceptance: the thread has the Omni Bot's tools, exposes the switch, and opens
    with Auto review disabled. Rollback: restore previous tools/permissions;
    already completed external actions cannot be undone by reverting code.
+   Done 2026-11-06 https://github.com/automagik-si/omni/pull/1631
 
 ## Progress
 
