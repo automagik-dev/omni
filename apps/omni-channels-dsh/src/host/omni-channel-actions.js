@@ -13,6 +13,7 @@
 // route is tried, and a 403 says the key cannot.
 import { z } from 'zod'
 import { settingsSchemas } from './channel-settings.js'
+import { answerersOf } from './omni.js'
 const Settings = settingsSchemas(z)
 
 // The channel types the page adds here, with how each pairs. Slack's sign-in creates its
@@ -269,8 +270,18 @@ export function install(rt) {
 
   async function settings(body) {
     const { id: channelId } = parse(ChannelPayload.strict(), body, 'Unknown channel')
-    const instance = parse(Instance, await must('GET', `/instances/${channelId}`), 'Omni did not return the channel')
-    return { settings: parse(Settings.read, instance.data, 'Omni returned invalid settings') }
+    const [channel, routes, listed] = await Promise.all([
+      must('GET', `/instances/${channelId}`),
+      // The channel's routes say which chats answer through an agent of their own; a route
+      // read that fails is no route, never a settings page without its settings.
+      request('GET', `/instances/${channelId}/routes`).then(reply => (reply.ok && Array.isArray(reply.json?.items) ? reply.json.items : []), () => []),
+      agents().catch(() => ({ items: [] })),
+    ])
+    const instance = parse(Instance, channel, 'Omni did not return the channel')
+    const names = new Map(listed.items.map(agent => [agent.id, agent.name]))
+    // The channel's own assignment is the page's "Assigned agent" select; answerers says who
+    // answers in fact, and where that was decided, so an inherited or routed agent is named.
+    return { settings: parse(Settings.read, instance.data, 'Omni returned invalid settings'), answerers: answerersOf(instance.data, routes, names) }
   }
   async function saveSettings(body) {
     const payload = parse(z.object({ id, patch: Settings.patch }).strict(), body, 'Check the channel settings')
