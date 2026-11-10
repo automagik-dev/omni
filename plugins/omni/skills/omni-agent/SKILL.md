@@ -1,7 +1,7 @@
 ---
 name: omni-agent
 description: "Agent communication toolkit — verb commands for WhatsApp, Telegram, Discord, Slack. Say, speak, imagine, react, listen, see, history, done."
-allowed-tools: Bash(omni *)
+allowed-tools: Bash(omni *), Bash(jq *)
 ---
 
 # Omni Agent — Verbs
@@ -40,6 +40,12 @@ REQUIRED as the last action of every turn; without it the turn hangs until serve
 - `omni done --skip --reason "nothing to add"` — close silently.
 - `omni done --react "👍"` — close with a reaction only.
 - `omni done --media <path> --caption "<text>"` — close with media.
+
+## In-turn rules
+
+- When `OMNI_INSTANCE` is set, replies must use Omni verbs; bare assistant output is never delivered to the chat.
+- Never call `omni use` or `omni open` inside a turn: the bridge already set the context.
+- Get message IDs from `omni history --json` before reacting. Multiple outbound verbs may precede `omni done`, which must be the last action.
 
 ## Turn lifecycle
 
@@ -82,6 +88,8 @@ omni chats messages <chatId> --json                # read any chat, not just the
 ```
 
 More via `omni messages --help` (`edit`, `delete`, `star`, `unstar`, `remove-reaction`, `close-contact`) and `omni chats --help` (`archive`, `pin`, `mute`, `label`, `participants`, `read`).
+
+For chat search/filter templates and TTS voice discovery, read [message browsing and voices](references/messages.md).
 
 `messages close-contact` records a terminal outcome or cooldown and may send a farewell: inspect `omni messages close-contact --help` and confirm the intended recipient/outcome before using it.
 
