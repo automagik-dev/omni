@@ -6,6 +6,8 @@ Choose the requested target first. An auth failure on a remote Omni is not a rea
 
 ## 1. Existing server or local install
 
+**Omni CLI contract checked: 2.261110.2 (2026-11-10).** Before sign-in, run `omni --version`; if older than 2.261110.2, inspect `omni update --help` and run `omni update` first. Older CLIs such as 2.261030.9 lack device sign-in, `--api-key-stdin` and `OMNI_CLI_API_KEY`; do not fall back to pasting a key.
+
 For an existing server:
 
 ```bash
