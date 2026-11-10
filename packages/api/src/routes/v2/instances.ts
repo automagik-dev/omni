@@ -33,6 +33,7 @@ import {
   SelfHistorySchema,
   SelfMessagesSchema,
   SelfReceiptSchema,
+  ZENVIA_HANDOFF_SOLUTIONS,
   ZenviaHandoffRoutingSchema,
 } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
@@ -52,7 +53,6 @@ import type { AppVariables } from '../../types';
 
 const log = createLogger('api:instances');
 
-const ZENVIA_HANDOFF_SOLUTIONS = ['conversion', 'zenvia_chat', 'nlu'] as const;
 type ZenviaHandoffSolution = (typeof ZENVIA_HANDOFF_SOLUTIONS)[number];
 
 const instancesRoutes = new Hono<{ Variables: AppVariables }>();

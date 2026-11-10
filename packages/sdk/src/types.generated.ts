@@ -5990,6 +5990,26 @@ export interface components {
                     from?: string;
                 }[];
             } | null;
+            /** @description Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it */
+            zenviaSenderId?: string | null;
+            /**
+             * @description Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it
+             * @enum {string|null}
+             */
+            zenviaHandoffSolution?: "conversion" | "zenvia_chat" | "nlu" | null;
+            /** @description Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it */
+            zenviaHandoffGroupId?: string | null;
+            /** @description Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it */
+            zenviaHandoffUserId?: string | null;
+            /** @description Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it */
+            zenviaHandoffRouting?: {
+                /** @description Key of handoffFields whose value picks the Sales group */
+                field: string;
+                /** @description Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match */
+                groups: {
+                    [key: string]: string;
+                };
+            } | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -6205,6 +6225,32 @@ export interface components {
                     escalationWindowMs?: number | null;
                 };
             } | null;
+            /** @description Zenvia API token (X-API-TOKEN header). Sealed at rest and write-only: never returned */
+            zenviaApiToken?: string | null;
+            /** @description Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it */
+            zenviaSenderId?: string | null;
+            /**
+             * @description Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it
+             * @enum {string|null}
+             */
+            zenviaHandoffSolution?: "conversion" | "zenvia_chat" | "nlu" | null;
+            /** @description Zenvia Sales API key, not the same token as zenviaApiToken. Sealed at rest and write-only: never returned */
+            zenviaSalesApiKey?: string | null;
+            /** @description Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it */
+            zenviaHandoffGroupId?: string | null;
+            /** @description Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it */
+            zenviaHandoffUserId?: string | null;
+            /** @description Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it */
+            zenviaHandoffRouting?: {
+                /** @description Key of handoffFields whose value picks the Sales group */
+                field: string;
+                /** @description Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match */
+                groups: {
+                    [key: string]: string;
+                };
+            } | null;
+            /** @description Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it */
+            webhookVerifyToken?: string | null;
         };
         InstanceStatus: {
             /**
@@ -6260,6 +6306,32 @@ export interface components {
             token?: string;
             /** @description Force new QR code for WhatsApp */
             forceNewQr?: boolean;
+            /** @description Zenvia API token (X-API-TOKEN header). Sealed at rest and write-only: never returned */
+            zenviaApiToken?: string;
+            /** @description Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it */
+            zenviaSenderId?: string;
+            /**
+             * @description Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it
+             * @enum {string}
+             */
+            zenviaHandoffSolution?: "conversion" | "zenvia_chat" | "nlu";
+            /** @description Zenvia Sales API key, not the same token as zenviaApiToken. Sealed at rest and write-only: never returned */
+            zenviaSalesApiKey?: string;
+            /** @description Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it */
+            zenviaHandoffGroupId?: string;
+            /** @description Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it */
+            zenviaHandoffUserId?: string;
+            /** @description Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it */
+            zenviaHandoffRouting?: {
+                /** @description Key of handoffFields whose value picks the Sales group */
+                field: string;
+                /** @description Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match */
+                groups: {
+                    [key: string]: string;
+                };
+            };
+            /** @description Zenvia only. Replaces the stored webhook verify token and is persisted on a successful connect, so it can be rotated; omit it to keep the stored one. Sealed at rest and write-only: never returned. Ignored for other channels */
+            webhookVerifyToken?: string;
         };
         ConnectResponse: {
             /**
@@ -12697,6 +12769,32 @@ export interface operations {
                             escalationWindowMs?: number | null;
                         };
                     } | null;
+                    /** @description Zenvia API token (X-API-TOKEN header). Sealed at rest and write-only: never returned */
+                    zenviaApiToken?: string | null;
+                    /** @description Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it */
+                    zenviaSenderId?: string | null;
+                    /**
+                     * @description Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it
+                     * @enum {string|null}
+                     */
+                    zenviaHandoffSolution?: "conversion" | "zenvia_chat" | "nlu" | null;
+                    /** @description Zenvia Sales API key, not the same token as zenviaApiToken. Sealed at rest and write-only: never returned */
+                    zenviaSalesApiKey?: string | null;
+                    /** @description Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it */
+                    zenviaHandoffGroupId?: string | null;
+                    /** @description Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it */
+                    zenviaHandoffUserId?: string | null;
+                    /** @description Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it */
+                    zenviaHandoffRouting?: {
+                        /** @description Key of handoffFields whose value picks the Sales group */
+                        field: string;
+                        /** @description Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match */
+                        groups: {
+                            [key: string]: string;
+                        };
+                    } | null;
+                    /** @description Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it */
+                    webhookVerifyToken?: string | null;
                 };
             };
         };
@@ -13069,6 +13167,32 @@ export interface operations {
                             escalationWindowMs?: number | null;
                         };
                     } | null;
+                    /** @description Zenvia API token (X-API-TOKEN header). Sealed at rest and write-only: never returned */
+                    zenviaApiToken?: string | null;
+                    /** @description Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it */
+                    zenviaSenderId?: string | null;
+                    /**
+                     * @description Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it
+                     * @enum {string|null}
+                     */
+                    zenviaHandoffSolution?: "conversion" | "zenvia_chat" | "nlu" | null;
+                    /** @description Zenvia Sales API key, not the same token as zenviaApiToken. Sealed at rest and write-only: never returned */
+                    zenviaSalesApiKey?: string | null;
+                    /** @description Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it */
+                    zenviaHandoffGroupId?: string | null;
+                    /** @description Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it */
+                    zenviaHandoffUserId?: string | null;
+                    /** @description Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it */
+                    zenviaHandoffRouting?: {
+                        /** @description Key of handoffFields whose value picks the Sales group */
+                        field: string;
+                        /** @description Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match */
+                        groups: {
+                            [key: string]: string;
+                        };
+                    } | null;
+                    /** @description Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it */
+                    webhookVerifyToken?: string | null;
                     agentReplyFilter?: {
                         /** @enum {string} */
                         mode: "all" | "filtered";
@@ -13585,6 +13709,32 @@ export interface operations {
                     token?: string;
                     /** @description Force new QR code for WhatsApp */
                     forceNewQr?: boolean;
+                    /** @description Zenvia API token (X-API-TOKEN header). Sealed at rest and write-only: never returned */
+                    zenviaApiToken?: string;
+                    /** @description Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it */
+                    zenviaSenderId?: string;
+                    /**
+                     * @description Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it
+                     * @enum {string}
+                     */
+                    zenviaHandoffSolution?: "conversion" | "zenvia_chat" | "nlu";
+                    /** @description Zenvia Sales API key, not the same token as zenviaApiToken. Sealed at rest and write-only: never returned */
+                    zenviaSalesApiKey?: string;
+                    /** @description Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it */
+                    zenviaHandoffGroupId?: string;
+                    /** @description Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it */
+                    zenviaHandoffUserId?: string;
+                    /** @description Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it */
+                    zenviaHandoffRouting?: {
+                        /** @description Key of handoffFields whose value picks the Sales group */
+                        field: string;
+                        /** @description Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match */
+                        groups: {
+                            [key: string]: string;
+                        };
+                    };
+                    /** @description Zenvia only. Replaces the stored webhook verify token and is persisted on a successful connect, so it can be rotated; omit it to keep the stored one. Sealed at rest and write-only: never returned. Ignored for other channels */
+                    webhookVerifyToken?: string;
                 };
             };
         };

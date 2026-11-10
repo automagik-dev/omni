@@ -56,6 +56,7 @@ export type {
   PaginatedResponse,
   ListInstancesParams,
   CreateInstanceBody,
+  UpdateInstanceBody,
   SendMessageBody,
   SentBy,
   ListEventsParams,
