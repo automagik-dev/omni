@@ -1,8 +1,11 @@
 {
   "name": "omni",
   "version": "2.261110.2",
-  "description": "Full Omni platform control — three-tier skill system for agents (omni-agent), first-time setup (omni-setup), and platform ops (omni-ops)",
+  "description": "Omni CLI skills for agent setup, multichannel messaging, automations, events, and platform operations",
   "author": {
     "name": "Automagik"
-  }
+  },
+  "repository": "https://github.com/automagik-dev/omni",
+  "license": "Apache-2.0",
+  "keywords": ["omni", "cli", "messaging", "agents", "automation"]
 }
