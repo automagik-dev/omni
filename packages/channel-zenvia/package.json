@@ -1,6 +1,6 @@
 {
   "name": "@omni/channel-zenvia",
-  "version": "2.261111.5",
+  "version": "2.261111.6",
   "description": "Zenvia WhatsApp channel plugin for Omni — Zenvia API v2 outbound + per-instance webhook inbound",
   "type": "module",
   "main": "src/index.ts",
