@@ -89,6 +89,9 @@ function validateActions(manifest: ConnectorManifest, where: string): string[] {
     if (!action.key || keys.has(action.key)) issues.push(`${where}: action '${action.key}' is empty or duplicated`);
     keys.add(action.key);
     if (!action.label) issues.push(`${where}: action '${action.key}' has no label`);
+    if (action.access !== undefined && action.access !== 'read' && action.access !== 'write') {
+      issues.push(`${where}: action '${action.key}' access must be 'read' or 'write'`);
+    }
     if (!isZodSchema(action.inputSchema)) {
       issues.push(`${where}: action '${action.key}' inputSchema must be a Zod schema`);
     }

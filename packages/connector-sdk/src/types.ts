@@ -55,11 +55,22 @@ export interface ConnectorActionContext {
 }
 
 /** One typed operation declared by a manifest. */
+/**
+ * What an action does to the provider: `read` changes nothing there, `write` changes it.
+ * An action without the field is of unknown kind, and callers must treat it as a write.
+ */
+export type ConnectorActionAccess = 'read' | 'write';
+
 export interface ConnectorActionDefinition {
   /** Action key, e.g. `add_comment`. Referenced literally by `connector.call`. */
   readonly key: string;
   readonly label: string;
   readonly description?: string;
+  /**
+   * Whether calling this action only reads (no change on the provider) or writes. A caller
+   * that asks before writes reads it; an action without it must be asked about as a write.
+   */
+  readonly access?: ConnectorActionAccess;
   /** Boundary validation for the rendered input. Invalid input never reaches the provider. */
   readonly inputSchema: z.ZodType<Record<string, unknown>>;
   /** Run the operation. Errors must already be safe to show an operator. */
@@ -148,7 +159,7 @@ export interface ConnectorProviderSummary {
   readonly label: string;
   readonly version: string;
   readonly events: ReadonlyArray<{ key: string; label: string }>;
-  readonly actions: ReadonlyArray<{ key: string; label: string }>;
+  readonly actions: ReadonlyArray<{ key: string; label: string; access?: ConnectorActionAccess }>;
 }
 
 export interface ConnectorProviderDetail extends ConnectorProviderSummary {
@@ -158,6 +169,7 @@ export interface ConnectorProviderDetail extends ConnectorProviderSummary {
     key: string;
     label: string;
     description?: string;
+    access?: ConnectorActionAccess;
     inputSchema: Record<string, unknown>;
   }>;
   readonly guide: Readonly<Record<string, string>>;

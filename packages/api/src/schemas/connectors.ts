@@ -165,7 +165,7 @@ export const ProviderSummarySchema = z
     label: z.string(),
     version: z.string(),
     events: z.array(z.object({ key: z.string(), label: z.string() })),
-    actions: z.array(z.object({ key: z.string(), label: z.string() })),
+    actions: z.array(z.object({ key: z.string(), label: z.string(), access: z.enum(['read', 'write']).optional() })),
   })
   .openapi('ProviderSummary');
 
@@ -195,6 +195,7 @@ export const ProviderDetailSchema = z
         key: z.string(),
         label: z.string(),
         description: z.string().optional(),
+        access: z.enum(['read', 'write']).optional(),
         inputSchema: z.record(z.string(), z.unknown()),
       }),
     ),

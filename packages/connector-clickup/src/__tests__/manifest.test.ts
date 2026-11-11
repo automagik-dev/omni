@@ -242,4 +242,18 @@ describe('ClickUp inbound delivery', () => {
   test('declares the HMAC contract ClickUp uses', () => {
     expect(clickupManifest.verification).toEqual({ kind: 'hmac-sha256', header: 'X-Signature', encoding: 'hex' });
   });
+
+  // What a Bot's caller asks about before running it: a read changes nothing on ClickUp, and
+  // a write does. Pinned action by action: flipping one is a deliberate diff, not a silence.
+  test('declares read or write for every action, and the whole map', () => {
+    expect(Object.fromEntries(clickupManifest.actions.map((entry) => [entry.key, entry.access]))).toEqual({
+      create_task: 'write',
+      update_task: 'write',
+      add_comment: 'write',
+      list_tasks: 'read',
+      list_spaces: 'read',
+      list_folders: 'read',
+      list_lists: 'read',
+    });
+  });
 });

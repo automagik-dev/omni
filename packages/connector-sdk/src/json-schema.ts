@@ -20,7 +20,11 @@ export function providerSummary(manifest: ConnectorManifest): ConnectorProviderS
     label: manifest.label,
     version: manifest.version,
     events: manifest.events.map((event) => ({ key: event.key, label: event.label })),
-    actions: manifest.actions.map((action) => ({ key: action.key, label: action.label })),
+    actions: manifest.actions.map((action) => ({
+      key: action.key,
+      label: action.label,
+      ...(action.access ? { access: action.access } : {}),
+    })),
   };
 }
 
@@ -37,6 +41,7 @@ export function providerDetail(manifest: ConnectorManifest): ConnectorProviderDe
       key: action.key,
       label: action.label,
       ...(action.description ? { description: action.description } : {}),
+      ...(action.access ? { access: action.access } : {}),
       inputSchema: inputSchemaJson(action.inputSchema),
     })),
     guide: manifest.guide,
