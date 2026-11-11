@@ -108,11 +108,24 @@ beforeEach(() => {
 afterEach(() => fetchSpy.mockRestore());
 
 /** URL and headers of every outbound request the route made. */
+/**
+ * URL and headers of every outbound request this instance's route made. Matched by the
+ * instance's ids or key, not by position: in a full-suite run a stray fetch from an
+ * earlier file can land in the spy first.
+ */
 function outbound(): { url: string; headers: Record<string, string> }[] {
-  return fetchSpy.mock.calls.map((call: unknown[]) => ({
-    url: String(call[0]),
-    headers: Object.fromEntries(new Headers((call[1] as RequestInit | undefined)?.headers).entries()),
-  }));
+  return fetchSpy.mock.calls
+    .map((call: unknown[]) => ({
+      url: String(call[0]),
+      headers: Object.fromEntries(new Headers((call[1] as RequestInit | undefined)?.headers).entries()),
+    }))
+    .filter(
+      (request: { url: string; headers: Record<string, string> }) =>
+        request.url.includes(META_DETAILS.phoneNumberId) ||
+        request.url.includes(META_DETAILS.wabaId) ||
+        request.headers['x-api-key'] === META_DETAILS.accessToken ||
+        request.headers.authorization?.includes(META_DETAILS.accessToken),
+    );
 }
 
 describe('POST /:id/whatsapp-business/connect through a provider', () => {
