@@ -8,6 +8,7 @@
  *   https://developers.facebook.com/docs/whatsapp/cloud-api/reference
  */
 
+import type { MetaAuthMode } from '@omni/core/schemas';
 import type {
   MetaApiError as MetaApiErrorEnvelope,
   MetaOutboundMessage,
@@ -81,8 +82,16 @@ export interface MetaWhatsAppClientOptions {
   accessToken: string;
   /** Default: 'v25.0'. */
   apiVersion?: string;
-  /** Optional override for the Graph API base URL (mostly for tests). */
+  /**
+   * API base URL, version included. Default: `https://graph.facebook.com/{apiVersion}`.
+   * A Meta-compatible provider (e.g. Kapso: `https://api.kapso.ai/meta/whatsapp/v24.0`) sets its own.
+   */
   baseUrl?: string;
+  /**
+   * How `accessToken` is sent: `bearer` (Meta, default) as `Authorization: Bearer`,
+   * or `x-api-key` (provider key) as `X-API-Key`.
+   */
+  authMode?: MetaAuthMode;
   timeoutMs?: number;
 }
 
@@ -93,6 +102,7 @@ export class MetaWhatsAppClient {
 
   private readonly accessToken: string;
   private readonly baseUrl: string;
+  private readonly authMode: MetaAuthMode;
   private readonly timeoutMs: number;
 
   constructor(opts: MetaWhatsAppClientOptions, wabaId?: string) {
@@ -100,7 +110,8 @@ export class MetaWhatsAppClient {
     this.accessToken = opts.accessToken;
     this.apiVersion = opts.apiVersion ?? 'v25.0';
     this.wabaId = wabaId;
-    this.baseUrl = opts.baseUrl ?? `https://graph.facebook.com/${this.apiVersion}`;
+    this.baseUrl = (opts.baseUrl ?? `https://graph.facebook.com/${this.apiVersion}`).replace(/\/+$/, '');
+    this.authMode = opts.authMode ?? 'bearer';
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -285,16 +296,26 @@ export class MetaWhatsAppClient {
     }
   }
 
-  /** GET /{media_id} — returns a temporary download URL for inbound media. */
-  async getMediaUrl(mediaId: string): Promise<{ url: string; mime_type: string; sha256?: string; file_size?: number }> {
+  /**
+   * GET /{media_id} — returns a temporary download URL for inbound media. A
+   * provider proxy may add `download_url`, a URL with its own signed token.
+   */
+  async getMediaUrl(
+    mediaId: string,
+  ): Promise<{ url: string; download_url?: string; mime_type: string; sha256?: string; file_size?: number }> {
     return this.get(`/${mediaId}`);
   }
 
-  /** Download bytes from a media URL (must include Bearer auth — URL is short-lived). */
-  async downloadMedia(downloadUrl: string): Promise<ArrayBuffer> {
-    const res = await this.fetchWithTimeout(downloadUrl, {
+  /**
+   * Download the bytes of a media lookup. Meta's `url` needs the token. A
+   * provider's `download_url` carries its own signed token and gets no auth
+   * header, since Meta's `url` would need a Meta token the provider holds.
+   */
+  async downloadMedia(media: { url: string; download_url?: string }): Promise<ArrayBuffer> {
+    const viaProvider = this.authMode === 'x-api-key' && Boolean(media.download_url);
+    const res = await this.fetchWithTimeout(viaProvider ? (media.download_url as string) : media.url, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+      headers: viaProvider ? {} : this.authHeaders(),
     });
     if (!res.ok) throw await this.errorFromResponse(res, 'GET media');
     return res.arrayBuffer();
@@ -392,7 +413,7 @@ export class MetaWhatsAppClient {
   private async postForm<T = unknown>(path: string, form: FormData): Promise<T> {
     const res = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+      headers: this.authHeaders(),
       body: form,
     });
     if (!res.ok) throw await this.errorFromResponse(res, `POST ${path}`);
@@ -411,10 +432,13 @@ export class MetaWhatsAppClient {
   }
 
   private headers(): Record<string, string> {
-    return {
-      Authorization: `Bearer ${this.accessToken}`,
-      'Content-Type': 'application/json',
-    };
+    return { ...this.authHeaders(), 'Content-Type': 'application/json' };
+  }
+
+  private authHeaders(): Record<string, string> {
+    return this.authMode === 'x-api-key'
+      ? { 'X-API-Key': this.accessToken }
+      : { Authorization: `Bearer ${this.accessToken}` };
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {

@@ -398,6 +398,38 @@ export const MetaWebhookPayloadSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Meta-compatible providers: per-instance API and webhook settings
+// (a provider such as Kapso mirrors the Cloud API and forwards Meta's webhooks)
+// ---------------------------------------------------------------------------
+
+/** How the access token is sent: Meta's `Authorization: Bearer`, or a provider key as `X-API-Key`. */
+export const MetaAuthModeSchema = z.enum(['bearer', 'x-api-key']);
+
+/**
+ * Which signature this instance's webhooks carry: Meta's `X-Hub-Signature-256`
+ * (`sha256=` + hex HMAC-SHA256 with META_APP_SECRET), or a provider's
+ * `X-Webhook-Signature` (bare hex HMAC-SHA256 with the instance's webhook secret).
+ */
+export const MetaSignatureModeSchema = z.enum(['x-hub-signature-256', 'x-webhook-signature']);
+
+/** Cloud API base URL with its version, e.g. `https://api.kapso.ai/meta/whatsapp/v24.0`. */
+export const MetaApiBaseUrlSchema = z
+  .string()
+  .url()
+  .refine((url) => url.startsWith('https://'), { message: 'apiBaseUrl must be an https URL' });
+
+/**
+ * An instance's provider settings as the plugin reads them on connect. All
+ * unset = Meta direct (Graph API, Bearer token, X-Hub-Signature-256).
+ */
+export const MetaProviderSettingsSchema = z.object({
+  apiBaseUrl: MetaApiBaseUrlSchema.optional(),
+  authMode: MetaAuthModeSchema.default('bearer'),
+  webhookSecret: z.string().min(1).optional(),
+  signatureMode: MetaSignatureModeSchema.default('x-hub-signature-256'),
+});
+
+// ---------------------------------------------------------------------------
 // Embedded Signup OAuth + connect endpoints
 // ---------------------------------------------------------------------------
 
@@ -445,10 +477,22 @@ export const WhatsAppBusinessConnectRequestSchema = z
     wabaId: z.string().min(1),
     appId: z.string().optional(),
     businessId: z.string().optional(),
+    /** Meta-compatible provider API base URL. Omit for Meta's Graph API. */
+    apiBaseUrl: MetaApiBaseUrlSchema.optional(),
+    /** Default `bearer`. A provider key (e.g. Kapso) uses `x-api-key`. */
+    authMode: MetaAuthModeSchema.optional(),
+    /** The secret a provider signs forwarded webhooks with. Stored like the access token. */
+    webhookSecret: z.string().min(1).optional(),
+    /** Default `x-hub-signature-256`. A provider forwarding Meta webhooks uses `x-webhook-signature`. */
+    signatureMode: MetaSignatureModeSchema.optional(),
   })
   .refine((v) => Boolean(v.accessToken) !== Boolean(v.exchangeHandle), {
     message: 'Provide exactly one of `accessToken` (manual flow) or `exchangeHandle` (Embedded Signup flow)',
     path: ['accessToken'],
+  })
+  .refine((v) => v.signatureMode !== 'x-webhook-signature' || Boolean(v.webhookSecret), {
+    message: '`signatureMode: x-webhook-signature` needs `webhookSecret`',
+    path: ['webhookSecret'],
   });
 
 /**
@@ -524,6 +568,9 @@ export type MetaMessageEcho = z.infer<typeof MetaMessageEchoSchema>;
 export type MetaHistoryMessage = z.infer<typeof MetaHistoryMessageSchema>;
 export type MetaHistoryChunk = z.infer<typeof MetaHistoryChunkSchema>;
 export type MetaStateSyncItem = z.infer<typeof MetaStateSyncItemSchema>;
+export type MetaAuthMode = z.infer<typeof MetaAuthModeSchema>;
+export type MetaSignatureMode = z.infer<typeof MetaSignatureModeSchema>;
+export type MetaProviderSettings = z.infer<typeof MetaProviderSettingsSchema>;
 export type EmbeddedSignupExchangeRequest = z.infer<typeof EmbeddedSignupExchangeRequestSchema>;
 export type EmbeddedSignupExchangeResponse = z.infer<typeof EmbeddedSignupExchangeResponseSchema>;
 export type WhatsAppBusinessConnectRequest = z.infer<typeof WhatsAppBusinessConnectRequestSchema>;

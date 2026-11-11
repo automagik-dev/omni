@@ -26,11 +26,12 @@ import type {
 import type { Logger } from '@omni/core';
 import { ERROR_CODES, OmniError, markdownToWhatsApp } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
-import { MetaInboundMessageSchema, WhatsAppFlowSendSchema } from '@omni/core/schemas';
+import { MetaInboundMessageSchema, MetaProviderSettingsSchema, WhatsAppFlowSendSchema } from '@omni/core/schemas';
 import type {
   MetaHistoryMessage,
   MetaInboundMessage,
   MetaMessageEcho,
+  MetaProviderSettings,
   MetaStateSyncItem,
   MetaTemplateStatusUpdate,
   MetaWebhookStatusEntry,
@@ -201,14 +202,25 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     const displayPhoneNumber = (creds.metaDisplayPhoneNumber ?? opts.metaDisplayPhoneNumber) as string | undefined;
     const connectionMethod =
       ((creds.metaConnectionMethod ?? opts.metaConnectionMethod) as string | undefined) ?? 'manual';
+    const provider = readProviderSettings(creds, opts);
 
-    this.logger.info('Connecting WhatsApp Cloud instance', { instanceId, phoneNumberId, wabaId, connectionMethod });
+    this.logger.info('Connecting WhatsApp Cloud instance', {
+      instanceId,
+      phoneNumberId,
+      wabaId,
+      connectionMethod,
+      apiBaseUrl: provider.apiBaseUrl,
+      authMode: provider.authMode,
+      signatureMode: provider.signatureMode,
+    });
 
     const client = new MetaWhatsAppClient(
       {
         phoneNumberId,
         accessToken,
         apiVersion,
+        baseUrl: provider.apiBaseUrl,
+        authMode: provider.authMode,
       },
       wabaId,
     );
@@ -232,6 +244,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
       apiVersion,
       connectionMethod,
       displayPhoneNumber,
+      ...provider,
     };
     const dedupeCache = createInboundDedupeCache();
     const lastInboundWamid = new Map<string, string>();
@@ -391,7 +404,9 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     const appSecret = process.env.META_APP_SECRET ?? '';
     const verifyToken = process.env.META_VERIFY_TOKEN ?? '';
 
-    if (!appSecret || !verifyToken) {
+    // An instance on a provider verifies with its own webhook secret, so the
+    // Meta env is only required when no instance can verify without it.
+    if ((!appSecret || !verifyToken) && !this.hasProviderSignedInstance()) {
       this.logger.error('META_APP_SECRET or META_VERIFY_TOKEN missing — refusing to handle webhook', {
         method: request.method,
       });
@@ -651,7 +666,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
         channel: 'whatsapp-business',
       });
     }
-    const bytes = await state.client.downloadMedia(media.url);
+    const bytes = await state.client.downloadMedia(media);
     return { buffer: Buffer.from(bytes), mimeType: media.mime_type };
   }
 
@@ -673,6 +688,14 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
   /** Look up the live state for an instance — used by the webhook handler. */
   getInstanceState(instanceId: string): WhatsAppBusinessInstanceState | undefined {
     return this.waInstances.get(instanceId);
+  }
+
+  /** Whether any connected instance verifies webhooks with its own provider secret. */
+  hasProviderSignedInstance(): boolean {
+    for (const state of this.waInstances.values()) {
+      if (state.config.signatureMode === 'x-webhook-signature' && state.config.webhookSecret) return true;
+    }
+    return false;
   }
 
   /** Iterate all connected instance ids — used by webhook for phone_number_id → instance resolution. */
@@ -1409,6 +1432,28 @@ const MEDIA_TYPE_MAP: Partial<Record<MetaInboundMessage['type'], ContentType>> =
  * the webhook handler synchronous so we don't owe Meta a 2xx while waiting
  * on a Graph API roundtrip.
  */
+/**
+ * Per-instance Meta-compatible provider settings from the stored instance
+ * (`metaApiBaseUrl`, `metaAuthMode`, `metaWebhookSecret`, `metaSignatureMode`).
+ * All unset = Meta direct, exactly as before.
+ */
+function readProviderSettings(creds: Record<string, unknown>, opts: Record<string, unknown>): MetaProviderSettings {
+  const pick = (key: string) => (creds[key] ?? opts[key] ?? undefined) || undefined;
+  const parsed = MetaProviderSettingsSchema.safeParse({
+    apiBaseUrl: pick('metaApiBaseUrl'),
+    authMode: pick('metaAuthMode'),
+    webhookSecret: pick('metaWebhookSecret'),
+    signatureMode: pick('metaSignatureMode'),
+  });
+  if (!parsed.success) {
+    throw new MetaApiError(MetaErrorCode.INVALID_REQUEST, 'Invalid Meta-compatible provider settings', {
+      operation: 'connect',
+      raw: { fields: parsed.error.issues.map((issue) => issue.path.join('.')) },
+    });
+  }
+  return parsed.data;
+}
+
 /** Insert into a FIFO-bounded map, evicting the oldest insertion beyond `max`. */
 function rememberBounded(map: Map<string, string>, key: string, value: string, max: number): void {
   map.delete(key);

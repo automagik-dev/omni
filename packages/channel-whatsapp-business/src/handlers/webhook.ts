@@ -11,7 +11,9 @@
  *  2. **POST /webhook** — Meta delivers events signed with HMAC-SHA256 over
  *     the raw body in `X-Hub-Signature-256`. We:
  *       a. read the raw body (single-use stream — must precede JSON parse).
- *       b. verify the signature with `META_APP_SECRET`. On failure → 401.
+ *       b. verify the signature with `META_APP_SECRET`, or a provider's
+ *          `X-Webhook-Signature` with the addressed instances' own webhook
+ *          secret (`verifyForwardedSignature`). On failure → 401.
  *       c. parse + validate JSON via `MetaWebhookPayloadSchema`.
  *       d. walk `entry[].changes[]`:
  *           - `field === 'messages'`: resolve instance by
@@ -43,7 +45,7 @@ import {
 } from '@omni/core/schemas';
 
 import type { HistoryMessageOutcome, WhatsAppBusinessPlugin } from '../plugin';
-import { verifyMetaSignature } from '../utils/signature';
+import { verifyMetaSignature, verifyProviderSignature } from '../utils/signature';
 
 // Meta documents webhook payloads up to 3 MB (a coexistence history chunk can
 // describe thousands of messages and is sent once). Accept up to 4 MB.
@@ -103,13 +105,18 @@ export async function handleMetaWebhook(
     return new Response('OK', { status: 200 });
   }
 
-  // 2. Verify the X-Hub-Signature-256 HMAC. Header lookup is
-  // case-insensitive per spec — Request.headers handles that for us.
-  const signature = request.headers.get('x-hub-signature-256');
-  const valid = await verifyMetaSignature(body, signature, appSecret);
+  // 2. Verify the signature: Meta's X-Hub-Signature-256 with the app secret,
+  // or a provider's X-Webhook-Signature with the addressed instances' own
+  // secret. Header lookup is case-insensitive (Request.headers).
+  const metaSignature = request.headers.get('x-hub-signature-256');
+  const providerSignature = request.headers.get('x-webhook-signature');
+  const valid =
+    (await verifyMetaSignature(body, metaSignature, appSecret)) ||
+    (await verifyForwardedSignature(body, providerSignature, plugin));
   if (!valid) {
-    logger.warn('[whatsapp-business] invalid X-Hub-Signature-256 — rejecting webhook', {
-      hasHeader: signature !== null,
+    logger.warn('[whatsapp-business] invalid webhook signature — rejecting webhook', {
+      hasHeader: metaSignature !== null,
+      hasProviderHeader: providerSignature !== null,
     });
     return new Response('Unauthorized', { status: 401 });
   }
@@ -140,6 +147,78 @@ export async function handleMetaWebhook(
 // ─────────────────────────────────────────────────────────────────────────
 // Internal helpers
 // ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * A provider-forwarded webhook (e.g. Kapso) is trusted only when its
+ * `X-Webhook-Signature` verifies with the webhook secret of EVERY instance the
+ * body addresses: by `metadata.phone_number_id`, or by the WABA id for
+ * WABA-scoped fields. One instance's secret never vouches for another
+ * instance's changes, and an instance on Meta's signature mode is never
+ * reached this way. The body is parsed only to find the instances; nothing in
+ * it is acted on before this returns true.
+ */
+async function verifyForwardedSignature(
+  body: string,
+  signature: string | null,
+  plugin: WhatsAppBusinessPlugin,
+): Promise<boolean> {
+  if (!signature) return false;
+  const secrets = forwardedWebhookSecrets(body, plugin);
+  if (!secrets) return false;
+  for (const secret of secrets) {
+    if (!(await verifyProviderSignature(body, signature, secret))) return false;
+  }
+  return true;
+}
+
+/** The webhook secrets of the instances a body addresses, or null when any cannot verify. */
+function forwardedWebhookSecrets(body: string, plugin: WhatsAppBusinessPlugin): Set<string> | null {
+  const addresses = addressedChanges(body);
+  if (!addresses) return null;
+  const secrets = new Set<string>();
+  for (const address of addresses) {
+    const states = instancesAddressed(plugin, address);
+    if (states.length === 0) return null;
+    for (const state of states) {
+      const secret = state.config.signatureMode === 'x-webhook-signature' ? state.config.webhookSecret : undefined;
+      if (!secret) return null;
+      secrets.add(secret);
+    }
+  }
+  return secrets.size > 0 ? secrets : null;
+}
+
+interface ChangeAddress {
+  wabaId: string;
+  phoneNumberId?: string;
+}
+
+/** Who each change of a (not yet verified) body addresses; null when it is no webhook envelope. */
+function addressedChanges(body: string): ChangeAddress[] | null {
+  let json: unknown;
+  try {
+    json = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  const payload = MetaWebhookPayloadSchema.safeParse(json);
+  if (!payload.success) return null;
+  return payload.data.entry.flatMap((entry) =>
+    entry.changes.map((change) => ({
+      wabaId: entry.id,
+      phoneNumberId: (change.value as { metadata?: { phone_number_id?: string } }).metadata?.phone_number_id,
+    })),
+  );
+}
+
+/** By phone_number_id when the change has one, else every instance on the WABA. */
+function instancesAddressed(plugin: WhatsAppBusinessPlugin, address: ChangeAddress) {
+  if (address.phoneNumberId) {
+    const found = plugin.findInstanceByPhoneNumberId(address.phoneNumberId);
+    return found ? [found[1]] : [];
+  }
+  return plugin.findInstancesByWabaId(address.wabaId).map(([, state]) => state);
+}
 
 async function processValidatedPayload(plugin: WhatsAppBusinessPlugin, payload: MetaWebhookPayload): Promise<void> {
   const logger = plugin.getLogger();
