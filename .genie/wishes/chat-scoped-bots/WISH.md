@@ -2,7 +2,7 @@
 
 | Field | Value |
 |-------|-------|
-| **Status** | DRAFT |
+| **Status** | APPROVED |
 | **Slug** | `chat-scoped-bots` |
 | **Date** | 2026-11-11 |
 | **Author** | Sofia (assigned Omni planning worker, for Felipe Rosa) |
@@ -480,8 +480,9 @@ claims that product behavior was tested by this planning PR._
   `resolve-chat-id.ts` and `services/chats.ts` confirms the existing instance-scoped
   lookup returns the row UUID/instance; existing `chatAllowlist` stores member
   UUIDs, so no new key storage is needed. DESIGN.md and DRAFT.md stay unchanged.
-- **Plan re-review:** PENDING — Omni Reviewer after push. Status remains DRAFT;
-  the author does not assert that HIGH-1 is independently cleared or the plan approved.
+- 2026-11-11 — Independent plan re-review at acf234f119f13bf31607eea9d9412629f63bdf69: SHIP, reviewer Claude (Opus 5.5),
+  read-only Omni Reviewer t3q7; HIGH-1 repaired; one LOW for G1 (run the instance-allowlist check before the pairing
+  lookup). Owner merged #1658.
 - **Execution / PR review:** not run; no product implementation in this PR.
 
 ---
