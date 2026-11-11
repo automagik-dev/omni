@@ -621,8 +621,8 @@ test('a chat-thread worker puts two events of a message trigger in its chat\'s t
   for (const item of subsIn(bench)) await run.call('automation-delete', { id: item.id })
   assert.doesNotMatch(await bench.tool('find_chats', {}), /thread:|dshbot:/)
   const worker = run.ctx.registeredTools.get('save_automation').parameters.properties.worker.description
-  assert.match(worker, /"thread" \(each event runs in the thread of the chat it came from, made a thread first when it is none; one thread per chat\)/)
-  assert.doesNotMatch(worker, /session|dshbot|thread:/)
+  assert.match(worker, /"thread" \(each event runs in the permanent sidebar session containing its chat; one thread per explicit chat set;/)
+  assert.doesNotMatch(worker, /ongoing session|new session|dshbot|thread:/)
   assert.deepEqual(run.ctx.registeredTools.get('save_automation').parameters.properties.as.enum, ['task', 'chat'])
   const sub = await threadSub(bench)
   assert.deepEqual(sub.worker, { kind: 'thread' })
@@ -2554,4 +2554,16 @@ test('SC2 the real thread queue delivers Fin Ops on both lines and Luiza into th
   }
   assert.deepEqual(b.run.made, [thread.sessionId])
   assert.equal(runsIn(b).every(run => run.sessionId === thread.sessionId), true)
+})
+
+test('RFC-0001 TEXT1: registered automation help distinguishes explicit-list save from channel event routing', async t => {
+  const b = await threadBench(t, { threads: false })
+  const save = b.run.ctx.registeredTools.get('save_automation')
+  for (const pattern of [/explicit chat list resolves or creates one permanent sidebar session at save, before any event/, /channel:<id> source creates none at save and routes at the first event/, /different existing threads is refused by name/, /removal asks whether to keep, pause or delete/, /owner's global send default \(ask first unless changed\)/, /never a tool/]) assert.match(save.description, pattern)
+  assert.match(save.parameters.properties.worker.description, /one thread per explicit chat set; explicit lists resolve at save, channel:<id> routes at the first event/)
+  assert.doesNotMatch(save.description + save.parameters.properties.worker.description, /one thread per chat\)|ephemeral|invisible|thread:<id>/)
+  assert.match(await b.tool('save_automation', { name: 'Channel', sources: `channel:${INSTANCE}`, trigger: 'message', worker: 'thread' }), /^Saved /)
+  assert.equal(b.run.channels.threads.list().length, 0)
+  assert.match(await b.tool('save_automation', { name: 'Explicit', sources: `chat:${CHAT},chat:${GROUP}`, trigger: 'message', worker: 'thread' }), /^Saved /)
+  assert.deepEqual(b.run.channels.threads.list()[0].chatIds, [CHAT, GROUP])
 })

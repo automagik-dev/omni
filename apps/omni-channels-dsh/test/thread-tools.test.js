@@ -966,7 +966,7 @@ test('a thread uses Omni\'s tools as the Omni Bot: reads run at once; a send int
 test('a thread\'s instructions name its chat, its full tool set and the switch, and tell it to act', () => {
   const text = threadInstructions({ chatName: 'Ana' })
   assert.match(text, /named "Ana"/)
-  assert.match(text, /dedicated to this chat/)
+  assert.match(text, /dedicated to this chat set/)
   assert.match(text, /full DeepSeek Harness tool set/)
   assert.match(text, /Omni's tools/)
   assert.match(text, /Always allow send/)
@@ -1054,4 +1054,18 @@ test('set tools require a member destination and preserve its channel/recipient;
   assert.doesNotMatch(picture.text, /not in this chat/)
   await run.channels.threads.setChats(thread.id, [CHAT, GROUP])
   assert.match((await use(run, 'thread_picture', thread.sessionId, { messageId: MESSAGE_IDS.elsewhere })).text, /not in this chat/)
+})
+
+test('RFC-0001 TEXT1: registered creation and member tools describe the implemented set and owner send boundary', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, fakeOmni()))
+  const create = run.ctx.registeredTools.get('create_thread')
+  for (const pattern of [/permanent sidebar session immediately/, /explicit chat set/, /own notes after the Omni Bot base prompt and fixed instructions/, /without its full memory/, /sidebar "\+"/, /at save/, /channel:<id>.*first event/, /refused by name/, /global send default \(ask first unless changed\)/, /never a tool/]) assert.match(create.description, pattern)
+  assert.deepEqual(Object.keys(create.parameters.properties), ['chats', 'title', 'notes'])
+  for (const name of ['thread_say', 'thread_react', 'thread_history']) {
+    const tool = run.ctx.registeredTools.get(name)
+    assert.match(tool.description, /selected member of this thread's chat set/)
+    assert.match(tool.parameters.properties.chatId.description, /required when this thread has several chats/)
+  }
+  assert.match(run.ctx.registeredTools.get('thread_say').description, /no tool can grant send permission/)
 })
