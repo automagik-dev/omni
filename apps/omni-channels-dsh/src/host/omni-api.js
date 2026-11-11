@@ -265,8 +265,8 @@ export function install(rt) {
   }
 
   // RFC-0001: raw calls cannot bypass channel ownership, including quiet writes
-  // and a card approved after a hand-over. Unknown/global writes fail closed once
-  // channels have been handed over; they cannot be attributed to one owning bot.
+  // and a card approved after a hand-over. The default bot keeps global management;
+  // dedicated bots may write only within their owned channels.
   const ChannelReply = z.object({ data: z.object({ instanceId: z.string().min(1) }).passthrough() })
   const MessageReply = z.object({ data: z.object({ chatId: z.string().min(1) }).passthrough() })
   const canonical = path => {
@@ -298,8 +298,9 @@ export function install(rt) {
     }
     // A caller-supplied instance on a global operation does not make it scoped.
     const scoped = /^\/(instances\/[^/]+|chats\/[^/]+|messages\/(send(?:\/|$)|delete-channel$|edit-channel$|[^/]+\/))/.test(route)
-    if (!scoped || channels.size === 0) return 'This call cannot be scoped to an owned channel. Use a channel-scoped operation.'
-    return [...channels].every(id => rt.canChannel(botId, id, 'write')) ? undefined : 'This channel belongs to another bot; this bot may only read it.'
+    if (![...channels].every(id => rt.canChannel(botId, id, 'write'))) return 'This channel belongs to another bot; this bot may only read it.'
+    if ((!scoped || channels.size === 0) && botId !== rt.eventsBotId()) return 'This call cannot be scoped to an owned channel. Use a channel-scoped operation.'
+    return undefined
   }
   rt.omniRawOwnership = rawOwnership
 

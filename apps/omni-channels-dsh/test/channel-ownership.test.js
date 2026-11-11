@@ -91,7 +91,7 @@ test('SC1 raw-call quiet writes, encoded paths, global changes and pending appro
   for (const args of [
     { method: 'POST', path: '/messages/send', body: JSON.stringify({ instanceId: OTHER_INSTANCE, to: 'x@g.us', text: 'wrong' }) },
     { method: 'POST', path: `/instances/${OTHER_INSTANCE}/connect` },
-    { method: 'POST', path: '/automations', body: JSON.stringify({ instanceId: INSTANCE }) },
+    { method: 'POST', path: '/automations', body: JSON.stringify({ instanceId: OTHER_INSTANCE }) },
   ]) assert.match(await b.tool('omni_call', args), /belongs to another bot|cannot be scoped/)
   assert.match(await b.channels.omniRawOwnership('m1', 'POST', `/instances/%2e%2e/instances/${OTHER_INSTANCE}/connect`, {}), /another bot/)
   assert.match(await b.channels.omniRawOwnership(botId, 'POST', `/instances/${INSTANCE}/connect`, {}), /another bot/)
@@ -155,4 +155,39 @@ test('SC1 queued events are cancelled at hand-over and the old automation record
   await assert.rejects(b.channels.fireSubscription(sub, { instanceId: OTHER_INSTANCE, chatId: ELSEWHERE }), /ownership changed/)
   assert.equal(thread.ownerBotId, botId)
   assert.equal(b.agentOf(thread.sessionId).calls.length, 0)
+})
+
+
+test('default bot global raw write still runs after owner confirmation following a hand-over', async t => {
+  const b = await bench(t)
+  await b.call('confirm_answer_bot', await b.propose())
+  const fetchOmni = globalThis.fetch
+  const writes = []
+  globalThis.fetch = (address, init) => {
+    if (new URL(address).pathname.endsWith('/automations') && init?.method === 'POST') {
+      writes.push(JSON.parse(init.body))
+      return Promise.resolve(new Response(JSON.stringify({ data: { id: 'global-created' } }), { status: 201 }))
+    }
+    return fetchOmni(address, init)
+  }
+  assert.match(await b.tool('omni_call', { method: 'POST', path: '/automations', body: JSON.stringify({ name: 'Global operation' }) }), /confirmation_required/)
+  assert.deepEqual(writes, [])
+  const pending = b.team.state.omniConsents.m1.at(-1)
+  const answered = await b.call('omni-consent-answer', { id: pending.id, answer: 'once' })
+  assert.equal(answered.status, 'confirmed')
+  assert.deepEqual(writes, [{ name: 'Global operation' }])
+})
+
+test('default bot global raw write targeting a handed-over channel stays refused', async t => {
+  const b = await bench(t)
+  await b.call('confirm_answer_bot', await b.propose())
+  assert.match(await b.tool('omni_call', { method: 'POST', path: '/automations', body: JSON.stringify({ instanceId: OTHER_INSTANCE }) }), /belongs to another bot/)
+  assert.equal(b.team.state.omniConsents?.m1?.length ?? 0, 0)
+})
+
+test('dedicated bot global raw write stays refused after a hand-over', async t => {
+  const b = await bench(t)
+  const { botId } = await b.call('confirm_answer_bot', await b.propose())
+  assert.match(await b.tool('omni_call', { method: 'POST', path: '/automations', body: JSON.stringify({ name: 'Global operation' }) }, botId), /cannot be scoped/)
+  assert.equal(b.team.state.omniConsents?.[botId]?.length ?? 0, 0)
 })
