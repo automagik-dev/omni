@@ -21,6 +21,7 @@
  * out of sync with this script.
  */
 
+import { execFileSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { planPluginVersions } from './lib/plugin-versions';
@@ -55,10 +56,12 @@ function main(): void {
   const previous = String(JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf-8')).version);
   // Judged before anything is written: the plugins' folders as the cut found them.
   const plans = new Map(planPluginVersions(repoRoot, version, previous).map((plan) => [plan.dir, plan]));
+  const writtenJson = new Set<string>();
   for (const plan of plans.values()) {
     console.log(`  plugin: ${plan.dir} ${plan.from} -> ${plan.to} (${plan.why})`);
     if (plan.omniRange !== null) {
       writeOmniRange(plan.dir, plan.omniRange);
+      writtenJson.add(`${plan.dir}/package.json`);
       console.log(`  plugin: ${plan.dir} engines.omni -> ${plan.omniRange}`);
     }
   }
@@ -71,11 +74,21 @@ function main(): void {
     const target = field.plugin ? (plans.get(field.plugin)?.to ?? version) : version;
     const changed = field.write(target);
     if (changed) {
+      if (field.path.endsWith('.json')) writtenJson.add(field.path);
       console.log(`  updated: ${field.path}`);
       updated++;
     } else {
       skipped++;
     }
+  }
+
+  // JSON.stringify preserves indentation, but expands short arrays. Format every
+  // JSON file we wrote before hooks run, using the repository's ignore policy.
+  if (writtenJson.size > 0) {
+    execFileSync('bunx', ['--no-install', 'biome', 'format', '--write', '--no-errors-on-unmatched', ...writtenJson], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    });
   }
 
   console.log(`\nSync complete: ${updated} updated, ${skipped} already current (${fields.length} total)`);

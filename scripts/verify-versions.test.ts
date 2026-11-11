@@ -6,8 +6,18 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { getAllVersionFields } from './lib/version-fields';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
+import { getAllVersionFields, repoRoot } from './lib/version-fields';
 import { fieldStatus, pluginFieldStatus, readBasePaths } from './verify-versions';
+
+test('the real bump keeps short JSON arrays Biome-clean and its diff version-only', () => {
+  execFileSync('bash', [join(repoRoot, 'scripts/release/version-bump-format.test.sh')], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    timeout: 30_000,
+  });
+}, 30_000);
 
 describe('fieldStatus', () => {
   const base = new Set(['package.json', 'packages/api/package.json']);
