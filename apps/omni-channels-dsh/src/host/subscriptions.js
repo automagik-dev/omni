@@ -653,7 +653,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'save_automation',
-    description: 'Omni and Main Bots only. Create an automation, or change one by id. It shows in the Automations panel beside your chat at once. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
+    description: 'Omni and Main Bots only. Create an automation, or change one by id. It shows in the Automations panel beside the Omni Bot\'s own chat at once. For worker: thread, an explicit chat list resolves or creates one permanent sidebar session at save, before any event; a channel:<id> source creates none at save and routes at the first event to the thread containing its chat, or a new one-chat thread. An explicit list spanning different existing threads is refused by name; confirm membership moves with the owner first. Threads list their automations and removal asks whether to keep, pause or delete them. New threads follow the owner\'s global send default (ask first unless changed); only the owner\'s settings or thread switch changes send permission, never a tool. Ask the user for anything you do not know (which chats, which emoji, which words, who acts) instead of guessing.',
     parameters: {
       id: { type: 'string', description: 'Only to change an existing automation' },
       name: { type: 'string', description: 'Short name the user would recognize' },
@@ -662,7 +662,7 @@ export function install(rt) {
       emoji: { type: 'string', description: 'For reaction: the one emoji' },
       allow_outbound: { type: 'boolean', description: 'Voice/media only: also accept your own-device media from the watched chats. Default false. Ask before enabling; agent/API sends remain excluded. Reactions already mean your own reactions.' },
       words: { type: 'string', description: 'For keyword: comma-separated words' },
-      worker: { type: 'string', description: `Who acts: "me" (you; the default)${teamReason() === null ? ', a Bot name, or "thread" (each event runs in the thread of the chat it came from, made a thread first when it is none; one thread per chat)' : ', or a Bot name'}` },
+      worker: { type: 'string', description: `Who acts: "me" (you; the default)${teamReason() === null ? ', a Bot name, or "thread" (each event runs in the permanent sidebar session containing its chat; one thread per explicit chat set; explicit lists resolve at save, channel:<id> routes at the first event)' : ', or a Bot name'}` },
       as: { type: 'string', enum: ['task', 'chat'], description: 'For a Bot: "task" (the default) gives it each event as its own single-run task; "chat" sends events into its chat' },
       react: { type: 'boolean', description: 'React 👀 when work starts and ✅ when done, on the message. Default true' },
       reply_to_me: { type: 'boolean', description: 'Also reply to the user in their own chat. Default false' },
