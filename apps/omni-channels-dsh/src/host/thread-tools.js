@@ -23,7 +23,7 @@
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
-import { operatesOmni } from './grants.js'
+import { omniActorOf, operatesOmni } from './grants.js'
 import { fitted, sensitiveCall } from './omni-api.js'
 import { MEDIA_FILE_BYTES, messageOf, readBounded } from './omni.js'
 import { output } from './output.js'
@@ -156,6 +156,8 @@ export function install(rt) {
     async execute(args, exec) {
       await rt.load()
       if (!operatesOmni(rt, rt.selfOf(exec?.agent?.id))) return 'Only the Omni Bot or a Main Bot creates threads.'
+      const actor = omniActorOf(rt, exec?.agent?.id)
+      if (Array.isArray(args?.chats) && args.chats.some(member => !rt.canChannel(actor, member.channelId, 'write'))) return 'Threads can be created only on channels you own.'
       const result = await rt.threads.create(args?.chats, args?.title, args?.notes)
       return result.ok ? fitted({ threadId: result.thread.id, sessionId: result.thread.sessionId, chatIds: result.thread.chatIds }) : `Not created: ${result.reason}`
     },
@@ -195,6 +197,8 @@ export function install(rt) {
         } catch { return { refusal: 'Could not resolve this member chat.' } }
       }
     }
+    const action = ['thread_say', 'thread_react'].includes(name) ? 'write' : 'read'
+    if (rt.canChannel?.(thread.ownerBotId, chat.channelId, action) === false) return { refusal: 'Channel ownership changed; this thread cannot act there.' }
     return { thread, chat, key, link, args: args.data }
   }
 
@@ -202,6 +206,7 @@ export function install(rt) {
   // given them); status 0 when Omni could not be reached.
   async function ask(open, method, path, body) {
     try {
+      if (rt.canChannel?.(open.thread.ownerBotId, open.chat.channelId, method === 'GET' ? 'read' : 'write') === false) return { status: 403, json: { error: { message: 'Channel ownership changed.' } } }
       const response = await rt.omniRequest(method, path, { url: open.link.url, key: open.key, body })
       if (!response) return { status: 0, json: null }
       return { status: response.status, json: await response.json().catch(() => null) }

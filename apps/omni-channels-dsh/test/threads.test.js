@@ -31,7 +31,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   assert.deepEqual(heard, [answer.threadId])
   assert.equal(run.made.length, 1)
   assert.deepEqual(thread, {
-    id: answer.threadId, sessionId: run.made[0], chatId: CHAT, chatIds: [CHAT], notes: '', chatJid: CHATS[CHAT].externalId, chatName: 'Marina', channelId: INSTANCE, origin: OMNI,
+    id: answer.threadId, sessionId: run.made[0], ownerBotId: 'm1', chatId: CHAT, chatIds: [CHAT], notes: '', chatJid: CHATS[CHAT].externalId, chatName: 'Marina', channelId: INSTANCE, origin: OMNI,
     self: OWNER, title: 'Marina', kind: 'direct', status: 'idle', turnOpenAt: null, at: thread.at,
   })
   // Not the team's: no agent and no task holds it, and the team owns it as nothing.
@@ -52,7 +52,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   run.emit(thread.sessionId, 'turn/end', { reason: { kind: 'completed' } })
   await run.channels.save()
   assert.deepEqual(saved(home).omniThreads[answer.threadId].status, 'idle')
-  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, chatIds: [CHAT], automations: [], channelId: INSTANCE, title: 'Marina', kind: 'direct', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
+  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, ownerBotId: 'm1', chatId: CHAT, chatIds: [CHAT], automations: [], channelId: INSTANCE, title: 'Marina', kind: 'direct', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
   assert.deepEqual([run.view().omniThreadsOffered, run.view().omniThreadsReason, run.view().omniRowProps], [true, null, [...TEAM_CONTRACT.rowProps]])
   // A DSH restart: the next start has it, connected, and makes no Session for it.
   await run.stop()

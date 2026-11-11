@@ -36,7 +36,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
@@ -979,4 +979,35 @@ test('sidebar lists a set once, shows its automations and cancellation of its de
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Cancel').props.onClick()
   assert.equal(calls.filter(([name]) => name === 'omni-thread-remove').length, 1)
   assert.doesNotMatch(text(view.draw()), /What should happen to:/)
+})
+
+
+test('SC1 sidebar rows and threads follow each channel owner; unassigned channels stay with the default', t => {
+  linked()
+  const ownership = { defaultBotId: BOT.id, channels: { [CHANNEL_B.id]: 'dedicated' } }
+  const roster = hooked({ omniOwnership: ownership, omniThreads: [THREAD(1, CHANNEL_A, { ownerBotId: BOT.id }), THREAD(3, CHANNEL_B, { ownerBotId: 'dedicated' })] })
+  const main = tree(t, { roster }).view.draw()
+  assert.ok(channelOf(main, CHANNEL_A))
+  assert.equal(channelOf(main, CHANNEL_B), undefined)
+  const dedicated = tree(t, { roster, bot: { id: 'dedicated', name: 'Service', kind: 'omni' } }).view.draw()
+  assert.equal(channelOf(dedicated, CHANNEL_A), undefined)
+  assert.ok(channelOf(dedicated, CHANNEL_B))
+  assert.deepEqual(all(dedicated, 'bt-thread').map(node => node.props['data-thread-id']), ['t3'])
+})
+
+test('SC2 sidebar creation proposes first; only the separate confirmation button commits', async t => {
+  calls.length = 0
+  const view = mount(() => react.createElement(ui.ChannelBotForm, { channels: [CHANNEL_A], roster: {}, onClose: () => {} }))
+  t.after(() => view.unmount())
+  answer = endpoint => endpoint === 'propose_answer_bot' ? { proposalId: 'proposal-1' } : { botId: 'dedicated' }
+  let root = view.draw()
+  byLabel(root, 'Bot name').props.onChange({ target: { value: 'Service' } })
+  root = view.draw()
+  nodes(root).find(node => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } })
+  root = view.draw()
+  await nodes(root).find(node => node.type === 'button' && text(node) === 'Review hand-over').props.onClick()
+  assert.deepEqual(calls, [['propose_answer_bot', { name: 'Service', channelIds: [CHANNEL_A.id] }]])
+  root = view.draw()
+  await nodes(root).find(node => node.type === 'button' && text(node) === 'Confirm hand-over').props.onClick()
+  assert.deepEqual(calls.at(-1), ['confirm_answer_bot', { proposalId: 'proposal-1' }])
 })
