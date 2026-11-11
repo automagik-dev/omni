@@ -21,6 +21,7 @@ function fixture(t, options = {}) {
     hooks: { live: () => () => {} },
     load: options.load ?? (async () => {}), save: options.save ?? (async () => {}),
     omniConfigured: options.configured ?? (async () => true), warn: () => {},
+    automationOwned: options.automationOwned,
     fireSubscription: async (subscription, event) => { fired.push([subscription.name, event.ref]); await options.fire?.(subscription, event) },
     omniRequest: async (method, path, args) => {
       calls.push([method, path, args])
@@ -608,4 +609,37 @@ test('external message identity reaches dispatch for text and media independentl
   await done.promise
   await f.rt.quiesceOmniEvents()
   assert.deepEqual(events.map(event => [event.ref, event.externalId]), [['event-1', 'WA-shared'], ['event-2', 'WA-shared'], ['event-3', 'WA-picture']])
+})
+
+
+test('SC1 two channels dispatch only to their owning subscription and recheck after enrichment', async t => {
+  const owners = new Map([['line-1', 'first'], ['line-2', 'second']])
+  const first = { ...sub('first'), ownerBotId: 'first', sources: [{ kind: 'channel', id: 'line-1' }] }
+  const second = { ...sub('second'), ownerBotId: 'second', sources: [{ kind: 'channel', id: 'line-2' }] }
+  const stale = { ...sub('stale'), ownerBotId: 'first', sources: [{ kind: 'channel', id: 'line-2' }] }
+  const f = fixture(t, {
+    subscriptions: { first, second, stale },
+    rows: [{ ...row(1), instanceId: 'line-1' }, { ...row(2), instanceId: 'line-2' }],
+    automationOwned: (subscription, event) => subscription.ownerBotId === owners.get(event.instanceId),
+  })
+  await f.rt.syncOmniEvents()
+  for (let i = 0; i < 30 && f.acks.length < 2; i += 1) await turn()
+  assert.deepEqual(f.fired, [['first', 'event-1'], ['second', 'event-2']])
+  assert.deepEqual(f.acks, [1, 2])
+})
+
+test('SC1 an ownership change while journal enrichment waits prevents the stale dispatch', async t => {
+  const barrier = deferred()
+  let owner = 'first'
+  const f = fixture(t, {
+    rows: [{ ...row(), instanceId: 'line-1' }],
+    lookup: () => barrier.promise,
+    automationOwned: subscription => subscription.name === owner,
+  })
+  await f.lookupEntered.promise
+  owner = 'second'
+  barrier.resolve({ ok: true, json: async () => ({ data: { name: 'chat' } }) })
+  for (let i = 0; i < 30 && !f.acks.length; i += 1) await turn()
+  assert.deepEqual(f.fired, [])
+  assert.deepEqual(f.acks, [1])
 })

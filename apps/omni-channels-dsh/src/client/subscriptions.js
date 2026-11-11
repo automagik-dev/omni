@@ -14,7 +14,13 @@ const TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordI
 // A card changed this recently is lit up: the board reacting to the conversation.
 const FRESH_MS = 6000
 
-export const isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId
+export const isEventsBot = (roster, id) => Boolean(id) && (id === roster?.eventsBotId || roster?.byId?.[id]?.kind === 'omni')
+export const ownedRoster = (roster, botId) => {
+  if (!botId) return roster
+  const subscriptions = (roster.subscriptions ?? []).filter(sub => (sub.ownerBotId ?? roster.eventsBotId) === botId)
+  const ids = new Set(subscriptions.map(sub => sub.id))
+  return { ...roster, subscriptions, subscriptionRuns: (roster.subscriptionRuns ?? []).filter(run => ids.has(run.subId)) }
+}
 
 // The header button's count: the automations there are, none until there is one.
 export const headCount = roster => (roster?.subscriptions ?? []).length || null
@@ -25,7 +31,7 @@ export const headCount = roster => (roster?.subscriptions ?? []).length || null
 export function workerOf(worker, roster, where = {}) {
   // The Main Bot runs the automations it handles itself (it was Autopilot's job once).
   if (worker.kind === 'events' || worker.kind === 'main') {
-    const bot = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId]
+    const bot = roster?.byId?.[where.ownerBotId ?? roster.eventsBotId ?? roster.mainBotId]
     return { name: bot?.name ?? 'Omni', bot, look: MAIN_LOOK }
   }
   // A chat's thread, by its chat's name (the threads ride the team view).
@@ -107,13 +113,15 @@ const RUN_STATUS = {
 const useWaiting = useWork => new Set((useWork ? useWork(work => (work.approvals ?? []).map(entry => entry.sessionId).join(',')) : '').split(',').filter(Boolean))
 
 // On Omni's sidebar row: runs waiting for your approval.
-export function EventsBadge({ roster, useWork }) {
+export function EventsBadge({ roster, useWork, botId }) {
+  roster = ownedRoster(roster, botId)
   const waiting = waitingRuns(roster, useWaiting(useWork))
   return waiting > 0 ? h('span', { className: 'os-pending', title: t('{n} waiting for you', { n: waiting }) }, String(waiting)) : null
 }
 
 // In Omni's chat header: shows or hides its board in the right sidebar.
-export function SubscriptionsButton({ roster, onToggle, useWork }) {
+export function SubscriptionsButton({ roster, onToggle, useWork, botId }) {
+  roster = ownedRoster(roster, botId)
   const count = headCount(roster)
   const waiting = waitingRuns(roster, useWaiting(useWork))
   return h('button', { type: 'button', className: 'os-head-btn', onClick: onToggle },
@@ -164,10 +172,12 @@ export const BOARD_KIND = 'omni-subscriptions'
 export const BOARD_TAB_ID = 'ds-bot/omni-subscriptions'
 export const boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t('Automations') })
 
-export function BoardTab({ useRoster, useWork, actions }) {
+export function BoardTab({ useRoster, useWork, actions, useTabInfo, sessionId }) {
   const roster = useRoster(value => value)
   const waiting = useWaiting(useWork)
-  const bot = roster.byId?.[roster.eventsBotId]
+  const tab = typeof useTabInfo === 'function' ? useTabInfo()?.tab : undefined
+  const ownerId = tab?.navigation?.params?.botId ?? Object.values(roster.byId ?? {}).find(bot => bot.sessionId === sessionId || bot.parts?.includes(sessionId))?.id ?? roster.eventsBotId
+  const bot = roster.byId?.[ownerId]
   if (!bot) return h('div', { className: 'os-board' }, h('p', { className: 'os-board-note' }, t('Automations belong to the Main Bot, which this team does not have.')))
   return h(SubscriptionsBoard, { bot, roster, actions, waiting })
 }
@@ -175,6 +185,7 @@ export function BoardTab({ useRoster, useWork, actions }) {
 export function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   const omni = useOmni()
   useEffect(() => { startLive(call) }, [])
+  roster = ownedRoster(roster, bot.id)
   const subs = roster.subscriptions ?? []
   const runs = runsOf(roster)
   const watched = new Set(subs.filter(sub => sub.on).flatMap(sub => sub.sources.map(source => `${source.kind}:${source.id}`))).size

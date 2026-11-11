@@ -9,7 +9,7 @@ import { omni } from './omni-client.js'
 // The automations board's quieter first run and the warning Omni's confirmation carries,
 // out of their React. Bundled as DSH bundles the client, with stand-in React.
 async function load() {
-  const entry = 'export { AutomationRow, headCount, savedOf, savedNotice, SavedAutomationCard, SubscriptionsButton, workerOf } from \'./subscriptions.js\''
+  const entry = 'export { AutomationRow, BoardTab, ownedRoster, headCount, savedOf, savedNotice, SavedAutomationCard, SubscriptionsButton, workerOf } from \'./subscriptions.js\''
   const bundle = await build({
     stdin: { contents: entry, resolveDir: fileURLToPath(new URL('../src/client/', import.meta.url)), loader: 'js' },
     bundle: true, format: 'cjs', platform: 'node', write: false, logLevel: 'silent',
@@ -43,7 +43,7 @@ test('the board never opens by itself: only the header button opens it; the phon
   assert.equal(opens.length, 2, `the column opens from ${opens.join(', ')}`)
   const index = readFileSync(new URL('index.js', dir), 'utf8')
   const toggle = index.slice(index.indexOf('function toggleBoard('), index.indexOf('function installBoard('))
-  assert.match(toggle, /right\.openTab\(BOARD_KIND\)/)
+  assert.match(toggle, /right\.openTab\(BOARD_KIND, \{ params: \{ botId \} \}\)/)
   assert.doesNotMatch(index, /omni\.board\.opened|localStorage/)
   const phone = readFileSync(new URL('omni-phone.js', dir), 'utf8')
   const open = phone.slice(phone.indexOf('export function openPhone('), phone.indexOf('function useChatPoll('))
@@ -150,4 +150,25 @@ test('the board names a chat-thread worker by its thread, its one chat, or each 
   const note = 'It handed every event to one ongoing session; now each event runs in the thread of its chat.'
   assert.deepEqual(notes(ui.AutomationRow({ sub: { ...sub, note }, roster: threads, runs: [] })), [note])
   assert.deepEqual(notes(ui.AutomationRow({ sub, roster: threads, runs: [] })), [])
+})
+
+
+test('SC1 each bot board and header count only its owned automations and runs', () => {
+  const data = { ...roster([{ id: 'legacy' }, { id: 'owned', ownerBotId: 'dedicated' }]), subscriptionRuns: [{ id: 'a', subId: 'legacy' }, { id: 'b', subId: 'owned' }] }
+  const main = ui.ownedRoster(data, 'm1')
+  const dedicated = ui.ownedRoster(data, 'dedicated')
+  assert.deepEqual(Array.from(main.subscriptions, sub => sub.id), ['legacy'])
+  assert.deepEqual(Array.from(main.subscriptionRuns, run => run.id), ['a'])
+  assert.deepEqual(Array.from(dedicated.subscriptions, sub => sub.id), ['owned'])
+  assert.deepEqual(Array.from(dedicated.subscriptionRuns, run => run.id), ['b'])
+  assert.equal(ui.headCount(dedicated), 1)
+})
+
+
+test('SC1 a board resolves its own session or tab owner without changing another bot board', () => {
+  const data = { eventsBotId: 'm1', byId: { m1: { id: 'm1', sessionId: 's-main' }, dedicated: { id: 'dedicated', sessionId: 's-dedicated' } } }
+  const props = { useRoster: pick => pick(data), actions: {} }
+  assert.equal(ui.BoardTab({ ...props, sessionId: 's-main' }).props.bot.id, 'm1')
+  assert.equal(ui.BoardTab({ ...props, sessionId: 's-dedicated' }).props.bot.id, 'dedicated')
+  assert.equal(ui.BoardTab({ ...props, useTabInfo: () => ({ tab: { navigation: { params: { botId: 'dedicated' } } } }) }).props.bot.id, 'dedicated')
 })

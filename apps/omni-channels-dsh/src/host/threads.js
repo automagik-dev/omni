@@ -201,8 +201,8 @@ export function threadInstructions(thread) {
 // src/host/groups.js groupSessionFor; models.js applyModel and askersModel): the Bot's desired
 // model, and its thinking level when that model serves it. None while the Bot has no model yet,
 // or on a host that only reads the team.
-async function omniRoute(rt) {
-  const bot = rt.botOf?.(rt.eventsBotId?.())
+async function omniRoute(rt, ownerBotId = rt.eventsBotId?.()) {
+  const bot = rt.botOf?.(ownerBotId)
   if (bot === undefined || rt.readOnly?.() !== undefined) return undefined
   const ref = await rt.desiredModel(bot)
   const route = splitRef(ref)
@@ -212,8 +212,8 @@ async function omniRoute(rt) {
 }
 
 // The Omni Bot's model selected on a Session; nothing changes while it has none.
-export async function selectOmniModel(rt, sessionId) {
-  const route = await omniRoute(rt)
+export async function selectOmniModel(rt, sessionId, ownerBotId) {
+  const route = await omniRoute(rt, ownerBotId ?? rt.threads?.bySession(sessionId)?.ownerBotId)
   if (route !== undefined) await rt.selectSessionModel(sessionId, route)
 }
 
@@ -233,6 +233,7 @@ export function install(rt) {
     if (thread && typeof thread === 'object') {
       thread.chatIds ??= typeof thread.chatId === 'string' ? [thread.chatId] : []
       thread.notes ??= ''
+      thread.ownerBotId ??= rt.channelOwner?.(thread.channelId) ?? rt.eventsBotId?.()
     }
     return thread
   }
@@ -264,27 +265,23 @@ export function install(rt) {
   // Session on its own; selections that come while one waits make one pass, and a pass to the
   // model the last one applied is none.
   let refollowing = Promise.resolve()
-  let queued = false
-  let applied = null
-  const omniChat = () => {
-    const botId = rt.eventsBotId?.()
-    return botId === undefined ? undefined : rt.chatOf?.(botId)
-  }
-  const refollow = () => {
-    if (queued) return refollowing
-    queued = true
+  const applied = new Map()
+  const queued = new Set()
+  const refollow = ownerBotId => {
+    if (queued.has(ownerBotId)) return refollowing
+    queued.add(ownerBotId)
     refollowing = refollowing.then(async () => {
-      queued = false
-      const route = await omniRoute(rt)
+      queued.delete(ownerBotId)
+      const route = await omniRoute(rt, ownerBotId)
       const key = route === undefined ? null : JSON.stringify(route)
-      if (key === null || key === applied) return
-      applied = key
+      if (key === null || key === applied.get(ownerBotId)) return
+      applied.set(ownerBotId, key)
       const gone = archivedIds(ctx)
-      for (const { sessionId } of list()) {
-        if (gone.has(sessionId)) continue
-        await rt.selectSessionModel(sessionId, route).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not applied to %s: %s', sessionId, error?.message ?? error))
+      for (const thread of list()) {
+        if (thread.ownerBotId !== ownerBotId || gone.has(thread.sessionId)) continue
+        await rt.selectSessionModel(thread.sessionId, route).catch(error => rt.warn('omni-channels: the owning bot model was not applied to %s: %s', thread.sessionId, error?.message ?? error))
       }
-    }).catch(error => rt.warn('omni-channels: the Omni Bot\'s model was not read: %s', error?.message ?? error))
+    }).catch(error => rt.warn('omni-channels: the owning bot model was not read: %s', error?.message ?? error))
     return refollowing
   }
 
@@ -295,7 +292,8 @@ export function install(rt) {
     const sessionId = session?.id
     if (sessionId === undefined) return
     if (event?.type === 'model/selection') {
-      if (sessionId === omniChat()) void refollow()
+      const owner = Object.values(state.bots ?? {}).find(bot => (bot.kind === 'omni' || bot.id === rt.eventsBotId?.()) && rt.chatOf?.(bot.id) === sessionId)
+      if (owner) void refollow(owner.id)
       return
     }
     // Only a turn's start and end matter; every other event of every Session stops here.
@@ -400,6 +398,7 @@ export function install(rt) {
     if (readOnly !== undefined) return { ok: false, reason: readOnly, reasonCode: 'read_only' }
     await rt.load()
     return serial(async () => {
+      if (new Set(parsed.data.chats.map(member => rt.channelOwner?.(member.channelId))).size > 1) return { ok: false, reason: 'A thread cannot span channels owned by different bots.' }
       const owners = [...new Set(parsed.data.chats.map(member => byChat(member.chatId)).filter(Boolean))]
       if (owners.length > 1) return { ok: false, reason: `Chats belong to different threads: ${owners.map(thread => JSON.stringify(thread.title ?? thread.chatName)).join(', ')}. Move the chats first with owner confirmation.` }
       if (owners.length && !automation) return { ok: false, reason: ALREADY }
@@ -455,11 +454,11 @@ export function install(rt) {
       return { ok: false, reason: `The thread's Session could not be made: ${error?.message ?? error}` }
     }
     const thread = {
-      id: threadId, sessionId, chatId, chatIds, notes, ...(title === undefined ? {} : { namedSet: true }), ...(chats.length === 1 ? {} : { members: chats.map(member => ({ chatId: member.id, channelId: member.instanceId })) }), chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
+      id: threadId, sessionId, ownerBotId: rt.channelOwner?.(channelId) ?? rt.eventsBotId?.(), chatId, chatIds, notes, ...(title === undefined ? {} : { namedSet: true }), ...(chats.length === 1 ? {} : { members: chats.map(member => ({ chatId: member.id, channelId: member.instanceId })) }), chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
       self: minted.self ?? null, title: name?.slice(0, TITLE_MAX) ?? null, kind, status: 'idle', turnOpenAt: null, at: Date.now(),
       ...(byAutomation ? { madeBy: 'automation' } : {}),
     }
-    await selectOmniModel(rt, sessionId).catch(error => rt.warn('omni-channels: the thread %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', chatName, error?.message ?? error))
+    await selectOmniModel(rt, sessionId, thread.ownerBotId).catch(error => rt.warn('omni-channels: the thread %s keeps DSH\'s model, the Omni Bot\'s was not applied: %s', chatName, error?.message ?? error))
     threads()[threadId] = thread
     try {
       await rt.save()
@@ -568,6 +567,7 @@ export function install(rt) {
         rows.set(chatId, row)
       }
     } catch (error) { return { ok: false, reason: error.message } }
+    if (changes.some(change => change.chatIds.some(chatId => rt.channelOwner?.(rows.get(chatId).instanceId) !== change.thread.ownerBotId))) return { ok: false, reason: 'A thread cannot span channels owned by different bots.' }
     const before = changes.map(change => ({ thread: change.thread, value: { ...change.thread } }))
     try {
       for (const change of changes) {
@@ -634,7 +634,7 @@ export function install(rt) {
         const reasonCode = reasonCodes === null ? 'needs_newer_team' : reasonCodes.get(thread.id)
         const status = live && rt.teamResume?.running?.(thread.sessionId) !== true ? 'idle' : thread.status ?? 'idle'
         return {
-          id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, chatIds: [...thread.chatIds], automations: rt.threadAutomations?.(thread) ?? [], channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
+          id: thread.id, sessionId: thread.sessionId, ownerBotId: thread.ownerBotId, chatId: thread.chatId, chatIds: [...thread.chatIds], automations: rt.threadAutomations?.(thread) ?? [], channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
           status, connected: reason === null, reason, ...(reasonCode === undefined ? {} : { reasonCode }),
           permissions: permissionsOf(thread, state.omniSettings), ownPermissions: ownPermissionsOf(thread), defaultPermissions: permissionsOf(undefined, state.omniSettings),
         }
