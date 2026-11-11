@@ -5,7 +5,7 @@
 | **Status** | DRAFT |
 | **Slug** | `omni-bot-answer-mode` |
 | **Date** | 2026-11-11 |
-| **Author** | Sofia (assigned Omni planning worker, for Felipe Rosa) |
+| **Author** | Assigned Omni planning worker |
 | **Appetite** | large — size G, four sequential groups |
 | **Branch** | `docs/omni-bot-answer-mode-wish` (planning); execution branches from fresh `origin/dev` after approval |
 | **Repos touched** | omni (`apps/omni-channels-dsh`) |
@@ -153,8 +153,10 @@ Zod and publish transitions through existing events/persistence conventions.
 Each group must stay within 25 files / 2,000 insertions; exceeding either requires
 returning to the owner to split a sibling wish, without dropping acceptance.
 
-Every Bun/make invocation on this host, including commit/push hooks, runs inside:
-`env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh <cmd>`.
+Before dispatch, the orchestrator exports `OMNI_GATE_WRAPPER` as the absolute
+path of this host's shared gate wrapper. Every Bun/make invocation on this host,
+including commit/push hooks, runs inside:
+`env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" <cmd>`.
 Group checks do not replace the repository's required aggregate gates or full
 pre-push hook. Build the client using the existing package build command when
 client sources change; the owning group includes generated `client.js`.
@@ -188,7 +190,7 @@ read-only sight after an owner-confirmed hand-over (IN1–2).
 
 **Interfaces:**
 - Consumes: existing `rt.eventsBotId(): string | undefined`,
-  `rt.threads.bySession(sessionId)` and G3's merged descriptions.
+  `rt.threads.bySession(sessionId)` and chat-scoped-bots G3's merged descriptions.
 - Produces: `rt.channelOwner(channelId: string): string | undefined`;
   `rt.canChannel(botId: string, channelId: string, action: 'read' | 'write' | 'automate'): boolean`;
   thread `ownerBotId: string`; subscription `ownerBotId: string`;
@@ -211,8 +213,8 @@ read-only sight after an owner-confirmed hand-over (IN1–2).
 
 **Validation:**
 ```bash
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/subscriptions.test.js test/omni-events.test.js test/grants.test.js test/omni-api.test.js test/thread-tools.test.js test/threads.test.js test/omni-tree.test.js test/automations-ux.test.js test/team-view.test.js'
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && bun run build && bun run lint'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/subscriptions.test.js test/omni-events.test.js test/grants.test.js test/omni-api.test.js test/thread-tools.test.js test/threads.test.js test/omni-tree.test.js test/automations-ux.test.js test/team-view.test.js'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && bun run build && bun run lint'
 ```
 
 **depends-on:** none
@@ -270,8 +272,8 @@ with master instructions/model, own notes and bounded visibility (IN3–4).
 
 **Validation:**
 ```bash
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/threads.test.js test/thread-tools.test.js test/thread-keys.test.js test/subscriptions.test.js test/omni-events.test.js test/grants.test.js test/omni-api.test.js test/omni-tree.test.js'
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && bun run build && bun run lint'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/threads.test.js test/thread-tools.test.js test/thread-keys.test.js test/subscriptions.test.js test/omni-events.test.js test/grants.test.js test/omni-api.test.js test/omni-tree.test.js'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && bun run build && bun run lint'
 ```
 
 **depends-on:** 1
@@ -283,7 +285,9 @@ changing its sandbox or destination (IN5).
 
 **Deliverables:**
 1. Own `src/host/{thread-tools,threads,omni-rules}.js`, `src/client/omni-tree.js`,
-   their focused tests/fixtures and generated `client.js`. Take `standing-runs.js`
+   their focused tests/fixtures and generated `client.js`. Create
+   `test/standing-runs.test.js` (new, G3) for the answer-child send-policy
+   integration, including SC6 approval/state paths. Take `standing-runs.js`
    only for the answer-child `asksFirst` interaction; ordinary automations retain
    existing permission semantics. Transfer that interface to G4.
 2. Initial new-child default training; staff can switch an individual child to
@@ -321,8 +325,8 @@ changing its sandbox or destination (IN5).
 
 **Validation:**
 ```bash
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/thread-tools.test.js test/threads.test.js test/standing-runs.test.js test/omni-tree.test.js'
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && bun run build && bun run lint'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/thread-tools.test.js test/threads.test.js test/standing-runs.test.js test/omni-tree.test.js'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && bun run build && bun run lint'
 ```
 
 **depends-on:** 2
@@ -379,9 +383,9 @@ staff or after the configured silence interval (IN6).
 
 **Validation:**
 ```bash
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test "test/*.test.js" && bun run build && bun run lint'
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh make verify-rfcs
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh make lint
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test "test/*.test.js" && bun run build && bun run lint'
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" make verify-rfcs
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh "$OMNI_GATE_WRAPPER" make lint
 ```
 Preserve repository-required aggregate `make check` and the normal pre-push
 typecheck/full-suite hook for implementation. Database/service checks require
@@ -427,19 +431,33 @@ these are planned observations, not results from this documentation PR._
 ## Review Results
 
 - **2026-11-11 — Design preflight:** copied DESIGN.md verified with
-  `node /Users/feliperosa/.claude/skills/brainstorm/references/design-review-evidence.mjs verify .genie/brainstorms/omni-bot-answer-mode/DESIGN.md`,
+  `node "$HOME/.claude/skills/brainstorm/references/design-review-evidence.mjs" verify .genie/brainstorms/omni-bot-answer-mode/DESIGN.md`,
   exit **0**. Reviewed content digest remains
   `95b8790c8e0f7e89003d30a23977e24a423f03469b40dbfbebda261784bd4c67`;
   reviewer `codex t5h7 (Omni Reviewer t3q7)`, reviewed 2026-11-11T19:41:45.000Z.
-- **Independent plan review:** pending; owner routes review after the PR opens.
-  DRAFT is not self-approval. No execution tasks created or dispatched.
-- **Planning validation:** gated `make verify-rfcs` exit **0** (29 tests),
+- **2026-11-11 — Independent plan review at `8bb549fb`: FIX-FIRST.**
+  Read-only reviewer found H1 (an unassigned new G3 test) and H2 (provider names
+  inherited from the frozen DRAFT). The orchestrator ruled to re-freeze a redacted
+  DRAFT; DESIGN.md remains unchanged.
+- **Bounded repair, attempt 1/2 (budget source: config; effort escalations: 0/2):**
+  H1: G3 now explicitly creates `test/standing-runs.test.js`, marked new in the
+  file list. H2: copied the orchestrator's re-frozen DRAFT byte for byte, SHA-256
+  `afe17dd0bc24d2d94bca483982cba4664896e958793100c6d5c6fb175bd9b2be`.
+  Both corrections address the root findings. Folded in the two LOWs: identify
+  chat-scoped-bots G3 explicitly; remove personal names and absolute host paths.
+  Independent re-review remains pending; DRAFT is not self-approval. No execution
+  tasks created or dispatched.
+- **Original planning validation at `8bb549fb`:** gated `make verify-rfcs` exit **0** (29 tests),
   gated `make lint` exit **0** (1,945 files). Repository-wide `genie wish lint`
   exits **1** with 28 unrelated findings, byte-identical to the findings from
   the untouched HEAD planning corpus. A focused snapshot containing this wish,
   chat-scoped-bots and both linked designs passes `genie wish lint --dir <snapshot>`
   with exit **0** (2 wishes, no broken brainstorm links). Existing wishes are
   outside this PR's scope. Full-corpus lint remains red; this is not plan approval.
+- **Repair validation:** design verifier, focused wish lint, gated
+  `make verify-rfcs` (29 tests) and gated `make lint` (1,945 files) each exit **0**.
+  Frozen-file hashes and both LOW corrections checked; full-corpus lint remains
+  byte-identical to the original baseline (28 unrelated findings, exit **1**).
 - **Execution / product validation:** not run; this PR changes planning Markdown only.
 
 ## Files to Create/Modify
@@ -477,7 +495,7 @@ test/omni-api.test.js
 test/thread-tools.test.js
 test/threads.test.js
 test/thread-keys.test.js
-test/standing-runs.test.js
+test/standing-runs.test.js (new, G3)
 test/omni-tree.test.js
 test/automations-ux.test.js
 test/team-view.test.js

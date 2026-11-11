@@ -303,7 +303,7 @@ Risks 8/20 (strangers' text reaching a tool-bearing Session; DSH sandbox is file
 Settled R1-1..R1-4: collective = shared sight, own chat (isolated = own chat only); answer mode needs a DEDICATED
 Omni Bot that can own one or more channels, while by default one Omni Bot manages all channels as today, and people
 add more Omni Bots if they want; children speak as the master (its instructions and model) plus their own notes;
-staff take over by replying from the number's own phone/WhatsApp Web, which auto-pauses that child.
+staff take over by replying from the number's own phone or a linked device, which auto-pauses that child.
 No product is named anywhere in this design (owner, R1-2).
 New fact needed: the plugin today has ONE Omni Bot per DSH (eventsBotId(): the bot of kind 'omni',
 subscriptions.js:111). Several Omni Bots, each owning channels, is new machinery: channel ownership, which bot's
@@ -332,8 +332,8 @@ which must improve) so its child learns that chat, takes on the persona of the p
 (language traits), and offers to take over from that moment, in TRAINING first (it asks before each send); every
 answer worker is customised per chat, so answer mode plugs into any existing number.
 Size: R3-4 adds two pieces of real work beyond answer mode: (1) Omni history backfill that actually fills chats
-(Cloud API has no backfill except the coexistence 180-day sync; Baileys history sync is partial), and (2) persona
+(a provider API offers no backfill beyond a one-time history sync at onboarding; the device-linked channel's history sync is partial), and (2) persona
 learning + training-then-takeover per child. That points to G, or a split.
-Related input: a number on Meta Cloud API with coexistence (humans on the Business app, the bot on Cloud API) gets
-staff replies only as smb_message_echoes, which Omni does not handle yet; staff-reply auto-pause depends on it there.
+Related input: a number connected through a provider API while humans keep the phone app gets staff replies only as
+provider echo events, which Omni does not ingest yet; staff-reply auto-pause depends on them there.
 WRS: Problem 20, Scope 14, Decisions 15, Risks 12, Criteria 8 = 69 (scope widened).
