@@ -15612,11 +15612,17 @@ var import_react14 = require("react");
 var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons;
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
-var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
+var isEventsBot = (roster, id) => Boolean(id) && (id === roster?.eventsBotId || roster?.byId?.[id]?.kind === "omni");
+var ownedRoster = (roster, botId) => {
+  if (!botId) return roster;
+  const subscriptions = (roster.subscriptions ?? []).filter((sub) => (sub.ownerBotId ?? roster.eventsBotId) === botId);
+  const ids = new Set(subscriptions.map((sub) => sub.id));
+  return { ...roster, subscriptions, subscriptionRuns: (roster.subscriptionRuns ?? []).filter((run) => ids.has(run.subId)) };
+};
 var headCount = (roster) => (roster?.subscriptions ?? []).length || null;
 function workerOf(worker, roster, where = {}) {
   if (worker.kind === "events" || worker.kind === "main") {
-    const bot2 = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId];
+    const bot2 = roster?.byId?.[where.ownerBotId ?? roster.eventsBotId ?? roster.mainBotId];
     return { name: bot2?.name ?? "Omni", bot: bot2, look: MAIN_LOOK };
   }
   if (worker.kind === "thread") {
@@ -15692,11 +15698,13 @@ var RUN_STATUS = {
   failed: { label: "Did not finish", tone: "bad" }
 };
 var useWaiting = (useWork) => new Set((useWork ? useWork((work) => (work.approvals ?? []).map((entry) => entry.sessionId).join(",")) : "").split(",").filter(Boolean));
-function EventsBadge({ roster, useWork }) {
+function EventsBadge({ roster, useWork, botId }) {
+  roster = ownedRoster(roster, botId);
   const waiting = waitingRuns(roster, useWaiting(useWork));
   return waiting > 0 ? (0, import_react14.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
-function SubscriptionsButton({ roster, onToggle, useWork }) {
+function SubscriptionsButton({ roster, onToggle, useWork, botId }) {
+  roster = ownedRoster(roster, botId);
   const count = headCount(roster);
   const waiting = waitingRuns(roster, useWaiting(useWork));
   return (0, import_react14.createElement)(
@@ -15739,10 +15747,12 @@ function SavedAutomationCard({ argValue, content, done, roster }) {
 var BOARD_KIND = "omni-subscriptions";
 var BOARD_TAB_ID = "ds-bot/omni-subscriptions";
 var boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t("Automations") });
-function BoardTab({ useRoster, useWork, actions }) {
+function BoardTab({ useRoster, useWork, actions, useTabInfo, sessionId }) {
   const roster = useRoster((value) => value);
   const waiting = useWaiting(useWork);
-  const bot = roster.byId?.[roster.eventsBotId];
+  const tab = typeof useTabInfo === "function" ? useTabInfo()?.tab : void 0;
+  const ownerId = tab?.navigation?.params?.botId ?? Object.values(roster.byId ?? {}).find((bot2) => bot2.sessionId === sessionId || bot2.parts?.includes(sessionId))?.id ?? roster.eventsBotId;
+  const bot = roster.byId?.[ownerId];
   if (!bot) return (0, import_react14.createElement)("div", { className: "os-board" }, (0, import_react14.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
   return (0, import_react14.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
 }
@@ -15751,6 +15761,7 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   (0, import_react14.useEffect)(() => {
     startLive(call);
   }, []);
+  roster = ownedRoster(roster, bot.id);
   const subs = roster.subscriptions ?? [];
   const runs = runsOf(roster);
   const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
@@ -16585,18 +16596,71 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
     )
   );
 }
+function ChannelBotForm({ channels: channels2, roster, onClose }) {
+  const [name, setName] = (0, import_react16.useState)("");
+  const [selected, setSelected] = (0, import_react16.useState)([]);
+  const [local, setLocal] = (0, import_react16.useState)(null);
+  const [busy, setBusy] = (0, import_react16.useState)(false);
+  const [problem, setProblem] = (0, import_react16.useState)(null);
+  const pending = local ? [local] : roster.omniBotProposals ?? [];
+  const act = async (endpoint, body, after) => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const value = await call(endpoint, body);
+      after(value);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (0, import_react16.createElement)(
+    "div",
+    { className: "ot-picker", role: "group", "aria-label": "Dedicated channel bot" },
+    problem ? (0, import_react16.createElement)("p", { role: "alert" }, hostText(problem)) : null,
+    pending.map((proposal) => (0, import_react16.createElement)(
+      "div",
+      { key: proposal.proposalId },
+      (0, import_react16.createElement)("p", null, `Create ${proposal.name} and hand over: ${proposal.channelIds.map((id) => channels2.find((channel) => channel.id === id)?.name ?? id).join(", ")}? The default bot will only read these channels.`),
+      (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: () => act("confirm_answer_bot", { proposalId: proposal.proposalId }, () => {
+        setLocal(null);
+        onClose();
+      }) }, "Confirm hand-over"),
+      (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: () => act("cancel_answer_bot", { proposalId: proposal.proposalId }, () => {
+        setLocal(null);
+        onClose();
+      }) }, "Cancel proposal")
+    )),
+    (0, import_react16.createElement)("input", { "aria-label": "Bot name", value: name, maxLength: 40, onChange: (event) => setName(event.target.value) }),
+    channels2.map((channel) => (0, import_react16.createElement)(
+      "label",
+      { key: channel.id },
+      (0, import_react16.createElement)("input", { type: "checkbox", checked: selected.includes(channel.id), onChange: (event) => setSelected((before) => event.target.checked ? [...before, channel.id] : before.filter((id) => id !== channel.id)) }),
+      channel.name
+    )),
+    (0, import_react16.createElement)("button", { type: "button", disabled: busy || !name.trim() || !selected.length, onClick: () => act("propose_answer_bot", { name, channelIds: selected }, (value) => setLocal({ ...value, name, channelIds: selected })) }, "Review hand-over"),
+    (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: onClose }, "Close")
+  );
+}
 function OmniTree(props) {
   const { bot, actions, roster } = props;
   const state = useOmni();
   const omni2 = (0, import_react16.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
   const [open, setOpen] = (0, import_react16.useState)(readOpen);
   const [picking, setPicking] = (0, import_react16.useState)(null);
+  const [creatingBot, setCreatingBot] = (0, import_react16.useState)(false);
   (0, import_react16.useEffect)(() => {
     startLive(call);
   }, []);
   if (!isOmniBot(bot)) return null;
   const rowProps = rowPropsOf(props, roster?.omniRowProps);
-  const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
+  const defaultBotId = roster?.omniOwnership?.defaultBotId ?? roster?.eventsBotId ?? bot.id;
+  const ownerOf = (id) => roster?.omniOwnership?.channels?.[id] ?? defaultBotId;
+  const threads = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter((thread) => (thread.ownerBotId ?? ownerOf(thread.channelId)) === bot.id);
+  const ownedChannels = state.channels.filter((channel) => ownerOf(channel.id) === bot.id);
+  const ownedState = { ...state, channels: ownedChannels };
+  const ownedView = { ...roster, omniThreads: threads };
   const others = (list) => list.length === 0 ? null : (0, import_react16.createElement)(
     "div",
     { className: "ot-others", role: "group", "aria-label": t("Other chats") },
@@ -16614,15 +16678,17 @@ function OmniTree(props) {
     return next;
   });
   const plus = plusOf(roster, state);
-  const listed = new Set(state.channels.map((channel) => channel.id));
+  const listed = new Set(ownedChannels.map((channel) => channel.id));
   return (0, import_react16.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
-    state.channels.map((channel) => (0, import_react16.createElement)(ChannelItem, {
+    bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
+    bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
+    ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {
       key: channel.id,
       channel,
-      state,
-      roster,
+      state: ownedState,
+      roster: ownedView,
       rowProps,
       actions,
       omni: omni2,
@@ -17642,12 +17708,12 @@ var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
 var boardRight = null;
-function toggleBoard(reportError) {
+function toggleBoard(reportError, botId) {
   const right = boardRight;
   if (!right) return;
   try {
     if (right.isExpanded() && right.active()?.kind === BOARD_KIND) right.toggleExpanded();
-    else right.openTab(BOARD_KIND);
+    else right.openTab(BOARD_KIND, { params: { botId } });
   } catch (error) {
     reportError?.(error, "board");
   }
@@ -17699,11 +17765,11 @@ function apply(ctx) {
   if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
   ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react18.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
-  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react18.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
+  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => isEventsBot(roster, bot.id) ? (0, import_react18.createElement)(EventsBadge, { roster, useWork, botId: bot.id }) : null }), "ds-bot: automations badge");
   if (botChildren) ctx.effect(() => botChildren.register({ id: "omni-channels", Component: OmniTree }), "ds-bot: Omni channels in the sidebar");
   ctx.effect(() => headerButtons.register({
     id: "omni-board",
-    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react18.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
+    Component: ({ bot, roster, actions, useWork }) => isEventsBot(roster, bot.id) ? (0, import_react18.createElement)(SubscriptionsButton, { roster, useWork, botId: bot.id, onToggle: () => toggleBoard(actions.reportError, bot.id) }) : null
   }), "ds-bot: automations button");
   if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: "omni-automations", order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), "ds-bot: automation suggestions");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");

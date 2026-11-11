@@ -4,6 +4,7 @@
 // save is on screen at the next poll). Sources are checked against the live omni channels
 // and chats, so an automation never names a chat that does not exist. (Stored as
 // state.subscriptions, the name they had first.)
+import { randomUUID } from 'node:crypto'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
 import { closeRun, excerptOf, fenced, isAskRun, pruneRuns, readsOnly, RUNS_KEPT, runId, SUMMARY_MAX } from './asks.js'
@@ -108,7 +109,155 @@ export function install(rt) {
   // (Autopilot) before. Any Bot that operates Omni manages them, and a chat thread as the Omni
   // Bot (grants.js omniActorOf). Loads the team first: the check reads the Bots from the saved
   // state.
-  const eventsBotId = () => Object.values(state.bots ?? {}).find(bot => bot?.kind === 'omni')?.id ?? state.mainBotIds.find(id => rt.botOf(id))
+  const eventsBotId = () => state.omniOwnership?.defaultBotId ?? Object.values(state.bots ?? {}).find(bot => bot?.kind === 'omni')?.id ?? state.mainBotIds.find(id => rt.botOf(id))
+  const ownerOf = sub => sub?.ownerBotId ?? eventsBotId()
+  const sourceChannels = sub => sub.sources.map(source => source.kind === 'channel' ? source.id : source.channelId)
+  const ownsAutomation = (botId, sub) => ownerOf(sub) === botId && sourceChannels(sub).every(id => rt.canChannel(botId, id, 'automate'))
+  const transferring = new Set()
+  let ownershipSettled = Promise.resolve()
+  let settleOwnership
+  rt.waitChannelOwnership = async channelId => { if (transferring.has(channelId)) await ownershipSettled }
+  rt.channelOwner = channelId => state.omniOwnership?.channels?.[channelId] ?? eventsBotId()
+  rt.canChannel = (botId, channelId, action) => {
+    if (!botId || !channelId || !rt.botOf(botId)) return false
+    if (transferring.has(channelId)) return false
+    if (!state.omniOwnership && operatesOmni(rt, botId)) return true
+    const owner = rt.channelOwner(channelId)
+    if (action === 'read') return botId === owner || botId === eventsBotId()
+    return ['write', 'automate'].includes(action) && botId === owner
+  }
+  rt.omniOwnershipRefusal = (botId, resource, action) => {
+    if (!operatesOmni(rt, botId)) return undefined
+    const channelId = resource.channelId ?? (resource.type === 'channel' ? resource.id : undefined)
+    if (!channelId) return undefined
+    return rt.canChannel(botId, channelId, ['read', 'media'].includes(action) ? 'read' : 'write') ? undefined : 'This channel belongs to another bot; this bot has no authority for that action.'
+  }
+  rt.automationOwner = ownerOf
+  rt.automationOwned = (sub, event) => ownsAutomation(ownerOf(sub), sub)
+    && (!event?.instanceId || rt.canChannel(ownerOf(sub), event.instanceId, 'automate'))
+
+  // RFC-0001: proposals carry no authority. Only the registered owner action commits
+  // a bot and its channels; model arguments can never stand in for that action.
+  const Proposal = z.object({ name: z.string().trim().min(1).max(40), channelIds: z.array(z.string().uuid()).min(1).max(100).refine(ids => new Set(ids).size === ids.length) }).strict()
+  const ProposalId = z.object({ proposalId: z.string().uuid() }).strict()
+  const proposals = () => (state.omniBotProposals ??= {})
+  let confirmation = Promise.resolve()
+  async function propose(raw) {
+    const input = Proposal.parse(raw)
+    const lookup = await watchable()
+    if (input.channelIds.some(id => !lookup.channels.has(id))) throw invalid('Pick existing channels.')
+    const target = Object.values(state.bots).find(bot => bot.name.toLowerCase() === input.name.toLowerCase())
+    if (target && target.kind !== 'omni' && target.id !== eventsBotId()) throw invalid('That name belongs to another kind of Bot.')
+    const proposal = { ...input, proposalId: randomUUID(), status: 'pending', ...(target ? { targetBotId: target.id } : {}), owners: input.channelIds.map(rt.channelOwner), at: Date.now() }
+    proposals()[proposal.proposalId] = proposal
+    try { await rt.save() } catch (error) { delete proposals()[proposal.proposalId]; throw error }
+    return { proposalId: proposal.proposalId }
+  }
+  const membersOf = thread => thread.members ?? [{ channelId: thread.channelId }]
+  function transferRows(proposal) {
+    const selected = new Set(proposal.channelIds)
+    const threads = rt.threads?.list() ?? []
+    const partial = threads.find(thread => membersOf(thread).some(member => selected.has(member.channelId)) && membersOf(thread).some(member => !selected.has(member.channelId)))
+    if (partial) throw refused(`The channel move would split thread ${JSON.stringify(partial.title ?? partial.chatName)}. Move all its channels together.`)
+    const movedThreads = threads.filter(thread => membersOf(thread).some(member => selected.has(member.channelId)))
+    if (movedThreads.some(thread => rt.teamResume?.running?.(thread.sessionId) === true || thread.turnOpenAt != null || runs().some(run => run.status === 'working' && run.sessionId === thread.sessionId))) throw refused('Wait for the channel threads to finish before moving them.')
+    const automations = Object.values(subs()).filter(sub => sourceChannels(sub).some(id => selected.has(id)))
+    if (automations.some(sub => sourceChannels(sub).some(id => !selected.has(id)))) throw refused('The channel move would split an automation. Move all its channels together.')
+    if (automations.some(sub => sub.worker?.kind === 'bot')) throw refused('Choose the owning bot or chat threads as the worker before moving this channel.')
+    return { movedThreads, automations }
+  }
+  function checkProposal(proposal) {
+    if (proposal.status !== 'pending') throw invalid('This proposal was already answered.')
+    if (proposal.channelIds.some((id, index) => rt.channelOwner(id) !== proposal.owners[index])) throw refused('Channel ownership changed. Make a new proposal.')
+  }
+  async function confirm(proposalId) {
+    await rt.load()
+    const proposal = proposals()[proposalId]
+    if (!proposal) throw invalid('No such proposal.')
+    if (rt.readOnly?.() !== undefined) throw refused(rt.readOnly())
+    checkProposal(proposal)
+    await watchable().then(lookup => {
+      if (proposal.channelIds.some(id => !lookup.channels.has(id))) throw refused('A proposed channel is no longer available.')
+    })
+    transferRows(proposal)
+    const sessionId = proposal.targetBotId ?? await rt.createSession(proposal.name)
+    const previous = state.omniOwnership
+    const defaultBotId = eventsBotId()
+    let movedThreads = [], automations = [], snapshots = [], previousRuns = []
+    try {
+      checkProposal(proposal)
+      const rows = transferRows(proposal)
+      movedThreads = rows.movedThreads
+      automations = rows.automations
+      snapshots = movedThreads.map(thread => [thread, thread.ownerBotId])
+      previousRuns = runs().filter(run => run.status === 'queued' && automations.some(sub => sub.id === run.subId)).map(run => [run, { ...run }])
+      ownershipSettled = new Promise(resolve => { settleOwnership = resolve })
+      for (const id of proposal.channelIds) transferring.add(id)
+      state.omniOwnership = { defaultBotId, channels: { ...previous?.channels, ...Object.fromEntries(proposal.channelIds.map(id => [id, sessionId])) } }
+      for (const thread of movedThreads) thread.ownerBotId = sessionId
+      // Replace the records: a dispatch already waiting on a save retains the old owner
+      // and fails its final check. Pending events never cross an ownership transition.
+      for (const sub of automations) subs()[sub.id] = { ...sub, ownerBotId: sessionId }
+      for (const run of runs()) if (run.status === 'queued' && automations.some(sub => sub.id === run.subId)) Object.assign(run, { status: 'failed', endedAt: Date.now(), summary: 'Not handed over: channel ownership changed.' })
+      proposal.status = 'confirmed'
+      proposal.botId = sessionId
+      const bot = proposal.targetBotId ? rt.botOf(proposal.targetBotId) : await rt.createBot({ name: proposal.name, kind: 'omni', role: 'Channels', instructions: '', existingSessionId: sessionId })
+      if (!bot) throw refused('The selected bot no longer exists.')
+      if (proposal.targetBotId) await rt.save()
+      rt.indexSessions()
+      ctx.emit('omni/channel-ownership', { botId: bot.id, channelIds: [...proposal.channelIds], previousOwners: proposal.owners })
+      rt.syncOmniEvents?.()
+      return { botId: bot.id }
+    } catch (error) {
+      if (previous === undefined) delete state.omniOwnership
+      else state.omniOwnership = previous
+      for (const [thread, owner] of snapshots) {
+        if (owner === undefined) delete thread.ownerBotId
+        else thread.ownerBotId = owner
+      }
+      for (const sub of automations) subs()[sub.id] = sub
+      for (const [run, value] of previousRuns) { for (const key of Object.keys(run)) delete run[key]; Object.assign(run, value) }
+      proposal.status = 'pending'
+      delete proposal.botId
+      if (!proposal.targetBotId) delete state.bots[sessionId]
+      rt.indexSessions()
+      await rt.save().catch(() => {})
+      if (!proposal.targetBotId) await ctx.workspaceRegistry.archiveSession(sessionId, { stopActivity: true }).catch(() => {})
+      throw error
+    } finally { for (const id of proposal.channelIds) transferring.delete(id); settleOwnership?.() }
+  }
+  const confirmSerial = run => {
+    const next = confirmation.then(run)
+    confirmation = next.catch(() => {})
+    return next
+  }
+  const ownerActions = {
+    'propose_answer_bot': body => propose(body),
+    'confirm_answer_bot': body => {
+      const { proposalId } = ProposalId.parse(body)
+      return confirmSerial(() => confirm(proposalId))
+    },
+    'cancel_answer_bot': body => confirmSerial(async () => {
+      const { proposalId } = ProposalId.parse(body)
+      await rt.load()
+      const proposal = proposals()[proposalId]
+      if (!proposal || proposal.status !== 'pending') throw invalid('No pending proposal.')
+      proposal.status = 'cancelled'
+      try { await rt.save() } catch (error) { proposal.status = 'pending'; throw error }
+      return { proposalId }
+    }),
+  }
+  for (const [name, action] of Object.entries(ownerActions)) ctx.effect(() => rt.hooks.endpoint(name, async body => { await rt.load(); return action(body) }), `omni-channels: ${name}`)
+  ctx.tools.register(defineTool({
+    name: 'propose_answer_bot',
+    description: 'The default channel bot only. Propose a dedicated bot and channel hand-over. Nothing is created or moved until the owner confirms the proposal in the sidebar.',
+    parameters: { name: { type: 'string', required: true }, channelIds: { type: 'array', items: { type: 'string' }, required: true } }, output,
+    async execute(args, exec) {
+      await rt.load()
+      if (rt.selfOf(exec?.agent?.id) !== eventsBotId()) return 'Only the default channel bot proposes a dedicated bot.'
+      try { return JSON.stringify(await propose(args)) } catch (error) { return `Not proposed: ${error.message}` }
+    },
+  }))
   const isEventsBot = async (exec) => {
     await rt.load()
     return operatesOmni(rt, omniActorOf(rt, exec.agent?.id))
@@ -125,7 +274,7 @@ export function install(rt) {
   const quoted = name => JSON.stringify(String(name ?? '').replace(/\s+/g, ' ').trim().slice(0, 60))
   // A chat-thread worker is named by its one chat, when it watches one.
   const nameOfWorker = (worker, sub) => {
-    if (worker.kind === 'events' || worker.kind === 'main') return eventsName()
+    if (worker.kind === 'events' || worker.kind === 'main') return rt.botOf(ownerOf(sub))?.name ?? eventsName()
     if (worker.kind === 'thread') {
       const only = sub?.sources?.length === 1 && sub.sources[0].kind === 'chat' ? sub.sources[0] : undefined
       return only === undefined ? 'each chat\'s own thread' : `the thread of ${quoted(only.name)}`
@@ -202,14 +351,16 @@ export function install(rt) {
   }
 
   // `lookup` is one fresh read of omni (watchable()), made only when the sources change.
-  async function save(args, lookup) {
+  async function save(args, lookup, botId) {
     const existing = args.id ? subs()[args.id] : undefined
     if (args.id && !existing) throw invalid(`No automation ${args.id}. Use list_automations.`)
+    if (existing && !ownsAutomation(botId, existing)) throw refused('This automation belongs to another channel bot.')
     const refs = split(args.sources)
     const sources = refs.length > 0 ? refs.map(ref => sourceOf(ref, lookup)) : existing?.sources ?? []
     if (sources.length === 0) throw invalid('Which chats, groups or channels? Ask the user, then pass their ids from find_chats.')
     const sub = {
       id: existing?.id ?? `sub-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+      ownerBotId: botId,
       name: String(args.name ?? existing?.name ?? '').trim().slice(0, 60),
       // A save that mends what paused it (a worker it did not know) turns it on again.
       on: existing?.pausedReason ? true : existing?.on ?? true,
@@ -227,6 +378,8 @@ export function install(rt) {
       createdAt: existing?.createdAt ?? Date.now(),
       updatedAt: Date.now(),
     }
+    if (!ownsAutomation(botId, sub)) throw refused('Automations may watch only channels you own.')
+    if (sub.worker.kind === 'bot' && (state.omniOwnership || rt.botOf(sub.worker.botId)?.kind === 'omni') && sub.worker.botId !== botId) throw refused('Another channel bot cannot receive this automation.')
     // A chat-thread worker, new or kept through an edit, needs the hook.
     const problem = workerProblem(sub.worker)
     if (problem !== null) throw refused(problem)
@@ -370,7 +523,7 @@ export function install(rt) {
     for (const sessionId of new Set(freed)) void rt.standingRuns?.handOver(sessionId)
   }
   // Ownership is projected from current membership; automations never store thread ids.
-  rt.threadAutomations = thread => Object.values(subs()).filter(sub => sub.worker?.kind === 'thread'
+  rt.threadAutomations = thread => Object.values(subs()).filter(sub => ownerOf(sub) === thread.ownerBotId && sub.worker?.kind === 'thread'
     && sub.sources.some(source => source.kind === 'chat' ? thread.chatIds.includes(source.id)
       : (thread.members ?? [{ channelId: thread.channelId }]).some(member => member.channelId === source.id)))
     .map(({ id, name }) => ({ id, name }))
@@ -408,6 +561,7 @@ export function install(rt) {
   // A worker that cannot take the event (no hook for a chat thread, a worker this plugin does
   // not know) pauses its automation with why, and the event is refused with that reason.
   async function startRun(sub, event) {
+    if (!rt.automationOwned(sub, event)) throw refused('Channel ownership changed; this automation cannot run here.')
     const worker = sub.worker
     const problem = workerProblem(worker)
     if (problem !== null) {
@@ -415,7 +569,7 @@ export function install(rt) {
       throw refused(`${sub.name} is paused: ${problem}`)
     }
     if (worker.kind === 'thread') return handToThread(sub, event)
-    const botId = worker.kind === 'events' || worker.kind === 'main' ? eventsBotId() : worker.botId
+    const botId = worker.kind === 'events' || worker.kind === 'main' ? ownerOf(sub) : worker.botId
     const bot = rt.botOf(botId)
     const task = worker.kind !== 'bot' || worker.mode !== 'chat'
     const run = {
@@ -441,6 +595,7 @@ export function install(rt) {
     await rt.save()
     if (uncontained) return run
     try {
+      if (!rt.automationOwned(sub, event)) throw refused('Channel ownership changed while the run waited.')
       await rt.deliver({ toId: botId, sessionId: run.sessionId, text, role: 'task', note: sub.name })
     } catch (error) {
       finish(run, 'failed', `Could not start: ${error.message}`)
@@ -468,6 +623,7 @@ export function install(rt) {
         const now = Date.now()
         for (const [key, entry] of delivered) if (now - entry.at > DEDUPE_MS) delivered.delete(key)
         if (identity !== null && delivered.has(identity)) return delivered.get(identity).run
+        if (!rt.automationOwned(sub, event)) throw refused('Channel ownership changed while the thread was made.')
         const run = Promise.resolve().then(() => rt.standingRuns.enqueue({ kind: 'thread', id: made.thread.id }, sub, event))
         if (identity !== null) {
           delivered.set(identity, { at: now, run })
@@ -489,7 +645,10 @@ export function install(rt) {
     await rt.save()
     return run
   }
-  rt.automationText = taskText
+  rt.automationText = (sub, event) => {
+    if (!rt.automationOwned(sub, event)) throw refused('Channel ownership changed while the run waited.')
+    return taskText(sub, event)
+  }
 
   // Event text comes from other people. With askFirst, a task Session runs under DSH's
   // read-only preset (no file changes; a wider retry waits for the user) and the tool gate
@@ -597,12 +756,12 @@ export function install(rt) {
     return { ...rest, from: event?.chat ?? '', excerpt: excerptOf(event), summary: 'Waiting for the run before it to end.', ...(event?.test ? { test: true } : {}) }
   }
   rt.subscriptionsView = () => ({
-    subscriptions: Object.values(subs()).sort((a, b) => a.createdAt - b.createdAt),
+    subscriptions: Object.values(subs()).sort((a, b) => a.createdAt - b.createdAt).map(sub => ({ ...sub, ownerBotId: ownerOf(sub) })),
     // An ask run is the thread's, never the board's.
     subscriptionRuns: runs().filter(run => !isAskRun(run)).map(boardRun),
   })
   // Autopilot, the Bot that automations hand their events to, rides the team view with them.
-  ctx.effect(() => rt.hooks.view(() => ({ eventsBotId: eventsBotId() ?? null, ...rt.subscriptionsView() })), 'ds-bot: automations view')
+  ctx.effect(() => rt.hooks.view(() => ({ eventsBotId: eventsBotId() ?? null, omniOwnership: state.omniOwnership ?? { defaultBotId: eventsBotId(), channels: {} }, omniBotProposals: Object.values(proposals()).filter(proposal => proposal.status === 'pending'), ...rt.subscriptionsView() })), 'ds-bot: automations view')
   rt.subscriptionEndpoint = async (endpoint, body) => {
     const id = String(body?.id ?? '')
     if (endpoint === 'automation-set-on') return setOn(id, body?.on === true)
@@ -646,7 +805,7 @@ export function install(rt) {
     async execute(_args, exec) {
       if (!await isEventsBot(exec)) return notEventsBot()
       await rt.load()
-      const list = Object.values(subs())
+      const list = Object.values(subs()).filter(sub => ownsAutomation(state.omniOwnership ? omniActorOf(rt, exec.agent?.id) : eventsBotId(), sub))
       return list.length === 0 ? 'No automations yet.' : list.map(sub => `${sub.id} · ${sub.name}: ${sentenceOf(sub, nameOfWorker)}${sub.note ? ` (${sub.note})` : ''}`).join('\n')
     },
   }))
@@ -674,7 +833,7 @@ export function install(rt) {
       try {
         await rt.load()
         const lookup = split(args.sources).length > 0 ? await watchable() : null
-        const sub = await save(args, lookup)
+        const sub = await save(args, lookup, state.omniOwnership ? omniActorOf(rt, exec.agent?.id) : eventsBotId())
         return `Saved ${sub.id} · ${sub.name}: ${sentenceOf(sub, nameOfWorker)}. It is in the Automations panel now.`
       } catch (error) {
         return `Not saved: ${error.message}`
@@ -694,6 +853,7 @@ export function install(rt) {
       if (!await isEventsBot(exec)) return notEventsBot()
       try {
         await rt.load()
+        if (!ownsAutomation(state.omniOwnership ? omniActorOf(rt, exec.agent?.id) : eventsBotId(), subs()[String(args.id)] ?? { sources: [] })) throw refused('This automation belongs to another channel bot.')
         const sub = await setOn(String(args.id), yes(args.on))
         return `${sub.name} is ${sub.on ? 'on' : 'paused'}.`
       } catch (error) {
@@ -711,6 +871,7 @@ export function install(rt) {
       if (!await isEventsBot(exec)) return notEventsBot()
       try {
         await rt.load()
+        if (!ownsAutomation(state.omniOwnership ? omniActorOf(rt, exec.agent?.id) : eventsBotId(), subs()[String(args.id)] ?? { sources: [] })) throw refused('This automation belongs to another channel bot.')
         const name = subs()[String(args.id)]?.name
         await remove(String(args.id))
         return `Deleted ${name}.`

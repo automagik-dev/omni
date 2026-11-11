@@ -415,16 +415,48 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, op
           hasChats ? t('All chats') : t('Channel health')))))
 }
 
+// Sidebar clicks are owner actions. The same proposal/confirmation endpoints serve
+// this form and proposals made by the default bot; confirmation is a separate click.
+export function ChannelBotForm({ channels, roster, onClose }) {
+  const [name, setName] = useState('')
+  const [selected, setSelected] = useState([])
+  const [local, setLocal] = useState(null)
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState(null)
+  const pending = local ? [local] : roster.omniBotProposals ?? []
+  const act = async (endpoint, body, after) => {
+    setBusy(true); setProblem(null)
+    try { const value = await call(endpoint, body); after(value) } catch (error) { setProblem(error.message) } finally { setBusy(false) }
+  }
+  return h('div', { className: 'ot-picker', role: 'group', 'aria-label': 'Dedicated channel bot' },
+    problem ? h('p', { role: 'alert' }, hostText(problem)) : null,
+    pending.map(proposal => h('div', { key: proposal.proposalId },
+      h('p', null, `Create ${proposal.name} and hand over: ${proposal.channelIds.map(id => channels.find(channel => channel.id === id)?.name ?? id).join(', ')}? The default bot will only read these channels.`),
+      h('button', { type: 'button', disabled: busy, onClick: () => act('confirm_answer_bot', { proposalId: proposal.proposalId }, () => { setLocal(null); onClose() }) }, 'Confirm hand-over'),
+      h('button', { type: 'button', disabled: busy, onClick: () => act('cancel_answer_bot', { proposalId: proposal.proposalId }, () => { setLocal(null); onClose() }) }, 'Cancel proposal'))),
+    h('input', { 'aria-label': 'Bot name', value: name, maxLength: 40, onChange: event => setName(event.target.value) }),
+    channels.map(channel => h('label', { key: channel.id },
+      h('input', { type: 'checkbox', checked: selected.includes(channel.id), onChange: event => setSelected(before => event.target.checked ? [...before, channel.id] : before.filter(id => id !== channel.id)) }), channel.name)),
+    h('button', { type: 'button', disabled: busy || !name.trim() || !selected.length, onClick: () => act('propose_answer_bot', { name, channelIds: selected }, value => setLocal({ ...value, name, channelIds: selected })) }, 'Review hand-over'),
+    h('button', { type: 'button', disabled: busy, onClick: onClose }, 'Close'))
+}
+
 export function OmniTree(props) {
   const { bot, actions, roster } = props
   const state = useOmni()
   const omni = useMemo(() => omniActions(id => actions.selectPanel(id), call), [actions])
   const [open, setOpen] = useState(readOpen)
   const [picking, setPicking] = useState(null)
+  const [creatingBot, setCreatingBot] = useState(false)
   useEffect(() => { startLive(call) }, [])
   if (!isOmniBot(bot)) return null
   const rowProps = rowPropsOf(props, roster?.omniRowProps)
-  const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : []
+  const defaultBotId = roster?.omniOwnership?.defaultBotId ?? roster?.eventsBotId ?? bot.id
+  const ownerOf = id => roster?.omniOwnership?.channels?.[id] ?? defaultBotId
+  const threads = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter(thread => (thread.ownerBotId ?? ownerOf(thread.channelId)) === bot.id)
+  const ownedChannels = state.channels.filter(channel => ownerOf(channel.id) === bot.id)
+  const ownedState = { ...state, channels: ownedChannels }
+  const ownedView = { ...roster, omniThreads: threads }
   // Threads of no channel shown here (none linked now, a channel removed, another Omni linked
   // since) still show, so they can be opened or removed: removing needs no link.
   const others = list => (list.length === 0 ? null : h('div', { className: 'ot-others', role: 'group', 'aria-label': t('Other chats') },
@@ -443,10 +475,12 @@ export function OmniTree(props) {
     return next
   })
   const plus = plusOf(roster, state)
-  const listed = new Set(state.channels.map(channel => channel.id))
+  const listed = new Set(ownedChannels.map(channel => channel.id))
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
-    state.channels.map(channel => h(ChannelItem, {
-      key: channel.id, channel, state, roster, rowProps, actions, omni, plus, open: open.has(channel.id), picking: picking === channel.id,
+    bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
+    bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? h(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
+    ownedChannels.map(channel => h(ChannelItem, {
+      key: channel.id, channel, state: ownedState, roster: ownedView, rowProps, actions, omni, plus, open: open.has(channel.id), picking: picking === channel.id,
       // Folding a channel closes its picker.
       onToggle: () => {
         if (picking === channel.id && open.has(channel.id)) setPicking(null)

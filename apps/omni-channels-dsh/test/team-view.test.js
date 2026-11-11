@@ -115,7 +115,7 @@ const TEAM_BROWSER_TOOLS = ['browser_back', 'browser_click', 'browser_handoff', 
 test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas, plus the plugin\'s own', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS, 'create_thread'].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS, 'create_thread', 'propose_answer_bot'].sort())
   assert.equal(ctx.registeredTools.has('omni_handoff'), false)
 })
 
@@ -195,6 +195,10 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect ds-bot: Omni permissions view',
     'on tools/pre-execute (prepend)',
     'tools guard',
+    'effect omni-channels: propose_answer_bot',
+    'effect omni-channels: confirm_answer_bot',
+    'effect omni-channels: cancel_answer_bot',
+    'tool propose_answer_bot',
     'on tools/pre-execute (prepend)',
     'on tools/pre-execute (prepend)',
     'on session/event',

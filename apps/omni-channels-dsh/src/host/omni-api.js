@@ -5,6 +5,7 @@
 // for the live parts of those cards and of the canvases Omni draws.
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
+import { z } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { isThreadSession, omniActorOf, operatesHere, operatesOmni } from './grants.js'
 import { output } from './output.js'
@@ -249,7 +250,12 @@ export function install(rt) {
     return null
   }
 
-  async function call(method, path, body) {
+  async function call(method, path, body, bot) {
+    if (bot !== undefined && method !== 'GET') {
+      const before = state.omniOwnership
+      const ownership = await rawOwnership(bot, method, path, body)
+      if (ownership || before !== state.omniOwnership) throw invalid(ownership ?? 'Channel ownership changed while this call waited.')
+    }
     const response = await rt.omniRequest(method, path, body === undefined ? {} : { body })
     if (response === null) throw invalid('Omni is not connected here.')
     const text = await response.text()
@@ -257,6 +263,45 @@ export function install(rt) {
     try { data = text ? JSON.parse(text) : null } catch { /* not JSON: keep the text */ }
     return { status: response.status, ok: response.ok, data }
   }
+
+  // RFC-0001: raw calls cannot bypass channel ownership, including quiet writes
+  // and a card approved after a hand-over. Unknown/global writes fail closed once
+  // channels have been handed over; they cannot be attributed to one owning bot.
+  const ChannelReply = z.object({ data: z.object({ instanceId: z.string().min(1) }).passthrough() })
+  const MessageReply = z.object({ data: z.object({ chatId: z.string().min(1) }).passthrough() })
+  const canonical = path => {
+    let decoded
+    try { decoded = decodeURIComponent(path) } catch { throw invalid('Invalid API path encoding.') }
+    return new URL(decoded.replace(/\/{2,}/g, '/'), 'http://omni.invalid').pathname
+  }
+  async function rawOwnership(botId, method, path, body, query) {
+    if (method === 'GET' || !Object.keys(state.omniOwnership?.channels ?? {}).length) return undefined
+    const route = canonical(path)
+    const channels = new Set()
+    const channel = /^\/instances\/([^/]+)/.exec(route)?.[1]
+    if (channel) channels.add(channel)
+    for (const value of [body?.instanceId, body?.channelId && route.startsWith('/instances') ? body.channelId : undefined, query?.instanceId]) if (typeof value === 'string') channels.add(value)
+    let chatId = /^\/chats\/([^/]+)/.exec(route)?.[1] ?? body?.chatId ?? query?.chatId
+    const messageId = /^\/messages\/([^/]+)/.exec(route)?.[1]
+    if (messageId && !['send', 'read', 'media', 'delete-channel', 'edit-channel', 'send-self'].includes(messageId)) {
+      const reply = await call('GET', `/messages/${encodeURIComponent(messageId)}`)
+      if (!reply.ok) return 'Could not resolve the channel for this call.'
+      const parsed = MessageReply.safeParse(reply.data)
+      if (!parsed.success) return 'Could not resolve the channel for this call.'
+      chatId = parsed.data.data.chatId
+    }
+    if (chatId) {
+      const reply = await call('GET', `/chats/${encodeURIComponent(chatId)}`)
+      const parsed = ChannelReply.safeParse(reply.data)
+      if (!reply.ok || !parsed.success) return 'Could not resolve the channel for this call.'
+      channels.add(parsed.data.data.instanceId)
+    }
+    // A caller-supplied instance on a global operation does not make it scoped.
+    const scoped = /^\/(instances\/[^/]+|chats\/[^/]+|messages\/(send(?:\/|$)|delete-channel$|edit-channel$|[^/]+\/))/.test(route)
+    if (!scoped || channels.size === 0) return 'This call cannot be scoped to an owned channel. Use a channel-scoped operation.'
+    return [...channels].every(id => rt.canChannel(botId, id, 'write')) ? undefined : 'This channel belongs to another bot; this bot may only read it.'
+  }
+  rt.omniRawOwnership = rawOwnership
 
   const parse = (text, what) => {
     if (text === undefined || text === null || text === '') return undefined
@@ -289,7 +334,7 @@ export function install(rt) {
 
   ctx.tools.register(defineTool({
     name: 'omni_call',
-    description: 'Omni and Main Bots only. Calls one omni API operation with full permissions, on the user\'s behalf. The user sees every call as a card in the chat (a QR code to scan, a channel, a table), so do not repeat its data in text. Find the operation with omni_endpoints first.',
+    description: 'Omni and Main Bots only. Calls one omni API operation within your owned channels, on the user\'s behalf. The default bot only reads channels handed to another bot. The user sees every call as a card in the chat (a QR code to scan, a channel, a table), so do not repeat its data in text. Find the operation with omni_endpoints first.',
     parameters: {
       method: { type: 'string', required: true, enum: METHODS, description: 'HTTP method' },
       path: { type: 'string', required: true, description: 'API path under /api/v2 with ids filled in, e.g. /instances/<id>/connect' },
@@ -310,6 +355,9 @@ export function install(rt) {
         if (!op) throw invalid(`${method} ${path} is not an omni API operation. Find it with omni_endpoints.`)
         const query = parse(args.query, 'query')
         const body = parse(args.body, 'body')
+        const botId = omniActorOf(rt, exec.agent?.id)
+        const ownership = await rawOwnership(botId, method, path, body, query)
+        if (ownership) return fitted({ status: 403, error: ownership })
         const act = sensitiveCall(method, path, body)
         if (act !== null) {
           // The card shows the whole call, or nothing runs.
@@ -319,8 +367,8 @@ export function install(rt) {
           const channel = channelId ? (await channelOf(channelId)).name : undefined
           const asked = await rt.omniPermit(exec, {
             action: act, force: 'confirm',
-            resource: { type: 'call', id: `${method} ${path}`, name: op.summary || `${method} ${path}` },
-            call: { tool: 'omni_call', args: { method, path, query, body } },
+            resource: { type: 'call', id: `${method} ${path}`, name: op.summary || `${method} ${path}`, ...(channelId ? { channelId } : {}) },
+            call: { tool: 'omni_call', args: { method, path, query, body, bot: botId } },
             preview: {
               method, path, ...(channel ? { channel } : {}),
               ...(typeof body?.to === 'string' ? { to: body.to } : {}), ...(typeof body?.text === 'string' ? { text: body.text } : {}),
@@ -330,17 +378,19 @@ export function install(rt) {
           })
           if (asked) return asked
         }
-        return await runCall({ method, path, query, body }, op)
+        return await runCall({ method, path, query, body, bot: botId }, op)
       } catch (error) {
         return fitted({ status: 0, error: error.message })
       }
     },
   }))
-  async function runCall({ method, path, query, body }, op) {
+  async function runCall({ method, path, query, body, bot }, op) {
+    const ownership = await rawOwnership(bot, method, path, body, query)
+    if (ownership) return fitted({ status: 403, error: ownership })
     // A confirmed card runs here too: it never reaches a chat-key route either.
     if (isKeyRoute(path)) return fitted({ status: 0, error: KEY_ROUTE_REFUSAL })
     const qs = query && typeof query === 'object' ? new URLSearchParams(Object.entries(query).filter(([, value]) => value !== undefined && value !== null).map(([key, value]) => [key, typeof value === 'object' ? JSON.stringify(value) : String(value)])).toString() : ''
-    const result = await call(method, `${path}${qs ? `?${qs}` : ''}`, body)
+    const result = await call(method, `${path}${qs ? `?${qs}` : ''}`, body, bot)
     return fitted({ status: result.status, operation: op?.summary ?? `${method} ${path}`, data: result.data })
   }
   rt.omniExecutor('omni_call', args => runCall(args, findOperation(spec?.ops ?? [], args.method, args.path)))
@@ -489,7 +539,7 @@ export function install(rt) {
       preview: args => ({ text: args.text }),
       run: async (args) => {
         const { chat } = await chatResource(args.chat)
-        const result = await call('POST', '/messages/send', { instanceId: chat.instanceId, to: chat.externalId, text: args.text })
+        const result = await call('POST', '/messages/send', { instanceId: chat.instanceId, to: chat.externalId, text: args.text }, args.bot)
         return fitted({ status: result.status, operation: 'Send message', data: result.data })
       },
     },
@@ -504,7 +554,7 @@ export function install(rt) {
       run: async (args) => {
         const { chat } = await chatResource(args.chat)
         await messageIn(chat, args.message)
-        const result = await call('POST', '/messages/send/reaction', { instanceId: chat.instanceId, to: chat.externalId, messageId: args.message, emoji: args.emoji })
+        const result = await call('POST', '/messages/send/reaction', { instanceId: chat.instanceId, to: chat.externalId, messageId: args.message, emoji: args.emoji }, args.bot)
         return fitted({ status: result.status, operation: 'React', data: result.data })
       },
     },
@@ -535,14 +585,20 @@ export function install(rt) {
       run: async (args) => {
         const { chat } = await chatResource(args.chat)
         const message = await messageIn(chat, args.message)
-        const result = await call('POST', '/messages/delete-channel', { instanceId: chat.instanceId, channelId: chat.externalId, messageId: message.externalId, fromMe: message.isFromMe === true })
+        const result = await call('POST', '/messages/delete-channel', { instanceId: chat.instanceId, channelId: chat.externalId, messageId: message.externalId, fromMe: message.isFromMe === true }, args.bot)
         return fitted({ status: result.status, operation: 'Delete message', data: result.data })
       },
     },
   }
   const act = (definition) => {
     const spec = ACTS[definition.name]
-    rt.omniExecutor(definition.name, args => spec.run(args))
+    const runOwned = async args => {
+      const { resource } = await chatResource(args.chat)
+      const ownership = rt.omniOwnershipRefusal?.(args.bot, resource, spec.action)
+      if (ownership) return fitted({ status: 403, error: ownership })
+      return spec.run(args)
+    }
+    rt.omniExecutor(definition.name, runOwned)
     ctx.tools.register(defineTool({
       ...definition,
       output,
@@ -554,7 +610,7 @@ export function install(rt) {
           const message = args.message ? await messageIn(chat, args.message) : undefined
           const asked = await rt.omniPermit(exec, { action: spec.action, resource, call: { tool: definition.name, args }, preview: spec.preview?.(args, message) ?? {} })
           if (asked) return asked
-          return await spec.run(args)
+          return await runOwned(args)
         } catch (error) {
           return fitted({ status: 0, error: error.message })
         }
@@ -633,9 +689,9 @@ export function install(rt) {
     name: 'omni_connect',
     description: 'Omni and Main Bots only. Starts connecting a channel (WhatsApp shows a QR code to scan). The user sees the live QR code, which turns into Connected once scanned; do not read it back.',
     parameters: { channel: { type: 'string', required: true, description: 'Channel id or exact name' } },
-  }, async (args) => {
+  }, async (args, exec) => {
     const id = await channelId(args.channel)
-    const result = await call('POST', `/instances/${id}/connect`, {})
+    const result = await call('POST', `/instances/${id}/connect`, {}, omniActorOf(rt, exec.agent?.id))
     return fitted({ status: result.status, operation: 'Connect channel', channelId: id, data: result.data })
   }, 'POST')
 

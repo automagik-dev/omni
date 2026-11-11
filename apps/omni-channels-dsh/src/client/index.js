@@ -4,7 +4,7 @@ import { registerSettings } from './omni-settings.js'
 import { WizardHost } from './wizard.js'
 import { CHANNELS_CSS, ChannelsFooter, ChannelsPage, ChatPage } from './channels.js'
 import { CHANNELS_PANEL, CHAT_PANEL } from './omni-store.js'
-import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SavedAutomationCard, SubscriptionsButton, automationExamples, boardTabDefinition } from './subscriptions.js'
+import { BOARD_KIND, BOARD_TAB_ID, BoardTab, EventsBadge, SUBSCRIPTIONS_CSS, SavedAutomationCard, SubscriptionsButton, automationExamples, boardTabDefinition, isEventsBot } from './subscriptions.js'
 import { AUTOMATIONS_CSS, AUTOMATIONS_PANEL, AutomationsPage } from './automations-page.js'
 import { Badge, KeyValue, LiveChannel, LiveChat, LiveQr, OMNI_LIVE_CSS, OmniCallCard, OmniToolCard, Table, parseCall } from './omni-live.js'
 import { OMNI_PEEK_CSS } from './omni-peek.js'
@@ -31,12 +31,12 @@ export const channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, 
 // It never opens by itself: the header's Automations button is the way in, and the Session's
 // own sidebar layout (open, closed, other tabs) is the user's.
 let boardRight = null
-function toggleBoard(reportError) {
+function toggleBoard(reportError, botId) {
   const right = boardRight
   if (!right) return
   try {
     if (right.isExpanded() && right.active()?.kind === BOARD_KIND) right.toggleExpanded()
-    else right.openTab(BOARD_KIND)
+    else right.openTab(BOARD_KIND, { params: { botId } })
   } catch (error) {
     reportError?.(error, 'board')
   }
@@ -97,13 +97,13 @@ export function apply(ctx) {
   // Saving an automation confirms in the chat, with the steering warning the board carries.
   ctx.effect(() => toolCards.register('save_automation', props => h(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), 'ds-bot: save_automation card')
   // Omni's row counts the automation runs waiting for you; its header opens their board.
-  ctx.effect(() => badges.register({ id: 'omni-events', Component: ({ bot, roster, useWork }) => (bot.id === roster.eventsBotId ? h(EventsBadge, { roster, useWork }) : null) }), 'ds-bot: automations badge')
+  ctx.effect(() => badges.register({ id: 'omni-events', Component: ({ bot, roster, useWork }) => (isEventsBot(roster, bot.id) ? h(EventsBadge, { roster, useWork, botId: bot.id }) : null) }), 'ds-bot: automations badge')
   // The Omni Bot's channels hang under its sidebar row, each with its + and the chats added
   // there as threads. A team client older than this plugin has no such place.
   if (botChildren) ctx.effect(() => botChildren.register({ id: 'omni-channels', Component: OmniTree }), 'ds-bot: Omni channels in the sidebar')
   ctx.effect(() => headerButtons.register({
     id: 'omni-board',
-    Component: ({ bot, roster, actions, useWork }) => (bot.id === roster.eventsBotId ? h(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null),
+    Component: ({ bot, roster, actions, useWork }) => (isEventsBot(roster, bot.id) ? h(SubscriptionsButton, { roster, useWork, botId: bot.id, onToggle: () => toggleBoard(actions.reportError, bot.id) }) : null),
   }), 'ds-bot: automations button')
   // An empty chat with the events Bot suggests what it can watch, where a panel used to open by
   // itself. A team client older than this plugin has no chat suggestions.

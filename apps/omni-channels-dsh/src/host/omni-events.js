@@ -212,14 +212,18 @@ export function install(rt) {
 
   async function handle(row, controller) {
     if (cancelled(controller)) return 'cancelled'
-    const due = Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row))
-    if (due.length === 0) return 'unmatched'
+    await rt.waitChannelOwnership?.(row.instanceId)
+    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
+    if (due().length === 0) return 'unmatched'
     const event = await eventOf(row)
     if (event === undefined) return 'unmatched'
     if (cancelled(controller)) return 'cancelled'
+    await rt.waitChannelOwnership?.(row.instanceId)
+    if (cancelled(controller)) return 'cancelled'
     // Admission is the first dispatch, not the lookup. Once entered, finish this whole
     // captured row (even after stop), then ack it before the run can settle.
-    for (const sub of due) {
+    for (const sub of due()) {
+      if (rt.automationOwned?.(sub, event) === false) continue
       try {
         await rt.fireSubscription(sub, { ...event, ref: row.id })
       } catch (error) {
