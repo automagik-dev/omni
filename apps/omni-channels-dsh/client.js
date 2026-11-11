@@ -11987,20 +11987,33 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   }
   return (0, import_react4.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react4.createElement)(Problem, { text: problem }));
 }
+var BUSINESS_FIELDS = { accessToken: "", phoneNumberId: "", wabaId: "", apiBaseUrl: "", authMode: "x-api-key", webhookSecret: "", signatureMode: "x-webhook-signature" };
+function businessDetails(fields) {
+  const apiBaseUrl = fields.apiBaseUrl.trim();
+  const webhookSecret = fields.webhookSecret.trim();
+  return {
+    accessToken: fields.accessToken.trim(),
+    phoneNumberId: fields.phoneNumberId.trim(),
+    wabaId: fields.wabaId.trim(),
+    ...apiBaseUrl ? { apiBaseUrl, authMode: fields.authMode } : {},
+    ...webhookSecret ? { webhookSecret, signatureMode: fields.signatureMode } : {}
+  };
+}
 function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const info = CHANNEL_TYPES[type];
-  const [fields, setFields] = (0, import_react4.useState)({ accessToken: "", phoneNumberId: "", wabaId: "" });
+  const [fields, setFields] = (0, import_react4.useState)(BUSINESS_FIELDS);
   const [channel, setChannel] = (0, import_react4.useState)(null);
   const [busy, setBusy] = (0, import_react4.useState)(false);
   const [problem, setProblem] = (0, import_react4.useState)(null);
   const set3 = (key) => (event) => setFields((value) => ({ ...value, [key]: event.target.value }));
-  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim());
+  const providerReady = !fields.apiBaseUrl.trim() || /^https:\/\/\S+$/.test(fields.apiBaseUrl.trim());
+  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim()) && providerReady;
   const connect = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      const made = await call("omni-wab-connect", { name: info.label, accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim() });
-      setFields({ accessToken: "", phoneNumberId: "", wabaId: "" });
+      const made = await call("omni-wab-connect", { name: info.label, ...businessDetails(fields) });
+      setFields(BUSINESS_FIELDS);
       setChannel(made);
     } catch (error) {
       console.warn("Could not connect the Business number:", error);
@@ -12010,6 +12023,12 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
     }
   };
   const field = (key, label, extra) => (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, label), (0, import_react4.createElement)("input", { value: fields[key], onChange: set3(key), autoComplete: "off", ...extra }));
+  const choice = (key, label, options) => (0, import_react4.createElement)(
+    "label",
+    { className: "oc-field" },
+    (0, import_react4.createElement)("span", null, label),
+    (0, import_react4.createElement)("select", { value: fields[key], onChange: set3(key) }, options.map(([value, text]) => (0, import_react4.createElement)("option", { key: value, value }, text)))
+  );
   return (0, import_react4.createElement)(
     FlowShell,
     { type, at: channel ? 1 : 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
@@ -12021,6 +12040,15 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
       field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
       field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
       field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
+      (0, import_react4.createElement)(
+        "details",
+        { className: "oc-field" },
+        (0, import_react4.createElement)("summary", null, t("Through a provider such as Kapso (optional)")),
+        field("apiBaseUrl", t("Provider API address"), { inputMode: "url", placeholder: "https://api.kapso.ai/meta/whatsapp/v24.0" }),
+        choice("authMode", t("Send the access token as"), [["x-api-key", t("Provider key (X-API-Key)")], ["bearer", t("Bearer token")]]),
+        field("webhookSecret", t("Provider webhook secret"), { type: "password" }),
+        choice("signatureMode", t("Webhook signature"), [["x-webhook-signature", t("Provider (X-Webhook-Signature)")], ["x-hub-signature-256", t("Meta app secret (X-Hub-Signature-256)")]])
+      ),
       (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
       (0, import_react4.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages."))
     ),
@@ -17540,6 +17568,15 @@ var STRINGS = {
   "Access token": "访问令牌",
   "Phone number ID": "电话号码 ID",
   "WhatsApp Business Account ID": "WhatsApp 企业账户 ID",
+  "Through a provider such as Kapso (optional)": "通过 Kapso 等服务商连接（可选）",
+  "Provider API address": "服务商 API 地址",
+  "Send the access token as": "访问令牌的发送方式",
+  "Provider key (X-API-Key)": "服务商密钥（X-API-Key）",
+  "Bearer token": "Bearer 令牌",
+  "Provider webhook secret": "服务商 Webhook 密钥",
+  "Webhook signature": "Webhook 签名",
+  "Provider (X-Webhook-Signature)": "服务商（X-Webhook-Signature）",
+  "Meta app secret (X-Hub-Signature-256)": "Meta 应用密钥（X-Hub-Signature-256）",
   "The token stays with your Omni. Omni only gets that number's messages.": "令牌只保存在你的 Omni 中。Omni 只会收到该号码的消息。",
   "{version} is available · you're on {current}": "{version} 已发布 · 你当前使用 {current}",
   "{version} is available. Its admin updates this Omni.": "{version} 已发布。由管理员更新这个 Omni。",

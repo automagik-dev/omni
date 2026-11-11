@@ -14,8 +14,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
+import { MetaWhatsAppClient } from '../client';
 import { handleMetaWebhook } from '../handlers/webhook';
 import { WhatsAppBusinessPlugin } from '../plugin';
+import { listTemplatesFromMeta } from '../templates';
 
 const KAPSO_BASE = 'https://api.kapso.ai/meta/whatsapp/v24.0';
 const KAPSO_KEY = 'test-kapso-api-key';
@@ -360,5 +362,58 @@ describe('Meta-compatible provider (Kapso)', () => {
         }),
       ).rejects.toThrow('Invalid Meta-compatible provider settings');
     });
+  });
+});
+
+describe('MetaWhatsAppClient transport', () => {
+  let fetchSpy: ReturnType<typeof spyOn>;
+
+  afterEach(() => fetchSpy.mockRestore());
+
+  /** URL and headers of every request the client made. */
+  function requests(): { url: string; headers: Record<string, string> }[] {
+    return fetchSpy.mock.calls.map((call: unknown[]) => ({
+      url: String(call[0]),
+      headers: Object.fromEntries(new Headers((call[1] as RequestInit | undefined)?.headers).entries()),
+    }));
+  }
+
+  test('x-api-key without a provider base URL still sends Bearer to Graph', async () => {
+    fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(ok({ id: META_PHONE_ID }));
+    const client = new MetaWhatsAppClient({
+      accessToken: KAPSO_KEY,
+      phoneNumberId: META_PHONE_ID,
+      authMode: 'x-api-key',
+    });
+
+    await client.getPhoneNumberInfo();
+
+    const [request] = requests();
+    expect(request?.url.startsWith('https://graph.facebook.com/')).toBe(true);
+    expect(request?.headers.authorization).toBe(`Bearer ${KAPSO_KEY}`);
+    expect(request?.headers['x-api-key']).toBeUndefined();
+  });
+
+  test('a raw Graph paging.next from the provider is fetched from the provider base', async () => {
+    fetchSpy = spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        ok({
+          data: [],
+          paging: { next: 'https://graph.facebook.com/v24.0/waba-kapso/message_templates?limit=1&after=CURSOR' },
+        }),
+      )
+      .mockResolvedValueOnce(ok({ data: [] }));
+    const client = new MetaWhatsAppClient(
+      { accessToken: KAPSO_KEY, phoneNumberId: KAPSO_PHONE_ID, baseUrl: KAPSO_BASE, authMode: 'x-api-key' },
+      'waba-kapso',
+    );
+
+    await listTemplatesFromMeta(client, 'waba-kapso', { pageSize: 1 });
+
+    const urls = requests().map((request) => request.url);
+    expect(urls).toHaveLength(2);
+    expect(urls[1]).toBe(`${KAPSO_BASE}/waba-kapso/message_templates?limit=1&after=CURSOR`);
+    expect(urls.some((url) => url.includes('graph.facebook.com'))).toBe(false);
+    expect(requests().every((request) => request.headers['x-api-key'] === KAPSO_KEY)).toBe(true);
   });
 });

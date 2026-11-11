@@ -59,6 +59,7 @@ import { registerSlackSchemas } from '../schemas/openapi/slack';
 import { registerSystemSchemas } from '../schemas/openapi/system';
 import { registerVoiceSchemas } from '../schemas/openapi/voice';
 import { registerWebhookSchemas } from '../schemas/openapi/webhooks';
+import { registerWhatsAppBusinessSchemas } from '../schemas/openapi/whatsapp-business';
 import { registerWhatsappFlowsSchemas } from '../schemas/openapi/whatsapp-flows';
 
 // Register all schemas
@@ -97,6 +98,7 @@ registerConversationSchemas(registry);
 registerFollowUpSchemas(registry);
 registerVoiceSchemas(registry);
 registerWhatsappFlowsSchemas(registry);
+registerWhatsAppBusinessSchemas(registry);
 registerChannelHarnessSchemas(registry);
 registerSlackSchemas(registry);
 // Flag-gated, but still documented: "no REST endpoints without OpenAPI docs"

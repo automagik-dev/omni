@@ -12,6 +12,7 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { Hono } from 'hono';
 import type { AppVariables } from '../../../types';
+import { templatesRoutes } from '../templates';
 import { whatsappBusinessRoutes } from '../whatsapp-business';
 
 const INSTANCE_ID = '44444444-4444-4444-8444-444444444444';
@@ -251,5 +252,40 @@ describe('a provider instance on routes that only Meta serves', () => {
       hasWebhookSecret: true,
     });
     expect(text).not.toContain(KAPSO.webhookSecret);
+  });
+});
+
+describe('template header media upload', () => {
+  test('a provider instance is refused before the Resumable Upload API is called', async () => {
+    const app = new Hono<{ Variables: AppVariables }>();
+    app.use('*', async (c, next) => {
+      c.set('services', {
+        instances: {
+          getById: mock(async () => ({
+            id: INSTANCE_ID,
+            channel: 'whatsapp-business',
+            metaAccessToken: 'fixture-provider-key',
+            metaPhoneNumberId: META_DETAILS.phoneNumberId,
+            metaWabaId: META_DETAILS.wabaId,
+            metaAppId: '1234567890',
+            ...KAPSO_COLUMNS,
+          })),
+        },
+      } as never);
+      c.set('apiKey', { id: 'test', name: 'test', scopes: ['*'], instanceIds: null, expiresAt: null } as never);
+      await next();
+    });
+    app.route('/', templatesRoutes);
+    const form = new FormData();
+    form.set('file', new File([new Uint8Array([1, 2, 3])], 'header.png', { type: 'image/png' }));
+
+    const res = await app.request(`/instances/${INSTANCE_ID}/whatsapp-templates/upload-header-media`, {
+      method: 'POST',
+      body: form,
+    });
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_SUPPORTED_VIA_PROVIDER');
+    expect(outbound()).toEqual([]);
   });
 });
