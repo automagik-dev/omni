@@ -73,7 +73,15 @@ describe('chat-key routes (wish: omni-chat-threads)', () => {
     const mint = (openApiSpec.paths?.['/keys/children'] as Record<string, Record<string, unknown>>).post;
     expect(Object.keys(mint?.responses as object).sort()).toEqual(['201', '400', '403', '404', '409']);
     const schema = (openApiSpec.components?.schemas as Record<string, Record<string, unknown>>).MintChildKeyRequest;
-    expect(schema).toMatchObject({ additionalProperties: false, required: ['chatId'] });
-    expect(Object.keys(schema?.properties as object)).toEqual(['chatId']);
+    const variants = schema?.anyOf as Array<Record<string, unknown>>;
+    expect(variants).toHaveLength(2);
+    expect(variants[0]).toMatchObject({ additionalProperties: false, required: ['chatId'] });
+    expect(Object.keys(variants[0]?.properties as object)).toEqual(['chatId']);
+    expect(variants[1]).toMatchObject({
+      additionalProperties: false,
+      required: ['chatIds'],
+      properties: { chatIds: { type: 'array', minItems: 1, items: { type: 'string', format: 'uuid' } } },
+    });
+    expect(Object.keys(variants[1]?.properties as object)).toEqual(['chatIds']);
   });
 });

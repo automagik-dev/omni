@@ -825,7 +825,10 @@ keysRoutes.post('/children', zValidator('json', MintChildKeyBodySchema), async (
   if (ceilingDenied) return ceilingDenied;
 
   const members = chats.map(({ id, externalId, instanceId }) => ({ id, externalId, instanceId }));
-  const result = await services.apiKeys.mintChild(apiKey.id, members);
+  const result = await services.apiKeys.mintChild(
+    apiKey.id,
+    'chatId' in body ? (members[0] as (typeof members)[number]) : members,
+  );
   if (!result.ok) return mintRefusal(c, result);
 
   return c.json(
