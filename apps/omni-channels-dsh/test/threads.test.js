@@ -11,7 +11,7 @@ import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { CUT_WINDOW_MS, matchesChat, THREAD_TOOLS } from '../src/host/threads.js'
-import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
+import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, scopedChats, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -52,7 +52,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   run.emit(thread.sessionId, 'turn/end', { reason: { kind: 'completed' } })
   await run.channels.save()
   assert.deepEqual(saved(home).omniThreads[answer.threadId].status, 'idle')
-  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, channelId: INSTANCE, title: 'Marina', kind: 'direct', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
+  assert.deepEqual(run.view().omniThreads, [{ id: answer.threadId, sessionId: thread.sessionId, chatId: CHAT, chatIds: [CHAT], automations: [], channelId: INSTANCE, title: 'Marina', kind: 'direct', status: 'idle', connected: true, reason: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'ask', reactions: 'list' } }])
   assert.deepEqual([run.view().omniThreadsOffered, run.view().omniThreadsReason, run.view().omniRowProps], [true, null, [...TEAM_CONTRACT.rowProps]])
   // A DSH restart: the next start has it, connected, and makes no Session for it.
   await run.stop()
@@ -847,4 +847,56 @@ test('RFC-0001: moving a member requires owner confirmation and rekeys both sets
   assert.deepEqual(target.chatIds, [GROUP, ELSEWHERE])
   assert.ok(old.every(key => omni.keys.get(key).revoked))
   assert.equal(run.channels.threads.byChat(ELSEWHERE).id, target.id)
+})
+
+test('SC1 create_thread makes the Fin Ops pair and Luiza one permanent sidebar session immediately', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const chats = scopedChats(t)
+  const omni = fakeOmni(), home = homeFor(t, omni), run = await boot(t, home)
+  const create = run.ctx.registeredTools.get('create_thread')
+  const reply = await create.execute({ chats, title: 'Finance', notes: 'Follow invoices', sends: 'allow' }, { agent: { id: 'm1' } })
+  assert.doesNotMatch(reply, /Not created/)
+  const [thread] = run.channels.threads.list()
+  assert.deepEqual(thread.chatIds, chats.map(chat => chat.chatId))
+  assert.equal(thread.title, 'Finance')
+  assert.equal(thread.notes, 'Follow invoices')
+  assert.equal(thread.permissions, undefined)
+  assert.equal(run.made.length, 1)
+  const rows = run.view().omniThreads
+  assert.equal(rows.length, 1)
+  assert.deepEqual(rows[0].chatIds, thread.chatIds)
+  assert.deepEqual(omni.children().at(-1).chatIds, thread.chatIds)
+  assert.equal(create.parameters.properties.sends, undefined)
+  assert.equal(create.parameters.properties.permissions, undefined)
+  assert.match(await create.execute({ chats, title: 'Other', notes: '' }, { agent: { id: thread.sessionId } }), /Only the Omni Bot/)
+})
+
+test('SC9 sidebar add accepts two chats across channels in one host operation, validating the complete set first', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const chats = scopedChats(t).slice(0, 2)
+  const omni = fakeOmni(), home = homeFor(t, omni), run = await boot(t, home)
+  const bad = await run.call('omni-thread-add', { chats: [chats[0], { ...chats[1], channelId: INSTANCE }], title: 'Finance', notes: '' })
+  assert.equal(bad.ok, false)
+  assert.equal(run.made.length, 0)
+  assert.equal(omni.children().length, 0)
+  const result = await run.call('omni-thread-add', { chats, title: 'Finance', notes: '' })
+  assert.equal(result.ok, true)
+  assert.equal(run.view().omniThreads.length, 1)
+  assert.equal(run.view().omniThreads[0].chatIds.length, 2)
+})
+
+test('set creation serializes overlapping requests and rolls back a failed session or record', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const chats = scopedChats(t)
+  const omni = fakeOmni(), home = homeFor(t, omni), run = await boot(t, home)
+  const results = await Promise.all([run.channels.threads.create(chats, 'Finance', ''), run.channels.threads.create(chats.slice(0, 2), 'Duplicate', '')])
+  assert.deepEqual(results.map(result => result.ok), [true, false])
+  assert.equal(run.made.length, 1)
+  await run.channels.threads.remove(results[0].thread.id)
+  const save = run.channels.save
+  run.channels.save = async () => { throw Error('disk full') }
+  assert.equal((await run.channels.threads.create(chats, 'Cannot persist', '')).ok, false)
+  assert.equal(run.channels.threads.list().length, 0)
+  assert.equal(omni.children().every(key => key.revoked), true)
+  run.channels.save = save
 })

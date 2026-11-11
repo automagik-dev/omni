@@ -16219,6 +16219,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const running = useStatus((map) => map.get(id)?.running === true);
   const active = useRetain(id, (info) => (info?.retainedBy?.mainView ?? 0) > 0);
   const [confirming, setConfirming] = (0, import_react16.useState)(false);
+  const [deleting2, setDeleting] = (0, import_react16.useState)(null);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   const [menu, setMenu] = (0, import_react16.useState)(false);
   const row = (0, import_react16.useRef)(null);
@@ -16255,14 +16256,17 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     const why = openPhone(thread);
     if (why !== null) setProblem(why);
   };
-  const remove = () => {
-    if (!confirming) {
+  const remove = (automationChoice) => {
+    if (!confirming && typeof automationChoice !== "string") {
       setConfirming(true);
       return;
     }
     setConfirming(false);
     setProblem(null);
-    call("omni-thread-remove", { threadId: thread.id }).catch((error) => {
+    call("omni-thread-remove", { threadId: thread.id, ...typeof automationChoice === "string" ? { automations: automationChoice } : {} }).then((result) => {
+      if (result?.needsChoice) setDeleting(result.automations);
+      else setDeleting(null);
+    }).catch((error) => {
       console.warn("Could not remove the chat:", error);
       setProblem(t("Could not remove this chat. Try again."));
     });
@@ -16345,10 +16349,28 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         }, choice.label))
       ))
     ) : null,
+    (thread.automations?.length ?? 0) > 0 ? (0, import_react16.createElement)(
+      "ul",
+      { className: "ot-thread-automations", "aria-label": "Automations" },
+      thread.automations.map((automation) => (0, import_react16.createElement)("li", { key: automation.id }, automation.name))
+    ) : null,
+    deleting2 ? (0, import_react16.createElement)(
+      "div",
+      { className: "ot-thread-menu", role: "group", "aria-label": "What should happen to these automations?" },
+      (0, import_react16.createElement)("p", null, `What should happen to: ${deleting2.map((automation) => automation.name).join(", ")}?`),
+      ...[["keep", "Keep automations"], ["pause", "Pause automations"], ["delete", "Delete automations"]].map(([choice, label2]) => (0, import_react16.createElement)("button", {
+        key: choice,
+        type: "button",
+        onClick: () => {
+          void remove(choice);
+        }
+      }, label2)),
+      (0, import_react16.createElement)("button", { type: "button", onClick: () => setDeleting(null) }, "Cancel")
+    ) : null,
     problem ? (0, import_react16.createElement)("span", { className: "ot-thread-problem", role: "alert" }, hostText(problem)) : null
   );
 }
-function PickerChat({ chat, busy, onPick }) {
+function PickerChat({ chat, busy, selected, onPick }) {
   const name = chat.name ?? (chat.kind === "group" ? t("Group") : t("Chat"));
   const tag = chat.added ? t("Added") : busy === chat.id ? t("Adding…") : null;
   return (0, import_react16.createElement)(
@@ -16358,6 +16380,7 @@ function PickerChat({ chat, busy, onPick }) {
       className: "ot-picker-chat",
       "data-chat-id": chat.id,
       disabled: chat.added === true || busy !== null,
+      "aria-pressed": selected,
       "aria-busy": busy === chat.id || void 0,
       "aria-label": [name, chat.number, tag].filter(Boolean).join(", "),
       title: chat.number ? `${name} · ${chat.number}` : name,
@@ -16380,8 +16403,12 @@ function PickerChat({ chat, busy, onPick }) {
     )
   );
 }
-function ThreadPicker({ channel, onPick, onClose }) {
+function ThreadPicker({ channel, channels: channels2 = [channel], onPick, onClose }) {
   const [query, setQuery] = (0, import_react16.useState)("");
+  const [channelId, setChannelId] = (0, import_react16.useState)(channel.id);
+  const [selected, setSelected] = (0, import_react16.useState)([]);
+  const [title, setTitle] = (0, import_react16.useState)("");
+  const [notes, setNotes] = (0, import_react16.useState)("");
   const [list, setList] = (0, import_react16.useState)({ status: "loading", chats: [], error: null });
   const [busy, setBusy] = (0, import_react16.useState)(null);
   const [problem, setProblem] = (0, import_react16.useState)(null);
@@ -16396,7 +16423,7 @@ function ThreadPicker({ channel, onPick, onClose }) {
   const words = query.trim();
   (0, import_react16.useEffect)(() => {
     const ticket = ++asked.current;
-    const load = () => call("omni-thread-chats", words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
+    const load = () => call("omni-thread-chats", words ? { channelId, query: words } : { channelId }).then(
       (reply) => {
         if (alive.current && asked.current === ticket) setList({ status: "ready", chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null });
       },
@@ -16413,13 +16440,18 @@ function ThreadPicker({ channel, onPick, onClose }) {
     }
     const timer = setTimeout(load, SEARCH_DELAY_MS);
     return () => clearTimeout(timer);
-  }, [channel.id, words]);
-  const pick = async (chat) => {
+  }, [channelId, words]);
+  const toggle = (chat) => {
+    setSelected((before) => before.some((item) => item.chatId === chat.id) ? before.filter((item) => item.chatId !== chat.id) : [...before, { channelId, chatId: chat.id, name: chat.name }]);
+  };
+  const pick = async () => {
+    if (selected.length === 0 || !title.trim()) return;
+    const chat = { id: "saving" };
     if (busy !== null || chat.added) return;
     setBusy(chat.id);
     setProblem(null);
     try {
-      const result = await onPick(chat);
+      const result = await onPick({ chats: selected.map(({ channelId: channelId2, chatId }) => ({ channelId: channelId2, chatId })), title: title.trim(), notes });
       if (alive.current && result?.ok !== true) {
         console.warn("Could not add the chat:", result?.reason);
         setProblem(addReason(result?.reasonCode));
@@ -16445,6 +16477,14 @@ function ThreadPicker({ channel, onPick, onClose }) {
     "div",
     { className: "ot-picker", role: "group", "aria-label": t("Add a chat from {name}", { name: channel.name }), onKeyDown },
     (0, import_react16.createElement)(
+      "select",
+      { "aria-label": "Channel", value: channelId, disabled: busy !== null, onChange: (event) => {
+        setChannelId(event.target.value);
+        setQuery("");
+      } },
+      channels2.map((item) => (0, import_react16.createElement)("option", { key: item.id, value: item.id }, item.name))
+    ),
+    (0, import_react16.createElement)(
       "div",
       { className: "ot-picker-head" },
       (0, import_react16.createElement)("input", {
@@ -16465,11 +16505,17 @@ function ThreadPicker({ channel, onPick, onClose }) {
     availableChats.length > 0 ? (0, import_react16.createElement)(
       "div",
       { className: "ot-picker-list" },
-      availableChats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, onPick: pick }))
-    ) : null
+      availableChats.map((chat) => (0, import_react16.createElement)(PickerChat, { key: chat.id, chat, busy, selected: selected.some((item) => item.chatId === chat.id), onPick: toggle }))
+    ) : null,
+    (0, import_react16.createElement)("p", { className: "ot-picker-selected" }, selected.map((item) => item.name ?? item.chatId).join(", ")),
+    (0, import_react16.createElement)("input", { "aria-label": "Thread title", placeholder: "Thread title", value: title, maxLength: 80, onChange: (event) => setTitle(event.target.value) }),
+    (0, import_react16.createElement)("textarea", { "aria-label": "Thread notes", placeholder: "Thread notes", value: notes, maxLength: 8e3, onChange: (event) => setNotes(event.target.value) }),
+    (0, import_react16.createElement)("button", { type: "button", disabled: busy !== null || selected.length === 0 || !title.trim(), onClick: () => {
+      void pick();
+    } }, "Create thread")
   );
 }
-var addThread = (channelId, chat) => call("omni-thread-add", { channelId, chatId: chat.id });
+var addThread = (payload) => call("omni-thread-add", payload);
 function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, plus, open, picking, onToggle, onPlus, onClosePicker }) {
   const plusButton = (0, import_react16.useRef)(null);
   const threads = threadsOf(roster, channel.id);
@@ -16481,7 +16527,7 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
     onClosePicker();
     plusButton.current?.focus?.();
   };
-  const onPick = (chat) => addThread(channel.id, chat).then((result) => {
+  const onPick = (payload) => addThread(payload).then((result) => {
     if (result?.ok !== true) return result;
     closePicker();
     if (typeof result.threadId !== "string" || !teamReady(roster)) return result;
@@ -16527,7 +16573,7 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
       (0, import_react16.createElement)(
         "div",
         { className: "ot-chats-in" },
-        picking && plus.offered ? (0, import_react16.createElement)(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
+        picking && plus.offered ? (0, import_react16.createElement)(ThreadPicker, { channel, channels: state.channels, onPick, onClose: closePicker }) : null,
         !plus.offered && plus.reason ? (0, import_react16.createElement)("span", { className: "ot-empty" }, hostText(plus.reason)) : null,
         threads.map((thread) => (0, import_react16.createElement)(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
         (0, import_react16.createElement)(

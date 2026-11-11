@@ -115,7 +115,7 @@ const TEAM_BROWSER_TOOLS = ['browser_back', 'browser_click', 'browser_handoff', 
 test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas, plus the plugin\'s own', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS, 'create_thread'].sort())
   assert.equal(ctx.registeredTools.has('omni_handoff'), false)
 })
 
@@ -261,6 +261,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-thread-remove',
     'effect omni-channels: omni-thread-permissions',
     'effect omni-channels: thread names',
+    'tool create_thread',
     'tool thread_say',
     'tool thread_react',
     'tool thread_history',

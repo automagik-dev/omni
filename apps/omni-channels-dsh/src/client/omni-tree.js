@@ -150,6 +150,7 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const running = useStatus(map => map.get(id)?.running === true)
   const active = useRetain(id, info => (info?.retainedBy?.mainView ?? 0) > 0)
   const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(null)
   const [problem, setProblem] = useState(null)
   const [menu, setMenu] = useState(false)
   const row = useRef(null)
@@ -185,11 +186,14 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     const why = openPhone(thread)
     if (why !== null) setProblem(why)
   }
-  const remove = () => {
-    if (!confirming) { setConfirming(true); return }
+  const remove = (automationChoice) => {
+    if (!confirming && typeof automationChoice !== 'string') { setConfirming(true); return }
     setConfirming(false)
     setProblem(null)
-    call('omni-thread-remove', { threadId: thread.id }).catch(error => {
+    call('omni-thread-remove', { threadId: thread.id, ...(typeof automationChoice === 'string' ? { automations: automationChoice } : {}) }).then(result => {
+      if (result?.needsChoice) setDeleting(result.automations)
+      else setDeleting(null)
+    }).catch(error => {
       console.warn('Could not remove the chat:', error)
       setProblem(t('Could not remove this chat. Try again.'))
     })
@@ -235,6 +239,14 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
           key: String(choice.value), type: 'button', role: 'menuitemradio', className: 'ot-thread-menu-item', 'aria-checked': choice.checked,
           'data-field': choice.field, 'data-value': choice.value ?? 'default', onClick: () => choose(choice),
         }, choice.label))))) : null,
+    (thread.automations?.length ?? 0) > 0 ? h('ul', { className: 'ot-thread-automations', 'aria-label': 'Automations' },
+      thread.automations.map(automation => h('li', { key: automation.id }, automation.name))) : null,
+    deleting ? h('div', { className: 'ot-thread-menu', role: 'group', 'aria-label': 'What should happen to these automations?' },
+      h('p', null, `What should happen to: ${deleting.map(automation => automation.name).join(', ')}?`),
+      ...[['keep', 'Keep automations'], ['pause', 'Pause automations'], ['delete', 'Delete automations']].map(([choice, label]) => h('button', {
+        key: choice, type: 'button', onClick: () => { void remove(choice) },
+      }, label)),
+      h('button', { type: 'button', onClick: () => setDeleting(null) }, 'Cancel')) : null,
     problem ? h('span', { className: 'ot-thread-problem', role: 'alert' }, hostText(problem)) : null)
 }
 
@@ -244,12 +256,12 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
  * chat with no name is called "Group" or "Chat". Its button is named by the chat's name, number and
  * whether it is added, not by every word in the row.
  */
-function PickerChat({ chat, busy, onPick }) {
+function PickerChat({ chat, busy, selected, onPick }) {
   const name = chat.name ?? (chat.kind === 'group' ? t('Group') : t('Chat'))
   const tag = chat.added ? t('Added') : busy === chat.id ? t('Adding…') : null
   return h('button', {
     type: 'button', className: 'ot-picker-chat', 'data-chat-id': chat.id, disabled: chat.added === true || busy !== null,
-    'aria-busy': busy === chat.id || undefined, 'aria-label': [name, chat.number, tag].filter(Boolean).join(', '),
+    'aria-pressed': selected, 'aria-busy': busy === chat.id || undefined, 'aria-label': [name, chat.number, tag].filter(Boolean).join(', '),
     title: chat.number ? `${name} · ${chat.number}` : name, onClick: () => { void onPick(chat) },
   },
   h(ChatAvatar, { chat: { ...chat, name }, size: 30 }),
@@ -267,8 +279,12 @@ function PickerChat({ chat, busy, onPick }) {
  * failed mint among them) shows here, and nothing is added. Chats that already have sidebar
  * threads stay out of the picker, including search results.
  */
-export function ThreadPicker({ channel, onPick, onClose }) {
+export function ThreadPicker({ channel, channels = [channel], onPick, onClose }) {
   const [query, setQuery] = useState('')
+  const [channelId, setChannelId] = useState(channel.id)
+  const [selected, setSelected] = useState([])
+  const [title, setTitle] = useState('')
+  const [notes, setNotes] = useState('')
   const [list, setList] = useState({ status: 'loading', chats: [], error: null })
   const [busy, setBusy] = useState(null)
   const [problem, setProblem] = useState(null)
@@ -282,7 +298,7 @@ export function ThreadPicker({ channel, onPick, onClose }) {
   const words = query.trim()
   useEffect(() => {
     const ticket = ++asked.current
-    const load = () => call('omni-thread-chats', words ? { channelId: channel.id, query: words } : { channelId: channel.id }).then(
+    const load = () => call('omni-thread-chats', words ? { channelId, query: words } : { channelId }).then(
       (reply) => { if (alive.current && asked.current === ticket) setList({ status: 'ready', chats: Array.isArray(reply?.chats) ? reply.chats : [], error: null }) },
       (error) => {
         if (alive.current && asked.current === ticket) {
@@ -297,13 +313,18 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     }
     const timer = setTimeout(load, SEARCH_DELAY_MS)
     return () => clearTimeout(timer)
-  }, [channel.id, words])
-  const pick = async (chat) => {
+  }, [channelId, words])
+  const toggle = (chat) => {
+    setSelected(before => before.some(item => item.chatId === chat.id) ? before.filter(item => item.chatId !== chat.id) : [...before, { channelId, chatId: chat.id, name: chat.name }])
+  }
+  const pick = async () => {
+    if (selected.length === 0 || !title.trim()) return
+    const chat = { id: 'saving' }
     if (busy !== null || chat.added) return
     setBusy(chat.id)
     setProblem(null)
     try {
-      const result = await onPick(chat)
+      const result = await onPick({ chats: selected.map(({ channelId, chatId }) => ({ channelId, chatId })), title: title.trim(), notes })
       if (alive.current && result?.ok !== true) {
         console.warn('Could not add the chat:', result?.reason)
         setProblem(addReason(result?.reasonCode))
@@ -326,6 +347,8 @@ export function ThreadPicker({ channel, onPick, onClose }) {
   const empty = list.status === 'ready' && availableChats.length === 0
   const emptyText = list.chats.length > 0 ? t('No chats to add here. Search for another chat.') : words ? t('No chats match.') : t('No chats yet')
   return h('div', { className: 'ot-picker', role: 'group', 'aria-label': t('Add a chat from {name}', { name: channel.name }), onKeyDown },
+    h('select', { 'aria-label': 'Channel', value: channelId, disabled: busy !== null, onChange: event => { setChannelId(event.target.value); setQuery('') } },
+      channels.map(item => h('option', { key: item.id, value: item.id }, item.name))),
     h('div', { className: 'ot-picker-head' },
       h('input', {
         type: 'search', className: 'ot-picker-search', value: query, placeholder: t('Search chats or numbers'), 'aria-label': t('Search chats or numbers'),
@@ -337,11 +360,15 @@ export function ThreadPicker({ channel, onPick, onClose }) {
     list.status === 'failed' ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(list.error)) : null,
     empty ? h('p', { className: 'ot-picker-note' }, emptyText) : null,
     availableChats.length > 0 ? h('div', { className: 'ot-picker-list' },
-      availableChats.map(chat => h(PickerChat, { key: chat.id, chat, busy, onPick: pick }))) : null)
+      availableChats.map(chat => h(PickerChat, { key: chat.id, chat, busy, selected: selected.some(item => item.chatId === chat.id), onPick: toggle }))) : null,
+    h('p', { className: 'ot-picker-selected' }, selected.map(item => item.name ?? item.chatId).join(', ')),
+    h('input', { 'aria-label': 'Thread title', placeholder: 'Thread title', value: title, maxLength: 80, onChange: event => setTitle(event.target.value) }),
+    h('textarea', { 'aria-label': 'Thread notes', placeholder: 'Thread notes', value: notes, maxLength: 8000, onChange: event => setNotes(event.target.value) }),
+    h('button', { type: 'button', disabled: busy !== null || selected.length === 0 || !title.trim(), onClick: () => { void pick() } }, 'Create thread'))
 }
 
 // The host adds the chat; the row shows on the team's next roster pull.
-const addThread = (channelId, chat) => call('omni-thread-add', { channelId, chatId: chat.id })
+const addThread = payload => call('omni-thread-add', payload)
 
 function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, open, picking, onToggle, onPlus, onClosePicker }) {
   const plusButton = useRef(null)
@@ -357,7 +384,7 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, op
   }
   // A pick is the owner's own click, so it opens the new thread, Session and phone pane, once
   // its row is drawn (no panel opens by itself).
-  const onPick = chat => addThread(channel.id, chat).then((result) => {
+  const onPick = payload => addThread(payload).then((result) => {
     if (result?.ok !== true) return result
     closePicker()
     if (typeof result.threadId !== 'string' || !teamReady(roster)) return result
@@ -381,7 +408,7 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni, plus, op
       }, h(PlusIcon)) : null),
     h('div', { id: panelId, className: 'ot-chats', 'data-open': open || undefined },
       h('div', { className: 'ot-chats-in' },
-        picking && plus.offered ? h(ThreadPicker, { channel, onPick, onClose: closePicker }) : null,
+        picking && plus.offered ? h(ThreadPicker, { channel, channels: state.channels, onPick, onClose: closePicker }) : null,
         !plus.offered && plus.reason ? h('span', { className: 'ot-empty' }, hostText(plus.reason)) : null,
         threads.map(thread => h(ThreadRow, { key: rowKey(thread, rowProps), thread, actions, rowProps, shown: open })),
         h('button', { type: 'button', className: 'ot-chat ot-all', tabIndex: open ? undefined : -1, onClick: () => omni.openChannels('channel', channel.id) },

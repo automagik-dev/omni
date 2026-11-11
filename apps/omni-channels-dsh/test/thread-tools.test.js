@@ -24,7 +24,7 @@ import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
 import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
 import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
-import { askedOf, boot, CHAT, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
+import { askedOf, boot, CHAT, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -1021,4 +1021,37 @@ test('a thread uses the automation tools as the Omni Bot does', async (t) => {
   }
   // A plain Session still may not.
   assert.match(String(await use(run, 'list_automations', 'some-session', {})), /manages automations/)
+})
+
+test('SC6 create_thread ignores send rights and inherits each owner default; only owner endpoints can override it', async t => {
+  const { run, thread } = await bench(t)
+  await run.channels.threads.remove(thread.id)
+  const tool = run.ctx.registeredTools.get('create_thread')
+  const result = await tool.execute({ chats: [{ channelId: INSTANCE, chatId: CHAT }], title: 'Luiza', notes: '', sends: 'allow', permissions: { sends: 'allow' } }, { agent: { id: 'm1' } })
+  assert.doesNotMatch(result, /Not created/)
+  const made = run.channels.threads.byChat(CHAT)
+  assert.equal(made.permissions, undefined)
+  run.channels.standingRuns.asksFirst = () => false
+  assert.equal((await preExecute(run, 'thread_say', made.sessionId, { text: 'Invoice received' })).kind, 'ask')
+  await run.call('omni-thread-defaults-save', { threadSends: 'allow' })
+  assert.equal((await preExecute(run, 'thread_say', made.sessionId, { text: 'Invoice received' })).kind, 'allow')
+  assert.equal(made.permissions, undefined)
+})
+
+test('set tools require a member destination and preserve its channel/recipient; media accepts any member only', async t => {
+  const { run, thread, omni } = await bench(t)
+  assert.equal((await run.channels.threads.setChats(thread.id, [CHAT, GROUP, ELSEWHERE])).ok, true)
+  assert.match(await use(run, 'thread_say', thread.sessionId, { text: 'Ambiguous' }), /Choose a chatId/)
+  assert.match(await use(run, 'thread_say', thread.sessionId, { chatId: '11111111-1111-4111-8111-111111111111', text: 'Outside' }), /Choose a chatId/)
+  for (const chatId of [CHAT, GROUP, ELSEWHERE]) {
+    assert.match(await use(run, 'thread_say', thread.sessionId, { chatId, text: 'Hello member' }), /Sent into/)
+    assert.match(await use(run, 'thread_react', thread.sessionId, { chatId, messageId: 'external-id', emoji: '👍' }), /Reacted/)
+    const history = await use(run, 'thread_history', thread.sessionId, { chatId })
+    assert.doesNotMatch(history, /Could not read/)
+  }
+  assert.deepEqual(omni.sent.filter(call => call.path === '/messages/send').map(call => [call.body.instanceId, call.body.to]), [CHAT, GROUP, ELSEWHERE].map(id => [CHATS[id].instanceId, CHATS[id].externalId]))
+  const picture = await use(run, 'thread_picture', thread.sessionId, { messageId: MESSAGE_IDS.elsewhere })
+  assert.doesNotMatch(picture.text, /not in this chat/)
+  await run.channels.threads.setChats(thread.id, [CHAT, GROUP])
+  assert.match((await use(run, 'thread_picture', thread.sessionId, { messageId: MESSAGE_IDS.elsewhere })).text, /not in this chat/)
 })

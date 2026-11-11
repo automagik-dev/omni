@@ -327,7 +327,7 @@ export function homeFor(t, omni, state = teamState()) {
 }
 // A fake Omni (fakeOmni) that also lists its channel and every chat, as find_chats and
 // save_automation read them; the real fetch comes back after the test.
-export function watchedOmni(t) {
+export function watchedOmni(t, { instanceIds = [INSTANCE] } = {}) {
   const omni = fakeOmni()
   t.after(resetFetch)
   const inner = globalThis.fetch
@@ -335,8 +335,8 @@ export function watchedOmni(t) {
     const url = new URL(String(address))
     const path = url.pathname.replace(/^\/api\/v2/, '')
     const json = body => new Response(JSON.stringify(body), { status: 200 })
-    if ((init.method ?? 'GET') === 'GET' && path === '/instances') return json({ items: [{ id: INSTANCE, channel: 'whatsapp-baileys', name: 'Pessoal', isActive: true }] })
-    if ((init.method ?? 'GET') === 'GET' && path === `/instances/${INSTANCE}/status`) return json({ data: { state: 'connected' } })
+    if ((init.method ?? 'GET') === 'GET' && path === '/instances') return json({ items: instanceIds.map(id => ({ id, channel: 'whatsapp-baileys', name: id === INSTANCE ? 'Pessoal' : 'Second line', isActive: true })) })
+    if ((init.method ?? 'GET') === 'GET' && [INSTANCE, OTHER_INSTANCE].some(id => path === `/instances/${id}/status`)) return json({ data: { state: 'connected' } })
     if ((init.method ?? 'GET') === 'GET' && path === '/chats' && !url.searchParams.has('instanceId')) return json({ items: Object.values(CHATS) })
     return inner(address, init)
   }
@@ -428,4 +428,14 @@ export async function dsh(run, name, sessionId, args = {}, answer = 'allowed-onc
   const refused = guarded(run.ctx, sessionId, name)
   if (refused !== undefined) return { card, result: `Error: ${refused}` }
   return { card, waiting, decision, result: await use(run, name, sessionId, args) }
+}
+
+// RFC-0001's explicit three-chat scenario: one group on two lines and Luiza on line 1.
+export function scopedChats(t) {
+  const before = Object.fromEntries([CHAT, GROUP, ELSEWHERE].map(id => [id, CHATS[id]]))
+  CHATS[CHAT] = { ...CHATS[CHAT], name: 'Luiza' }
+  CHATS[GROUP] = { ...CHATS[GROUP], name: 'Fin Ops' }
+  CHATS[ELSEWHERE] = { ...CHATS[ELSEWHERE], name: 'Fin Ops', chatType: 'group', externalId: CHATS[GROUP].externalId }
+  t.after(() => Object.assign(CHATS, before))
+  return [GROUP, ELSEWHERE, CHAT].map(chatId => ({ chatId, channelId: CHATS[chatId].instanceId }))
 }
