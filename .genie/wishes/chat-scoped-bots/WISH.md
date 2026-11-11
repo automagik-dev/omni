@@ -164,7 +164,18 @@ exactly the explicit set, before exposing new creation/routing entry points.
    every chat to its own instance/recipient on the server, check every ceiling,
    and retain root-only minting, scope/expiry bounds, cap, revocation and events.
    Preserve legacy single-chat callers and responses. Empty, invalid, missing or
-   out-of-authority members mint nothing; no partial set is returned.
+   out-of-authority members mint nothing; no partial set is returned. Enforce
+   instance/recipient pairing in `scope-enforcer.ts`: a body-addressed send by
+   a multi-chat child passes only when its `instanceId` + `to` resolve to a
+   member chat on that instance, in addition to the existing lock checks.
+   Resolve with the existing `resolveChatRow(c, to, instanceId)` helper and
+   require the returned row's `instanceId` to equal the body's instance and its
+   UUID to be in the child's `chatAllowlist`; a raw JID match alone is insufficient.
+   Existing child minting already stores chat UUIDs in that list, and existing
+   chat rows carry their own instance. Keep every member UUID in the list and
+   derive the pair from those rows at authorization time: no new key storage,
+   schema, migration or cached pairing map. Missing/unresolvable/nonmember rows
+   fail closed. Regenerate `omni-routes.js` when the child-mint summary changes.
 4. Migrate the local key-file entry/waiting records as well as thread records;
    relink/drain retries retain the whole set. Add/remove each replace the child
    and retire the old authority; failure stays disconnected rather than using
@@ -177,6 +188,13 @@ exactly the explicit set, before exposing new creation/routing entry points.
   mint/replacement, drain and handover.
 - `packages/api/src/services/api-keys.ts`, `packages/api/src/routes/v2/keys.ts`,
   `packages/api/src/schemas/openapi/keys.ts` — bounded mint and its wire schema.
+- `packages/api/src/middleware/scope-enforcer.ts` and
+  `packages/api/src/middleware/__tests__/scope-enforcer.test.ts` — resolve each
+  body-addressed instance/recipient pair to a member chat and prove refusal of
+  cross-instance combinations.
+- `apps/omni-channels-dsh/src/host/omni-routes.js` — generated route descriptions;
+  regenerate with `node apps/omni-channels-dsh/scripts/build-client.mjs` when the
+  `POST /keys/children` summary changes, never edit the generated file by hand.
 - `apps/omni-channels-dsh/test/threads.test.js`, `test/thread-keys.test.js`,
   `test/thread-fixture.js` (all under `apps/omni-channels-dsh/`).
 - `packages/api/src/routes/v2/__tests__/keys-device-child.test.ts` and
@@ -185,6 +203,10 @@ exactly the explicit set, before exposing new creation/routing entry points.
 **Interfaces:**
 - Consumes: `ChildChat = { id: string; externalId: string; instanceId: string }`
   from the current service; existing record/session/key lifecycle and `rt.save()`.
+- Consumes: existing `resolveChatRow(c, raw: string, explicitInstanceId?: string): Promise<Chat | null>`
+  from `packages/api/src/lib/resolve-chat-id.ts`; `Chat` includes `id`, `instanceId`
+  and `externalId`. Native recipients use instance-scoped `findByExternalIdSmart`;
+  require the resolved UUID to be a member even if the JID appears in the flat list.
 - Produces: normalized records retain existing fields and add
   `chatIds: string[]; notes: string`; `rt.threads.byChat(chatId: string): Thread | undefined`
   resolves any member. Existing scalar chat/channel fields stay as compatibility
@@ -211,17 +233,26 @@ exactly the explicit set, before exposing new creation/routing entry points.
 - [ ] **SC10:** Adding or removing a chat re-issues the key. **Proof:** host tests
   asserting the old key is replaced and the new allowlist matches the set after
   an add and after a removal.
-- [ ] Key tests include chats on different instances and a wrong instance/recipient
-  combination; preserving each chat's lock is required, not just three independent
-  broad allowlists. Re-mint, parent narrowing and local persistence failure retain
-  existing fail-closed guarantees. If existing scope enforcement cannot prove
-  this with the owned files, return the concrete gap for a bounded plan amendment
-  before widening the file set or inventing new authority storage.
+- [ ] A multi-chat child for {Fin Ops on line 1, Fin Ops on line 2, Luiza DM
+  on line 1} refuses `POST /messages/send` with `instanceId=line2` and
+  `to=<Luiza JID>`, even though both values occur in its independent flat lists.
+  **Proof:** in `packages/api/src/middleware/__tests__/scope-enforcer.test.ts`,
+  exercise the real middleware with those three member UUIDs and assert **403**
+  before the send handler is reached; repeat with a Luiza row on line 2 present
+  in the database but absent from the member UUIDs, and with no such row. Valid
+  sends to each of the three actual member pairs pass. In
+  `packages/api/src/routes/v2/__tests__/keys-device-child.test.ts`, mint that set
+  through the API and prove the same wrong-pair refusal through real auth and
+  scope enforcement. This proves pairing from existing chat rows and the
+  existing key allowlist, without new storage.
+- [ ] Re-mint, parent narrowing and local persistence failure retain existing
+  fail-closed guarantees. Generated `omni-routes.js` agrees with the changed
+  child-mint summary.
 
 **Validation:**
 ```bash
 env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh sh -c 'cd apps/omni-channels-dsh && node --import ./test/harness-resolve.mjs --test test/threads.test.js test/thread-keys.test.js'
-env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh bun test packages/api/src/routes/v2/__tests__/keys-device-child.test.ts
+env -i HOME="$HOME" PATH="$HOME/.bun/bin:$PATH" sh /Users/feliperosa/workspace/repos/brain-v3.worktrees/.tools/gate.sh bun test packages/api/src/middleware/__tests__/scope-enforcer.test.ts packages/api/src/routes/v2/__tests__/keys-device-child.test.ts
 ```
 The first command uses fake DSH/Omni, and the second uses the existing in-memory
 Drizzle fixture and real auth/scope middleware. Neither needs a live service.
@@ -417,7 +448,7 @@ claims that product behavior was tested by this planning PR._
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Multi-chat authority widens a session and could form unintended instance/recipient combinations | High | Server resolves each member, preserves parent ceilings and each chat's lock; G1 real-middleware negative tests; amend plan before widening files if enforcement is insufficient |
+| Multi-chat authority widens a session and could form unintended instance/recipient combinations | High | G1 owns scope-enforcer.ts and its test; resolve the send's body instance/recipient to an existing chat row, require its UUID in the child's existing allowlist, and prove the Luiza-on-line-2 refusal through middleware and a minted child |
 | Records and key-file retry entries currently store one `chatId` | Medium | Normalize both; preserve old identity/overrides and full-set relink/drain behavior |
 | Shared host files invite conflicting writers | Medium | Strict G1 → G2 → G3 ownership transfer; one PR per implementation group after approval |
 | Two selected lines deliver the same external message | Medium | Carry external id for all message paths; dedupe before queue admission; test duplicates and distinct ids |
@@ -438,8 +469,19 @@ claims that product behavior was tested by this planning PR._
 - **Planning validation:** gated `make verify-rfcs` exit **0** (29 tests),
   gated `make lint` exit **0** (1,910 files), and isolated `genie wish lint`
   exit **0** for this wish. No execution handoff is approved.
-- **Plan review:** PENDING — Omni Reviewer after push. Status remains DRAFT;
-  no APPROVED/SHIP plan verdict is asserted by the author.
+- **2026-11-11 — Independent plan review at `d7a28458db86c3b46c3f731dd5959ddb32b52cc4`:**
+  FIX-FIRST, one HIGH (HIGH-1), reviewer Claude (Opus 5.5), read-only Omni Reviewer.
+  G1 omitted the middleware needed to enforce each chat's instance/recipient pair;
+  the three flat allowlists admitted Luiza on the wrong line. The review also
+  noted missing ownership of generated `omni-routes.js`.
+- **Bounded plan repair:** G1 now owns that middleware/test and the generated
+  route file, names the existing-row/UUID pairing check and exact negative proof,
+  and removes the implementation-time contingency. Inspection of
+  `resolve-chat-id.ts` and `services/chats.ts` confirms the existing instance-scoped
+  lookup returns the row UUID/instance; existing `chatAllowlist` stores member
+  UUIDs, so no new key storage is needed. DESIGN.md and DRAFT.md stay unchanged.
+- **Plan re-review:** PENDING — Omni Reviewer after push. Status remains DRAFT;
+  the author does not assert that HIGH-1 is independently cleared or the plan approved.
 - **Execution / PR review:** not run; no product implementation in this PR.
 
 ---
@@ -464,6 +506,9 @@ apps/omni-channels-dsh/src/host/thread-keys.js
 packages/api/src/services/api-keys.ts
 packages/api/src/routes/v2/keys.ts
 packages/api/src/schemas/openapi/keys.ts
+packages/api/src/middleware/scope-enforcer.ts
+packages/api/src/middleware/__tests__/scope-enforcer.test.ts
+apps/omni-channels-dsh/src/host/omni-routes.js  (generated)
 packages/api/src/routes/v2/__tests__/keys-device-child.test.ts
 packages/api/src/services/__tests__/api-key-children-postgres.test.ts
 apps/omni-channels-dsh/test/threads.test.js
