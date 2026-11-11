@@ -420,7 +420,7 @@ interface LockHarness {
 }
 
 /** Mounts only the scope lock in front of a stub handler that echoes the chat the lock handed over. */
-function mountLock(key: ApiKeyData, contextInstanceId: string | null = null): LockHarness {
+function mountLock(key: ApiKeyData, contextInstanceId: string | null = null, rows = CHAT_ROWS): LockHarness {
   const lookups: LockHarness['lookups'] = { byId: [], byExternal: [] };
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
@@ -438,13 +438,13 @@ function mountLock(key: ApiKeyData, contextInstanceId: string | null = null): Lo
       chats: {
         getById: async (id: string) => {
           lookups.byId.push(id);
-          const row = CHAT_ROWS.find((r) => r.id === id);
+          const row = rows.find((r) => r.id === id);
           if (!row) throw new NotFoundError('Chat', id);
           return row;
         },
         findByExternalIdSmart: async (instanceId: string, externalId: string) => {
           lookups.byExternal.push({ instanceId, externalId });
-          return CHAT_ROWS.find((r) => r.instanceId === instanceId && r.externalId === externalId) ?? null;
+          return rows.find((r) => r.instanceId === instanceId && r.externalId === externalId) ?? null;
         },
       },
     } as never);
@@ -895,5 +895,50 @@ describe('self-validation served route guard (#1461)', () => {
     expect(response.status).toBe(403);
     expect(reached).toBe(false);
     expect(await response.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
+  });
+});
+
+describe('RFC-0001 chat-set instance/recipient pairing', () => {
+  const fin1 = { id: OWN_CHAT, instanceId: OWN_INSTANCE, externalId: 'fin-ops@g.us' };
+  const fin2 = { id: FOREIGN_CHAT, instanceId: OTHER_INSTANCE, externalId: fin1.externalId };
+  const luiza = { id: OTHER_CHAT, instanceId: OWN_INSTANCE, externalId: OTHER_JID };
+  const members = [fin1, fin2, luiza];
+  const key = chatKey({
+    instanceIds: [OWN_INSTANCE, OTHER_INSTANCE],
+    instanceAllowlist: [OWN_INSTANCE, OTHER_INSTANCE],
+    chatAllowlist: members.flatMap((chat) => [chat.id, chat.externalId]),
+    outboundRecipientAllowlist: [fin1.externalId, luiza.externalId],
+  });
+  for (const present of [false, true]) {
+    test(`wrong Luiza/line2 pair is 403 before handler (nonmember row present: ${present})`, async () => {
+      const rows = present ? [...members, { ...luiza, id: MISSING_CHAT, instanceId: OTHER_INSTANCE }] : members;
+      const { app, lookups } = mountLock(key, null, rows);
+      const response = await call(app, 'POST', '/messages/send', { instanceId: OTHER_INSTANCE, to: luiza.externalId });
+      expect(response.status).toBe(403);
+      expect(await errorOf(response)).toMatchObject({ lock: 'chatAllowlist' });
+      expect(lookups.byExternal).toEqual([{ instanceId: OTHER_INSTANCE, externalId: luiza.externalId }]);
+      const forwarded = await call(app, 'POST', '/messages/send/forward', {
+        instanceId: OTHER_INSTANCE,
+        to: fin2.externalId,
+        fromChatId: luiza.externalId,
+      });
+      expect(forwarded.status).toBe(403);
+      for (const chat of members) {
+        expect(
+          (await call(app, 'POST', '/messages/send', { instanceId: chat.instanceId, to: chat.externalId })).status,
+        ).toBe(200);
+      }
+    });
+  }
+  test('wrong instance is refused before pairing lookup or VALIDATION', async () => {
+    const { app, lookups } = mountLock(
+      { ...key, instanceAllowlist: [OWN_INSTANCE], instanceIds: [OWN_INSTANCE] },
+      null,
+      members,
+    );
+    const response = await call(app, 'POST', '/messages/send', { instanceId: OTHER_INSTANCE, to: luiza.externalId });
+    expect(response.status).toBe(403);
+    expect(await errorOf(response)).toMatchObject({ lock: 'instanceAllowlist' });
+    expect(lookups.byExternal).toEqual([]);
   });
 });

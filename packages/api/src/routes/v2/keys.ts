@@ -790,48 +790,54 @@ function childKeyAnswer(
 }
 
 /**
- * POST /keys/children - Mint a cs key locked to one of the caller's chats
+ * POST /keys/children - Mint a cs key locked to an explicit chat set
  *
- * The body names the chat row by its UUID and nothing else (strict). The
+ * The strict body names one chatId or a nonempty chatIds set of UUIDs. The
  * child's scopes are the cs four cut to the caller's own, and they must be
  * covered by a signing host too, as on every key write; its instance must be
  * inside the caller's legacy, profile-aware and effective instance authority,
  * and a chat outside it answers 404, as a missing chat does.
  * The service then re-checks the caller's row under lock and holds the cap and
- * the one-live-key-per-chat rule.
+ * the one-live-key-per-member rule.
  */
 keysRoutes.post('/children', zValidator('json', MintChildKeyBodySchema), async (c) => {
   const caller = chatKeyCaller(c);
   if ('response' in caller) return caller.response;
   const { apiKey } = caller;
-  const { chatId } = c.req.valid('json');
+  const body = c.req.valid('json');
+  const chatIds = 'chatId' in body ? [body.chatId] : body.chatIds;
   const services = c.get('services');
 
   const notFound = () => c.json({ error: { code: 'NOT_FOUND', message: 'Chat not found' } }, 404);
-  const chat = await chatById(services, chatId);
-  const instanceId = chat?.instanceId;
-  if (!chat || !instanceId) return notFound();
-  // A chat on an instance out of the caller's reach answers as a missing one, and before the
-  // scope ceiling, so no refusal tells the caller that the chat exists there.
-  if (enforceInstanceCeiling(c, { instanceIds: [instanceId], profile: 'cs', instanceAllowlist: [instanceId] })) {
-    return notFound();
+  const chats: Array<Chat & { instanceId: string }> = [];
+  for (const chatId of chatIds) {
+    const chat = await chatById(services, chatId);
+    const instanceId = chat?.instanceId;
+    if (!chat || !instanceId) return notFound();
+    if (enforceInstanceCeiling(c, { instanceIds: [instanceId], profile: 'cs', instanceAllowlist: [instanceId] })) {
+      return notFound();
+    }
+    chats.push({ ...chat, instanceId });
   }
 
   const childScopes = CS_CHILD_SCOPES.filter((scope) => ApiKeyService.scopeAllows(apiKey.scopes, scope));
   const ceilingDenied = enforceScopeCeiling(c, childScopes);
   if (ceilingDenied) return ceilingDenied;
 
-  const result = await services.apiKeys.mintChild(apiKey.id, {
-    id: chat.id,
-    externalId: chat.externalId,
-    instanceId,
-  });
+  const members = chats.map(({ id, externalId, instanceId }) => ({ id, externalId, instanceId }));
+  const result = await services.apiKeys.mintChild(
+    apiKey.id,
+    'chatId' in body ? (members[0] as (typeof members)[number]) : members,
+  );
   if (!result.ok) return mintRefusal(c, result);
 
   return c.json(
     {
       data: {
-        ...childKeyAnswer(result.child, result.plainTextKey, { ...chat, instanceId }, apiKey.id),
+        ...childKeyAnswer(result.child, result.plainTextKey, chats[0] as Chat & { instanceId: string }, apiKey.id),
+        ...('chatIds' in body
+          ? { chatId: undefined, chatExternalId: undefined, instanceId: undefined, chats: members }
+          : {}),
         replacedKeyId: result.replacedKeyId,
       },
     },

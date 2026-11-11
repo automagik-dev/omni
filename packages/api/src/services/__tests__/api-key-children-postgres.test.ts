@@ -152,6 +152,22 @@ postgresDescribe('chat keys (real PostgreSQL)', () => {
     expect(later?.replacedKeyId).toBe(earlier?.child.id as string);
   });
 
+  test('RFC-0001: concurrent overlapping chat-set mints retire the entire earlier child', async () => {
+    const { key: root } = await parent();
+    const a = [chat(20), chat(21, OTHER_INSTANCE)];
+    const b = [chat(21, OTHER_INSTANCE), chat(22)];
+    const results = (await Promise.all([service.mintChild(root.id, a), service.mintChild(root.id, b)])).map(minted);
+    const live = await liveChildrenOf(root.id);
+    expect(live).toHaveLength(1);
+    const winner = results.find((result) => result.child.id === live[0]?.id);
+    const loser = results.find((result) => result !== winner);
+    expect(winner?.replacedKeyId).toBe(loser?.child.id as string);
+    expect(await service.validate(loser?.plainTextKey ?? '')).toBeNull();
+    // Narrowing either instance retires a set that needs both.
+    await service.update(root.id, { instanceIds: [INSTANCE] });
+    expect(await liveChildrenOf(root.id)).toHaveLength(0);
+  });
+
   test(`two concurrent mints at ${MAX_LIVE_CHILDREN - 1} live children: one mints, one gets child_limit`, async () => {
     const { key: root } = await parent();
     await db.insert(apiKeys).values(
