@@ -1,6 +1,6 @@
 {
   "name": "@omni/connector-sdk",
-  "version": "2.261111.13",
+  "version": "2.261111.14",
   "description": "Code-declared connector manifests: credentials, events, actions, verification and the boot-validated registry",
   "license": "Apache-2.0",
   "type": "module",
