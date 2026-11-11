@@ -65,17 +65,23 @@ scopes and approval requirements; instruction cleanup does not widen them.
 1. Group 1: remove duplicate commands/routing/agents/rules (own issue/PR to identify).
    Acceptance: each old intent resolves through a single router to its peer.
    Rollback: restore instruction files; no stored product data changes.
+   Done 2026-11-10 https://github.com/automagik-si/omni/pull/1646
 2. Group 2: rewrite setup and peers against actual help (own issue/PR).
    Acceptance: the documented setup works against the installed CLI/Genie version.
    Rollback: revert instructions, preserving the retirement of obsolete hooks.
+   Done 2026-11-10 https://github.com/automagik-si/omni/pull/1652
 3. Group 3: metadata, root skill cleanup and false MCP claims (own issue/PR).
    Acceptance: the plugin loads and describes only the CLI surface it provides.
    Rollback: revert documentation/metadata; no database migration is involved.
+   Done 2026-11-10 https://github.com/automagik-si/omni/pull/1645
 4. Group 4: lint/smoke gates and migration note (own issue/PR).
    Acceptance: an invalid named command or over-budget skill fails the gate.
    Rollback: revert the gate change without reinstalling the removed auto-installer.
+   Done 2026-11-11 https://github.com/automagik-si/omni/pull/1656
 
 ## Progress
+
+The four groups merged as #1646, #1652, #1645 and #1656; live acceptance on the installed plugin is still the owner's.
 
 The WISH still records APPROVED and its four groups; the supplied merged snapshot
 does not identify a complete four-group delivery. It does record #1517 updating
