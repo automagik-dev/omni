@@ -30,7 +30,8 @@ import { output } from './output.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { NOT_LINKED } from './thread-keys.js'
 import { automationAsk } from './standing-runs.js'
-import { permissionsOf, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
+import { setReadOnly } from './subscriptions.js'
+import { answerSettingsOf, answerToolsOf, isAnswerChild, permissionsOf, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
 
 export { permissionsOf }
 
@@ -63,7 +64,7 @@ export const isFreeReaction = (emoji, list) => {
 
 /** The names a Session other than a thread may keep: every thread tool left out. */
 export function withoutThreadTools(names) {
-  return [...names].filter(name => !THREAD_TOOLS.includes(name))
+  return [...names].filter(name => ![...THREAD_TOOLS, 'answer_chats'].includes(name))
 }
 
 export const NOT_A_THREAD = 'This tool works only in an added chat\'s thread, on that chat.'
@@ -145,6 +146,89 @@ const pictureOutput = {
 export function install(rt) {
   const { ctx, state } = rt
 
+  const answerAgents = new Map()
+  const restrictions = new WeakMap()
+  const nativeAnswers = new WeakSet()
+  const ANSWER_REFUSAL = 'Answer children use only their permitted read-only and chat tools.'
+  rt.answerToolRefusal = exec => {
+    const thread = rt.threads?.bySession(exec?.agent?.id ?? exec?.agent?.session?.id)
+    if (!isAnswerChild(thread)) return undefined
+    if (!rt.answerCanSend(thread.id, thread.chatId)) return 'Answer mode or channel ownership changed.'
+    if (!answerToolsOf(thread, rt.botOf(thread.ownerBotId)).includes(exec.name)) return ANSWER_REFUSAL
+    if (!rt.answerPresetReady(thread)) return 'The answer child is not contained on read-only permissions.'
+    return undefined
+  }
+  rt.answerPresetReady = thread => {
+    const agent = answerAgents.get(thread.sessionId)
+    const presets = ctx.get?.('permissionPresets')
+    try {
+      return !!agent && typeof presets?.current === 'function' && presets.current(agent.session) === 'read-only'
+        && presets.catalog().options.some(option => option.value === 'read-only')
+    } catch { return false }
+  }
+  async function containAnswer(agent, thread) {
+    // The actual Session and its live registry are verified at every event admission,
+    // recreation and call. A failed restriction/preset never falls back to Auto review.
+    if (typeof agent?.ctx?.tools?.restrict !== 'function') throw new Error('This Session has no scoped tool registry.')
+    const presets = ctx.get?.('permissionPresets')
+    if (typeof presets?.current !== 'function') throw new Error('This host cannot verify read-only permissions.')
+    const allow = answerToolsOf(thread, rt.botOf(thread.ownerBotId))
+    const signature = JSON.stringify(allow)
+    const previous = restrictions.get(agent)
+    if (previous?.signature !== signature) {
+      const release = agent.ctx.tools.restrict({ allow })
+      previous?.release?.()
+      restrictions.set(agent, { signature, release })
+    }
+    answerAgents.set(thread.sessionId, agent)
+    await setReadOnly(rt, thread.sessionId, agent)
+    if (rt.threadKeys.keyFor(thread.id) === null) throw new Error('The answer child needs a key locked to its one chat.')
+    if (!rt.answerPresetReady(thread)) throw new Error('The answer child is not on read-only permissions.')
+    if (!nativeAnswers.has(agent)) {
+      agent.ctx.tools.setExecutor(new NativeToolExecutor(agent.ctx))
+      nativeAnswers.add(agent)
+    }
+  }
+  rt.prepareAnswerThread = async thread => containAnswer(await rt.resolveAgent(thread.sessionId), thread)
+  // Direct calls and forged names are refused independently of registry filtering.
+  ctx.tools.guard(exec => rt.answerToolRefusal(exec))
+  ctx.on('tools/pre-execute', async (exec, next) => {
+    await rt.load()
+    const thread = rt.threads?.bySession(exec.agent?.id ?? exec.agent?.session?.id)
+    if (isAnswerChild(thread)) {
+      try { await containAnswer(exec.agent, thread) } catch (error) { return { kind: 'deny', reason: error.message } }
+      const reason = rt.answerToolRefusal(exec)
+      if (reason) return { kind: 'deny', reason }
+    }
+    return next()
+  }, { prepend: true })
+
+  const Notes = z.object({ threadId: z.string().regex(ID), notes: z.string().max(8000) }).strict()
+  const SharedNotes = z.object({ botId: z.string().min(1), notes: z.string().max(8000) }).strict()
+  for (const [name, schema, parameters] of [
+    ['set_child_notes', Notes, { threadId: { type: 'string', required: true }, notes: { type: 'string', required: true } }],
+    ['set_answer_shared_notes', SharedNotes, { botId: { type: 'string', required: true }, notes: { type: 'string', required: true } }],
+  ]) ctx.tools.register(defineTool({
+    name, description: 'Only the owning master updates its answer child notes or its collective shared notes. Notes never grant tools or send permission.', parameters, output,
+    async execute(raw, exec) {
+      await rt.load()
+      if (rt.readOnly?.() !== undefined) return rt.readOnly()
+      const parsed = schema.safeParse(raw)
+      if (!parsed.success) return 'Give valid ids and notes of at most 8000 characters.'
+      const input = parsed.data
+      const thread = name === 'set_child_notes' ? rt.threads.byId(input.threadId) : undefined
+      const bot = rt.botOf(thread?.ownerBotId ?? input.botId)
+      // selfOf is the actual master, never the child's inherited Omni actor.
+      if (!bot || bot.id !== rt.selfOf(exec?.agent?.id) || !answerSettingsOf(bot).enabled || (name === 'set_child_notes' && !isAnswerChild(thread))) return 'Only the owning answer bot may change these notes.'
+      const target = thread ?? bot.answer
+      const field = thread ? 'notes' : 'sharedNotes'
+      const before = target[field]
+      target[field] = input.notes
+      try { await rt.save() } catch (error) { target[field] = before; throw error }
+      return 'Notes saved.'
+    },
+  }))
+
   ctx.tools.register(defineTool({
     name: 'create_thread',
     description: 'Omni and Main Bots only. Creates one permanent sidebar session immediately for an explicit chat set, with a title and own notes after the Omni Bot base prompt and fixed instructions, without its full memory. The sidebar "+" also creates a set. Explicit-list thread automations resolve or create it at save; channel:<id> automations route at the first event. Each chat belongs to at most one thread; conflicting existing threads are refused by name, so confirm membership moves with the owner first. Follows the owner’s global send default (ask first unless changed); only the owner’s settings or "Always allow send" switch can change send permission, never a tool.',
@@ -155,6 +239,7 @@ export function install(rt) {
     output,
     async execute(args, exec) {
       await rt.load()
+      if (rt.answerToolRefusal(exec)) return rt.answerToolRefusal(exec)
       if (!operatesOmni(rt, rt.selfOf(exec?.agent?.id))) return 'Only the Omni Bot or a Main Bot creates threads.'
       const actor = omniActorOf(rt, exec?.agent?.id)
       if (Array.isArray(args?.chats) && args.chats.some(member => !rt.canChannel(actor, member.channelId, 'write'))) return 'Threads can be created only on channels you own.'
@@ -175,6 +260,8 @@ export function install(rt) {
   async function gate(exec, name = exec?.name, raw = exec?.arguments) {
     const thread = rt.threads?.bySession(exec?.agent?.id ?? exec?.agent?.session?.id)
     if (thread === undefined) return { refusal: NOT_A_THREAD }
+    const answerRefusal = rt.answerToolRefusal({ ...exec, name })
+    if (answerRefusal) return { refusal: answerRefusal }
     if (rt.teamResume?.ready !== true) return { refusal: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
     const link = rt.omniLink?.() ?? null
     const key = rt.threadKeys?.keyFor(thread.id) ?? null
@@ -183,11 +270,18 @@ export function install(rt) {
     const args = schema.safeParse(raw ?? {})
     if (!args.success) return { refusal: what }
     let chat = thread
+    let collectiveRead = false
     if (['thread_say', 'thread_react', 'thread_history'].includes(name)) {
       const members = thread.chatIds ?? [thread.chatId]
       const selected = args.data.chatId ?? (members.length === 1 ? members[0] : undefined)
-      if (!members.includes(selected)) return { refusal: 'Choose a chatId from this thread’s member chats.' }
-      if (selected !== thread.chatId || members.length > 1) {
+      if (isAnswerChild(thread) && name === 'thread_history' && selected && selected !== thread.chatId) {
+        try {
+          const row = await rt.answerReadChat(thread, selected)
+          chat = { chatId: row.id, channelId: row.instanceId, chatJid: row.externalId, chatName: row.name ?? row.id }
+          collectiveRead = true
+        } catch (error) { return { refusal: error.message } }
+      } else if (!members.includes(selected)) return { refusal: 'Choose a chatId from this thread’s member chats.' }
+      if (!collectiveRead && (selected !== thread.chatId || members.length > 1)) {
         try {
           const response = await rt.omniRequest('GET', `/chats/${selected}`, { url: link.url, key })
           const parsed = z.object({ data: z.object({ id: z.string().regex(ID), instanceId: z.string().regex(ID), externalId: z.string().min(1), name: z.string().nullish() }) }).safeParse(await response?.json())
@@ -199,7 +293,8 @@ export function install(rt) {
     }
     const action = ['thread_say', 'thread_react'].includes(name) ? 'write' : 'read'
     if (rt.canChannel?.(thread.ownerBotId, chat.channelId, action) === false) return { refusal: 'Channel ownership changed; this thread cannot act there.' }
-    return { thread, chat, key, link, args: args.data }
+    if (isAnswerChild(thread) && !(action === 'read' ? rt.answerCanRead(thread.id, chat.chatId) : rt.answerCanSend(thread.id, chat.chatId))) return { refusal: 'This child cannot act in that chat.' }
+    return { thread, chat, key, link, collectiveRead, args: args.data }
   }
 
   // One request on exactly this key and Omni (rt.omniRequest never falls back to another when
@@ -207,7 +302,9 @@ export function install(rt) {
   async function ask(open, method, path, body) {
     try {
       if (rt.canChannel?.(open.thread.ownerBotId, open.chat.channelId, method === 'GET' ? 'read' : 'write') === false) return { status: 403, json: { error: { message: 'Channel ownership changed.' } } }
-      const response = await rt.omniRequest(method, path, { url: open.link.url, key: open.key, body })
+      if (isAnswerChild(open.thread) && !(method === 'GET' ? rt.answerCanRead(open.thread.id, open.chat.chatId) : rt.answerCanSend(open.thread.id, open.chat.chatId))) return { status: 403, json: null }
+      const response = await rt.omniRequest(method, path, { url: open.link.url, key: open.collectiveRead && method === 'GET' ? open.link.key : open.key, body })
+      if (isAnswerChild(open.thread) && method === 'GET' && !rt.answerCanRead(open.thread.id, open.chat.chatId)) return { status: 403, json: null }
       if (!response) return { status: 0, json: null }
       return { status: response.status, json: await response.json().catch(() => null) }
     } catch {
@@ -343,7 +440,9 @@ export function install(rt) {
     if (found.status === 404) throw invalid('Omni has no such message.')
     const row = MessageRow.safeParse(found.ok ? await found.json().catch(() => null) : null)
     if (!row.success) throw invalid(`Omni answered ${found.status} for that message.`)
-    if (!(open.thread.chatIds ?? [open.thread.chatId]).includes(row.data.data.chatId)) throw invalid('That message is not in this chat.')
+    if (isAnswerChild(open.thread)) {
+      await rt.answerReadChat(open.thread, row.data.data.chatId)
+    } else if (!(open.thread.chatIds ?? [open.thread.chatId]).includes(row.data.data.chatId)) throw invalid('That message is not in this chat.')
     if (!row.data.data.hasMedia) throw invalid('That message has no picture.')
     const message = messageOf(row.data.data)
     const described = message.mediaText === null ? 'missing (Omni has none, or could not make one)' : message.mediaText
@@ -355,11 +454,26 @@ export function install(rt) {
     // Voice notes, videos and documents reach the thread as Omni's text only.
     if (!PICTURE_TYPES.has(message.type)) return { text: [...head, 'It is not a picture, so nothing is shown.'].join('\n') }
     const notShown = reason => ({ text: [...head, `The picture itself is not shown: ${reason}.`].join('\n') })
-    if (!(await seesPictures(exec))) return notShown('this thread\'s model does not take pictures')
+    const sees = await seesPictures(exec)
+    if (isAnswerChild(open.thread) && !rt.answerCanRead(open.thread.id, row.data.data.chatId)) throw invalid('This child cannot read that chat.')
+    if (!sees) return notShown('this thread\'s model does not take pictures')
     const saved = await savePicture(message.id, open.link)
+    if (isAnswerChild(open.thread) && !rt.answerCanRead(open.thread.id, row.data.data.chatId)) throw invalid('This child cannot read that chat.')
     if (saved.image === undefined) return notShown(saved.reason)
     return { text: head.join('\n'), image: saved.image }
   }, pictureOutput, text => ({ text }))
+
+  ctx.tools.register(defineTool({
+    name: 'answer_chats', description: 'Collective answer children only: list the chats their own master owns. Read access never changes the reply destination.', parameters: {}, output,
+    async execute(_args, exec) {
+      await rt.load()
+      const thread = rt.threads?.bySession(exec?.agent?.id)
+      if (!isAnswerChild(thread)) return 'Only collective answer children list their master chats.'
+      const refusal = rt.answerToolRefusal({ ...exec, name: 'answer_chats' })
+      if (refusal) return refusal
+      try { return fitted({ chats: await rt.answerChats(thread) }) } catch (error) { return error.message }
+    },
+  }))
 
   // The Omni Bot answers in a read-only run of its own (subscriptions.js rt.askOmni), and its
   // answer comes back into this thread as a message that starts a turn. The ask goes through
@@ -470,6 +584,7 @@ export function install(rt) {
     const sessionId = agent.id ?? agent.session?.id
     const thread = rt.threads?.bySession(sessionId)
     if (thread === undefined) return
+    if (isAnswerChild(thread)) return containAnswer(agent, thread)
     held.add(agent)
     try {
       agent.ctx.tools.setExecutor(new NativeToolExecutor(agent.ctx))
@@ -480,14 +595,20 @@ export function install(rt) {
   }
   ctx.effect(() => rt.threads.onAdded(async (thread) => {
     try {
-      hold(await rt.resolveAgent(thread.sessionId))
+      await hold(await rt.resolveAgent(thread.sessionId))
     } catch (error) {
       rt.warn('omni-channels: the thread Session %s was not set up: %s', thread.sessionId, error?.message ?? error)
     }
   }), 'omni-channels: thread Sessions')
-  ctx.on('agent/created', ({ agent } = {}) => {
-    void Promise.resolve(rt.load()).then(() => hold(agent)).catch(error => rt.warn('omni-channels: a thread\'s Session was not set up: %s', error?.message ?? error))
+  ctx.on('agent/created', async ({ agent } = {}) => {
+    await rt.load()
+    await hold(agent)
   })
+  ctx.effect(() => {
+    void Promise.resolve(rt.load()).then(async () => {
+      for (const thread of rt.threads.list().filter(isAnswerChild)) await rt.prepareAnswerThread(thread)
+    }).catch(error => rt.warn('omni-channels: answer children are held: %s', error.message))
+  }, 'omni-channels: restore answer ceilings')
   // A thread put on Auto review whose DSH has it no more (the plugin switched off): DSH refuses
   // to restore that Session ("cannot restore preset auto without its active integration") in
   // its own agent/created listener. This one runs before it (both are prepended, this one
@@ -499,7 +620,7 @@ export function install(rt) {
       await rt.load()
       const thread = rt.threads?.bySession(agent?.id ?? agent?.session?.id)
       const presets = ctx.get?.('permissionPresets')
-      if (thread?.autoReview !== true || presets === undefined || agent?.session === undefined || autoLive(presets)) return
+      if (isAnswerChild(thread) || thread?.autoReview !== true || presets === undefined || agent?.session === undefined || autoLive(presets)) return
       const fallback = presets.catalog().defaultPreset
       presets.set(agent.session, fallback)
       delete thread.autoReview

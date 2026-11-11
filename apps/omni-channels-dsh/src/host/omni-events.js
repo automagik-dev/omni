@@ -213,6 +213,7 @@ export function install(rt) {
   async function handle(row, controller) {
     if (cancelled(controller)) return 'cancelled'
     await rt.waitChannelOwnership?.(row.instanceId)
+    rt.syncAnswerSubscriptions?.()
     const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
     if (due().length === 0) return 'unmatched'
     const event = await eventOf(row)
@@ -330,6 +331,7 @@ export function install(rt) {
     if (stopped) return
     if (configured) await dropRetired().catch(error => rt.warn('ds-bot: retiring the first omni consumer failed: %s', error?.message ?? error))
     if (stopped) return
+    rt.syncAnswerSubscriptions?.()
     const active = Object.values(state.subscriptions ?? {}).filter(sub => sub.on)
     for (const stream of STREAMS) {
       const wanted = configured && active.some(sub => stream.kinds.includes(sub.trigger.kind))

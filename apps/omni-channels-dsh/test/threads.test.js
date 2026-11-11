@@ -11,7 +11,7 @@ import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { CUT_WINDOW_MS, matchesChat, THREAD_TOOLS } from '../src/host/threads.js'
-import { OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, scopedChats, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
+import { answerBench, ANSWER_MASTER, use, OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, scopedChats, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -925,4 +925,81 @@ test('RFC-0001 TEXT1: the assembled thread prompt explains permanent sets and sc
   assert.doesNotMatch(text, /one thread per chat\)|ephemeral|invisible|one chat of theirs|tools work on it without a chat id/)
   assert.doesNotMatch(text, /\n- You have no shell|with full API permissions|## Work that needs a computer is not yours/)
   assert.deepEqual(run.view().omniThreads[0].chatIds, chats.map(chat => chat.chatId))
+})
+
+// RFC-0001 answer children, SC3: creation and inheritance on the real host path.
+test('SC3 answer admission creates one child concurrently and inherits live master instructions, model and own notes', async t => {
+  const b = await answerBench(t)
+  const [first, again] = await Promise.all([b.child(), b.child()])
+  assert.equal(first.id, again.id)
+  assert.equal(b.made.length, 1)
+  assert.equal(first.answerChild, true)
+  assert.equal(first.sendingMode, 'training')
+  assert.deepEqual(first.chatIds, [CHAT])
+  assert.equal(b.presets.current(b.agentOf(first.sessionId).session), 'read-only')
+  assert.deepEqual(b.selected.filter(([id]) => id === first.sessionId).at(-1), [first.sessionId, 'deepseek/pro'])
+  const text = () => b.ctx.sections.get('omni-thread').text({ agent: { id: first.sessionId } })
+  assert.ok(text().indexOf('MASTER:') < text().indexOf('# Answer this person'))
+  assert.doesNotMatch(text(), /operate Omni for the user|full DeepSeek Harness tool set|SHARED:/)
+  assert.equal(await use(b, 'set_child_notes', ANSWER_MASTER, { threadId: first.id, notes: 'CHILD: prefers Portuguese.' }), 'Notes saved.')
+  assert.ok(text().indexOf('# Answer this person') < text().indexOf('CHILD:'))
+  b.team.state.bots[ANSWER_MASTER].instructions = 'MASTER: updated instructions.'
+  b.team.state.bots[ANSWER_MASTER].model = 'deepseek/flash'
+  await b.child()
+  assert.match(text(), /MASTER: updated instructions/)
+  assert.deepEqual(b.selected.at(-1), [first.sessionId, 'deepseek/flash'])
+  assert.match(await use(b, 'set_child_notes', 'm1', { threadId: first.id, notes: 'wrong' }), /Only the owning/)
+  await assert.rejects(b.call('omni-thread-permissions', { threadId: first.id, sends: 'allow' }), /training policy/)
+  assert.equal((await b.channels.threads.setChats(first.id, [CHAT, GROUP])).ok, false)
+})
+
+test('SC4 unavailable preset and failed registry prevent child creation and clean up its key and session', async t => {
+  const b = await answerBench(t)
+  b.presets.available = false
+  await assert.rejects(b.child(), /read-only|preset/)
+  assert.equal(b.channels.threads.list().length, 0)
+  assert.equal(b.omni.children().filter(key => !key.revoked).length, 0)
+  assert.equal(b.archived.length, 1)
+  b.presets.available = true
+  b.fake.restrictError = new Error('registry unavailable')
+  await assert.rejects(b.child(), /registry unavailable/)
+  assert.equal(b.channels.threads.list().length, 0)
+  assert.equal(b.omni.children().filter(key => !key.revoked).length, 0)
+})
+
+test('SC4 recreated child verifies read-only again and never falls back to Auto review', async t => {
+  const b = await answerBench(t)
+  const child = await b.child()
+  const fresh = b.freshAgent(child.sessionId)
+  for (const listener of b.ctx.listeners.get('agent/created') ?? []) await listener({ agent: fresh })
+  assert.equal(b.presets.current(fresh.session), 'read-only')
+  assert.equal(b.restricts.filter(entry => entry.agent === fresh).length, 1)
+  assert.deepEqual(b.restricts.filter(entry => entry.agent === fresh)[0].filter.allow, ['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
+  b.presets.available = false
+  await assert.rejects(Promise.all((b.ctx.listeners.get('agent/created') ?? []).map(listener => listener({ agent: b.freshAgent(child.sessionId) }))), /read-only|preset/)
+  assert.equal(b.channels.answerPresetReady(child), false)
+})
+
+test('SC3 answer child identity, notes, visibility and locked key survive restart', async t => {
+  const b = await answerBench(t, { visibility: 'collective' })
+  const child = await b.child()
+  await use(b, 'set_child_notes', ANSWER_MASTER, { threadId: child.id, notes: 'Persist these notes.' })
+  await b.channels.save()
+  await b.stop()
+  const next = await boot(t, b.home, { services: { permissionPresets: b.presets } })
+  const found = await next.channels.threads.answerFor({ ownerBotId: ANSWER_MASTER, channelId: INSTANCE, chatId: CHAT })
+  assert.equal(found.id, child.id)
+  assert.equal(found.notes, 'Persist these notes.')
+  assert.equal(next.made.length, 0)
+  assert.equal(next.view().omniAnswers[ANSWER_MASTER].visibility, 'collective')
+  assert.equal(next.channels.answerPresetReady(found), true)
+  assert.match(next.ctx.sections.get('omni-thread').text({ agent: { id: found.sessionId } }), /SHARED:|Persist these notes/)
+})
+
+test('SC4 a host that silently refuses read-only never admits a child', async t => {
+  const presets = { catalog: () => ({ options: [{ value: 'read-only' }], defaultPreset: 'workspace-write' }), current: () => 'workspace-write', set() {} }
+  const b = await answerBench(t, { presets })
+  await assert.rejects(b.child(), /not read-only/)
+  assert.equal(b.channels.threads.list().length, 0)
+  assert.equal(b.omni.children().filter(key => !key.revoked).length, 0)
 })

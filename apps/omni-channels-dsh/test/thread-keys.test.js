@@ -17,6 +17,7 @@ import { install as installLink, LINK_FILE } from '../src/host/omni-link.js'
 import { install as installOmni } from '../src/host/omni.js'
 import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { BEING_CUT, DRAIN_MS, install as installKeys, isOwnChat, KEYS_FILE, NOT_LINKED, OTHER_OMNI, UNREADABLE } from '../src/host/thread-keys.js'
+import { answerBench, GROUP } from './thread-fixture.js'
 import { applyBoth, fakeContext } from './team.js'
 
 const realFetch = globalThis.fetch
@@ -1097,4 +1098,19 @@ test('RFC-0001: a replacement that cannot persist its pending marker retires the
     fsPromises.rename = rename
     syncBuiltinESMExports()
   }
+})
+
+test('SC4 answer key retrieval refuses a wrong-chat or widened stored key', async t => {
+  const b = await answerBench(t)
+  const child = await b.child()
+  const path = join(b.home, KEYS_FILE)
+  const file = JSON.parse(readFileSync(path, 'utf8'))
+  assert.ok(b.channels.threadKeys.keyFor(child.id))
+  file.threads[child.id].chatIds = [CHAT, GROUP]
+  writeFileSync(path, JSON.stringify(file))
+  assert.equal(b.channels.threadKeys.keyFor(child.id), null)
+  await assert.rejects(b.child(), /key locked/)
+  file.threads[child.id].chatIds = [GROUP]
+  writeFileSync(path, JSON.stringify(file))
+  assert.equal(b.channels.threadKeys.keyFor(child.id), null)
 })

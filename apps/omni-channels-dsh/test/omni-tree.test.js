@@ -36,7 +36,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
@@ -1010,4 +1010,23 @@ test('SC2 sidebar creation proposes first; only the separate confirmation button
   root = view.draw()
   await nodes(root).find(node => node.type === 'button' && text(node) === 'Confirm hand-over').props.onClick()
   assert.deepEqual(calls.at(-1), ['confirm_answer_bot', { proposalId: 'proposal-1' }])
+})
+
+
+test('answer settings start isolated and save one owner setting with read-only additions and shared notes', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: {} }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const select = nodes(view.draw()).find(node => node.type === 'select')
+  assert.equal(select.props.value, 'isolated')
+  select.props.onChange({ target: { value: 'collective' } })
+  nodes(view.draw()).find(node => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } })
+  await settle()
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
+  await settle()
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '' }])
+  assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })), [])
 })

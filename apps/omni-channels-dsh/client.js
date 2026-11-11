@@ -16204,6 +16204,7 @@ function freeMarkOf(thread) {
   return null;
 }
 function permissionMenuOf(thread) {
+  if (thread?.answerChild === true) return [];
   const own = thread?.ownPermissions ?? {};
   const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value });
   const sends = { ask: t("Ask me each time"), allow: t("Send without asking") };
@@ -16643,6 +16644,49 @@ function ChannelBotForm({ channels: channels2, roster, onClose }) {
     (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: onClose }, "Close")
   );
 }
+function AnswerSettings({ bot, value = {} }) {
+  const [open, setOpen] = (0, import_react16.useState)(false);
+  const [enabled, setEnabled] = (0, import_react16.useState)(value.enabled === true);
+  const [visibility, setVisibility] = (0, import_react16.useState)(value.visibility ?? "isolated");
+  const [allowedTools, setAllowedTools] = (0, import_react16.useState)(value.allowedTools ?? []);
+  const [sharedNotes, setSharedNotes] = (0, import_react16.useState)(value.sharedNotes ?? "");
+  const [busy, setBusy] = (0, import_react16.useState)(false);
+  const [problem, setProblem] = (0, import_react16.useState)(null);
+  (0, import_react16.useEffect)(() => {
+    setEnabled(value.enabled === true);
+    setVisibility(value.visibility ?? "isolated");
+    setAllowedTools(value.allowedTools ?? []);
+    setSharedNotes(value.sharedNotes ?? "");
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes]);
+  const save = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes });
+      setOpen(false);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (0, import_react16.createElement)(
+    "div",
+    null,
+    (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setOpen((before) => !before) }, "Answer mode"),
+    open ? (0, import_react16.createElement)(
+      "div",
+      { className: "ot-picker", role: "group", "aria-label": "Answer mode settings" },
+      (0, import_react16.createElement)("label", null, (0, import_react16.createElement)("input", { type: "checkbox", checked: enabled, onChange: (event) => setEnabled(event.target.checked) }), "Answer new messages"),
+      (0, import_react16.createElement)("label", null, "Visibility", (0, import_react16.createElement)("select", { value: visibility, onChange: (event) => setVisibility(event.target.value) }, (0, import_react16.createElement)("option", { value: "isolated" }, "Isolated: own chat only"), (0, import_react16.createElement)("option", { value: "collective" }, "Collective: read this bot’s chats and shared notes"))),
+      (0, import_react16.createElement)("p", null, "Children always ask before sending and reply only in their own chat."),
+      ["read", "read_image", "glob", "grep"].map((name) => (0, import_react16.createElement)("label", { key: name }, (0, import_react16.createElement)("input", { type: "checkbox", checked: allowedTools.includes(name), onChange: (event) => setAllowedTools((before) => event.target.checked ? [...before, name] : before.filter((item) => item !== name)) }), `Allow ${name}`)),
+      (0, import_react16.createElement)("label", null, "Shared notes for collective children", (0, import_react16.createElement)("textarea", { maxLength: 8e3, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })),
+      problem ? (0, import_react16.createElement)("p", { role: "alert" }, hostText(problem)) : null,
+      (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: save }, "Save answer settings")
+    ) : null
+  );
+}
 function OmniTree(props) {
   const { bot, actions, roster } = props;
   const state = useOmni();
@@ -16682,6 +16726,7 @@ function OmniTree(props) {
   return (0, import_react16.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
+    bot.id !== defaultBotId ? (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }) : null,
     bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {

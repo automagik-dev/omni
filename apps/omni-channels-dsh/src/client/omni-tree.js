@@ -103,6 +103,7 @@ export function freeMarkOf(thread) {
  * choice, the one in force checked. Each item is what `omni-thread-permissions` is sent.
  */
 export function permissionMenuOf(thread) {
+  if (thread?.answerChild === true) return []
   const own = thread?.ownPermissions ?? {}
   const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value })
   const sends = { ask: t('Ask me each time'), allow: t('Send without asking') }
@@ -441,6 +442,36 @@ export function ChannelBotForm({ channels, roster, onClose }) {
     h('button', { type: 'button', disabled: busy, onClick: onClose }, 'Close'))
 }
 
+// Owner-only endpoint; no model tool can enable answer mode or widen its tools.
+export function AnswerSettings({ bot, value = {} }) {
+  const [open, setOpen] = useState(false)
+  const [enabled, setEnabled] = useState(value.enabled === true)
+  const [visibility, setVisibility] = useState(value.visibility ?? 'isolated')
+  const [allowedTools, setAllowedTools] = useState(value.allowedTools ?? [])
+  const [sharedNotes, setSharedNotes] = useState(value.sharedNotes ?? '')
+  const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState(null)
+  useEffect(() => {
+    setEnabled(value.enabled === true); setVisibility(value.visibility ?? 'isolated')
+    setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes])
+  const save = async () => {
+    setBusy(true); setProblem(null)
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes }); setOpen(false) }
+    catch (error) { setProblem(error.message) } finally { setBusy(false) }
+  }
+  return h('div', null,
+    h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setOpen(before => !before) }, 'Answer mode'),
+    open ? h('div', { className: 'ot-picker', role: 'group', 'aria-label': 'Answer mode settings' },
+      h('label', null, h('input', { type: 'checkbox', checked: enabled, onChange: event => setEnabled(event.target.checked) }), 'Answer new messages'),
+      h('label', null, 'Visibility', h('select', { value: visibility, onChange: event => setVisibility(event.target.value) }, h('option', { value: 'isolated' }, 'Isolated: own chat only'), h('option', { value: 'collective' }, 'Collective: read this bot’s chats and shared notes'))),
+      h('p', null, 'Children always ask before sending and reply only in their own chat.'),
+      ['read', 'read_image', 'glob', 'grep'].map(name => h('label', { key: name }, h('input', { type: 'checkbox', checked: allowedTools.includes(name), onChange: event => setAllowedTools(before => event.target.checked ? [...before, name] : before.filter(item => item !== name)) }), `Allow ${name}`)),
+      h('label', null, 'Shared notes for collective children', h('textarea', { maxLength: 8000, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
+      problem ? h('p', { role: 'alert' }, hostText(problem)) : null,
+      h('button', { type: 'button', disabled: busy, onClick: save }, 'Save answer settings')) : null)
+}
+
 export function OmniTree(props) {
   const { bot, actions, roster } = props
   const state = useOmni()
@@ -477,6 +508,7 @@ export function OmniTree(props) {
   const plus = plusOf(roster, state)
   const listed = new Set(ownedChannels.map(channel => channel.id))
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
+    bot.id !== defaultBotId ? h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }) : null,
     bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? h(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map(channel => h(ChannelItem, {

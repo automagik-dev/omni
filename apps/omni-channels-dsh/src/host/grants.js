@@ -118,6 +118,7 @@ export function install(rt) {
   rt.omniPermit = async (exec, { action, resource, call, preview = {}, force }) => {
     await rt.load()
     const sessionId = exec.agent?.id
+    if (rt.threads?.bySession(sessionId)?.answerChild === true) return 'Answer children use their own scoped chat tools; generic Omni grants cannot widen them.'
     const botId = omniActorOf(rt, sessionId)
     if (rt.botOf(botId) === undefined) return 'Only Bots on the team use Omni.'
     const main = operatesOmni(rt, botId)
