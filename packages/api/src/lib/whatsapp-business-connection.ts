@@ -10,7 +10,7 @@
  * as `config.credentials`). See GH #894.
  */
 
-import type { MetaAuthMode } from '@omni/core/schemas';
+import { type MetaAuthMode, isMetaHostUrl } from '@omni/core/schemas';
 import { z } from 'zod';
 
 /**
@@ -73,7 +73,7 @@ export function applyWhatsAppBusinessConnectionOptions(
 
 /** Whether the instance reaches WhatsApp through a Meta-compatible provider instead of Meta. */
 export function usesMetaProvider(instance: { metaApiBaseUrl?: string | null }): boolean {
-  return Boolean(instance.metaApiBaseUrl);
+  return Boolean(instance.metaApiBaseUrl) && !isMetaHostUrl(instance.metaApiBaseUrl ?? '');
 }
 
 /**

@@ -272,6 +272,53 @@ describe('Meta-compatible provider (Kapso)', () => {
       expect(received().map((e) => e.payload.externalId)).toEqual(['wamid.meta-1']);
     });
 
+    test("a valid app-secret signature cannot stand in for a provider instance's own signature", async () => {
+      const body = inboundBody(KAPSO_PHONE_ID, 'wamid.kapso-hub');
+      const response = await handleMetaWebhook(
+        post(body, { 'x-hub-signature-256': `sha256=${await hmacHex(body, APP_SECRET)}` }),
+        plugin,
+        APP_SECRET,
+        '',
+      );
+
+      expect(response.status).toBe(401);
+      expect(bus.published).toEqual([]);
+    });
+
+    test('a Meta-signature instance with its own secret verifies with it, never with the app secret', async () => {
+      const ownInstance = '00000000-0000-4000-8000-0000000000b7';
+      const ownPhoneId = '555000111222333';
+      const ownSecret = 'test-own-meta-app-secret';
+      fetchSpy.mockResolvedValueOnce(ok({ id: ownPhoneId }));
+      await plugin.connect(ownInstance, {
+        instanceId: ownInstance,
+        credentials: {
+          metaAccessToken: 'EAAown',
+          metaPhoneNumberId: ownPhoneId,
+          metaWabaId: 'waba-own',
+          metaWebhookSecret: ownSecret,
+        },
+      });
+      bus.published = [];
+      const body = inboundBody(ownPhoneId, 'wamid.own-1');
+
+      const own = await handleMetaWebhook(
+        post(body, { 'x-hub-signature-256': `sha256=${await hmacHex(body, ownSecret)}` }),
+        plugin,
+        '',
+        '',
+      );
+      const app = await handleMetaWebhook(
+        post(body, { 'x-hub-signature-256': `sha256=${await hmacHex(body, APP_SECRET)}` }),
+        plugin,
+        APP_SECRET,
+        '',
+      );
+
+      expect([own.status, app.status]).toEqual([200, 401]);
+      expect(received().map((e) => e.payload.externalId)).toEqual(['wamid.own-1']);
+    });
+
     test('plugin.handleWebhook serves a provider instance when the Meta env is unset', async () => {
       const saved = { secret: process.env.META_APP_SECRET, token: process.env.META_VERIFY_TOKEN };
       Reflect.deleteProperty(process.env, 'META_APP_SECRET');
@@ -349,6 +396,20 @@ describe('Meta-compatible provider (Kapso)', () => {
       expect(fetchSpy.mock.calls.map((call: unknown[]) => call[0])).toEqual([`${KAPSO_BASE}/media-2`]);
     });
 
+    test('a download_url off the provider origin is refused before any download', async () => {
+      fetchSpy.mockClear();
+      fetchSpy.mockResolvedValueOnce(
+        ok({
+          url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=3',
+          download_url: 'https://other.example/media?token=signed',
+          mime_type: 'image/jpeg',
+        }),
+      );
+
+      await expect(plugin.downloadInboundMedia(KAPSO_INSTANCE, 'media-3')).rejects.toThrow('off the provider origin');
+      expect(fetchSpy.mock.calls.map((call: unknown[]) => call[0])).toEqual([`${KAPSO_BASE}/media-3`]);
+    });
+
     test('connect refuses a non-https provider base URL', async () => {
       await expect(
         plugin.connect('00000000-0000-4000-8000-0000000000aa', {
@@ -392,6 +453,22 @@ describe('MetaWhatsAppClient transport', () => {
     expect(request?.url.startsWith('https://graph.facebook.com/')).toBe(true);
     expect(request?.headers.authorization).toBe(`Bearer ${KAPSO_KEY}`);
     expect(request?.headers['x-api-key']).toBeUndefined();
+  });
+
+  test('x-api-key with a base URL on a Meta host is refused', () => {
+    fetchSpy = spyOn(globalThis, 'fetch');
+    for (const baseUrl of ['https://graph.facebook.com/v24.0', 'https://graph-video.facebook.com/v24.0']) {
+      expect(
+        () =>
+          new MetaWhatsAppClient({
+            accessToken: KAPSO_KEY,
+            phoneNumberId: META_PHONE_ID,
+            baseUrl,
+            authMode: 'x-api-key',
+          }),
+      ).toThrow('not a Meta host');
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   test('a raw Graph paging.next from the provider is fetched from the provider base', async () => {

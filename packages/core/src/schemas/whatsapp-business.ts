@@ -407,10 +407,23 @@ export const MetaAuthModeSchema = z.enum(['bearer', 'x-api-key']);
 
 /**
  * Which signature this instance's webhooks carry: Meta's `X-Hub-Signature-256`
- * (`sha256=` + hex HMAC-SHA256 with META_APP_SECRET), or a provider's
- * `X-Webhook-Signature` (bare hex HMAC-SHA256 with the instance's webhook secret).
+ * (`sha256=` + hex HMAC-SHA256 with the instance's webhook secret when it has
+ * one, else META_APP_SECRET), or a provider's `X-Webhook-Signature` (bare hex
+ * HMAC-SHA256 with the instance's webhook secret).
  */
 export const MetaSignatureModeSchema = z.enum(['x-hub-signature-256', 'x-webhook-signature']);
+
+/**
+ * Whether a URL is on one of Meta's own hosts (Graph API, lookaside media). A
+ * provider key (`x-api-key`) must never be sent to one.
+ */
+export function isMetaHostUrl(url: string): boolean {
+  try {
+    return /(^|\.)(facebook\.com|fbsbx\.com)$/.test(new URL(url).hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
 
 /** Cloud API base URL with its version, e.g. `https://api.kapso.ai/meta/whatsapp/v24.0`. */
 export const MetaApiBaseUrlSchema = z
@@ -483,12 +496,12 @@ export const WhatsAppBusinessConnectRequestSchema = z
     // clears a stored value. All unset = Meta direct.
     /** Provider API base URL with its version. `null` returns the instance to Meta's Graph API. */
     apiBaseUrl: MetaApiBaseUrlSchema.nullable().optional(),
-    /** `bearer` (Meta) or `x-api-key` (provider key header; needs `apiBaseUrl`). */
-    authMode: MetaAuthModeSchema.optional(),
+    /** `bearer` (Meta) or `x-api-key` (provider key header; needs a non-Meta `apiBaseUrl`). `null` resets to bearer. */
+    authMode: MetaAuthModeSchema.nullable().optional(),
     /** The secret a provider signs forwarded webhooks with. Stored like the access token. */
     webhookSecret: z.string().min(1).nullable().optional(),
-    /** `x-hub-signature-256` (Meta) or `x-webhook-signature` (provider; needs `webhookSecret`). */
-    signatureMode: MetaSignatureModeSchema.optional(),
+    /** `x-hub-signature-256` (Meta) or `x-webhook-signature` (provider; needs `webhookSecret`). `null` resets to Meta's. */
+    signatureMode: MetaSignatureModeSchema.nullable().optional(),
   })
   .refine((v) => Boolean(v.accessToken) !== Boolean(v.exchangeHandle), {
     message: 'Provide exactly one of `accessToken` (manual flow) or `exchangeHandle` (Embedded Signup flow)',

@@ -30227,17 +30227,17 @@ export interface operations {
                      */
                     apiBaseUrl?: string | null;
                     /**
-                     * @description How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs apiBaseUrl)
-                     * @enum {string}
+                     * @description How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs a non-Meta apiBaseUrl). On connect, omitted keeps the stored value and null resets to bearer.
+                     * @enum {string|null}
                      */
-                    authMode?: "bearer" | "x-api-key";
-                    /** @description Secret the provider signs forwarded webhooks with. Omitted keeps the stored value; null clears it. */
+                    authMode?: "bearer" | "x-api-key" | null;
+                    /** @description This instance's webhook signing secret: the provider's secret, or with x-hub-signature-256 the instance's own Meta app secret. Omitted keeps the stored value; null clears it. */
                     webhookSecret?: string | null;
                     /**
-                     * @description Webhook signature: 'x-hub-signature-256' (META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret)
-                     * @enum {string}
+                     * @description Webhook signature: 'x-hub-signature-256' (the instance's webhookSecret when set, else META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret). On connect, omitted keeps the stored value and null resets to x-hub-signature-256.
+                     * @enum {string|null}
                      */
-                    signatureMode?: "x-hub-signature-256" | "x-webhook-signature";
+                    signatureMode?: "x-hub-signature-256" | "x-webhook-signature" | null;
                 };
             };
         };
@@ -30335,12 +30335,12 @@ export interface operations {
                             /** @description Provider API base; null for Meta direct */
                             apiBaseUrl: string | null;
                             /**
-                             * @description How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs apiBaseUrl)
+                             * @description How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs a non-Meta apiBaseUrl). On connect, omitted keeps the stored value and null resets to bearer.
                              * @enum {string}
                              */
                             authMode: "bearer" | "x-api-key";
                             /**
-                             * @description Webhook signature: 'x-hub-signature-256' (META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret)
+                             * @description Webhook signature: 'x-hub-signature-256' (the instance's webhookSecret when set, else META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret). On connect, omitted keeps the stored value and null resets to x-hub-signature-256.
                              * @enum {string}
                              */
                             signatureMode: "x-hub-signature-256" | "x-webhook-signature";

@@ -198,8 +198,8 @@ an instance without them is Meta direct, exactly as before.
 |---|---|---|
 | `apiBaseUrl` | unset → `https://graph.facebook.com/{version}` | `https://api.kapso.ai/meta/whatsapp/v24.0` (https only) |
 | `authMode` | `bearer` → `Authorization: Bearer <accessToken>` | `x-api-key` → `X-API-Key: <accessToken>` (the Kapso project key) |
-| `webhookSecret` | unset | the secret of the Kapso webhook that forwards Meta events |
-| `signatureMode` | `x-hub-signature-256` (`META_APP_SECRET`) | `x-webhook-signature` (hex HMAC-SHA256 of the raw body with `webhookSecret`) |
+| `webhookSecret` | unset (or the instance's own Meta app secret) | the secret of the Kapso webhook that forwards Meta events |
+| `signatureMode` | `x-hub-signature-256` (with `webhookSecret` when set, else `META_APP_SECRET`) | `x-webhook-signature` (hex HMAC-SHA256 of the raw body with `webhookSecret`) |
 
 ```bash
 omni instances connect <instance-id> \
@@ -213,13 +213,17 @@ omni instances connect <instance-id> \
 ```
 
 - **Webhook.** Point the Kapso webhook ("Meta webhook forwarding") at the same global URL,
-  `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-business/webhook`. Omni still finds the instance by `phone_number_id` and
-  verifies `X-Webhook-Signature` with that instance's own secret; a body addressed to an instance that is not
-  provider-signed, or signed with another instance's secret, gets 401. `META_APP_SECRET` is not needed when every
-  instance is provider-signed.
-- **Re-connect.** A connect that omits a provider field keeps the stored value; `null` clears it. `authMode: x-api-key`
-  without `apiBaseUrl`, and `signatureMode: x-webhook-signature` without `webhookSecret`, are refused with 400.
-- **Media.** Downloads use the provider's `download_url`; a provider key is never sent to a Meta host.
+  `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-business/webhook`. Omni finds every instance a body addresses
+  (by `phone_number_id`, or by WABA for alerts and template status) and checks each one's own mode and secret. A
+  provider instance needs `X-Webhook-Signature` with its secret; an `X-Hub-Signature-256` signed with
+  `META_APP_SECRET` never stands in for it. An instance on `x-hub-signature-256` with its own `webhookSecret` (its own
+  Meta app) verifies with that secret only. `META_APP_SECRET` is used only for Meta-direct instances without a secret,
+  and for bodies that address no connected instance; it is not needed when every instance has its own secret.
+- **Re-connect.** A connect that omits a provider field keeps the stored value; `null` clears it (a mode resets to
+  Meta's default). `authMode: x-api-key` without a provider `apiBaseUrl` (unset, or a Meta host such as
+  `graph.facebook.com`), and `signatureMode: x-webhook-signature` without `webhookSecret`, are refused with 400.
+- **Media.** Downloads use the provider's `download_url` (no key needed); a media URL off the provider's origin is
+  refused, and a provider key is never sent to a Meta host.
 - **Meta-only routes.** Number registration, app subscription, conversation analytics, profile photo upload and
   template header media upload use Meta's own app-scoped endpoints. A provider instance gets
   `400 NOT_SUPPORTED_VIA_PROVIDER`; do these in the provider's dashboard.
@@ -250,7 +254,7 @@ Use the `template.status_changed` core event (`packages/core/src/events/types.ts
 
 - `X-Hub-Signature-256` HMAC mismatch. Check `META_APP_SECRET` matches the App you're using.
 - Through a provider: `X-Webhook-Signature` must verify with the instance's `webhookSecret`, and the instance must have
-  `signatureMode: x-webhook-signature`.
+  `signatureMode: x-webhook-signature`. Every instance the body addresses must verify with its own secret.
 - Common cause: editing the App Secret in Meta dashboard but not updating env.
 
 ### Webhook returns 200 but no events fire

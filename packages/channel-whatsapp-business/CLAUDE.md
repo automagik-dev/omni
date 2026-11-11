@@ -96,16 +96,18 @@ Inbound `wamid` values must be deduped via `createInboundDedupeCache` (shared wi
 
 `X-Hub-Signature-256: sha256=<hex>` over the **raw request body** using HMAC-SHA256 with `META_APP_SECRET`. Compare using a constant-time check (Web Crypto `crypto.subtle` + manual constant-time byte compare). Reject with 401 + warn-log on mismatch — do not include any token diff in the log.
 
-A Meta-compatible provider (Kapso) forwards the same payload signed `X-Webhook-Signature: <hex>` with its own webhook
-secret. `verifyForwardedSignature` (`handlers/webhook.ts`) accepts it only when every instance the body addresses —
-routed exactly as the handlers route it (phone_number_id, or WABA for alerts and template status) — has
-`signatureMode: 'x-webhook-signature'` and the signature verifies with each of their secrets.
+Verification is per instance (`verifyWebhookSignature` in `handlers/webhook.ts`). Every instance the body addresses —
+routed exactly as the handlers route it (phone_number_id, or WABA for alerts and template status) — must pass its own
+check: `x-webhook-signature` (a provider such as Kapso: bare hex HMAC with the instance's `webhookSecret`), or
+`x-hub-signature-256` with the instance's `webhookSecret` when set, else `META_APP_SECRET`. The app secret never
+stands in for an instance that has its own secret. A body addressing no connected instance is checked with
+`META_APP_SECRET`.
 
 ### Meta-compatible provider
 
-`MetaWhatsAppClient` takes `baseUrl` + `authMode` (`bearer` | `x-api-key`). `authMode` only applies with a `baseUrl`,
-so a provider key never reaches `graph.facebook.com`. `downloadMedia` uses the provider's `download_url` and refuses a
-lookup URL off the provider origin. Template `paging.next` URLs are reduced to a path under the client's base. The API
+`MetaWhatsAppClient` takes `baseUrl` + `authMode` (`bearer` | `x-api-key`). `authMode` only applies with a provider
+`baseUrl`; `x-api-key` with a base on a Meta host (`isMetaHostUrl`) throws, so a provider key never reaches Meta.
+`downloadMedia` uses the provider's `download_url` and refuses either media URL off the provider origin. Template `paging.next` URLs are reduced to a path under the client's base. The API
 side builds every client through `metaClientTransport(instance)` (`@omni/api` `lib/whatsapp-business-connection.ts`)
 and refuses Meta-only routes for a provider instance with `metaOnlyRouteError`.
 

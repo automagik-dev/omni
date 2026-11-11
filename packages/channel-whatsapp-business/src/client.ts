@@ -8,7 +8,7 @@
  *   https://developers.facebook.com/docs/whatsapp/cloud-api/reference
  */
 
-import type { MetaAuthMode } from '@omni/core/schemas';
+import { type MetaAuthMode, isMetaHostUrl } from '@omni/core/schemas';
 import type {
   MetaApiError as MetaApiErrorEnvelope,
   MetaOutboundMessage,
@@ -115,9 +115,20 @@ export class MetaWhatsAppClient {
     this.apiVersion = opts.apiVersion ?? 'v25.0';
     this.wabaId = wabaId;
     this.baseUrl = (opts.baseUrl ?? `https://graph.facebook.com/${this.apiVersion}`).replace(/\/+$/, '');
-    this.providerOrigin = opts.baseUrl ? new URL(this.baseUrl).origin : undefined;
-    // A provider key never goes to graph.facebook.com: the auth mode only applies with a provider base.
-    this.authMode = opts.baseUrl ? (opts.authMode ?? 'bearer') : 'bearer';
+    // A base on one of Meta's own hosts is Meta direct, whatever URL spells it.
+    const provider = Boolean(opts.baseUrl) && !isMetaHostUrl(this.baseUrl);
+    // A provider key never goes to Meta: refuse it on a Meta host, ignore it without a provider base.
+    if (opts.baseUrl && !provider && opts.authMode === 'x-api-key') {
+      throw new MetaApiErrorClass(
+        MetaErrorCode.INVALID_REQUEST,
+        'x-api-key auth needs a provider base URL, not a Meta host',
+        {
+          operation: 'client',
+        },
+      );
+    }
+    this.providerOrigin = provider ? new URL(this.baseUrl).origin : undefined;
+    this.authMode = provider ? (opts.authMode ?? 'bearer') : 'bearer';
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -445,13 +456,25 @@ export class MetaWhatsAppClient {
     headers: Record<string, string>;
   } {
     if (!this.providerOrigin) return { target: media.url, headers: this.authHeaders() };
-    if (media.download_url) return { target: media.download_url, headers: {} };
-    if (new URL(media.url).origin === this.providerOrigin) return { target: media.url, headers: this.authHeaders() };
+    // The signed download_url needs no key; either URL is fetched only on the provider's origin.
+    if (media.download_url) {
+      if (this.onProviderOrigin(media.download_url)) return { target: media.download_url, headers: {} };
+    } else if (this.onProviderOrigin(media.url)) {
+      return { target: media.url, headers: this.authHeaders() };
+    }
     throw new MetaApiErrorClass(
       MetaErrorCode.INVALID_REQUEST,
-      'Provider media lookup returned no download_url and a url off the provider origin',
+      'Provider media lookup returned a URL off the provider origin',
       { operation: 'GET media' },
     );
+  }
+
+  private onProviderOrigin(url: string): boolean {
+    try {
+      return new URL(url).origin === this.providerOrigin;
+    } catch {
+      return false;
+    }
   }
 
   private authHeaders(): Record<string, string> {

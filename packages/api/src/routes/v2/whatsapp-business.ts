@@ -43,6 +43,7 @@ import {
   MetaSignatureModeSchema,
   WhatsAppBusinessConnectRequestSchema,
   WhatsAppBusinessRegisterRequestSchema,
+  isMetaHostUrl,
 } from '@omni/core/schemas';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
@@ -163,8 +164,8 @@ function resolveProviderSettings(
     ok: false as const,
     payload: { error: { code: 'INVALID_PROVIDER_SETTINGS', message } },
   });
-  if (columns.metaAuthMode === 'x-api-key' && !columns.metaApiBaseUrl) {
-    return invalid('authMode x-api-key needs apiBaseUrl: a provider key is only sent to its provider');
+  if (columns.metaAuthMode === 'x-api-key' && (!columns.metaApiBaseUrl || isMetaHostUrl(columns.metaApiBaseUrl))) {
+    return invalid('authMode x-api-key needs a provider apiBaseUrl: a provider key is never sent to Meta');
   }
   if (columns.metaSignatureMode === 'x-webhook-signature' && !columns.metaWebhookSecret) {
     return invalid('signatureMode x-webhook-signature needs webhookSecret');

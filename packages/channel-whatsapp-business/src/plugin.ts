@@ -404,9 +404,9 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     const appSecret = process.env.META_APP_SECRET ?? '';
     const verifyToken = process.env.META_VERIFY_TOKEN ?? '';
 
-    // An instance on a provider verifies with its own webhook secret, so the
-    // Meta env is only required when no instance can verify without it.
-    if ((!appSecret || !verifyToken) && !this.hasProviderSignedInstance()) {
+    // An instance with its own webhook secret verifies without the app secret,
+    // so the Meta env is only required when no instance can verify without it.
+    if ((!appSecret || !verifyToken) && !this.hasInstanceWebhookSecret()) {
       this.logger.error('META_APP_SECRET or META_VERIFY_TOKEN missing — refusing to handle webhook', {
         method: request.method,
       });
@@ -690,10 +690,10 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     return this.waInstances.get(instanceId);
   }
 
-  /** Whether any connected instance verifies webhooks with its own provider secret. */
-  hasProviderSignedInstance(): boolean {
+  /** Whether any connected instance verifies webhooks with its own secret (provider or own Meta app). */
+  hasInstanceWebhookSecret(): boolean {
     for (const state of this.waInstances.values()) {
-      if (state.config.signatureMode === 'x-webhook-signature' && state.config.webhookSecret) return true;
+      if (state.config.webhookSecret) return true;
     }
     return false;
   }

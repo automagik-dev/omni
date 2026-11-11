@@ -13,12 +13,13 @@ import { ErrorSchema } from './common';
 const idParam = z.object({ id: z.string().uuid().openapi({ description: 'Instance UUID' }) });
 
 const AuthModeSchema = z.enum(MetaAuthModeSchema.options).openapi({
-  description: "How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs apiBaseUrl)",
+  description:
+    "How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs a non-Meta apiBaseUrl). On connect, omitted keeps the stored value and null resets to bearer.",
 });
 
 const SignatureModeSchema = z.enum(MetaSignatureModeSchema.options).openapi({
   description:
-    "Webhook signature: 'x-hub-signature-256' (META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret)",
+    "Webhook signature: 'x-hub-signature-256' (the instance's webhookSecret when set, else META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret). On connect, omitted keeps the stored value and null resets to x-hub-signature-256.",
 });
 
 export const WhatsAppBusinessConnectBodySchema = z.object({
@@ -34,11 +35,12 @@ export const WhatsAppBusinessConnectBodySchema = z.object({
     description:
       "Meta-compatible provider API base with its version (https), e.g. Kapso's https://api.kapso.ai/meta/whatsapp/v24.0. Omitted keeps the stored value; null returns to Meta's Graph API.",
   }),
-  authMode: AuthModeSchema.optional(),
+  authMode: AuthModeSchema.nullable().optional(),
   webhookSecret: z.string().min(1).nullable().optional().openapi({
-    description: 'Secret the provider signs forwarded webhooks with. Omitted keeps the stored value; null clears it.',
+    description:
+      "This instance's webhook signing secret: the provider's secret, or with x-hub-signature-256 the instance's own Meta app secret. Omitted keeps the stored value; null clears it.",
   }),
-  signatureMode: SignatureModeSchema.optional(),
+  signatureMode: SignatureModeSchema.nullable().optional(),
 });
 
 export const WhatsAppBusinessConnectionSchema = z.object({

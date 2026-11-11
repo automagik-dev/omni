@@ -180,6 +180,36 @@ describe('POST /:id/whatsapp-business/connect through a provider', () => {
     expect(probe?.headers.authorization).toBe(`Bearer ${META_DETAILS.accessToken}`);
   });
 
+  test('all four provider fields null return a stored provider instance to Meta direct', async () => {
+    const { app, updates, connectCredentials } = mount(KAPSO_COLUMNS);
+
+    const res = await app.request(
+      `/${INSTANCE_ID}/whatsapp-business/connect`,
+      post({ ...META_DETAILS, apiBaseUrl: null, authMode: null, webhookSecret: null, signatureMode: null }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(updates[0]).toMatchObject(META_DIRECT_COLUMNS);
+    expect(connectCredentials()).toMatchObject(META_DIRECT_COLUMNS);
+    const [probe] = outbound();
+    expect(probe?.url.startsWith('https://graph.facebook.com/')).toBe(true);
+    expect(probe?.headers.authorization).toBe(`Bearer ${META_DETAILS.accessToken}`);
+  });
+
+  test('a provider key with a Meta Graph base URL is refused before anything is stored or sent', async () => {
+    const { app, updates } = mount();
+
+    const res = await app.request(
+      `/${INSTANCE_ID}/whatsapp-business/connect`,
+      post({ ...META_DETAILS, apiBaseUrl: 'https://graph.facebook.com/v24.0', authMode: 'x-api-key' }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_PROVIDER_SETTINGS');
+    expect(updates).toEqual([]);
+    expect(outbound()).toEqual([]);
+  });
+
   test('a provider key without a provider base URL is refused before anything is stored', async () => {
     const { app, updates } = mount();
 
