@@ -114,6 +114,15 @@ test('WhatsApp Business: created and connected with the Meta details, and the to
   assert.doesNotMatch(JSON.stringify(made), /EAAG/)
 })
 
+test('WhatsApp Business without a provider: Omni receives the same connect body, key for key and in order', async () => {
+  const { run, calls } = host({
+    'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel } }],
+    [`POST /instances/${CHANNEL}/whatsapp-business/connect`]: () => [200, { data: { connected: true } }],
+  })
+  await run('omni-wab-connect', META)
+  assert.equal(JSON.stringify(calls[1].body), '{"accessToken":"EAAGsecret-meta-token","phoneNumberId":"123456789012345","wabaId":"987654321098765"}')
+})
+
 test('WhatsApp Business through a provider: its address, key mode and webhook secret reach the connect', async () => {
   const { run, calls } = host({
     'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel } }],

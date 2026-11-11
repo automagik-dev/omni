@@ -120,3 +120,13 @@ test('Business connect immediately shows setup with a masked token', async () =>
   assert.equal(calls.filter(([name]) => name === 'omni-wab-connect').length, 1)
   view.unmount()
 })
+test('Business connect with the provider section left empty sends the Meta details only, as before', async () => {
+  const sent = []
+  callReply = async (endpoint, payload) => { if (endpoint === 'omni-wab-connect') sent.push(JSON.stringify(payload)); return endpoint === 'omni-wab-connect' ? { id: 'created-channel', type: 'whatsapp-business', name: 'Business' } : { authorized: true, ...config } }
+  const view = mount(() => react.createElement(ui.LiveConnectFlow, { state: { page: { type: 'whatsapp-business' } }, omni: {}, Tile: () => null, PreviewChip: () => null }))
+  view.draw(); await settle(); let tree = view.draw()
+  for (const [index, value] of ['test-access-token', '12345678', '23456789'].entries()) { nodes(tree).filter(n => n.type === 'input')[index].props.onChange({ target: { value } }); tree = view.draw() }
+  await button(tree, 'Connect').props.onClick(); view.draw(); await settle()
+  assert.deepEqual(sent, ['{"name":"WhatsApp Business","accessToken":"test-access-token","phoneNumberId":"12345678","wabaId":"23456789"}'])
+  view.unmount()
+})

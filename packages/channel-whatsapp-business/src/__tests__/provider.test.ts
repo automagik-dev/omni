@@ -337,6 +337,76 @@ describe('Meta-compatible provider (Kapso)', () => {
     });
   });
 
+  describe('existing Meta-direct instances', () => {
+    test("inbound media is fetched from Meta's lookaside URL with Bearer, as before", async () => {
+      fetchSpy.mockClear();
+      fetchSpy
+        .mockResolvedValueOnce(
+          ok({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=4', mime_type: 'image/jpeg' }),
+        )
+        .mockResolvedValueOnce(new Response(new Uint8Array([4, 5, 6]), { status: 200 }));
+
+      const media = await plugin.downloadInboundMedia(META_INSTANCE, 'media-4');
+
+      expect([...media.buffer]).toEqual([4, 5, 6]);
+      expect(media.mimeType).toBe('image/jpeg');
+      const [lookupUrl, lookupInit] = fetchSpy.mock.calls[0] as [string, RequestInit];
+      const [downloadUrl, downloadInit] = fetchSpy.mock.calls[1] as [string, RequestInit];
+      expect(lookupUrl).toBe('https://graph.facebook.com/v25.0/media-4');
+      expect(lookupInit.headers).toMatchObject({ Authorization: 'Bearer EAAtest' });
+      expect(downloadUrl).toBe('https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=4');
+      expect(downloadInit.headers).toEqual({ Authorization: 'Bearer EAAtest' });
+    });
+
+    test('an instance stored before 0097 (the four provider columns null) is Meta direct', async () => {
+      const legacyInstance = '00000000-0000-4000-8000-0000000001e9';
+      const legacyPhoneId = '106540352242999';
+      fetchSpy.mockClear();
+      fetchSpy.mockImplementation(async () =>
+        ok({ id: legacyPhoneId, messaging_product: 'whatsapp', contacts: [], messages: [{ id: 'wamid.out' }] }),
+      );
+      await plugin.connect(legacyInstance, {
+        instanceId: legacyInstance,
+        credentials: {
+          metaAccessToken: 'EAAlegacy',
+          metaPhoneNumberId: legacyPhoneId,
+          metaWabaId: 'waba-legacy',
+          metaApiBaseUrl: null,
+          metaAuthMode: null,
+          metaWebhookSecret: null,
+          metaSignatureMode: null,
+        },
+      });
+      await plugin.sendMessage(legacyInstance, { to: CUSTOMER, content: { type: 'text', text: 'Olá' } });
+
+      const requests = fetchSpy.mock.calls as Array<[string, RequestInit]>;
+      expect(requests.map(([url]) => url)).toEqual([
+        expect.stringMatching(new RegExp(`^https://graph\\.facebook\\.com/v25\\.0/${legacyPhoneId}\\?`)),
+        `https://graph.facebook.com/v25.0/${legacyPhoneId}/messages`,
+      ]);
+      for (const [, init] of requests) {
+        expect(init.headers).toMatchObject({ Authorization: 'Bearer EAAlegacy' });
+        expect((init.headers as Record<string, string>)['X-API-Key']).toBeUndefined();
+      }
+
+      const body = inboundBody(legacyPhoneId, 'wamid.legacy-1');
+      const viaAppSecret = await handleMetaWebhook(
+        post(body, { 'x-hub-signature-256': `sha256=${await hmacHex(body, APP_SECRET)}` }),
+        plugin,
+        APP_SECRET,
+        '',
+      );
+      const viaProviderHeader = await handleMetaWebhook(
+        post(body, { 'x-webhook-signature': await hmacHex(body, APP_SECRET) }),
+        plugin,
+        APP_SECRET,
+        '',
+      );
+      expect([viaAppSecret.status, viaProviderHeader.status]).toEqual([200, 401]);
+      expect(received().map((e) => e.payload.externalId)).toEqual(['wamid.legacy-1']);
+    });
+  });
+
   describe('outbound', () => {
     test('connect validated the number through the provider base URL with X-API-Key', () => {
       const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];

@@ -8,7 +8,11 @@
  */
 
 import { afterEach, describe, expect, test } from 'bun:test';
-import { applyWhatsAppBusinessConnectionOptions } from '../whatsapp-business-connection';
+import {
+  applyWhatsAppBusinessConnectionOptions,
+  metaClientTransport,
+  usesMetaProvider,
+} from '../whatsapp-business-connection';
 
 const ENV = 'META_GRAPH_API_VERSION';
 const original = process.env[ENV];
@@ -50,5 +54,35 @@ describe('applyWhatsAppBusinessConnectionOptions — metaApiVersion', () => {
   test('nothing valid anywhere leaves the key unset so the plugin default applies', () => {
     expect(resolve(null, '')).toBeUndefined();
     expect(resolve(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe('a row stored before migration 0097 (the four provider columns null)', () => {
+  const legacyRow = {
+    metaAccessToken: 'EAA-legacy-token',
+    metaPhoneNumberId: '111222333444555',
+    metaWabaId: '999888777666555',
+    metaApiVersion: 'v25.0',
+    metaApiBaseUrl: null,
+    metaAuthMode: null,
+    metaWebhookSecret: null,
+    metaSignatureMode: null,
+  };
+
+  test('generic connect, restart and the boot monitor hydrate exactly the Meta-direct options', () => {
+    setEnv(undefined);
+    const options: Record<string, unknown> = {};
+    applyWhatsAppBusinessConnectionOptions(options, legacyRow);
+    expect(options).toEqual({
+      metaAccessToken: 'EAA-legacy-token',
+      metaPhoneNumberId: '111222333444555',
+      metaWabaId: '999888777666555',
+      metaApiVersion: 'v25.0',
+    });
+  });
+
+  test('API routes build a Graph client with Bearer and refuse nothing as a provider', () => {
+    expect(metaClientTransport(legacyRow)).toEqual({});
+    expect(usesMetaProvider(legacyRow)).toBe(false);
   });
 });

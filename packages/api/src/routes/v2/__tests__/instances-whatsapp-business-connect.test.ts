@@ -204,4 +204,26 @@ describe('Meta-compatible provider settings survive generic connect and restart 
 
     for (const key of Object.keys(provider)) expect(key in (captured.connectOptions ?? {})).toBe(false);
   });
+
+  test('a row stored before 0097 (the four columns null) connects and restarts as Meta direct', async () => {
+    const legacyColumns = {
+      metaApiBaseUrl: null,
+      metaAuthMode: null,
+      metaWebhookSecret: null,
+      metaSignatureMode: null,
+    };
+    for (const [path, body] of [
+      ['connect', post({})],
+      ['restart', post()],
+    ] as const) {
+      const captured: Captured = {};
+      const app = mount(captured, legacyColumns);
+
+      const res = await app.request(`/${INSTANCE_ID}/${path}`, body);
+
+      expect(res.status).toBe(200);
+      expect(captured.connectOptions?.metaAccessToken).toBe('EAA-persisted-token');
+      for (const key of Object.keys(provider)) expect(key in (captured.connectOptions ?? {})).toBe(false);
+    }
+  });
 });
