@@ -248,41 +248,138 @@ export const MetaTemplateStatusUpdateSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
+// Coexistence (WhatsApp Business app + Cloud API on one number)
+//   - smb_message_echoes → value.message_echoes[]: messages the business sent
+//     from the WhatsApp Business app or a companion device
+//   - history           → value.history[]: past chats shared at onboarding
+//   - smb_app_state_sync → value.state_sync[]: the app's address book
+// Items stay open (passthrough) so fields Meta adds later survive; the
+// webhook handler validates each item on its own and skips a bad one.
+// ---------------------------------------------------------------------------
+
+export const MetaMessageEchoSchema = z
+  .object({
+    from: z.string(),
+    /** Omitted when the user's phone number is unavailable (BSUID-only user). */
+    to: z.string().optional(),
+    to_user_id: z.string().optional(),
+    id: z.string(),
+    timestamp: z.string(),
+    type: z.string(),
+  })
+  .passthrough();
+
+export const MetaHistoryMessageSchema = z
+  .object({
+    from: z.string(),
+    /** Only on messages the business sent (echoes). */
+    to: z.string().optional(),
+    /** Only on messages the user sent. */
+    from_user_id: z.string().optional(),
+    id: z.string(),
+    timestamp: z.string(),
+    /** `media_placeholder` carries no content; the asset follows in a later webhook. */
+    type: z.string(),
+    history_context: z.object({ status: z.string().optional() }).passthrough().optional(),
+  })
+  .passthrough();
+
+export const MetaHistoryThreadSchema = z
+  .object({
+    /** The WhatsApp user's phone number; omitted when unavailable. */
+    id: z.string().optional(),
+    context: z
+      .object({ wa_id: z.string().optional(), user_id: z.string().optional(), username: z.string().optional() })
+      .passthrough()
+      .optional(),
+    messages: z.array(z.record(z.string(), z.unknown())).default([]),
+  })
+  .passthrough();
+
+export const MetaHistoryChunkSchema = z
+  .object({
+    metadata: z
+      .object({
+        phase: z.coerce.number().optional(),
+        chunk_order: z.coerce.number().optional(),
+        progress: z.coerce.number().optional(),
+      })
+      .passthrough()
+      .optional(),
+    threads: z.array(MetaHistoryThreadSchema).optional(),
+    /** Code 2593109: the business turned history sharing off in the app. */
+    errors: z
+      .array(z.object({ code: z.number(), title: z.string().optional(), message: z.string().optional() }).passthrough())
+      .optional(),
+  })
+  .passthrough();
+
+export const MetaStateSyncItemSchema = z
+  .object({
+    type: z.string(),
+    contact: z
+      .object({
+        full_name: z.string().optional(),
+        first_name: z.string().optional(),
+        /** Omitted when the user's phone number is unavailable. */
+        phone_number: z.string().optional(),
+        user_id: z.string().optional(),
+        username: z.string().optional(),
+      })
+      .passthrough()
+      .optional(),
+    /** `add` (added or edited) or `remove`. */
+    action: z.string(),
+    metadata: z.object({ timestamp: z.string().optional() }).passthrough().optional(),
+  })
+  .passthrough();
+
+// ---------------------------------------------------------------------------
 // Full webhook payload (entry[].changes[].value)
 // ---------------------------------------------------------------------------
 
-export const MetaWebhookValueSchema = z.object({
-  messaging_product: z.literal('whatsapp').optional(),
-  metadata: z
-    .object({
-      display_phone_number: z.string(),
-      phone_number_id: z.string(),
-    })
-    .optional(),
-  contacts: z
-    .array(
-      z
-        .object({
-          profile: z.object({ name: z.string().optional() }).passthrough().optional(),
-          wa_id: z.string().optional(),
-        })
-        .passthrough(),
-    )
-    .optional(),
-  messages: z.array(MetaInboundMessageSchema).optional(),
-  statuses: z.array(MetaWebhookStatusEntrySchema).optional(),
-  errors: z
-    .array(
-      z
-        .object({
-          code: z.number(),
-          title: z.string(),
-          message: z.string().optional(),
-        })
-        .passthrough(),
-    )
-    .optional(),
-});
+/**
+ * Passthrough: this all-optional object is the first member of the change
+ * value union, so a strict object would match every value and strip whatever
+ * it does not name (template status and account alert fields included).
+ */
+export const MetaWebhookValueSchema = z
+  .object({
+    messaging_product: z.literal('whatsapp').optional(),
+    metadata: z
+      .object({
+        display_phone_number: z.string(),
+        phone_number_id: z.string(),
+      })
+      .optional(),
+    contacts: z
+      .array(
+        z
+          .object({
+            profile: z.object({ name: z.string().optional() }).passthrough().optional(),
+            wa_id: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    messages: z.array(MetaInboundMessageSchema).optional(),
+    statuses: z.array(MetaWebhookStatusEntrySchema).optional(),
+    errors: z
+      .array(
+        z
+          .object({
+            code: z.number(),
+            title: z.string(),
+            message: z.string().optional(),
+          })
+          .passthrough(),
+      )
+      .optional(),
+    message_echoes: z.array(z.record(z.string(), z.unknown())).optional(),
+    history: z.array(z.record(z.string(), z.unknown())).optional(),
+    state_sync: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .passthrough();
 
 export const MetaWebhookChangeSchema = z.object({
   field: z.string(),
@@ -423,6 +520,10 @@ export type MetaInboundMessage = z.infer<typeof MetaInboundMessageSchema>;
 export type MetaWebhookStatusEntry = z.infer<typeof MetaWebhookStatusEntrySchema>;
 export type MetaWebhookPayload = z.infer<typeof MetaWebhookPayloadSchema>;
 export type MetaTemplateStatusUpdate = z.infer<typeof MetaTemplateStatusUpdateSchema>;
+export type MetaMessageEcho = z.infer<typeof MetaMessageEchoSchema>;
+export type MetaHistoryMessage = z.infer<typeof MetaHistoryMessageSchema>;
+export type MetaHistoryChunk = z.infer<typeof MetaHistoryChunkSchema>;
+export type MetaStateSyncItem = z.infer<typeof MetaStateSyncItemSchema>;
 export type EmbeddedSignupExchangeRequest = z.infer<typeof EmbeddedSignupExchangeRequestSchema>;
 export type EmbeddedSignupExchangeResponse = z.infer<typeof EmbeddedSignupExchangeResponseSchema>;
 export type WhatsAppBusinessConnectRequest = z.infer<typeof WhatsAppBusinessConnectRequestSchema>;

@@ -32,6 +32,7 @@ src/
 ├── types.ts                     # Internal types (WhatsAppBusinessConfig, MetaOutboundMessage, …)
 ├── oauth.ts                     # exchangeCodeForToken / getWabaDetails / registerPhoneNumber / subscribeApp
 ├── templates.ts                 # Template CRUD + sync helpers
+├── coexistence.ts               # Business app coexistence: rawPayload evidence, contact store helpers
 ├── senders/                     # One file per outbound content type
 │   ├── text.ts
 │   ├── media.ts                 # image / audio / video / document / sticker
@@ -103,6 +104,21 @@ data-exchange contract (421 = can't decrypt → check key `signature_status`,
 427 = bad token, 432 = bad HMAC); screen logic registers on
 `plugin.flowResolvers` and must resolve within ~8s. Private keys are unsealed
 by the API route (`app.ts`), never read here.
+
+### Coexistence (WhatsApp Business app on the same number)
+
+Three webhook fields mirror the Business app; all resolve the instance by `metadata.phone_number_id`:
+
+- `smb_message_echoes` → `handleMessageEcho`: `message.received` in the customer's chat (`to`) with own-device
+  evidence on rawPayload (`isFromMe`, `key.id`, `key.fromMe`, `upsertType: 'notify'`; no `key.remoteJid`), so it is
+  never confused with an API send (`message.sent`). It carries `rawPayload.noAgentDispatch`, so Omni's agent
+  dispatcher never dispatches it (owner decision 2026-11-11). DSH automations with `allowOutbound` still see it.
+  Reaction echoes are skipped.
+- `history` → `handleHistoryMessage`: `ingestMode: 'history-sync'` with `rawPayload.messageTimestamp` (persistence
+  drops a history message without it) and `noAgentDispatch`. `media_placeholder` is skipped; its asset arrives later
+  as `value.messages` on the same field and finds its chat through `historyPlaceholderChats`.
+- `smb_app_state_sync` → `handleContactSync`: stored in plugin storage (`coexistence-contact:<instanceId>:<phone>`),
+  read by `fetchContacts` for the contacts sync job (identity upsert), and announced on `custom.contacts.names`.
 
 ### 24h window enforcement
 
