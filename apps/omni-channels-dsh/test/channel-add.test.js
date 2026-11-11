@@ -114,6 +114,18 @@ test('WhatsApp Business: created and connected with the Meta details, and the to
   assert.doesNotMatch(JSON.stringify(made), /EAAG/)
 })
 
+test('WhatsApp Business through a provider: its address, key mode and webhook secret reach the connect', async () => {
+  const { run, calls } = host({
+    'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel } }],
+    [`POST /instances/${CHANNEL}/whatsapp-business/connect`]: () => [200, { data: { connected: true } }],
+  })
+  const provider = { apiBaseUrl: 'https://api.kapso.example/meta/whatsapp/v24.0', authMode: 'x-api-key', webhookSecret: 'fixture-webhook-secret', signatureMode: 'x-webhook-signature' }
+  const made = await run('omni-wab-connect', { ...META, ...provider })
+  assert.deepEqual(calls[1].body, { accessToken: META.accessToken, phoneNumberId: META.phoneNumberId, wabaId: META.wabaId, ...provider })
+  assert.doesNotMatch(JSON.stringify(made), /fixture-webhook-secret|EAAG/)
+  await assert.rejects(run('omni-wab-connect', { ...META, apiBaseUrl: 'http://api.kapso.example' }), /access token/)
+})
+
 test('WhatsApp Business details Meta refuses leave no channel behind, and say why', async () => {
   const { run, calls } = host({
     'POST /instances': body => [201, { data: { id: CHANNEL, name: body.name, channel: body.channel } }],

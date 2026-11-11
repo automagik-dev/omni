@@ -40,6 +40,8 @@ const SENSITIVE_KEYS = new Set([
   'privatekey',
   'accesstoken',
   'refreshtoken',
+  'webhooksecret',
+  'metawebhooksecret',
 ]);
 
 /**

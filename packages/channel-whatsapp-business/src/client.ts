@@ -100,8 +100,12 @@ export class MetaWhatsAppClient {
   readonly wabaId?: string;
   readonly apiVersion: string;
 
+  /** API base the client calls, version included, no trailing slash. */
+  readonly baseUrl: string;
+
   private readonly accessToken: string;
-  private readonly baseUrl: string;
+  /** Set when a Meta-compatible provider replaces the Graph API base. */
+  private readonly providerOrigin?: string;
   private readonly authMode: MetaAuthMode;
   private readonly timeoutMs: number;
 
@@ -111,7 +115,9 @@ export class MetaWhatsAppClient {
     this.apiVersion = opts.apiVersion ?? 'v25.0';
     this.wabaId = wabaId;
     this.baseUrl = (opts.baseUrl ?? `https://graph.facebook.com/${this.apiVersion}`).replace(/\/+$/, '');
-    this.authMode = opts.authMode ?? 'bearer';
+    this.providerOrigin = opts.baseUrl ? new URL(this.baseUrl).origin : undefined;
+    // A provider key never goes to graph.facebook.com: the auth mode only applies with a provider base.
+    this.authMode = opts.baseUrl ? (opts.authMode ?? 'bearer') : 'bearer';
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -307,16 +313,15 @@ export class MetaWhatsAppClient {
   }
 
   /**
-   * Download the bytes of a media lookup. Meta's `url` needs the token. A
-   * provider's `download_url` carries its own signed token and gets no auth
-   * header, since Meta's `url` would need a Meta token the provider holds.
+   * Download the bytes of a media lookup. Meta direct: `url` with the token.
+   * Through a provider, the credentials never leave the provider's origin: its
+   * `download_url` carries its own signed token and gets no auth header, a
+   * `url` on the provider's origin gets the token, and any other `url` (Meta's
+   * lookaside, which needs a Meta token the provider holds) is refused.
    */
   async downloadMedia(media: { url: string; download_url?: string }): Promise<ArrayBuffer> {
-    const viaProvider = this.authMode === 'x-api-key' && Boolean(media.download_url);
-    const res = await this.fetchWithTimeout(viaProvider ? (media.download_url as string) : media.url, {
-      method: 'GET',
-      headers: viaProvider ? {} : this.authHeaders(),
-    });
+    const { target, headers } = this.mediaRequest(media);
+    const res = await this.fetchWithTimeout(target, { method: 'GET', headers });
     if (!res.ok) throw await this.errorFromResponse(res, 'GET media');
     return res.arrayBuffer();
   }
@@ -433,6 +438,20 @@ export class MetaWhatsAppClient {
 
   private headers(): Record<string, string> {
     return { ...this.authHeaders(), 'Content-Type': 'application/json' };
+  }
+
+  private mediaRequest(media: { url: string; download_url?: string }): {
+    target: string;
+    headers: Record<string, string>;
+  } {
+    if (!this.providerOrigin) return { target: media.url, headers: this.authHeaders() };
+    if (media.download_url) return { target: media.download_url, headers: {} };
+    if (new URL(media.url).origin === this.providerOrigin) return { target: media.url, headers: this.authHeaders() };
+    throw new MetaApiErrorClass(
+      MetaErrorCode.INVALID_REQUEST,
+      'Provider media lookup returned no download_url and a url off the provider origin',
+      { operation: 'GET media' },
+    );
   }
 
   private authHeaders(): Record<string, string> {

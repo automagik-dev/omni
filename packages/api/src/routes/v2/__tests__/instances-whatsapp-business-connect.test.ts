@@ -169,3 +169,39 @@ describe('POST /instances/:id/restart — restart must not brick the instance', 
     expect(captured.connectOptions?.metaWabaId).toBe('999888777666555');
   });
 });
+
+describe('Meta-compatible provider settings survive generic connect and restart (#1661)', () => {
+  const provider = {
+    metaApiBaseUrl: 'https://api.kapso.example/meta/whatsapp/v24.0',
+    metaAuthMode: 'x-api-key',
+    metaWebhookSecret: 'fixture-webhook-secret',
+    metaSignatureMode: 'x-webhook-signature',
+  };
+
+  test('POST /connect hands the persisted provider settings to the plugin', async () => {
+    const captured: Captured = {};
+    const app = mount(captured, provider);
+
+    await app.request(`/${INSTANCE_ID}/connect`, post({}));
+
+    expect(captured.connectOptions).toMatchObject(provider);
+  });
+
+  test('POST /restart keeps a provider instance on its provider', async () => {
+    const captured: Captured = {};
+    const app = mount(captured, provider);
+
+    await app.request(`/${INSTANCE_ID}/restart`, post());
+
+    expect(captured.connectOptions).toMatchObject(provider);
+  });
+
+  test('a Meta-direct row carries no provider keys', async () => {
+    const captured: Captured = {};
+    const app = mount(captured);
+
+    await app.request(`/${INSTANCE_ID}/connect`, post({}));
+
+    for (const key of Object.keys(provider)) expect(key in (captured.connectOptions ?? {})).toBe(false);
+  });
+});

@@ -82,6 +82,7 @@ Cross-package audit (lives in @omni/api because it imports the scrub module):
 
 - `metaAccessToken` is stored **plain text** in `instances.meta_access_token` (parity with `discord_bot_token`, `telegram_bot_token`, `gupshup_auth_token`). Encryption at-rest is repo-wide tech debt — do NOT add column-level encryption here in isolation.
 - NEVER log the access token. Sentry scrubbing (`@omni/api/src/lib/sentry-scrub.ts`) masks `EAA<…>` patterns and `Authorization` headers.
+- `metaWebhookSecret` (provider webhook secret) follows the same rule: plain column, never logged, never returned.
 
 ### Webhook resolution
 
@@ -94,6 +95,19 @@ Inbound `wamid` values must be deduped via `createInboundDedupeCache` (shared wi
 ### Signature verification
 
 `X-Hub-Signature-256: sha256=<hex>` over the **raw request body** using HMAC-SHA256 with `META_APP_SECRET`. Compare using a constant-time check (Web Crypto `crypto.subtle` + manual constant-time byte compare). Reject with 401 + warn-log on mismatch — do not include any token diff in the log.
+
+A Meta-compatible provider (Kapso) forwards the same payload signed `X-Webhook-Signature: <hex>` with its own webhook
+secret. `verifyForwardedSignature` (`handlers/webhook.ts`) accepts it only when every instance the body addresses —
+routed exactly as the handlers route it (phone_number_id, or WABA for alerts and template status) — has
+`signatureMode: 'x-webhook-signature'` and the signature verifies with each of their secrets.
+
+### Meta-compatible provider
+
+`MetaWhatsAppClient` takes `baseUrl` + `authMode` (`bearer` | `x-api-key`). `authMode` only applies with a `baseUrl`,
+so a provider key never reaches `graph.facebook.com`. `downloadMedia` uses the provider's `download_url` and refuses a
+lookup URL off the provider origin. Template `paging.next` URLs are reduced to a path under the client's base. The API
+side builds every client through `metaClientTransport(instance)` (`@omni/api` `lib/whatsapp-business-connection.ts`)
+and refuses Meta-only routes for a provider instance with `metaOnlyRouteError`.
 
 ### WhatsApp Flows
 

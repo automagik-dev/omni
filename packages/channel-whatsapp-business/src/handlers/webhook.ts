@@ -189,6 +189,7 @@ function forwardedWebhookSecrets(body: string, plugin: WhatsAppBusinessPlugin): 
 }
 
 interface ChangeAddress {
+  field: string;
   wabaId: string;
   phoneNumberId?: string;
 }
@@ -205,15 +206,22 @@ function addressedChanges(body: string): ChangeAddress[] | null {
   if (!payload.success) return null;
   return payload.data.entry.flatMap((entry) =>
     entry.changes.map((change) => ({
+      field: change.field,
       wabaId: entry.id,
       phoneNumberId: (change.value as { metadata?: { phone_number_id?: string } }).metadata?.phone_number_id,
     })),
   );
 }
 
-/** By phone_number_id when the change has one, else every instance on the WABA. */
+/**
+ * The instances a change reaches, by the same key `processChange` routes it
+ * by: alerts and template status by the entry's WABA (a phone_number_id in the
+ * value is ignored there), everything else by phone_number_id, and a change
+ * with neither by the WABA.
+ */
 function instancesAddressed(plugin: WhatsAppBusinessPlugin, address: ChangeAddress) {
-  if (address.phoneNumberId) {
+  const wabaRouted = CHANNEL_ALERT_FIELDS.has(address.field) || address.field === 'message_template_status_update';
+  if (!wabaRouted && address.phoneNumberId) {
     const found = plugin.findInstanceByPhoneNumberId(address.phoneNumberId);
     return found ? [found[1]] : [];
   }

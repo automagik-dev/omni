@@ -117,6 +117,12 @@ const SENSITIVE_KEYS = new Set<string>([
   'appsecret',
   'verify_token',
   'verifytoken',
+  // Meta-compatible provider (Kapso): webhook signing secret and the X-API-Key header.
+  'webhook_secret',
+  'webhooksecret',
+  'meta_webhook_secret',
+  'metawebhooksecret',
+  'x-api-key',
 ]);
 
 function isSensitiveKey(key: string): boolean {

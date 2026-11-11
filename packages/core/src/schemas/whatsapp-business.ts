@@ -477,22 +477,22 @@ export const WhatsAppBusinessConnectRequestSchema = z
     wabaId: z.string().min(1),
     appId: z.string().optional(),
     businessId: z.string().optional(),
-    /** Meta-compatible provider API base URL. Omit for Meta's Graph API. */
-    apiBaseUrl: MetaApiBaseUrlSchema.optional(),
-    /** Default `bearer`. A provider key (e.g. Kapso) uses `x-api-key`. */
+    // Meta-compatible provider settings (e.g. Kapso). Each one omitted keeps
+    // the instance's stored value, so a re-connect that only re-enters the
+    // token never moves an instance between Meta and its provider; `null`
+    // clears a stored value. All unset = Meta direct.
+    /** Provider API base URL with its version. `null` returns the instance to Meta's Graph API. */
+    apiBaseUrl: MetaApiBaseUrlSchema.nullable().optional(),
+    /** `bearer` (Meta) or `x-api-key` (provider key header; needs `apiBaseUrl`). */
     authMode: MetaAuthModeSchema.optional(),
     /** The secret a provider signs forwarded webhooks with. Stored like the access token. */
-    webhookSecret: z.string().min(1).optional(),
-    /** Default `x-hub-signature-256`. A provider forwarding Meta webhooks uses `x-webhook-signature`. */
+    webhookSecret: z.string().min(1).nullable().optional(),
+    /** `x-hub-signature-256` (Meta) or `x-webhook-signature` (provider; needs `webhookSecret`). */
     signatureMode: MetaSignatureModeSchema.optional(),
   })
   .refine((v) => Boolean(v.accessToken) !== Boolean(v.exchangeHandle), {
     message: 'Provide exactly one of `accessToken` (manual flow) or `exchangeHandle` (Embedded Signup flow)',
     path: ['accessToken'],
-  })
-  .refine((v) => v.signatureMode !== 'x-webhook-signature' || Boolean(v.webhookSecret), {
-    message: '`signatureMode: x-webhook-signature` needs `webhookSecret`',
-    path: ['webhookSecret'],
   });
 
 /**

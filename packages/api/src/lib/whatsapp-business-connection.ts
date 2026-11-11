@@ -10,6 +10,7 @@
  * as `config.credentials`). See GH #894.
  */
 
+import type { MetaAuthMode } from '@omni/core/schemas';
 import { z } from 'zod';
 
 /**
@@ -30,6 +31,11 @@ export interface WhatsAppBusinessConnectionSource {
   metaApiVersion?: string | null;
   metaDisplayPhoneNumber?: string | null;
   metaConnectionMethod?: string | null;
+  /** Meta-compatible provider settings; all unset = Meta direct. */
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
+  metaWebhookSecret?: string | null;
+  metaSignatureMode?: string | null;
 }
 
 /**
@@ -59,4 +65,40 @@ export function applyWhatsAppBusinessConnectionOptions(
   if (apiVersion) options.metaApiVersion = apiVersion;
   if (input.metaDisplayPhoneNumber) options.metaDisplayPhoneNumber = input.metaDisplayPhoneNumber;
   if (input.metaConnectionMethod) options.metaConnectionMethod = input.metaConnectionMethod;
+  if (input.metaApiBaseUrl) options.metaApiBaseUrl = input.metaApiBaseUrl;
+  if (input.metaAuthMode) options.metaAuthMode = input.metaAuthMode;
+  if (input.metaWebhookSecret) options.metaWebhookSecret = input.metaWebhookSecret;
+  if (input.metaSignatureMode) options.metaSignatureMode = input.metaSignatureMode;
+}
+
+/** Whether the instance reaches WhatsApp through a Meta-compatible provider instead of Meta. */
+export function usesMetaProvider(instance: { metaApiBaseUrl?: string | null }): boolean {
+  return Boolean(instance.metaApiBaseUrl);
+}
+
+/**
+ * `MetaWhatsAppClient` options for an instance row: the provider base URL and
+ * auth mode when set, nothing extra for Meta direct. Every API route that
+ * builds a client from a row goes through this, so a provider key is only
+ * ever sent to the provider.
+ */
+export function metaClientTransport(instance: { metaApiBaseUrl?: string | null; metaAuthMode?: string | null }): {
+  baseUrl?: string;
+  authMode?: MetaAuthMode;
+} {
+  if (!instance.metaApiBaseUrl) return {};
+  return {
+    baseUrl: instance.metaApiBaseUrl,
+    authMode: instance.metaAuthMode === 'x-api-key' ? 'x-api-key' : 'bearer',
+  };
+}
+
+/** Error body for a route that only talks to Meta's own Graph API. */
+export function metaOnlyRouteError(operation: string) {
+  return {
+    error: {
+      code: 'NOT_SUPPORTED_VIA_PROVIDER',
+      message: `${operation} calls Meta's Graph API directly and is not available for an instance on a Meta-compatible provider`,
+    },
+  };
 }

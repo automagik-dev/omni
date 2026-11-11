@@ -220,6 +220,37 @@ describe('Meta-compatible provider (Kapso)', () => {
       expect(bus.published).toEqual([]);
     });
 
+    test("a WABA-routed field is verified by the WABA's instances, not by a phone id in its value", async () => {
+      // Kapso's own phone id rides in the value, but account_update routes by
+      // entry.id: the Meta-direct instance's WABA. Kapso's secret must not pass.
+      const body = JSON.stringify({
+        object: 'whatsapp_business_account',
+        entry: [
+          {
+            id: 'waba-meta',
+            changes: [
+              {
+                field: 'account_update',
+                value: {
+                  metadata: { display_phone_number: '15550001111', phone_number_id: KAPSO_PHONE_ID },
+                  event: 'ACCOUNT_VIOLATION',
+                },
+              },
+            ],
+          },
+        ],
+      });
+      const response = await handleMetaWebhook(
+        post(body, { 'x-webhook-signature': await hmacHex(body, KAPSO_SECRET) }),
+        plugin,
+        APP_SECRET,
+        '',
+      );
+
+      expect(response.status).toBe(401);
+      expect(bus.published.filter((e) => e.type === 'channel.alert')).toEqual([]);
+    });
+
     test('a Meta-direct instance is unchanged: Meta signature passes, a provider signature does not', async () => {
       const body = inboundBody(META_PHONE_ID, 'wamid.meta-1');
       const viaProvider = await handleMetaWebhook(
@@ -304,6 +335,16 @@ describe('Meta-compatible provider (Kapso)', () => {
       expect(lookupUrl).toBe(`${KAPSO_BASE}/media-1`);
       expect(downloadUrl).toBe('https://api.kapso.ai/meta/whatsapp/media_download?token=signed');
       expect(downloadInit.headers).toEqual({});
+    });
+
+    test("a provider lookup without download_url never sends the key to Meta's lookaside", async () => {
+      fetchSpy.mockClear();
+      fetchSpy.mockResolvedValueOnce(
+        ok({ url: 'https://lookaside.fbsbx.com/whatsapp_business/attachments/?mid=2', mime_type: 'image/jpeg' }),
+      );
+
+      await expect(plugin.downloadInboundMedia(KAPSO_INSTANCE, 'media-2')).rejects.toThrow('off the provider origin');
+      expect(fetchSpy.mock.calls.map((call: unknown[]) => call[0])).toEqual([`${KAPSO_BASE}/media-2`]);
     });
 
     test('connect refuses a non-https provider base URL', async () => {

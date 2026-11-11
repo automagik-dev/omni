@@ -37,6 +37,10 @@ import {
 import { createLogger } from '@omni/core';
 import {
   EmbeddedSignupExchangeRequestSchema,
+  type MetaAuthMode,
+  MetaAuthModeSchema,
+  type MetaSignatureMode,
+  MetaSignatureModeSchema,
   WhatsAppBusinessConnectRequestSchema,
   WhatsAppBusinessRegisterRequestSchema,
 } from '@omni/core/schemas';
@@ -44,7 +48,12 @@ import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import * as oauthTokenCache from '../../lib/oauth-token-cache';
 import { runOutsideProducerScope } from '../../lib/producer-scope';
-import { resolveMetaApiVersion } from '../../lib/whatsapp-business-connection';
+import {
+  metaClientTransport,
+  metaOnlyRouteError,
+  resolveMetaApiVersion,
+  usesMetaProvider,
+} from '../../lib/whatsapp-business-connection';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
@@ -98,6 +107,8 @@ function buildClientFromInstance(instance: {
   metaPhoneNumberId: string | null;
   metaWabaId: string | null;
   metaApiVersion: string | null;
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
 }): MetaWhatsAppClient | null {
   if (!instance.metaAccessToken || !instance.metaPhoneNumberId) return null;
   return new MetaWhatsAppClient(
@@ -105,9 +116,60 @@ function buildClientFromInstance(instance: {
       phoneNumberId: instance.metaPhoneNumberId,
       accessToken: instance.metaAccessToken,
       apiVersion: instance.metaApiVersion ?? 'v25.0',
+      ...metaClientTransport(instance),
     },
     instance.metaWabaId ?? undefined,
   );
+}
+
+type ConnectBody = z.infer<typeof WhatsAppBusinessConnectRequestSchema>;
+
+/** Provider columns as the connect route writes them; null = Meta direct for that field. */
+interface ProviderColumns {
+  metaApiBaseUrl: string | null;
+  metaAuthMode: MetaAuthMode | null;
+  metaWebhookSecret: string | null;
+  metaSignatureMode: MetaSignatureMode | null;
+}
+
+/**
+ * The provider settings a connect leaves on the instance. A field the body
+ * omits keeps the stored value (a re-connect that re-enters only the token
+ * never moves an instance between Meta and its provider); `null` clears it.
+ * Refuses a combination that could not work or would send a key to the
+ * wrong host: a provider key header without a provider base URL, or a
+ * provider signature without a webhook secret.
+ */
+function resolveProviderSettings(
+  stored: {
+    metaApiBaseUrl?: string | null;
+    metaAuthMode?: string | null;
+    metaWebhookSecret?: string | null;
+    metaSignatureMode?: string | null;
+  },
+  body: ConnectBody,
+): { ok: true; columns: ProviderColumns } | { ok: false; payload: { error: { code: string; message: string } } } {
+  const pick = <T>(value: T | null | undefined, kept: T | null | undefined): T | null =>
+    value === undefined ? (kept ?? null) : value;
+  const authMode = MetaAuthModeSchema.safeParse(pick(body.authMode, stored.metaAuthMode));
+  const signatureMode = MetaSignatureModeSchema.safeParse(pick(body.signatureMode, stored.metaSignatureMode));
+  const columns: ProviderColumns = {
+    metaApiBaseUrl: pick(body.apiBaseUrl, stored.metaApiBaseUrl),
+    metaAuthMode: authMode.success ? authMode.data : null,
+    metaWebhookSecret: pick(body.webhookSecret, stored.metaWebhookSecret),
+    metaSignatureMode: signatureMode.success ? signatureMode.data : null,
+  };
+  const invalid = (message: string) => ({
+    ok: false as const,
+    payload: { error: { code: 'INVALID_PROVIDER_SETTINGS', message } },
+  });
+  if (columns.metaAuthMode === 'x-api-key' && !columns.metaApiBaseUrl) {
+    return invalid('authMode x-api-key needs apiBaseUrl: a provider key is only sent to its provider');
+  }
+  if (columns.metaSignatureMode === 'x-webhook-signature' && !columns.metaWebhookSecret) {
+    return invalid('signatureMode x-webhook-signature needs webhookSecret');
+  }
+  return { ok: true, columns };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,6 +264,9 @@ whatsappBusinessRoutes.post(
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'accessToken or exchangeHandle is required' } }, 400);
     }
 
+    const provider = resolveProviderSettings(instance, body);
+    if (!provider.ok) return c.json(provider.payload, 400);
+
     // Persist Meta config on the instance row first.
     const updated = await services.instances.update(id, {
       metaAccessToken: accessToken,
@@ -212,6 +277,7 @@ whatsappBusinessRoutes.post(
       metaApiVersion: apiVersion,
       metaConnectionMethod: connectionMethod,
       metaConnectedAt: new Date(),
+      ...provider.columns,
       isActive: true,
     });
 
@@ -225,6 +291,7 @@ whatsappBusinessRoutes.post(
           phoneNumberId: body.phoneNumberId,
           accessToken,
           apiVersion,
+          ...metaClientTransport(provider.columns),
         },
         body.wabaId,
       );
@@ -265,6 +332,7 @@ whatsappBusinessRoutes.post(
             metaApiVersion: apiVersion,
             metaConnectionMethod: connectionMethod,
             metaDisplayPhoneNumber: displayPhoneNumber,
+            ...provider.columns,
           },
           options: {},
         }),
@@ -307,6 +375,7 @@ whatsappBusinessRoutes.post(
         409,
       );
     }
+    if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Registering the number'), 400);
 
     try {
       await registerPhoneNumberOAuth(
@@ -338,6 +407,7 @@ whatsappBusinessRoutes.post('/:id/whatsapp-business/subscribe-app', async (c) =>
   if (!instance.metaAccessToken || !instance.metaWabaId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected (missing WABA id)' } }, 409);
   }
+  if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Subscribing the app'), 400);
 
   try {
     const result = await subscribeApp(
@@ -377,6 +447,11 @@ whatsappBusinessRoutes.get('/:id/whatsapp-business/connection', async (c) => {
       connectionMethod: instance.metaConnectionMethod,
       connectedAt: instance.metaConnectedAt,
       connected: Boolean(instance.metaAccessToken && instance.metaPhoneNumberId),
+      // Provider settings; the webhook secret itself is never returned.
+      apiBaseUrl: instance.metaApiBaseUrl ?? null,
+      authMode: instance.metaAuthMode ?? 'bearer',
+      signatureMode: instance.metaSignatureMode ?? 'x-hub-signature-256',
+      hasWebhookSecret: Boolean(instance.metaWebhookSecret),
     },
   });
 });
@@ -419,6 +494,10 @@ whatsappBusinessRoutes.delete('/:id/whatsapp-business/connection', async (c) => 
     metaConnectionMethod: null,
     metaDisplayPhoneNumber: null,
     metaConnectedAt: null,
+    metaApiBaseUrl: null,
+    metaAuthMode: null,
+    metaWebhookSecret: null,
+    metaSignatureMode: null,
     isActive: false,
   });
 
@@ -470,6 +549,8 @@ whatsappBusinessRoutes.get('/:id/whatsapp-business/analytics', zValidator('query
   if (!instance.metaAccessToken || !instance.metaWabaId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
   }
+  // The analytics call below goes straight to graph.facebook.com.
+  if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Conversation analytics'), 400);
 
   const apiVersion = instance.metaApiVersion ?? 'v25.0';
   const now = Math.floor(Date.now() / 1000);
@@ -626,6 +707,8 @@ whatsappBusinessRoutes.post('/:id/whatsapp-business/profile/photo', async (c) =>
   if (!instance.metaAccessToken || !instance.metaPhoneNumberId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
   }
+  // The resumable upload goes to graph.facebook.com with the app id.
+  if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Profile photo upload'), 400);
 
   const upload = await readProfilePhotoUpload(c);
   if (!upload.ok) return c.json(upload.payload, 400);

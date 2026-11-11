@@ -188,6 +188,44 @@ app into three webhook fields; Omni records them like this:
 
 Echoes and history carry `rawPayload.noAgentDispatch`, the channel-neutral marker the agent dispatcher drops.
 
+## Through a Meta-compatible provider (Kapso)
+
+A provider such as Kapso holds the Meta connection and exposes the same Graph API under its own base URL and key.
+Omni then talks to the provider instead of `graph.facebook.com`. Four optional connect fields set this per instance;
+an instance without them is Meta direct, exactly as before.
+
+| Field | Meta direct (default) | Kapso |
+|---|---|---|
+| `apiBaseUrl` | unset → `https://graph.facebook.com/{version}` | `https://api.kapso.ai/meta/whatsapp/v24.0` (https only) |
+| `authMode` | `bearer` → `Authorization: Bearer <accessToken>` | `x-api-key` → `X-API-Key: <accessToken>` (the Kapso project key) |
+| `webhookSecret` | unset | the secret of the Kapso webhook that forwards Meta events |
+| `signatureMode` | `x-hub-signature-256` (`META_APP_SECRET`) | `x-webhook-signature` (hex HMAC-SHA256 of the raw body with `webhookSecret`) |
+
+```bash
+omni instances connect <instance-id> \
+  --access-token <kapso-project-key> \
+  --phone-number-id <pnid> \
+  --waba-id <waba> \
+  --api-base-url https://api.kapso.ai/meta/whatsapp/v24.0 \
+  --auth-mode x-api-key \
+  --webhook-secret <kapso-webhook-secret> \
+  --signature-mode x-webhook-signature
+```
+
+- **Webhook.** Point the Kapso webhook ("Meta webhook forwarding") at the same global URL,
+  `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-business/webhook`. Omni still finds the instance by `phone_number_id` and
+  verifies `X-Webhook-Signature` with that instance's own secret; a body addressed to an instance that is not
+  provider-signed, or signed with another instance's secret, gets 401. `META_APP_SECRET` is not needed when every
+  instance is provider-signed.
+- **Re-connect.** A connect that omits a provider field keeps the stored value; `null` clears it. `authMode: x-api-key`
+  without `apiBaseUrl`, and `signatureMode: x-webhook-signature` without `webhookSecret`, are refused with 400.
+- **Media.** Downloads use the provider's `download_url`; a provider key is never sent to a Meta host.
+- **Meta-only routes.** Number registration, app subscription, conversation analytics, profile photo upload and
+  template header media upload use Meta's own app-scoped endpoints. A provider instance gets
+  `400 NOT_SUPPORTED_VIA_PROVIDER`; do these in the provider's dashboard.
+- The webhook secret is stored like `metaAccessToken` (plain column) and never returned: `GET .../connection` shows
+  `hasWebhookSecret` only.
+
 ## Templates HSM lifecycle
 
 ```
@@ -211,6 +249,8 @@ Use the `template.status_changed` core event (`packages/core/src/events/types.ts
 ### Webhook returns 401
 
 - `X-Hub-Signature-256` HMAC mismatch. Check `META_APP_SECRET` matches the App you're using.
+- Through a provider: `X-Webhook-Signature` must verify with the instance's `webhookSecret`, and the instance must have
+  `signatureMode: x-webhook-signature`.
 - Common cause: editing the App Secret in Meta dashboard but not updating env.
 
 ### Webhook returns 200 but no events fire
