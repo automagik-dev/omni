@@ -31,7 +31,7 @@ test('an added chat is a plain Session of the plugin\'s: outside the team\'s age
   assert.deepEqual(heard, [answer.threadId])
   assert.equal(run.made.length, 1)
   assert.deepEqual(thread, {
-    id: answer.threadId, sessionId: run.made[0], chatId: CHAT, chatJid: CHATS[CHAT].externalId, chatName: 'Marina', channelId: INSTANCE, origin: OMNI,
+    id: answer.threadId, sessionId: run.made[0], chatId: CHAT, chatIds: [CHAT], notes: '', chatJid: CHATS[CHAT].externalId, chatName: 'Marina', channelId: INSTANCE, origin: OMNI,
     self: OWNER, title: 'Marina', kind: 'direct', status: 'idle', turnOpenAt: null, at: thread.at,
   })
   // Not the team's: no agent and no task holds it, and the team owns it as nothing.
@@ -770,4 +770,81 @@ test('a disconnected persisted thread carries its curated reason code in the tea
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const run = await boot(t, homeFor(t, fakeOmni(), teamState({ omniThreads: { old: record('old', 'old-session') } })), { mask: true })
   assert.equal(run.view().omniThreads[0].reasonCode, 'needs_newer_team')
+})
+
+
+test('RFC-0001 SC7: a legacy scalar record loads as a one-chat set with empty notes and keeps its identity and overrides', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const old = record('legacy', 'old-session', { permissions: { sends: 'allow' }, turnOpenAt: 12 })
+  const home = homeFor(t, omni, teamState({ omniThreads: { legacy: old } }))
+  const run = await boot(t, home)
+  const thread = run.channels.threads.byChat(CHAT)
+  assert.equal(thread.id, old.id)
+  assert.equal(thread.sessionId, old.sessionId)
+  assert.deepEqual(thread.chatIds, [CHAT])
+  assert.equal(thread.notes, '')
+  assert.deepEqual(thread.permissions, old.permissions)
+  assert.equal(thread.turnOpenAt, 12)
+  assert.equal(run.view().omniThreads[0].id, old.id)
+  assert.deepEqual(run.made, [])
+})
+
+test('RFC-0001 SC8: thread notes follow the base prompt and fixed instructions in the assembled session prompt', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  const { thread } = await run.channels.threads.add(INSTANCE, CHAT)
+  thread.notes = 'Track Fin Ops invoices and Luiza approvals.'
+  const context = { agent: run.agentOf(thread.sessionId) }
+  const sections = [...run.ctx.sections.values()].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))
+  const text = sections.map(section => typeof section.text === 'function' ? section.text(context) : section.text ?? '').join('\n')
+  const fixed = text.indexOf('# This chat thread')
+  const base = text.indexOf('## You operate Omni for the user')
+  assert.ok(base >= 0 && base < fixed)
+  assert.ok(text.indexOf('Track Fin Ops invoices') > text.indexOf('- Talk to the user here'))
+  assert.ok(text.indexOf('## Thread notes') > fixed)
+  assert.ok(sections.find(section => section.name === 'omni-thread').order > 100)
+})
+
+test('RFC-0001 SC10: membership add/remove rekeys; lookups include all members and a failed save disconnects', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  const { thread } = await run.channels.threads.add(INSTANCE, CHAT)
+  const old = run.channels.threadKeys.keyFor(thread.id)
+  assert.equal((await run.channels.threads.setChats(thread.id, [CHAT, GROUP, ELSEWHERE])).ok, true)
+  assert.deepEqual(thread.chatIds, [CHAT, GROUP, ELSEWHERE])
+  for (const chatId of thread.chatIds) assert.equal(run.channels.threads.byChat(chatId).id, thread.id)
+  assert.equal(omni.keys.get(old).revoked, true)
+  const expanded = run.channels.threadKeys.keyFor(thread.id)
+  assert.equal((await run.channels.threads.setChats(thread.id, [CHAT, ELSEWHERE])).ok, true)
+  assert.equal(omni.keys.get(expanded).revoked, true)
+  assert.equal(run.channels.threads.byChat(GROUP), undefined)
+  const save = run.channels.save
+  run.channels.save = async () => { throw new Error('disk full') }
+  assert.equal((await run.channels.threads.setChats(thread.id, [CHAT])).ok, false)
+  assert.deepEqual(thread.chatIds, [CHAT, ELSEWHERE])
+  assert.equal(run.channels.threadKeys.keyFor(thread.id), null)
+  await run.channels.threadKeys.drain()
+  assert.equal(run.channels.threadKeys.keyFor(thread.id), null)
+  run.channels.save = save
+})
+
+test('RFC-0001: moving a member requires owner confirmation and rekeys both sets without duplicate membership', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const omni = fakeOmni()
+  const run = await boot(t, homeFor(t, omni))
+  const { thread: source } = await run.channels.threads.add(INSTANCE, CHAT)
+  await run.channels.threads.setChats(source.id, [CHAT, ELSEWHERE])
+  const { thread: target } = await run.channels.threads.add(INSTANCE, GROUP)
+  const old = [source, target].map(thread => run.channels.threadKeys.keyFor(thread.id))
+  assert.equal((await run.channels.threads.setChats(target.id, [GROUP, ELSEWHERE])).ok, false)
+  assert.deepEqual(source.chatIds, [CHAT, ELSEWHERE])
+  assert.deepEqual(target.chatIds, [GROUP])
+  assert.equal((await run.channels.threads.setChats(target.id, [GROUP, ELSEWHERE], { confirmed: true })).ok, true)
+  assert.deepEqual(source.chatIds, [CHAT])
+  assert.deepEqual(target.chatIds, [GROUP, ELSEWHERE])
+  assert.ok(old.every(key => omni.keys.get(key).revoked))
+  assert.equal(run.channels.threads.byChat(ELSEWHERE).id, target.id)
 })

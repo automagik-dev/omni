@@ -444,7 +444,13 @@ function headerInstanceMismatch(
 
 /** The first name of the resolved chat (the raw `:id`, its UUID, its native id) the chat lock admits, or undefined. */
 function chatNameInLock(apiKey: ApiKeyData, raw: string, chat: Chat): string | undefined {
+  if (isChatSetKey(apiKey) && !(apiKey.chatAllowlist ?? []).includes(chat.id)) return undefined;
   return [raw, chat.id, chat.externalId].find((name) => enforceChatAllowlist(apiKey, name).allowed);
+}
+
+/** A chat-set child stores every member UUID alongside compatibility native ids. */
+function isChatSetKey(apiKey: ApiKeyData): boolean {
+  return apiKey.profile === 'cs' && (apiKey.chatAllowlist ?? []).filter(isChatUuid).length > 1;
 }
 
 /** A chat row with no instance is never inside an instance lock. */
@@ -615,6 +621,30 @@ function denyUnless(
   return lockDenyResponse(c, lock, result);
 }
 
+/** Every body-addressed send target must resolve to a member on the requested instance. */
+async function lockSendPairs(
+  c: Context<{ Variables: AppVariables }>,
+  apiKey: ApiKeyData,
+  targets: LockTargets,
+): Promise<Response | null> {
+  const instance = targets.instance;
+  const names = targets.sourceChat === null ? [targets.recipient] : [targets.recipient, targets.sourceChat];
+  for (const name of names) {
+    const chat =
+      instance && name && ApiKeyService.instanceAllowed(apiKey.instanceIds, instance)
+        ? await resolveChatRow(c, name, instance)
+        : null;
+    if (!chat || chat.instanceId !== instance || !(apiKey.chatAllowlist ?? []).includes(chat.id)) {
+      return lockDenyResponse(c, 'chatAllowlist', {
+        allowed: false,
+        reason: 'not-in-allowlist',
+        attempted: name ?? '',
+      });
+    }
+  }
+  return null;
+}
+
 /** The profile-aware allowlist locks; the refusal to return, or null when the request may proceed. */
 async function enforceLocks(
   c: Context<{ Variables: AppVariables }>,
@@ -634,8 +664,21 @@ async function enforceLocks(
     return mismatch;
   }
 
+  // Refuse an instance outside either ceiling before resolveChatRow can throw VALIDATION.
+  const instanceDenied = denyUnless(
+    c,
+    apiKey,
+    route,
+    'instanceAllowlist',
+    enforceInstanceAllowlist(apiKey, targets.instance),
+  );
+  if (instanceDenied) return instanceDenied;
+  if (isOutboundSendRoute(cleanPath) && isChatSetKey(apiKey)) {
+    const pairDenied = await lockSendPairs(c, apiKey, targets);
+    if (pairDenied) return pairDenied;
+  }
+
   return (
-    denyUnless(c, apiKey, route, 'instanceAllowlist', enforceInstanceAllowlist(apiKey, targets.instance)) ??
     denyUnless(c, apiKey, route, 'chatAllowlist', enforceChatAllowlist(apiKey, targets.chat)) ??
     (targets.sourceChat === null
       ? null

@@ -108,12 +108,12 @@ export function fakeOmni() {
     }
     const chatId = path.match(/^\/chats\/([^/]+)$/)?.[1]
     if (method === 'GET' && chatId !== undefined) {
-      if (child && caller.chatId !== chatId) return locked()
+      if (child && !(caller.chatIds ?? [caller.chatId]).includes(chatId)) return locked()
       return CHATS[chatId] ? json(200, { data: CHATS[chatId] }) : json(404, { error: { code: 'NOT_FOUND', message: 'Chat not found' } })
     }
     if (method === 'POST' && (path === '/messages/send' || path === '/messages/send/reaction')) {
       const body = JSON.parse(init.body)
-      if (child && (!caller.chatNames.includes(body.to) || body.to !== caller.recipient || body.instanceId !== caller.instanceId)) return locked()
+      if (child && !(caller.chats ?? [CHATS[caller.chatId]]).some(chat => chat.externalId === body.to && chat.instanceId === body.instanceId)) return locked()
       sent.push({ path, body, key: caller.text })
       return json(path === '/messages/send' ? 201 : 200, path === '/messages/send' ? { data: { messageId: randomUUID(), status: 'sent' } } : { success: true, data: { messageId: randomUUID() } })
     }
@@ -137,13 +137,19 @@ export function fakeOmni() {
     if (method === 'POST' && path === '/keys/children') {
       if (omni.mint === 'missing') return json(404, {})
       if (omni.mint === 'refused') return json(403, { error: { code: 'FORBIDDEN', message: 'this key cannot mint chat keys' } })
-      const chat = CHATS[JSON.parse(init.body).chatId]
+      const body = JSON.parse(init.body)
+      const members = (body.chatIds ?? [body.chatId]).map(id => CHATS[id])
+      if (members.some(chat => !chat)) return json(404, {})
+      const chat = members[0]
       const made = {
         id: randomUUID(), text: `omni_sk_child_${randomUUID().slice(0, 8)}`, kind: 'child', revoked: false, chatId: chat.id,
-        chatNames: [chat.id, chat.externalId], instanceId: chat.instanceId, recipient: chat.externalId,
+        chatIds: members.map(chat => chat.id), chats: members,
+        chatNames: members.flatMap(chat => [chat.id, chat.externalId]), instanceId: chat.instanceId, recipient: chat.externalId,
       }
       keys.set(made.text, made)
-      return json(201, { data: { id: made.id, plainTextKey: made.text, parentKeyId: link.id, chatId: chat.id, chatExternalId: chat.externalId, instanceId: chat.instanceId, scopes: ['messages:send', 'chats:read'], expiresAt: null } })
+      return json(201, { data: { id: made.id, plainTextKey: made.text, parentKeyId: link.id,
+        ...(body.chatIds ? { chats: members.map(({ id, externalId, instanceId }) => ({ id, externalId, instanceId })) } : { chatId: chat.id, chatExternalId: chat.externalId, instanceId: chat.instanceId }),
+        scopes: ['messages:send', 'chats:read'], expiresAt: null } })
     }
     if (method === 'GET' && path === `/instances/${INSTANCE}`) return json(200, { data: { id: INSTANCE, name: 'Pessoal', ownerIdentifier: `${OWNER}:12@s.whatsapp.net` } })
     const revoke = path.match(/^\/keys\/children\/([^/]+)\/revoke$/)?.[1]

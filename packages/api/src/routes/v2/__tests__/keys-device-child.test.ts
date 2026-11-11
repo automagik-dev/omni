@@ -896,6 +896,8 @@ function routeHarness() {
     c.set('services', {
       apiKeys: h.service,
       chats: {
+        findByExternalIdSmart: async (instanceId: string, externalId: string) =>
+          chats.find((row) => row.instanceId === instanceId && row.externalId === externalId) ?? null,
         getById: async (id: string) => {
           const row = chats.find((candidate) => candidate.id === id);
           if (!row) throw new NotFoundError('Chat', id);
@@ -919,6 +921,7 @@ function routeHarness() {
       return c.json({ data: { sent: true } });
     });
   }
+  v2.get('/chats/:id/messages', (c) => c.json({ items: [] }));
   app.route('/api/v2', v2);
 
   const as = async (
@@ -943,7 +946,7 @@ function routeHarness() {
     as(key, 'POST', '/keys/children', { chatId }, headers);
   const children = (parentId: string) => h.store.rows.filter((row) => row.parentKeyId === parentId);
 
-  return { ...h, as, mint, children, sent };
+  return { ...h, as, mint, children, sent, chats };
 }
 
 describe('POST /keys/children', () => {
@@ -1256,5 +1259,74 @@ describe("a minted child's sends stay in its own chat (Decision 14: to is the ch
       to: chat(1).externalId,
     });
     expect(res.status).toBe(403);
+  });
+});
+
+describe('RFC-0001 explicit chat-set children', () => {
+  test('SC3: a three-chat child reads every member and refuses a fourth; wrong instance/recipient pairs never reach send', async () => {
+    const r = routeHarness();
+    const fin1 = { ...chat(10), externalId: 'fin-ops@g.us' };
+    const fin2 = { ...chat(11, OTHER_INSTANCE), externalId: fin1.externalId };
+    const luiza = { ...chat(12), externalId: 'luiza@s.whatsapp.net' };
+    const fourth = { ...chat(13, OTHER_INSTANCE), externalId: luiza.externalId };
+    r.chats.splice(0, r.chats.length, fin1, fin2, luiza);
+    const { plainTextKey } = await r.parent();
+    const result = await r.as(plainTextKey, 'POST', '/keys/children', { chatIds: [fin1.id, fin2.id, luiza.id] });
+    expect(result.status).toBe(201);
+    expect(result.json.data.chats).toEqual([fin1, fin2, luiza]);
+    const key = result.json.data.plainTextKey;
+    for (const member of [fin1, fin2, luiza]) {
+      expect((await r.as(key, 'GET', `/chats/${member.id}/messages`)).status).toBe(200);
+      expect(
+        (
+          await r.as(key, 'POST', '/messages/send', {
+            instanceId: member.instanceId,
+            to: member.externalId,
+            text: 'hi',
+          })
+        ).status,
+      ).toBe(200);
+    }
+    expect((await r.as(key, 'GET', `/chats/${fourth.id}/messages`)).status).toBe(403);
+    // Both flat values are allowed, but Luiza on line 2 is not a member pair.
+    for (const present of [false, true]) {
+      if (present) {
+        r.chats.push(fourth);
+        expect((await r.as(key, 'GET', `/chats/${fourth.id}/messages`)).status).toBe(403);
+      }
+      expect(
+        (await r.as(key, 'POST', '/messages/send', { instanceId: OTHER_INSTANCE, to: luiza.externalId, text: 'hi' }))
+          .status,
+      ).toBe(403);
+    }
+    expect(r.sent).toHaveLength(3);
+  });
+
+  test('invalid, missing and out-of-authority members mint no partial set', async () => {
+    const r = routeHarness();
+    const { key: parent, plainTextKey } = await r.parent(undefined, { instanceIds: [INSTANCE] });
+    for (const body of [
+      { chatIds: [] },
+      { chatIds: [chat(1).id, 'bad'] },
+      { chatIds: [chat(1).id, chat(1).id] },
+      { chatIds: [chat(1).id], chatId: chat(1).id },
+      { chatIds: [chat(1).id, chat(99).id] },
+      { chatIds: [chat(1).id, chat(3, OTHER_INSTANCE).id] },
+    ]) {
+      const result = await r.as(plainTextKey, 'POST', '/keys/children', body);
+      expect([400, 404]).toContain(result.status);
+      expect(r.children(parent.id)).toHaveLength(0);
+    }
+  });
+
+  test('overlapping re-mint retires the whole former set and parent narrowing revokes the new child', async () => {
+    const h = harness();
+    const { key: root } = await h.parent();
+    const old = minted(await h.service.mintChild(root.id, [chat(1), chat(2, OTHER_INSTANCE)]));
+    const next = minted(await h.service.mintChild(root.id, [chat(2, OTHER_INSTANCE), chat(3)]));
+    expect(await h.validates(old.plainTextKey)).toBe(401);
+    expect(await h.validates(next.plainTextKey)).toBe(200);
+    await h.service.update(root.id, { instanceIds: [INSTANCE] });
+    expect(await h.validates(next.plainTextKey)).toBe(401);
   });
 });

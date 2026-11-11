@@ -730,17 +730,26 @@ export class ApiKeyService {
   // ==========================================================================
 
   /**
-   * Mint a `cs` child of `parentId` locked to one chat. The parent row is locked
+   * Mint a `cs` child of `parentId` locked to an explicit chat set. The parent row is locked
    * for the whole transaction, so the cap and the one-live-child-per-chat rule
-   * hold under concurrent mints; a re-mint for the same chat revokes the
+   * hold under concurrent mints; a re-mint overlapping any member revokes the
    * previous child first. The parent must be an active root key with no chat,
    * instance or recipient lock; the caller's own checks (scope, tenancy,
    * instance ceiling) belong to the route.
    */
-  async mintChild(parentId: string, chat: ChildChat): Promise<MintChildResult> {
-    if (!ChildChatSchema.safeParse(chat).success) {
+  async mintChild(parentId: string, input: ChildChat | ChildChat[]): Promise<MintChildResult> {
+    const parsed = z
+      .array(ChildChatSchema)
+      .min(1)
+      .safeParse(Array.isArray(input) ? input : [input]);
+    if (!parsed.success || new Set(parsed.data.map((chat) => chat.id)).size !== parsed.data.length) {
       return { ok: false, code: 'not_mintable', message: 'invalid chat' };
     }
+    const chats = parsed.data;
+    const chat = chats[0] as ChildChat;
+    const memberIds = new Set(chats.map((member) => member.id));
+    const instances = [...new Set(chats.map((member) => member.instanceId))];
+    const recipients = [...new Set(chats.map((member) => member.externalId))];
     const plainTextKey = this.generateKey();
     const keyHash = await this.hashKey(plainTextKey);
     const keyPrefix = this.getKeyPrefix(plainTextKey);
@@ -753,7 +762,7 @@ export class ApiKeyService {
       const refusal = notMintableReason(parent);
       if (refusal || !parent) return { ok: false, code: 'not_mintable', message: refusal ?? 'parent key not found' };
       // Read from the locked row, never from the caller's (possibly cached) view of it.
-      if (!parentCoversInstance(parent, chat.instanceId)) {
+      if (!instances.every((instanceId) => parentCoversInstance(parent, instanceId))) {
         return {
           ok: false,
           code: 'not_mintable',
@@ -777,8 +786,10 @@ export class ApiKeyService {
         .from(apiKeys)
         .where(and(eq(apiKeys.parentKeyId, parent.id), eq(apiKeys.status, 'active')));
       const now = Date.now();
-      const sameChat = active.filter((child) => child.chatAllowlist.includes(chat.id));
-      const liveElsewhere = active.filter((child) => isLive(child, now) && !child.chatAllowlist.includes(chat.id));
+      const sameChat = active.filter((child) => child.chatAllowlist.some((id) => memberIds.has(id)));
+      const liveElsewhere = active.filter(
+        (child) => isLive(child, now) && !child.chatAllowlist.some((id) => memberIds.has(id)),
+      );
       if (liveElsewhere.length >= MAX_LIVE_CHILDREN) {
         return {
           ok: false,
@@ -797,15 +808,15 @@ export class ApiKeyService {
 
       const resolved = resolveProfile({
         profile: 'cs',
-        chatAllowlist: [chat.id, chat.externalId],
-        instanceAllowlist: [chat.instanceId],
-        outboundRecipientAllowlist: [chat.externalId],
+        chatAllowlist: [...new Set(chats.flatMap((member) => [member.id, member.externalId]))],
+        instanceAllowlist: instances,
+        outboundRecipientAllowlist: recipients,
       });
       const [child] = await tx
         .insert(apiKeys)
         .values({
           name: `chat:${chat.id}`,
-          description: `Chat key for ${chat.externalId}`,
+          description: `Chat key for ${recipients.join(', ')}`,
           keyPrefix,
           keyHash,
           scopes,
@@ -814,7 +825,7 @@ export class ApiKeyService {
           chatAllowlist: resolved.chatAllowlist,
           instanceAllowlist: resolved.instanceAllowlist,
           outboundRecipientAllowlist: resolved.outboundRecipientAllowlist,
-          instanceIds: [chat.instanceId],
+          instanceIds: instances,
           rateLimit: parent.rateLimit,
           expiresAt: parent.expiresAt,
           parentKeyId: parent.id,

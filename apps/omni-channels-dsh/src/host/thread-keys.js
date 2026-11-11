@@ -46,8 +46,11 @@ const NO_KEY = 'Not connected: this thread has no key.'
 export const UNREADABLE = 'The thread keys file could not be read, so the chat keys in it were not cut. Revoking this app\'s key in Omni ends them.'
 
 const text = z.string().min(1).max(2000)
-const Entry = z.object({ childId: text, key: text, chatId: text, origin: text, parentKeyId: text.nullable(), pending: z.object({ since: z.number() }).nullable() })
-const Waiting = z.object({ chatId: text, origin: text, reason: z.string().max(1000), reasonCode: z.enum(['omni_unreachable', 'chat_keys_unavailable', 'chat_key_limit']).optional() })
+const membership = { chatId: text.optional(), chatIds: z.array(text).min(1).optional() }
+const normalize = value => ({ ...value, chatIds: value.chatIds ?? [value.chatId] })
+const hasMembers = value => value.chatIds !== undefined || value.chatId !== undefined
+const Entry = z.object({ childId: text, key: text, ...membership, origin: text, parentKeyId: text.nullable(), pending: z.object({ since: z.number() }).nullable() }).refine(hasMembers).transform(normalize)
+const Waiting = z.object({ ...membership, origin: text, reason: z.string().max(1000), reasonCode: z.enum(['omni_unreachable', 'chat_keys_unavailable', 'chat_key_limit']).optional() }).refine(hasMembers).transform(normalize)
 const KeysFile = z.object({
   version: z.literal(1),
   threads: z.record(z.string(), Entry),
@@ -56,7 +59,11 @@ const KeysFile = z.object({
 })
 
 // Omni's answers, as Group 4's routes give them (packages/api/src/schemas/openapi/keys.ts).
-const Minted = z.object({ data: z.object({ id: z.string().regex(ID), plainTextKey: text, parentKeyId: z.string().nullish(), chatId: z.string(), chatExternalId: z.string(), instanceId: z.string().regex(ID) }) })
+const MintMetadata = z.object({ id: z.string().regex(ID), plainTextKey: text, parentKeyId: z.string().nullish() })
+const Minted = z.object({ data: z.union([
+  MintMetadata.extend({ chatId: z.string().regex(ID), chatExternalId: text, instanceId: z.string().regex(ID) }),
+  MintMetadata.extend({ chats: z.array(z.object({ id: z.string().regex(ID), externalId: text, instanceId: z.string().regex(ID) })).min(1) }),
+]) })
 const Revoked = z.object({ data: z.object({ status: z.enum(['revoked', 'already_revoked']) }) })
 const Instance = z.object({ data: z.object({ ownerIdentifier: z.string().max(200).nullish() }) })
 const Refusal = z.object({ error: z.object({ message: z.string().max(500), code: z.string().optional() }) })
@@ -323,18 +330,21 @@ export function install(rt) {
   // A fresh child of the link key for one thread, and the owner's number read with the link
   // key (`self`); the file changes only when the key was made. `status`: Omni's answer, 0 when
   // it could not be reached.
-  async function mintIn(file, threadId, chatId, link) {
-    const reply = await ask(link.url, link.key, 'POST', '/keys/children', { chatId })
+  async function mintIn(file, threadId, input, link) {
+    const chatIds = Array.isArray(input) ? input : [input]
+    const chatId = chatIds[0]
+    const reply = await ask(link.url, link.key, 'POST', '/keys/children', chatIds.length === 1 ? { chatId } : { chatIds })
     if (reply.status !== 201) return { ok: false, ...refusalOf(reply, link), status: reply.status }
     const minted = Minted.safeParse(reply.json)
-    if (!minted.success || minted.data.data.chatId !== chatId) {
+    const members = minted.success ? minted.data.data.chats?.map(chat => chat.id) ?? [minted.data.data.chatId] : []
+    if (!minted.success || members.length !== chatIds.length || !chatIds.every(id => members.includes(id))) {
       await discard(link, reply.json?.data?.plainTextKey)
       return { ok: false, reason: 'Omni answered something else for a chat key.', status: reply.status }
     }
     const child = minted.data.data
-    const channel = await ask(link.url, link.key, 'GET', `/instances/${child.instanceId}`)
+    const channel = await ask(link.url, link.key, 'GET', `/instances/${child.chats?.[0]?.instanceId ?? child.instanceId}`)
     const owner = channel.status === 200 ? Instance.safeParse(channel.json).data?.data?.ownerIdentifier : null
-    file.threads[threadId] = { childId: child.id, key: child.plainTextKey, chatId, origin: link.url, parentKeyId: child.parentKeyId ?? link.keyId ?? null, pending: null }
+    file.threads[threadId] = { childId: child.id, key: child.plainTextKey, chatId, chatIds, origin: link.url, parentKeyId: child.parentKeyId ?? link.keyId ?? null, pending: null }
     delete file.waiting[threadId]
     return { ok: true, self: digitsOf(owner) || null }
   }
@@ -347,7 +357,7 @@ export function install(rt) {
     if (link === null || rt.teamResume?.ready !== true) return { got, reasons }
     for (const [threadId, waiting] of Object.entries(file.waiting)) {
       if (file.threads[threadId] || !sameOmni(link.url, waiting.origin) || down.has(cleanOmniUrl(link.url))) continue
-      const minted = await mintIn(file, threadId, waiting.chatId, link)
+      const minted = await mintIn(file, threadId, waiting.chatIds, link)
       if (minted.status === 0) down.add(cleanOmniUrl(link.url))
       if (minted.ok) got.push(threadId)
       else if (waiting.reason !== `Not connected: ${minted.reason}` || waiting.reasonCode !== minted.reasonCode) {
@@ -360,10 +370,12 @@ export function install(rt) {
     return { got, reasons }
   }
 
+  const blocked = new Set()
   const live = (entry, link) => entry !== undefined && entry.pending === null && link !== null && sameOmni(link.url, entry.origin)
   // Why a thread is not connected, from a read of the file and the link; null when it is.
   function reasonIn(file, link, threadId) {
     const entry = file.threads[threadId]
+    if (blocked.has(threadId)) return KEEP_FAILED
     if (live(entry, link)) return null
     if (entry?.pending) return BEING_CUT
     if (link === null) return NOT_LINKED
@@ -376,9 +388,10 @@ export function install(rt) {
   rt.threadKeys = {
     // A thread's key, made with the link key. On a failure nothing is written and the reason
     // comes back: the thread then has no key, and nothing runs on the link key for it.
-    mint: async (threadId, chatId) => {
+    mint: async (threadId, input) => {
+      const chatIds = Array.isArray(input) ? input : [input]
       if (typeof threadId !== 'string' || threadId === '') return { ok: false, reason: 'Unknown thread.' }
-      if (typeof chatId !== 'string' || !ID.test(chatId)) return { ok: false, reason: 'Unknown chat.' }
+      if (chatIds.length === 0 || !chatIds.every(id => typeof id === 'string' && ID.test(id)) || new Set(chatIds).size !== chatIds.length) return { ok: false, reason: 'Unknown chat.' }
       if (rt.teamResume?.ready !== true) return { ok: false, reason: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
       // The file or its lock could not be made (a full or read-only disk): the reason, not a throw.
       const kept = error => {
@@ -390,7 +403,7 @@ export function install(rt) {
         if (link === null) return { ok: false, reason: NOT_LINKED }
         const file = read()
         if (file.threads[threadId]) return { ok: false, reason: 'This thread has a key already.' }
-        const minted = await mintIn(file, threadId, chatId, link)
+        const minted = await mintIn(file, threadId, chatIds, link)
         if (!minted.ok) return { ok: false, reason: minted.reason, ...(minted.reasonCode === undefined ? {} : { reasonCode: minted.reasonCode }) }
         try {
           await write(file)
@@ -399,13 +412,57 @@ export function install(rt) {
           await discard(link, file.threads[threadId].key)
           return kept(error)
         }
+        blocked.delete(threadId)
         changed([threadId])
         return minted
       }).catch(kept)
     },
+    // Disable the old authority durably before minting its replacement. A failed
+    // cut stays pending; drain retains the complete requested set for its retry.
+    replace: (threadId, chatIds) => serial(async () => {
+      if (typeof threadId !== 'string' || threadId === '' || !Array.isArray(chatIds) || chatIds.length === 0 ||
+          !chatIds.every(id => typeof id === 'string' && ID.test(id)) || new Set(chatIds).size !== chatIds.length) return { ok: false, reason: 'Unknown chat set.' }
+      if (rt.teamResume?.ready !== true) return { ok: false, reason: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
+      const file = read()
+      const link = rt.omniLink?.() ?? null
+      const entry = file.threads[threadId]
+      const origin = entry?.origin ?? file.waiting[threadId]?.origin ?? link?.url
+      if (!origin) return { ok: false, reason: NOT_LINKED }
+      blocked.add(threadId)
+      file.waiting[threadId] = { chatId: chatIds[0], chatIds: [...chatIds], origin, reason: WAITING }
+      if (entry) entry.pending ??= { since: Date.now() }
+      try {
+        await write(file)
+      } catch (error) {
+        // Even if the disk refuses the pending marker, try to retire the old key.
+        if (entry) await cut(entry, parentsOf(file, entry, link))
+        throw error
+      }
+      blocked.delete(threadId)
+      changed([threadId])
+      if (entry) {
+        if (!(await cut(entry, parentsOf(file, entry, link)))) return { ok: false, reason: BEING_CUT }
+        drop(file, threadId)
+        await write(file)
+      }
+      if (link === null || !sameOmni(link.url, origin)) return { ok: false, reason: link === null ? NOT_LINKED : OTHER_OMNI }
+      const minted = await mintIn(file, threadId, chatIds, link)
+      if (!minted.ok) return minted
+      try {
+        await write(file)
+      } catch (error) {
+        await discard(link, file.threads[threadId].key)
+        throw error
+      }
+      changed([threadId])
+      return minted
+    }).catch(error => {
+      rt.warn?.('omni-channels: a replacement key could not be kept: %s', error?.message ?? error)
+      return { ok: false, reason: KEEP_FAILED }
+    }),
     keyFor: (threadId) => {
       const entry = read().threads[threadId]
-      return live(entry, rt.omniLink?.() ?? null) ? entry.key : null
+      return !blocked.has(threadId) && live(entry, rt.omniLink?.() ?? null) ? entry.key : null
     },
     connected: threadId => rt.threadKeys.keyFor(threadId) !== null,
     reasonOf: threadId => reasonIn(read(), rt.omniLink?.() ?? null, threadId),
@@ -488,7 +545,7 @@ export function install(rt) {
     const down = new Set()
     for (const threadId of threadIds) {
       const entry = file.threads[threadId]
-      if (entry.pending === null) file.waiting[threadId] = { chatId: entry.chatId, origin: entry.origin, reason: WAITING }
+      if (entry.pending === null) file.waiting[threadId] = { chatId: entry.chatIds[0], chatIds: entry.chatIds, origin: entry.origin, reason: WAITING }
       if (await cut(entry, parentsOf(file, entry, link), down)) {
         drop(file, threadId)
         continue

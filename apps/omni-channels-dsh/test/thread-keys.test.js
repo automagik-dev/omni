@@ -89,12 +89,16 @@ function fakeOmni() {
       case 'POST /keys/children': {
         if (caller.kind !== 'link') return json(403, { error: { code: 'FORBIDDEN', message: 'this key cannot mint or revoke chat keys' } })
         if (omni.refuseWith) return json(403, { error: { code: 'FORBIDDEN', message: omni.refuseWith(caller.text) } })
-        const chat = CHATS[JSON.parse(init.body).chatId]
-        if (!chat) return json(404, { error: { code: 'NOT_FOUND', message: 'Chat not found' } })
-        const previous = [...keys.values()].find(record => record.parentId === caller.id && record.chatId === chat.id && !record.revoked)
+        const body = JSON.parse(init.body)
+        const members = (body.chatIds ?? [body.chatId]).map(id => CHATS[id])
+        if (members.some(chat => !chat)) return json(404, { error: { code: 'NOT_FOUND', message: 'Chat not found' } })
+        const chat = members[0]
+        const previous = [...keys.values()].find(record => record.parentId === caller.id && (record.chatIds ?? [record.chatId]).some(id => members.some(chat => chat.id === id)) && !record.revoked)
         if (previous) previous.revoked = true
-        const child = add(url.host, 'child', { parentId: caller.id, chatId: chat.id })
-        const data = { id: child.id, plainTextKey: child.text, parentKeyId: caller.id, chatId: chat.id, chatExternalId: chat.externalId, instanceId: chat.instanceId, scopes: ['messages:send', 'chats:read'], expiresAt: null, replacedKeyId: previous?.id ?? null }
+        const child = add(url.host, 'child', { parentId: caller.id, chatId: chat.id, chatIds: members.map(chat => chat.id) })
+        const data = { id: child.id, plainTextKey: child.text, parentKeyId: caller.id,
+          ...(body.chatIds ? { chats: members } : { chatId: chat.id, chatExternalId: chat.externalId, instanceId: chat.instanceId }),
+          scopes: ['messages:send', 'chats:read'], expiresAt: null, replacedKeyId: previous?.id ?? null }
         return json(201, { data: omni.tamper ? omni.tamper(data) : data })
       }
       case 'POST /keys/children/self/revoke':
@@ -116,7 +120,7 @@ function fakeOmni() {
       default: {
         const chatId = path.match(/^\/chats\/([^/]+)$/)?.[1]
         if (method === 'GET' && CHATS[chatId]) {
-          if (caller.kind === 'child' && caller.chatId !== chatId) return json(403, { error: { code: 'FORBIDDEN', message: 'chat lock' } })
+          if (caller.kind === 'child' && !(caller.chatIds ?? [caller.chatId]).includes(chatId)) return json(403, { error: { code: 'FORBIDDEN', message: 'chat lock' } })
           return json(200, { data: CHATS[chatId] })
         }
         return json(404, { error: { code: 'NOT_FOUND', message: 'Not Found' } })
@@ -233,7 +237,7 @@ test('a thread\'s key is a child of the link key, kept only in a 0600 file besid
   assert.equal(statSync(join(home, KEYS_FILE)).mode & 0o777, 0o600)
   assert.deepEqual(file(), {
     version: 1,
-    threads: { t1: { childId: child.id, key: child.text, chatId: CHAT, origin: OMNI, parentKeyId: parent.id, pending: null } },
+    threads: { t1: { childId: child.id, key: child.text, chatId: CHAT, chatIds: [CHAT], origin: OMNI, parentKeyId: parent.id, pending: null } },
     retired: [],
     waiting: {},
   })
@@ -1036,5 +1040,61 @@ test('unknown waiting reasons have no inferred reason code (M24)', async (t) => 
   for (const [index, reason] of reasons.entries()) {
     assert.equal(rt.threadKeys.reasonOf(`t${index}`), reason)
     assert.equal(rt.threadKeys.reasonCodesOf([`t${index}`]).get(`t${index}`), undefined)
+  }
+})
+
+
+test('RFC-0001 SC10: add and remove replace the complete chat-set key and retire its old authority', async (t) => {
+  const omni = fakeOmni()
+  const parent = omni.linkKey()
+  const { rt, file } = runtime(t, { link: linked(parent) })
+  assert.equal((await rt.threadKeys.mint('t1', CHAT)).ok, true)
+  const first = rt.threadKeys.keyFor('t1')
+  assert.equal((await rt.threadKeys.replace('t1', [CHAT, OWN_CHAT])).ok, true)
+  const second = rt.threadKeys.keyFor('t1')
+  assert.notEqual(second, first)
+  assert.equal(omni.byText(first).revoked, true)
+  assert.deepEqual(omni.byText(second).chatIds, [CHAT, OWN_CHAT])
+  assert.deepEqual(file().threads.t1.chatIds, [CHAT, OWN_CHAT])
+  assert.equal((await rt.threadKeys.replace('t1', [OWN_CHAT])).ok, true)
+  assert.equal(omni.byText(second).revoked, true)
+  assert.deepEqual(omni.byText(rt.threadKeys.keyFor('t1')).chatIds, [OWN_CHAT])
+})
+
+test('RFC-0001: replacement cut failure disconnects, and drain/relink preserve the entire requested set', async (t) => {
+  const omni = fakeOmni()
+  const parent = omni.linkKey()
+  const { rt, file } = runtime(t, { link: linked(parent) })
+  await rt.threadKeys.mint('t1', CHAT)
+  const old = rt.threadKeys.keyFor('t1')
+  omni.down = true
+  assert.equal((await rt.threadKeys.replace('t1', [CHAT, OWN_CHAT])).ok, false)
+  assert.equal(rt.threadKeys.keyFor('t1'), null)
+  assert.deepEqual(file().waiting.t1.chatIds, [CHAT, OWN_CHAT])
+  omni.down = false
+  await rt.threadKeys.drain()
+  assert.equal(omni.byText(old).revoked, true)
+  assert.deepEqual(omni.byText(rt.threadKeys.keyFor('t1')).chatIds, [CHAT, OWN_CHAT])
+  const next = omni.linkKey()
+  await rt.writeOmniLink(linked(next))
+  assert.deepEqual(file().threads.t1.chatIds, [CHAT, OWN_CHAT])
+})
+
+test('RFC-0001: a replacement that cannot persist its pending marker retires the old key and stays disconnected', async (t) => {
+  const omni = fakeOmni()
+  const parent = omni.linkKey()
+  const { rt } = runtime(t, { link: linked(parent) })
+  await rt.threadKeys.mint('t1', CHAT)
+  const old = rt.threadKeys.keyFor('t1')
+  const rename = fsPromises.rename
+  fsPromises.rename = async () => { throw new Error('disk full') }
+  syncBuiltinESMExports()
+  try {
+    assert.equal((await rt.threadKeys.replace('t1', [CHAT, OWN_CHAT])).ok, false)
+    assert.equal(rt.threadKeys.keyFor('t1'), null)
+    assert.equal(omni.byText(old).revoked, true)
+  } finally {
+    fsPromises.rename = rename
+    syncBuiltinESMExports()
   }
 })

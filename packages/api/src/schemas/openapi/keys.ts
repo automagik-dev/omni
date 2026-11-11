@@ -13,11 +13,17 @@ import { z } from '../../lib/zod-openapi';
 import { ErrorSchema } from './common';
 
 /** `POST /keys/children`: the chat row the child is locked to, and nothing else. */
-export const MintChildKeyBodySchema = z
-  .object({
-    chatId: z.string().uuid().openapi({ description: "The chat row's UUID (not its JID)" }),
-  })
-  .strict();
+export const MintChildKeyBodySchema = z.union([
+  z.object({ chatId: z.string().uuid() }).strict(),
+  z
+    .object({
+      chatIds: z
+        .array(z.string().uuid())
+        .min(1)
+        .refine((ids) => new Set(ids).size === ids.length, 'Duplicate chats'),
+    })
+    .strict(),
+]);
 
 /** `POST /keys/children/:id/revoke`. */
 export const RevokeChildKeyBodySchema = z
@@ -34,9 +40,10 @@ export const ChildKeySchema = z.object({
   id: z.string().uuid().openapi({ description: 'The chat key id' }),
   plainTextKey: z.string().openapi({ description: 'The key itself. Returned once; never stored by Omni in clear.' }),
   parentKeyId: z.string().uuid().openapi({ description: 'The key that minted it (the caller)' }),
-  chatId: z.string().uuid().openapi({ description: "The chat row's UUID" }),
-  chatExternalId: z.string().openapi({ description: "The chat's id on its channel (a WhatsApp JID)" }),
-  instanceId: z.string().uuid().openapi({ description: "The chat's instance" }),
+  chatId: z.string().uuid().optional().openapi({ description: 'The legacy single chat row UUID' }),
+  chatExternalId: z.string().optional().openapi({ description: "The chat's id on its channel (a WhatsApp JID)" }),
+  instanceId: z.string().uuid().optional().openapi({ description: "The chat's instance" }),
+  chats: z.array(z.object({ id: z.string().uuid(), externalId: z.string(), instanceId: z.string().uuid() })).optional(),
   scopes: z.array(z.string()).openapi({
     description:
       'The cs scopes the caller holds: messages:send and chats:read, plus context:write and turns:close when held',
@@ -71,19 +78,19 @@ export function registerKeySchemas(registry: OpenAPIRegistry): void {
     path: '/keys/children',
     operationId: 'mintChildKey',
     tags: ['Keys'],
-    summary: 'Mint a chat key',
+    summary: 'Mint a key for an explicit chat set',
     description:
-      'Mint a `cs` key locked to one chat (its UUID and JID), its instance and its recipient, with the ' +
+      'Mint a `cs` key locked to one chat or an explicit set, retaining each instance/recipient pair, with the ' +
       "caller's expiry. The caller must be a root key: no parent, no chat, instance or recipient lock, " +
       'no tenant credential, holding chats:keys, chats:read and messages:send. A second mint for the ' +
-      "same chat revokes the caller's previous key for it. A caller may hold 500 live chat keys.",
+      "overlapping chat revokes the caller's previous key for it. A caller may hold 500 live chat keys.",
     request: { body: { content: { 'application/json': { schema: MintChildKeyBodySchema } } } },
     responses: {
       201: {
         description: 'Chat key minted',
         content: { 'application/json': { schema: z.object({ data: ChildKeySchema }) } },
       },
-      400: { description: 'Invalid body (any field besides chatId)', content: ERROR_CONTENT },
+      400: { description: 'Invalid body (exactly chatId or a nonempty unique chatIds set)', content: ERROR_CONTENT },
       403: { description: 'The caller may not mint chat keys, or not with its scopes', content: ERROR_CONTENT },
       404: {
         description: "No chat row with that id, or the chat is on an instance outside the caller's reach",
