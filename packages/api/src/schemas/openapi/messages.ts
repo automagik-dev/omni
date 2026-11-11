@@ -629,6 +629,11 @@ export function registerMessageSchemas(registry: OpenAPIRegistry): void {
       },
       400: { description: 'Validation error', content: { 'application/json': { schema: ErrorSchema } } },
       404: { description: 'Instance or chat not found', content: { 'application/json': { schema: ErrorSchema } } },
+      422: {
+        description:
+          'CHANNEL_SEND_REJECTED: the channel refused the handoff for good (retrying the same request cannot succeed). The chat is NOT paused and nothing else changed, so the agent can keep the conversation. Transient channel failures stay 502 CHANNEL_SEND_FAILED.',
+        content: { 'application/json': { schema: ErrorSchema } },
+      },
     },
   });
 

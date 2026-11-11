@@ -172,6 +172,8 @@ export interface SendResult {
   /** Whether the error is retryable */
   retryable?: boolean;
 
+  rejected?: boolean;
+
   /** Timestamp of send attempt */
   timestamp: number;
 

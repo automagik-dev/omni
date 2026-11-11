@@ -449,21 +449,24 @@ function handleSendResult(
     error?: string;
     errorCode?: string;
     retryable?: boolean;
+    rejected?: boolean;
     timestamp?: number;
   },
-  context: { channelType: string; instanceId: string; operation: string },
+  context: { channelType: string; instanceId: string; operation: string; details?: Record<string, unknown> },
 ): void {
   if (!result.success) {
+    const rejected = result.rejected === true;
     throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
+      code: rejected ? ERROR_CODES.CHANNEL_SEND_REJECTED : ERROR_CODES.CHANNEL_SEND_FAILED,
       message: result.error ?? `Failed to ${context.operation}`,
       context: {
         channelType: context.channelType,
         instanceId: context.instanceId,
+        ...context.details,
         errorCode: result.errorCode,
-        retryable: result.retryable,
+        retryable: rejected ? false : result.retryable,
       },
-      recoverable: result.retryable ?? false,
+      recoverable: rejected ? false : (result.retryable ?? false),
     });
   }
 }
@@ -1546,20 +1549,12 @@ messagesRoutes.post('/send/media', zValidator('json', sendMediaSchema), async (c
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send media',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        mediaType: data.type,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, {
+    channelType: instance.channel,
+    instanceId: data.instanceId,
+    operation: 'send media',
+    details: { mediaType: data.type },
+  });
 
   // Sentry metric: message sent count by channel
   if (sentryEnabled()) {
@@ -1674,19 +1669,7 @@ messagesRoutes.post('/send/reaction', zValidator('json', sendReactionSchema), as
   // Send via channel plugin
   const result = await plugin.sendMessage(instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send reaction',
-      context: {
-        channelType: instance.channel,
-        instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'send reaction' });
 
   return c.json({
     success: true,
@@ -1764,19 +1747,7 @@ messagesRoutes.post('/send/sticker', zValidator('json', sendStickerSchema), asyn
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send sticker',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send sticker' });
 
   return c.json(
     {
@@ -1851,19 +1822,7 @@ messagesRoutes.post('/send/contact', zValidator('json', sendContactSchema), asyn
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send contact',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send contact' });
 
   return c.json(
     {
@@ -1943,19 +1902,7 @@ messagesRoutes.post('/send/location', zValidator('json', sendLocationSchema), as
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send location',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send location' });
 
   return c.json(
     {
@@ -2493,19 +2440,11 @@ messagesRoutes.post('/send/tts', zValidator('json', sendTtsSchema), async (c) =>
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send TTS voice note',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, {
+    channelType: instance.channel,
+    instanceId: data.instanceId,
+    operation: 'send TTS voice note',
+  });
 
   return c.json(
     {
@@ -2638,19 +2577,7 @@ messagesRoutes.post('/send/forward', zValidator('json', forwardMessageSchema), a
   // Send via channel plugin
   const result = await plugin.sendMessage(instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to forward message',
-      context: {
-        channelType: instance.channel,
-        instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId, operation: 'forward message' });
 
   return c.json(
     {
@@ -3265,19 +3192,7 @@ messagesRoutes.post('/send/embed', zValidator('json', sendEmbedSchema), async (c
   // Send via channel plugin
   const result = await plugin.sendMessage(data.instanceId, outgoingMessage);
 
-  if (!result.success) {
-    throw new OmniError({
-      code: ERROR_CODES.CHANNEL_SEND_FAILED,
-      message: result.error ?? 'Failed to send embed',
-      context: {
-        channelType: instance.channel,
-        instanceId: data.instanceId,
-        errorCode: result.errorCode,
-        retryable: result.retryable,
-      },
-      recoverable: result.retryable ?? false,
-    });
-  }
+  handleSendResult(result, { channelType: instance.channel, instanceId: data.instanceId, operation: 'send embed' });
 
   return c.json(
     {

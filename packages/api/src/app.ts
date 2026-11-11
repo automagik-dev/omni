@@ -416,6 +416,21 @@ export function createApp(
   app.post('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
   app.get('/api/v2/channels/asc/:instanceId/webhook', handleAscWebhook);
 
+  app.post('/api/v2/channels/zenvia/:instanceId/webhook', async (c) => {
+    const channelRegistry = c.get('channelRegistry');
+
+    if (!channelRegistry) {
+      return c.json({ error: { code: 'NO_REGISTRY', message: 'Channel registry not available' } }, 503);
+    }
+
+    const plugin = channelRegistry.get('zenvia');
+    if (!plugin?.handleWebhook) {
+      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'Zenvia plugin not loaded' } }, 503);
+    }
+
+    return plugin.handleWebhook(c.req.raw);
+  });
+
   // PROTOTYPE public webchat endpoints — auth-exempt (an anonymous site visitor
   // has no API key). widget (GET demo page), events (GET Server-Sent Events),
   // messages (POST visitor text). The plugin routes by path and refuses unknown

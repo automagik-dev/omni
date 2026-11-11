@@ -1,0 +1,121 @@
+import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
+import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
+import type { ZenviaPlugin } from '../plugin';
+import type { HostResolver } from '../utils/public-host';
+
+export const instanceId = '00000000-0000-4000-8000-000000000011';
+export const SENDER_ID = '551140000000';
+export const API_TOKEN = 'test-zenvia-token';
+export const VERIFY_TOKEN = 'test-webhook-secret';
+const PUBLIC_ADDRESS = '93.184.216.34';
+
+export const publicHostResolver: HostResolver = async () => [{ address: PUBLIC_ADDRESS, family: 4 }];
+
+class MockLogger implements Logger {
+  debug() {}
+  info() {}
+  warn() {}
+  error() {}
+  child(): Logger {
+    return this;
+  }
+}
+
+class MockStorage implements PluginStorage {
+  private readonly data = new Map<string, unknown>();
+
+  async get<T>(key: string): Promise<T | null> {
+    return (this.data.get(key) as T) ?? null;
+  }
+
+  async set<T>(key: string, value: T): Promise<void> {
+    this.data.set(key, value);
+  }
+
+  async delete(key: string): Promise<boolean> {
+    return this.data.delete(key);
+  }
+
+  async has(key: string): Promise<boolean> {
+    return this.data.has(key);
+  }
+
+  async keys(): Promise<string[]> {
+    return Array.from(this.data.keys());
+  }
+}
+
+export class MockEventBus implements EventBus {
+  published: Array<{ type: string; payload: unknown; metadata?: unknown }> = [];
+
+  async connect(): Promise<void> {}
+
+  async publish(type: string, payload: unknown, metadata?: unknown): Promise<PublishResult> {
+    this.published.push({ type, payload, metadata });
+    return { id: 'test-id', sequence: 1, stream: 'test-stream' };
+  }
+
+  async publishGeneric(type: string, payload: unknown, metadata?: unknown): Promise<PublishResult> {
+    return this.publish(type, payload, metadata);
+  }
+
+  async subscribe(): Promise<Subscription> {
+    return { id: 'sub-1', pattern: '*', unsubscribe: async () => {} };
+  }
+
+  async subscribePattern(): Promise<Subscription> {
+    return { id: 'sub-2', pattern: '*', unsubscribe: async () => {} };
+  }
+
+  async subscribeMany(): Promise<Subscription> {
+    return { id: 'sub-3', pattern: '*', unsubscribe: async () => {} };
+  }
+
+  async subscribeAll(): Promise<Subscription> {
+    return { id: 'sub-4', pattern: '*', unsubscribe: async () => {} };
+  }
+
+  async close(): Promise<void> {}
+
+  isConnected(): boolean {
+    return true;
+  }
+}
+
+export function createContext(eventBus: MockEventBus): PluginContext {
+  return {
+    eventBus,
+    storage: new MockStorage(),
+    logger: new MockLogger(),
+    config: {
+      env: 'development',
+      apiBaseUrl: 'http://localhost:3000',
+      webhookBaseUrl: 'http://localhost:3000/webhooks',
+      mediaStorage: { type: 'local', basePath: '/tmp/media' },
+    },
+    db: { execute: async () => [], getDrizzle: () => null },
+  };
+}
+
+export function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+export async function connectPlugin(
+  plugin: ZenviaPlugin,
+  extraCredentials: Record<string, unknown> = {},
+): Promise<void> {
+  plugin.hostResolver = publicHostResolver;
+  await plugin.connect(instanceId, {
+    instanceId,
+    credentials: {
+      zenviaApiToken: API_TOKEN,
+      zenviaSenderId: SENDER_ID,
+      webhookVerifyToken: VERIFY_TOKEN,
+      ...extraCredentials,
+    },
+  });
+}

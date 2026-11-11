@@ -38,12 +38,13 @@
  */
 
 import type { ChannelPlugin, ChannelRegistry } from '@omni/channel-sdk';
-import type { Database, GupshupHandoffOptions } from '@omni/db';
+import type { Database, GupshupHandoffOptions, ZenviaHandoffRouting } from '@omni/db';
 import { instances } from '@omni/db';
 import { eq } from 'drizzle-orm';
 
 import { applyInboundReplyContextOption } from '../lib/inbound-reply-context';
 import { applyWhatsAppBusinessConnectionOptions } from '../lib/whatsapp-business-connection';
+import { openInstanceCredentials } from '../services/instances';
 import { lookupInstanceOwner, rememberInstanceOwners } from '../tenancy/instance-owner-registry';
 import { runForEachActiveTenantRow } from '../tenancy/periodic-tenant-work';
 import { scopedHandle } from '../tenancy/tenant-scope';
@@ -232,6 +233,13 @@ export function buildInstanceConnectOptions(instance: {
   ascBaseUrl?: string | null;
   ascToken?: string | null;
   ascOriginador?: string | null;
+  zenviaApiToken?: string | null;
+  zenviaSenderId?: string | null;
+  zenviaHandoffSolution?: string | null;
+  zenviaSalesApiKey?: string | null;
+  zenviaHandoffGroupId?: string | null;
+  zenviaHandoffUserId?: string | null;
+  zenviaHandoffRouting?: ZenviaHandoffRouting | null;
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
@@ -261,6 +269,9 @@ export function buildInstanceConnectOptions(instance: {
   }
   if (instance.channel === 'asc') {
     applyAscOptions(options, instance);
+  }
+  if (instance.channel === 'zenvia') {
+    applyZenviaOptions(options, instance);
   }
   if (instance.channel === 'asc-flow') {
     applyAscFlowOptions(options, instance);
@@ -349,6 +360,29 @@ function applyAscOptions(
   if (instance.ascBaseUrl) options.ascBaseUrl = instance.ascBaseUrl;
   if (instance.ascToken) options.ascToken = instance.ascToken;
   if (instance.ascOriginador) options.ascOriginador = instance.ascOriginador;
+  if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
+}
+
+function applyZenviaOptions(
+  options: Record<string, unknown>,
+  instance: {
+    zenviaApiToken?: string | null;
+    zenviaSenderId?: string | null;
+    zenviaHandoffSolution?: string | null;
+    zenviaSalesApiKey?: string | null;
+    zenviaHandoffGroupId?: string | null;
+    zenviaHandoffUserId?: string | null;
+    zenviaHandoffRouting?: ZenviaHandoffRouting | null;
+    webhookVerifyToken?: string | null;
+  },
+): void {
+  if (instance.zenviaApiToken) options.zenviaApiToken = instance.zenviaApiToken;
+  if (instance.zenviaSenderId) options.zenviaSenderId = instance.zenviaSenderId;
+  if (instance.zenviaHandoffSolution) options.zenviaHandoffSolution = instance.zenviaHandoffSolution;
+  if (instance.zenviaSalesApiKey) options.zenviaSalesApiKey = instance.zenviaSalesApiKey;
+  if (instance.zenviaHandoffGroupId) options.zenviaHandoffGroupId = instance.zenviaHandoffGroupId;
+  if (instance.zenviaHandoffUserId) options.zenviaHandoffUserId = instance.zenviaHandoffUserId;
+  if (instance.zenviaHandoffRouting) options.zenviaHandoffRouting = instance.zenviaHandoffRouting;
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 
@@ -889,8 +923,9 @@ export class InstanceMonitor {
     const [instance] = await runTenantWorkDb(this.pool, this.tenantOf(instanceId), () =>
       this.db.select().from(instances).where(eq(instances.id, instanceId)).limit(1),
     );
-    if (instance) rememberInstanceOwners([instance]);
-    return instance ?? null;
+    if (!instance) return null;
+    rememberInstanceOwners([instance]);
+    return openInstanceCredentials(instance);
   }
 
   /**
@@ -995,7 +1030,7 @@ export async function reconnectWithPool(
     // `message.received` of a boot carry a trusted tenant rather than a legacy
     // envelope.
     rememberInstanceOwners(rows);
-    return rows as Array<{ id: string; name: string; channel: string; tenantId: string | null }>;
+    return rows.map(openInstanceCredentials);
   };
 
   // LEGACY WORLD: one ambient scan, then the pre-G5 batching. Unchanged.

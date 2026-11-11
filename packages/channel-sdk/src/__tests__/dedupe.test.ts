@@ -247,3 +247,36 @@ describe('createInboundDedupeCache', () => {
     expect(cache.stats().missCount).toBe(200);
   });
 });
+
+describe('DedupeCache.release', () => {
+  test('lets the same id be processed again after it was released', () => {
+    const cache = createInboundDedupeCache();
+    const logger = createMockLogger();
+    cache.isDuplicate('inst-1', 'msg-1', 'zenvia', logger);
+    cache.release('inst-1', 'msg-1');
+    expect(cache.isDuplicate('inst-1', 'msg-1', 'zenvia', logger)).toBe(false);
+    expect(cache.isDuplicate('inst-1', 'msg-1', 'zenvia', logger)).toBe(true);
+  });
+
+  test('forgets only the released id', () => {
+    const cache = createInboundDedupeCache();
+    const logger = createMockLogger();
+    cache.isDuplicate('inst-1', 'msg-1', 'zenvia', logger);
+    cache.isDuplicate('inst-1', 'msg-2', 'zenvia', logger);
+    cache.isDuplicate('inst-2', 'msg-1', 'zenvia', logger);
+    cache.release('inst-1', 'msg-1');
+    expect(cache.size).toBe(2);
+    expect(cache.isDuplicate('inst-1', 'msg-2', 'zenvia', logger)).toBe(true);
+    expect(cache.isDuplicate('inst-2', 'msg-1', 'zenvia', logger)).toBe(true);
+  });
+
+  test('is a no-op for an id that was never seen or whose key is invalid', () => {
+    const cache = createInboundDedupeCache();
+    const logger = createMockLogger();
+    cache.isDuplicate('inst-1', 'msg-1', 'zenvia', logger);
+    expect(() => cache.release('inst-1', 'never-seen')).not.toThrow();
+    expect(() => cache.release('', 'msg-1')).not.toThrow();
+    expect(() => cache.release('inst-1', 'bad id with spaces')).not.toThrow();
+    expect(cache.size).toBe(1);
+  });
+});

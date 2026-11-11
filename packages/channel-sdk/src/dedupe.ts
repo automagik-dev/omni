@@ -40,6 +40,8 @@ export interface DedupeCache {
    */
   isDuplicate(instanceId: string, externalId: string, channel: string, logger: Logger): boolean;
 
+  release(instanceId: string, externalId: string): void;
+
   /** Get cache statistics */
   stats(): DedupeStats;
 
@@ -185,6 +187,11 @@ export function createInboundDedupeCache(config?: DedupeConfig): DedupeCache {
     return recordMiss(cacheKey);
   }
 
+  function release(instanceId: string, externalId: string): void {
+    const cacheKey = validateCacheKey(instanceId, externalId);
+    if (cacheKey !== null) cache.delete(cacheKey);
+  }
+
   function stats(): DedupeStats {
     return {
       hitCount,
@@ -208,6 +215,7 @@ export function createInboundDedupeCache(config?: DedupeConfig): DedupeCache {
 
   return {
     isDuplicate,
+    release,
     stats,
     clear,
     dispose,

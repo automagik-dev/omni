@@ -75,6 +75,104 @@ export const GupshupHandoffOptionsSchema = z
   })
   .strict();
 
+const zenviaRoutingValue = z.string().min(1).max(256);
+const zenviaRoutingGroupId = z.string().trim().min(1).max(64);
+export const ZenviaHandoffRoutingSchema = z
+  .object({
+    field: z.string().trim().min(1).max(128).describe('Key of handoffFields whose value picks the Sales group'),
+    groups: z
+      .record(zenviaRoutingValue, zenviaRoutingGroupId)
+      .describe(
+        'Maps a value of the field to a Sales group id. Values compare trimmed, with inner whitespace collapsed and ignoring case; two keys that become equal are rejected. Only string values match',
+      ),
+  })
+  .strict()
+  .superRefine((routing, ctx) => {
+    const keys = Object.keys(routing.groups);
+    if (keys.length === 0 || keys.length > 256) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['groups'], message: 'needs 1 to 256 entries' });
+    }
+    const seen = new Set<string>();
+    for (const key of keys) {
+      const normalized = key.trim().replace(/\s+/g, ' ').toLowerCase();
+      if (!normalized) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['groups', key], message: 'a value cannot be blank' });
+      } else if (seen.has(normalized)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['groups', key],
+          message: 'duplicate value: it is the same as another one after trimming, collapsing spaces and ignoring case',
+        });
+      }
+      seen.add(normalized);
+    }
+  });
+
+export const ZENVIA_HANDOFF_SOLUTIONS = ['conversion', 'zenvia_chat', 'nlu'] as const;
+
+type NullableOptional<T extends z.ZodRawShape> = { [K in keyof T]: z.ZodOptional<z.ZodNullable<T[K]>> };
+
+function nullableOptional<T extends z.ZodRawShape>(shape: T): NullableOptional<T> {
+  const entries = Object.entries(shape).map(([key, field]) => [key, field.nullable().optional()]);
+  return Object.fromEntries(entries) as NullableOptional<T>;
+}
+
+const zenviaInstanceFields = {
+  zenviaApiToken: z.string().openapi({
+    description: 'Zenvia API token (X-API-TOKEN header). Sealed at rest and write-only: never returned',
+    writeOnly: true,
+  }),
+  zenviaSenderId: z.string().openapi({
+    description:
+      'Sender registered at Zenvia (the WhatsApp number). Read by the plugin at connect: restart the instance after changing it',
+  }),
+  zenviaHandoffSolution: z.enum(ZENVIA_HANDOFF_SOLUTIONS).openapi({
+    description:
+      'Zenvia solution a handoff routes the conversation to (conversation.solution). Read by the plugin at connect: restart the instance after changing it',
+  }),
+  zenviaSalesApiKey: z.string().openapi({
+    description:
+      'Zenvia Sales API key, not the same token as zenviaApiToken. Sealed at rest and write-only: never returned',
+    writeOnly: true,
+  }),
+  zenviaHandoffGroupId: z.string().openapi({
+    description:
+      'Sales group dedicated to the chatbot; handoffs transfer the prospect to it. Read by the plugin at connect: restart the instance after changing it',
+  }),
+  zenviaHandoffUserId: z.string().openapi({
+    description:
+      'Optional agent inside the handoff group the prospect is transferred to. Read by the plugin at connect: restart the instance after changing it',
+  }),
+  zenviaHandoffRouting: ZenviaHandoffRoutingSchema.openapi({
+    description:
+      'Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it',
+  }),
+  webhookVerifyToken: z.string().openapi({
+    description:
+      'Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it',
+    writeOnly: true,
+  }),
+};
+
+const zenviaInstanceWriteShape = nullableOptional(zenviaInstanceFields);
+
+const zenviaInstanceConnectShape = {
+  ...z.object(zenviaInstanceFields).partial().shape,
+  webhookVerifyToken: z.string().min(1).optional().openapi({
+    description:
+      'Zenvia only. Replaces the stored webhook verify token and is persisted on a successful connect, so it can be rotated; omit it to keep the stored one. Sealed at rest and write-only: never returned. Ignored for other channels',
+    writeOnly: true,
+  }),
+};
+
+const zenviaInstanceResponseShape = nullableOptional({
+  zenviaSenderId: zenviaInstanceFields.zenviaSenderId,
+  zenviaHandoffSolution: zenviaInstanceFields.zenviaHandoffSolution,
+  zenviaHandoffGroupId: zenviaInstanceFields.zenviaHandoffGroupId,
+  zenviaHandoffUserId: zenviaInstanceFields.zenviaHandoffUserId,
+  zenviaHandoffRouting: zenviaInstanceFields.zenviaHandoffRouting,
+});
+
 /**
  * Close-contact cooldown/escalation overrides (instances.close_contact_config).
  * One definition shared by the POST/PATCH validators and the OpenAPI document.
@@ -267,6 +365,7 @@ export const InstanceSchema = z
     gupshupHandoffOptions: GupshupHandoffOptionsSchema.nullable()
       .optional()
       .openapi({ description: 'Gupshup HANDOFF routing options' }),
+    ...zenviaInstanceResponseShape,
     closeContactConfig: CloseContactConfigSchema.nullable()
       .optional()
       .openapi({ description: 'Per-outcome close-contact cooldown/escalation overrides (null = defaults)' }),
@@ -335,6 +434,7 @@ export const CreateInstanceSchema = z.object({
         'Per-outcome overrides for POST /messages/send/close-contact cooldown and escalation. Omitted outcomes/keys use the defaults; null clears it',
       example: { no_response: { escalationThreshold: null } },
     }),
+  ...zenviaInstanceWriteShape,
 });
 
 /**
@@ -383,6 +483,7 @@ export const PairingCodeSchema = z.object({
 export const ConnectInstanceSchema = z.object({
   token: z.string().optional().openapi({ description: 'Bot token for Discord instances' }),
   forceNewQr: z.boolean().optional().openapi({ description: 'Force new QR code for WhatsApp' }),
+  ...zenviaInstanceConnectShape,
 });
 
 /**

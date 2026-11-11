@@ -148,6 +148,7 @@ export type Channel =
   | 'hermes'
   | 'asc'
   | 'asc-flow'
+  | 'zenvia'
   | 'internal'
   | 'harness'
   | 'webchat';
@@ -360,7 +361,28 @@ export interface CreateInstanceBody {
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
   gupshupHandoffOptions?: components['schemas']['CreateInstanceRequest']['gupshupHandoffOptions'];
+  zenviaApiToken?: string;
+  zenviaSenderId?: string;
+  webhookVerifyToken?: string;
+  zenviaSalesApiKey?: string;
+  zenviaHandoffGroupId?: string;
+  zenviaHandoffUserId?: string;
+  zenviaHandoffSolution?: 'conversion' | 'zenvia_chat' | 'nlu';
+  zenviaHandoffRouting?: { field: string; groups: Record<string, string> };
 }
+
+type ZenviaInstanceConfigKey =
+  | 'zenviaApiToken'
+  | 'zenviaSenderId'
+  | 'webhookVerifyToken'
+  | 'zenviaSalesApiKey'
+  | 'zenviaHandoffGroupId'
+  | 'zenviaHandoffUserId'
+  | 'zenviaHandoffSolution'
+  | 'zenviaHandoffRouting';
+
+export type UpdateInstanceBody = Partial<Instance> &
+  Pick<components['schemas']['CreateInstanceRequest'], ZenviaInstanceConfigKey>;
 
 /**
  * Authorship marker accepted by the send routes (#912). 'agent' attributes the
@@ -1147,6 +1169,14 @@ export interface ConnectInstanceBody {
   twilioStatusCallbackUrl?: string;
   twilioWebhookUrl?: string;
   twilioValidateSignature?: boolean;
+  zenviaApiToken?: string;
+  zenviaSenderId?: string;
+  zenviaSalesApiKey?: string;
+  zenviaHandoffGroupId?: string;
+  zenviaHandoffUserId?: string;
+  zenviaHandoffSolution?: 'conversion' | 'zenvia_chat' | 'nlu';
+  zenviaHandoffRouting?: { field: string; groups: Record<string, string> };
+  webhookVerifyToken?: string;
   /** WhatsApp-specific connection options */
   whatsapp?: {
     /** Sync full message history on connect (default: true) */
@@ -1727,7 +1757,7 @@ export function createOmniClient(config: OmniClientConfig) {
       /**
        * Update an instance
        */
-      async update(id: string, body: Partial<Instance>): Promise<void> {
+      async update(id: string, body: UpdateInstanceBody): Promise<void> {
         const { error, response } = await client.PATCH('/instances/{id}', {
           params: { path: { id } },
           body: body as Record<string, never>,

@@ -45,6 +45,7 @@ const WHATSAPP_FAMILY_CHANNELS: ReadonlySet<ChannelType> = new Set<ChannelType>(
   'gupshup',
   'hermes',
   'asc',
+  'zenvia',
 ]);
 
 /**

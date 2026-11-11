@@ -49,6 +49,7 @@ export const channelTypes = [
   'asc',
   'asc-flow',
   'twilio-whatsapp',
+  'zenvia', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
   'internal',
   'harness', // no-migration-needed: channel columns are varchar(50), not a pg enum — a new literal needs no DDL
   'webchat', // no-migration-needed: same varchar(50) column — prototype channel
@@ -110,6 +111,11 @@ export interface GupshupHandoffOptions {
   fieldsByPhonePrefix?: Array<{ prefixes: string[]; fields: Record<string, string> }>;
   /** Ordered template; each entry is a literal (`value`) or a reference to a handoff field (`from`). */
   customerFields?: Array<{ apiKey: string; value?: string; from?: string }>;
+}
+
+export interface ZenviaHandoffRouting {
+  field: string;
+  groups: Record<string, string>;
 }
 
 /**
@@ -983,6 +989,16 @@ export const instances = pgTable(
     ascToken: text('asc_token'),
     /** WABA phone number (digits-only E.164) — the `originador` header. */
     ascOriginador: varchar('asc_originador', { length: 32 }),
+
+    zenviaApiToken: text('zenvia_api_token'),
+    zenviaSenderId: varchar('zenvia_sender_id', { length: 64 }),
+    zenviaHandoffSolution: varchar('zenvia_handoff_solution', { length: 32 }).$type<
+      'conversion' | 'zenvia_chat' | 'nlu'
+    >(),
+    zenviaSalesApiKey: text('zenvia_sales_api_key'),
+    zenviaHandoffGroupId: varchar('zenvia_handoff_group_id', { length: 64 }),
+    zenviaHandoffUserId: varchar('zenvia_handoff_user_id', { length: 64 }),
+    zenviaHandoffRouting: jsonb('zenvia_handoff_routing').$type<ZenviaHandoffRouting>(),
 
     // ---- ASC platform Flow Configuration ----
     // Per-instance credentials for the ASC platform REST API (/rest/v2), the
