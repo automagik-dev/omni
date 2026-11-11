@@ -20,6 +20,8 @@
  *             status events.
  *           - `field === 'message_template_status_update'`: emit
  *             `template.status_changed`.
+ *           - coexistence fields (`smb_message_echoes`, `history`,
+ *             `smb_app_state_sync`): see the Coexistence section below.
  *       e. ALWAYS respond 200/204 — Meta de-activates the app after
  *          repeated non-2xx. Unknown phone_number_ids are logged + 200, NOT
  *          4xx'd.
@@ -29,18 +31,23 @@
  */
 
 import {
+  MetaHistoryChunkSchema,
+  MetaHistoryMessageSchema,
   type MetaInboundMessage,
+  MetaMessageEchoSchema,
+  MetaStateSyncItemSchema,
   MetaTemplateStatusUpdateSchema,
   type MetaWebhookPayload,
   MetaWebhookPayloadSchema,
   type MetaWebhookStatusEntry,
 } from '@omni/core/schemas';
 
-import type { WhatsAppBusinessPlugin } from '../plugin';
+import type { HistoryMessageOutcome, WhatsAppBusinessPlugin } from '../plugin';
 import { verifyMetaSignature } from '../utils/signature';
 
-// Meta caps webhook bodies at 1 MB. We accept up to 2 MB to be safe.
-const MAX_BODY_BYTES = 2 * 1024 * 1024;
+// Meta documents webhook payloads up to 3 MB (a coexistence history chunk can
+// describe thousands of messages and is sent once). Accept up to 4 MB.
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
 /**
  * Handle the GET verification challenge that Meta sends when an app
@@ -178,12 +185,158 @@ async function processChange(
     return;
   }
 
+  const coexistence = COEXISTENCE_HANDLERS.get(change.field);
+  if (coexistence) {
+    const target = resolvePhoneNumberInstance(plugin, change, logger);
+    if (target) await coexistence(plugin, target, logger);
+    return;
+  }
+
   if (change.field !== 'messages') {
     logger.debug('[whatsapp-business] ignoring unsupported webhook field', { field: change.field });
     return;
   }
 
   await processMessagesChange(plugin, change, logger);
+}
+
+// ─── Coexistence (WhatsApp Business app on the same number) ───
+
+interface CoexistenceTarget {
+  instanceId: string;
+  dedupeCache: InboundDedupeCache;
+  value: Record<string, unknown>;
+  businessPhone: string | undefined;
+}
+
+type CoexistenceHandler = (
+  plugin: WhatsAppBusinessPlugin,
+  target: CoexistenceTarget,
+  logger: WebhookLogger,
+) => Promise<void>;
+
+const COEXISTENCE_HANDLERS = new Map<string, CoexistenceHandler>([
+  ['smb_message_echoes', processMessageEchoes],
+  ['history', processHistory],
+  ['smb_app_state_sync', processStateSync],
+]);
+
+/** Resolve the instance of a phone-number-scoped change, or log and drop it. */
+function resolvePhoneNumberInstance(
+  plugin: WhatsAppBusinessPlugin,
+  change: MetaWebhookChange,
+  logger: WebhookLogger,
+): CoexistenceTarget | undefined {
+  const value = (change.value ?? {}) as Record<string, unknown>;
+  const metadata = value.metadata as { phone_number_id?: string; display_phone_number?: string } | undefined;
+  const phoneNumberId = metadata?.phone_number_id;
+  const resolved = phoneNumberId ? plugin.findInstanceByPhoneNumberId(phoneNumberId) : undefined;
+  if (!resolved) {
+    logger.warn('[whatsapp-business] no instance for coexistence change — dropping', {
+      field: change.field,
+      phoneNumberId,
+    });
+    return undefined;
+  }
+  const [instanceId, state] = resolved;
+  return { instanceId, dedupeCache: state.dedupeCache, value, businessPhone: metadata?.display_phone_number };
+}
+
+function arrayOf(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+async function processMessageEchoes(
+  plugin: WhatsAppBusinessPlugin,
+  { instanceId, dedupeCache, value }: CoexistenceTarget,
+  logger: WebhookLogger,
+): Promise<void> {
+  for (const raw of arrayOf(value.message_echoes)) {
+    const echo = MetaMessageEchoSchema.safeParse(raw);
+    if (!echo.success) {
+      logger.warn('[whatsapp-business] message echo failed schema validation', {
+        instanceId,
+        issues: echo.error.issues.slice(0, 3),
+      });
+      continue;
+    }
+    try {
+      await plugin.handleMessageEcho(instanceId, echo.data, dedupeCache);
+    } catch (err) {
+      logger.warn('[whatsapp-business] failed to emit message echo', { instanceId, err: String(err) });
+    }
+  }
+}
+
+/**
+ * Shared history arrives as `value.history[]` chunks of threads. The media of
+ * a `media_placeholder` follows in a later webhook on the same field as
+ * `value.messages[]`. A chunk with `errors` (code 2593109) means the business
+ * declined to share history.
+ */
+async function processHistory(
+  plugin: WhatsAppBusinessPlugin,
+  { instanceId, value, businessPhone }: CoexistenceTarget,
+  logger: WebhookLogger,
+): Promise<void> {
+  const counts: Record<HistoryMessageOutcome, number> = { ingested: 0, placeholder: 0, skipped: 0 };
+  const ingest = async (raw: unknown, chatId: string | undefined) => {
+    const item = MetaHistoryMessageSchema.safeParse(raw);
+    if (!item.success) {
+      counts.skipped++;
+      return;
+    }
+    try {
+      counts[await plugin.handleHistoryMessage(instanceId, item.data, chatId, businessPhone)]++;
+    } catch (err) {
+      counts.skipped++;
+      logger.warn('[whatsapp-business] failed to ingest history message', { instanceId, err: String(err) });
+    }
+  };
+
+  for (const raw of arrayOf(value.messages)) await ingest(raw, undefined);
+
+  for (const rawChunk of arrayOf(value.history)) {
+    const chunk = MetaHistoryChunkSchema.safeParse(rawChunk);
+    if (!chunk.success) {
+      logger.warn('[whatsapp-business] history chunk failed schema validation', {
+        instanceId,
+        issues: chunk.error.issues.slice(0, 3),
+      });
+      continue;
+    }
+    for (const error of chunk.data.errors ?? []) {
+      logger.warn('[whatsapp-business] history not shared', { instanceId, code: error.code, title: error.title });
+    }
+    for (const thread of chunk.data.threads ?? []) {
+      const chatId = thread.id ?? thread.context?.wa_id;
+      for (const raw of thread.messages) await ingest(raw, chatId);
+    }
+    logger.info('[whatsapp-business] history chunk processed', {
+      instanceId,
+      phase: chunk.data.metadata?.phase,
+      chunkOrder: chunk.data.metadata?.chunk_order,
+      progress: chunk.data.metadata?.progress,
+    });
+  }
+
+  logger.info('[whatsapp-business] history webhook processed', { instanceId, ...counts });
+}
+
+async function processStateSync(
+  plugin: WhatsAppBusinessPlugin,
+  { instanceId, value }: CoexistenceTarget,
+  logger: WebhookLogger,
+): Promise<void> {
+  const items = arrayOf(value.state_sync).flatMap((raw) => {
+    const item = MetaStateSyncItemSchema.safeParse(raw);
+    return item.success ? [item.data] : [];
+  });
+  try {
+    await plugin.handleContactSync(instanceId, items);
+  } catch (err) {
+    logger.warn('[whatsapp-business] failed to sync coexistence contacts', { instanceId, err: String(err) });
+  }
 }
 
 async function processChannelAlert(

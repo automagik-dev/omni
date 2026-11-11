@@ -58,6 +58,8 @@ In Meta App Dashboard → **WhatsApp** → **Configuration**:
    - `account_update` — account-level state changes (banned, verified, etc.)
    - `phone_number_quality_update` — quality_rating drops (GREEN → YELLOW → RED)
    - `phone_number_name_update` — verified_name approvals / rejections
+   - For a number that stays on the WhatsApp Business app (coexistence): `smb_message_echoes`, `history`,
+     `smb_app_state_sync` — see [Coexistence](#coexistence-whatsapp-business-app-on-the-same-number)
 
 Meta will GET your webhook URL with `hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<n>`. Omni's handler responds with the challenge if the token matches.
 
@@ -172,6 +174,19 @@ Beyond message + template lifecycle, Meta pushes operator-facing alerts on the W
 ```
 
 A single Meta webhook fans out to N events when N Omni instances share the WABA. Subscribe via `eventBus.subscribe('channel.alert', …)` from any consumer (notification worker, dashboard badge, etc.).
+
+## Coexistence (WhatsApp Business app on the same number)
+
+A number onboarded through Embedded Signup coexistence keeps working in the WhatsApp Business app. Meta mirrors the
+app into three webhook fields; Omni records them like this:
+
+| Meta field | Omni |
+|---|---|
+| `smb_message_echoes` — the business sent a message from the app or a companion device | `message.received` in the customer's chat with `rawPayload.isFromMe`, `key.fromMe`, `key.id` and `upsertType: 'notify'` (the shape of a Baileys phone-sent message). An API send emits `message.sent` instead, so the two never mix. **Omni's agents are never dispatched for an echo.** DSH automations that opt in to the owner's own messages (`allowOutbound`) still see it. Reaction echoes are not recorded yet. |
+| `history` — chats shared once at onboarding (up to 180 days) | `message.received` with `ingestMode: 'history-sync'`: the chats fill with their past and no agent is dispatched. Media arrives as `media_placeholder` (skipped); Meta sends the asset of messages from the last 14 days in a later `history` webhook, which Omni records in the same chat. Code `2593109` (the business declined sharing) is logged. |
+| `smb_app_state_sync` — the app's contacts | Stored per instance, named in DM chats at once (`custom.contacts.names`), and upserted as identities by the next contacts sync (daily, or a manual contacts sync). Contacts without a phone number are skipped. |
+
+Echoes and history carry `rawPayload.noAgentDispatch`, the channel-neutral marker the agent dispatcher drops.
 
 ## Templates HSM lifecycle
 

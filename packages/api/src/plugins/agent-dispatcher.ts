@@ -5666,6 +5666,20 @@ async function isAgentOutboundEcho(
   return true;
 }
 
+/** Drops decided from the event alone, before any DB read. */
+function earlyDropReason(
+  payload: MessageReceivedPayload,
+  metadata: { platformIdentityId?: string },
+): string | undefined {
+  if (payload.from === metadata.platformIdentityId) return 'message from self';
+  // A channel marks a message it records but must never hand to an agent with
+  // `rawPayload.noAgentDispatch = true`: today WhatsApp Business coexistence
+  // echoes (sent from the Business app) and shared history. rawPayload is
+  // persisted, so the marker also holds on agent-replay.
+  if (payload.rawPayload?.noAgentDispatch === true) return 'channel marked the message never dispatchable';
+  return undefined;
+}
+
 async function shouldProcessMessage(
   agentRunner: Services['agentRunner'],
   accessService: Services['access'],
@@ -5681,8 +5695,9 @@ async function shouldProcessMessage(
     logDrop('no instanceId in metadata', payload, undefined);
     return null;
   }
-  if (payload.from === metadata.platformIdentityId) {
-    logDrop('message from self', payload, metadata.instanceId);
+  const earlyDrop = earlyDropReason(payload, metadata);
+  if (earlyDrop) {
+    logDrop(earlyDrop, payload, metadata.instanceId);
     return null;
   }
 
