@@ -3,7 +3,7 @@
 
 .PHONY: help install dev dev-api dev-services dev-stop build clean version \
         test test-sweep test-watch test-api test-db test-pg-gate test-pg-gate-warm pg-gate-warm-stop \
-        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions verify-rfcs marketplace-check skill-cli-check \
+        typecheck lint lint-fix format check check-all dead-code verify-migrations verify-versions verify-rfcs marketplace-check skill-cli-check plugin-smoke \
         db-push db-migrate db-studio db-reset \
         ensure-nats ensure-ffmpeg check-ffmpeg check-deps start stop restart logs status \
         restart-api restart-nats restart-pgserve logs-api \
@@ -312,8 +312,13 @@ marketplace-check:
 
 # Static plugin command/flag drift gate. SDK dist is needed only to load CLI command metadata.
 skill-cli-check: _build-dist
-	bun test scripts/check-skill-cli.test.ts
+	bun test scripts/check-skill-cli.test.ts scripts/skills-lint.test.ts
+	bun run skills:lint
 	bun scripts/check-skill-cli.ts
+
+# Build from source every time; no installed CLI or auto-installer dependency (RFC-0005).
+plugin-smoke:
+	bun scripts/plugin-smoke.ts
 
 # Run all quality checks
 check: typecheck lint dead-code verify-migrations verify-versions verify-rfcs marketplace-check skill-cli-check test
