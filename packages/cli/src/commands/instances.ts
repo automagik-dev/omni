@@ -164,6 +164,14 @@ function parseZenviaHandoffRouting(value: string): unknown {
   }
 }
 
+function parseZenviaMediaHosts(value: string): string[] | null {
+  if (value === 'null') return null;
+  return value
+    .split(',')
+    .map((host) => host.trim())
+    .filter((host) => host.length > 0);
+}
+
 function applyZenviaFields(body: Record<string, unknown>, opts: Record<string, unknown>): void {
   setVal(body, 'zenviaApiToken', opts.zenviaApiToken);
   setVal(body, 'zenviaSenderId', opts.zenviaSenderId);
@@ -173,6 +181,9 @@ function applyZenviaFields(body: Record<string, unknown>, opts: Record<string, u
   setVal(body, 'zenviaHandoffSolution', opts.zenviaHandoffSolution);
   if (typeof opts.zenviaHandoffRouting === 'string' && opts.zenviaHandoffRouting.length > 0) {
     body.zenviaHandoffRouting = parseZenviaHandoffRouting(opts.zenviaHandoffRouting);
+  }
+  if (typeof opts.zenviaMediaHosts === 'string') {
+    body.zenviaMediaHosts = parseZenviaMediaHosts(opts.zenviaMediaHosts);
   }
 }
 
@@ -557,6 +568,10 @@ export function createInstancesCommand(): Command {
     .option(
       '--zenvia-handoff-routing <json>',
       'Zenvia queue-to-group map (JSON): {"field":"<handoffFields key>","groups":{"<value>":"<groupId>"}}; --zenvia-handoff-group-id is the fallback',
+    )
+    .option(
+      '--zenvia-media-hosts <hosts>',
+      'Hosts Zenvia inbound media may be downloaded from (comma-separated, each covers its subdomains); empty accepts any public host',
     )
     // Twilio WhatsApp
     .option('--twilio-account-sid <sid>', 'Twilio Account SID')
@@ -1297,6 +1312,10 @@ export function createInstancesCommand(): Command {
     .option(
       '--zenvia-handoff-routing <json>',
       'Zenvia queue-to-group map (JSON object, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
+    )
+    .option(
+      '--zenvia-media-hosts <hosts>',
+      'Hosts Zenvia inbound media may be downloaded from (comma-separated, use "null" to clear). The plugin reads it at connect: restart the instance for the change to take effect',
     )
     // Trigger events
     .option('--trigger-events <events>', 'Trigger events (comma-separated, use "null" to clear)')

@@ -240,6 +240,7 @@ export function buildInstanceConnectOptions(instance: {
   zenviaHandoffGroupId?: string | null;
   zenviaHandoffUserId?: string | null;
   zenviaHandoffRouting?: ZenviaHandoffRouting | null;
+  zenviaMediaHosts?: string[] | null;
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
@@ -373,6 +374,7 @@ function applyZenviaOptions(
     zenviaHandoffGroupId?: string | null;
     zenviaHandoffUserId?: string | null;
     zenviaHandoffRouting?: ZenviaHandoffRouting | null;
+    zenviaMediaHosts?: string[] | null;
     webhookVerifyToken?: string | null;
   },
 ): void {
@@ -383,6 +385,7 @@ function applyZenviaOptions(
   if (instance.zenviaHandoffGroupId) options.zenviaHandoffGroupId = instance.zenviaHandoffGroupId;
   if (instance.zenviaHandoffUserId) options.zenviaHandoffUserId = instance.zenviaHandoffUserId;
   if (instance.zenviaHandoffRouting) options.zenviaHandoffRouting = instance.zenviaHandoffRouting;
+  if (instance.zenviaMediaHosts?.length) options.zenviaMediaHosts = instance.zenviaMediaHosts;
   if (instance.webhookVerifyToken) options.webhookVerifyToken = instance.webhookVerifyToken;
 }
 

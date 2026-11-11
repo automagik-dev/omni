@@ -35,6 +35,7 @@ import {
   SelfReceiptSchema,
   ZENVIA_HANDOFF_SOLUTIONS,
   ZenviaHandoffRoutingSchema,
+  ZenviaMediaHostsSchema,
 } from '../../schemas/openapi/instances';
 import type { Services } from '../../services';
 import { PairingRequestConsumedError, PairingRequestExpiredError } from '../../services/access';
@@ -284,6 +285,11 @@ const createInstanceSchema = z.object({
     .nullable()
     .describe(
       'Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it',
+    ),
+  zenviaMediaHosts: ZenviaMediaHostsSchema.optional()
+    .nullable()
+    .describe(
+      'Hosts the inbound media may be downloaded from, each covering its subdomains (up to 64). Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it',
     ),
   ascFlowBaseUrl: z
     .string()
@@ -780,6 +786,7 @@ type InstanceConnectionOptionsInput = {
   zenviaHandoffGroupId?: string | null;
   zenviaHandoffUserId?: string | null;
   zenviaHandoffRouting?: ZenviaHandoffRouting | null;
+  zenviaMediaHosts?: string[] | null;
   metaAccessToken?: string | null;
   metaPhoneNumberId?: string | null;
   metaWabaId?: string | null;
@@ -885,6 +892,7 @@ function applyZenviaConnectionOptions(
     zenviaHandoffGroupId?: string | null;
     zenviaHandoffUserId?: string | null;
     zenviaHandoffRouting?: ZenviaHandoffRouting | null;
+    zenviaMediaHosts?: string[] | null;
     webhookVerifyToken?: string | null;
   },
 ): void {
@@ -895,6 +903,7 @@ function applyZenviaConnectionOptions(
   if (input.zenviaHandoffGroupId) options.zenviaHandoffGroupId = input.zenviaHandoffGroupId;
   if (input.zenviaHandoffUserId) options.zenviaHandoffUserId = input.zenviaHandoffUserId;
   if (input.zenviaHandoffRouting) options.zenviaHandoffRouting = input.zenviaHandoffRouting;
+  if (input.zenviaMediaHosts?.length) options.zenviaMediaHosts = input.zenviaMediaHosts;
   if (input.webhookVerifyToken) options.webhookVerifyToken = input.webhookVerifyToken;
 }
 
@@ -1315,6 +1324,7 @@ instancesRoutes.post('/', zValidator('json', createInstanceSchema), async (c) =>
     zenviaHandoffGroupId: instance.zenviaHandoffGroupId,
     zenviaHandoffUserId: instance.zenviaHandoffUserId,
     zenviaHandoffRouting: instance.zenviaHandoffRouting,
+    zenviaMediaHosts: instance.zenviaMediaHosts,
     // No meta* threading here: createInstanceSchema carries no Meta fields, so
     // a whatsapp-business row is never credentialed at create — credentials
     // arrive via the whatsapp-cloud connect/OAuth route.
@@ -1890,6 +1900,9 @@ const connectInstanceSchema = z.object({
   zenviaHandoffRouting: ZenviaHandoffRoutingSchema.optional().describe(
     'Routes a handoff to a Sales group by the value of one handoffFields key (see POST /instances)',
   ),
+  zenviaMediaHosts: ZenviaMediaHostsSchema.optional().describe(
+    'Hosts the inbound media may be downloaded from (see POST /instances). Replaces the stored list and is persisted on a successful connect',
+  ),
   webhookVerifyToken: z
     .string()
     .min(1)
@@ -1955,6 +1968,7 @@ function mergeZenviaFields(
     | 'zenviaHandoffGroupId'
     | 'zenviaHandoffUserId'
     | 'zenviaHandoffRouting'
+    | 'zenviaMediaHosts'
   >,
   body: Pick<
     ConnectInstanceBody,
@@ -1966,6 +1980,7 @@ function mergeZenviaFields(
     | 'zenviaHandoffGroupId'
     | 'zenviaHandoffUserId'
     | 'zenviaHandoffRouting'
+    | 'zenviaMediaHosts'
   >,
 ) {
   return {
@@ -1976,6 +1991,7 @@ function mergeZenviaFields(
     zenviaHandoffGroupId: body.zenviaHandoffGroupId ?? instance.zenviaHandoffGroupId,
     zenviaHandoffUserId: body.zenviaHandoffUserId ?? instance.zenviaHandoffUserId,
     zenviaHandoffRouting: body.zenviaHandoffRouting ?? instance.zenviaHandoffRouting,
+    zenviaMediaHosts: body.zenviaMediaHosts ?? instance.zenviaMediaHosts,
   };
 }
 

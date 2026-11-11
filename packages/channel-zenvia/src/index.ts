@@ -23,6 +23,14 @@ export {
 export type { HandoffGroupResolution, HandoffRoutingMiss, ZenviaHandoffRouting } from './handoff-routing';
 
 export {
+  MAX_MEDIA_HOSTS,
+  isAllowedMediaHost,
+  parseMediaHosts,
+  zenviaMediaHostSchema,
+  zenviaMediaHostsSchema,
+} from './media-hosts';
+
+export {
   buildHandoffNote,
   buildHandoffRouting,
   resolveHandoffMode,

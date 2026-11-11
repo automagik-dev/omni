@@ -32,7 +32,9 @@ official Meta BSP with its own API format (not a Cloud API mirror).
     cannot redirect it. This relies on `fetch` of Bun 1.4.4 honoring
     `tls.serverName` for the certificate check, which was measured against a
     local TLS server (a wrong name is rejected) and against a public host with
-    the system trust store. The timeout covers the body too;
+    the system trust store. With `zenviaMediaHosts` set, the URL and every
+    redirect hop must also be on that list (https on port 443), checked before
+    resolving the host. The timeout covers the body too;
   - a click-to-WhatsApp ad referral is exposed as `rawPayload.referral` in
     the Meta Cloud API shape (`source_type`, `source_id`, `source_url`,
     `headline`, `body`, `ctwa_clid`);
@@ -49,6 +51,7 @@ official Meta BSP with its own API format (not a Cloud API mirror).
 | `zenviaHandoffRouting`  | no       | JSON `{ "field": "<handoffFields key>", "groups": { "<value>": "<groupId>" } }`: the value of that key picks the Sales group (see Routing a handoff to a group). Needs `zenviaSalesApiKey`. |
 | `zenviaHandoffUserId`   | no       | A specific agent inside the chosen group.                                                   |
 | `zenviaHandoffSolution` | no       | `conversion` \| `zenvia_chat` \| `nlu`. Fallback routing when there is no Sales transfer.     |
+| `zenviaMediaHosts`      | no       | Up to 64 host names (`zenvia.com`, `files.example.org`) inbound media may be downloaded from; each covers its subdomains on a label boundary. No scheme, port, path, wildcard or IP address. Empty or absent accepts any host that resolves only to public addresses. |
 | `webhookVerifyToken`    | yes      | Shared secret every webhook POST must carry as `x-webhook-token`. Zenvia signs nothing, so an instance does not connect without it. |
 
 To wire up the webhook, create the subscriptions with that URL. Put the
@@ -291,8 +294,9 @@ these events are acknowledged and ignored.
 - `CONVERSATION_STATUS` events and human takeover: they need the core contract
   described above.
 - Template management (create, list, sync): this plugin only sends templates.
-- An allowlist of hosts for inbound media: it waits for Zenvia's answer on
-  which hosts serve `fileUrl` (open questions below).
+- A default for `zenviaMediaHosts`: it waits for Zenvia's answer on which
+  hosts serve `fileUrl` (open questions below). Until then the list is empty
+  unless an instance sets it.
 
 ## Open questions for the vendor
 
