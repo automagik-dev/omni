@@ -260,7 +260,7 @@ async function processChange(
   }
 
   if (change.field === 'message_template_status_update') {
-    await processTemplateStatusUpdate(plugin, change, logger);
+    await processTemplateStatusUpdate(plugin, change, entryId, logger);
     return;
   }
 
@@ -453,6 +453,7 @@ async function processChannelAlert(
 async function processTemplateStatusUpdate(
   plugin: WhatsAppBusinessPlugin,
   change: MetaWebhookChange,
+  wabaId: string,
   logger: WebhookLogger,
 ): Promise<void> {
   const parsed = MetaTemplateStatusUpdateSchema.safeParse(change.value);
@@ -463,8 +464,8 @@ async function processTemplateStatusUpdate(
     return;
   }
   // Template status updates don't carry phone_number_id — they're scoped
-  // to a WABA. The templates service (`templates.ts::handleTemplateStatusUpdate`)
-  // resolves the correct local row + instance scope by `(metaTemplateId, wabaId)`
+  // to a WABA: `entry.id`. The templates service (`templates.ts::handleTemplateStatusUpdate`)
+  // resolves the local rows of THAT WABA by metaTemplateId or (name, language)
   // and updates the DB before emitting. The webhook handler here delegates
   // to the templates service rather than fanning out to all instances.
   //
@@ -473,7 +474,7 @@ async function processTemplateStatusUpdate(
   const { handleTemplateStatusUpdate } = await import('../templates');
   const { getDb } = await import('@omni/db');
   try {
-    await handleTemplateStatusUpdate(getDb(), parsed.data, plugin);
+    await handleTemplateStatusUpdate(getDb(), parsed.data, plugin, wabaId);
   } catch (err) {
     logger.warn('[whatsapp-business] failed to handle template status update', {
       metaTemplateId: parsed.data.message_template_id,

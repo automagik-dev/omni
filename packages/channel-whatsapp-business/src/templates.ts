@@ -382,11 +382,16 @@ export async function syncTemplatesToDb(
  * Group 4's webhook handler invokes this AFTER signature verification and
  * AFTER the inbound dedupe cache has cleared the entry. Idempotency: we re-
  * read the row to capture the previous status before updating.
+ *
+ * `wabaId` is the webhook entry's id: only that WABA's rows match. Two WABAs
+ * can hold a template with the same name and language, and an update for one
+ * must never rewrite or notify the other.
  */
 export async function handleTemplateStatusUpdate(
   db: Database,
   update: MetaTemplateStatusUpdate,
   plugin: WhatsAppBusinessPlugin,
+  wabaId: string,
 ): Promise<void> {
   const newStatus = mapMetaEventToStatus(update.event);
 
@@ -411,11 +416,14 @@ export async function handleTemplateStatusUpdate(
       .select()
       .from(whatsappTemplates)
       .where(
-        or(
-          eq(whatsappTemplates.metaId, update.message_template_id),
-          and(
-            eq(whatsappTemplates.name, update.message_template_name),
-            eq(whatsappTemplates.language, update.message_template_language),
+        and(
+          eq(whatsappTemplates.wabaId, wabaId),
+          or(
+            eq(whatsappTemplates.metaId, update.message_template_id),
+            and(
+              eq(whatsappTemplates.name, update.message_template_name),
+              eq(whatsappTemplates.language, update.message_template_language),
+            ),
           ),
         ),
       );
