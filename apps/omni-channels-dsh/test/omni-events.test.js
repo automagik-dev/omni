@@ -596,3 +596,16 @@ test('media enrichment keeps both the caption and transcription', { timeout: 500
   await f.rt.quiesceOmniEvents()
   assert.equal(events[0].text, 'Appointment note\nRemember the appointment')
 })
+
+test('external message identity reaches dispatch for text and media independently of journal refs', { timeout: 5000 }, async t => {
+  const done = deferred(), events = []
+  const input = [
+    { ...row(1), instanceId: 'instance-1', externalId: 'WA-shared', textContent: 'invoice' },
+    { ...row(2), instanceId: 'instance-2', externalId: 'WA-shared', textContent: 'invoice' },
+    { ...row(3), instanceId: 'instance-1', externalId: 'WA-picture', contentType: 'image', textContent: 'invoice photo' },
+  ]
+  const f = fixture(t, { rows: input, fire: async (_sub, event) => events.push(event), save: async () => { if (events.length === 3) done.resolve() } })
+  await done.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(events.map(event => [event.ref, event.externalId]), [['event-1', 'WA-shared'], ['event-2', 'WA-shared'], ['event-3', 'WA-picture']])
+})

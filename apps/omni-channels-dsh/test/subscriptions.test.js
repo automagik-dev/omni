@@ -16,7 +16,7 @@ import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { NO_CHAT, RETIRED_QUEUED, ROW_RETIRED, UNKNOWN_WORKER, WORKER_MOVED } from '../src/host/subscriptions.js'
 import { AUTOMATION_THREADS_MAX, THREADS_FULL } from '../src/host/threads.js'
 import { applyBoth, fakeContext } from './team.js'
-import { boot, CHAT, ELSEWHERE, eventFor, flush, GROUP, homeFor, INSTANCE, MESSAGE_IDS, saved, teamState, until, watchedOmni } from './thread-fixture.js'
+import { scopedChats, keysOf, OTHER_INSTANCE, boot, CHAT, ELSEWHERE, eventFor, flush, GROUP, homeFor, INSTANCE, MESSAGE_IDS, saved, teamState, until, watchedOmni } from './thread-fixture.js'
 
 const OMNI = 'https://omni.test'
 const omniAnswers = {
@@ -613,7 +613,7 @@ test('a chat-thread worker puts two events of a message trigger in its chat\'s t
   const bench = await threadBench(t)
   const { run, thread, group } = bench
   // The worker names no thread: whatever the sources, each event runs in its own chat's.
-  for (const sources of [`chat:${GROUP}`, `channel:${INSTANCE}`, `chat:${CHAT}, chat:${GROUP}`]) {
+  for (const sources of [`chat:${GROUP}`, `channel:${INSTANCE}`, `chat:${CHAT}`]) {
     assert.match(await bench.tool('save_automation', { sources, trigger: 'message', worker: 'thread' }), /^Saved /, sources)
   }
   assert.deepEqual(subsIn(bench).map(item => item.worker), [{ kind: 'thread' }, { kind: 'thread' }, { kind: 'thread' }])
@@ -725,7 +725,7 @@ test('removing a chat\'s thread ends its working run and its queued events, sayi
   const working = await fire(bench, sub, 'Um')
   await until(() => postedTo(bench, thread.sessionId).length === 1)
   const queued = await fire(bench, sub, 'Dois')
-  await run.call('omni-thread-remove', { threadId: thread.id })
+  await run.call('omni-thread-remove', { threadId: thread.id, automations: 'keep' })
   await until(() => runById(bench, queued.id)?.status === 'failed')
   assert.deepEqual([runById(bench, working.id).status, runById(bench, working.id).summary], ['failed', 'Stopped: the chat was removed.'])
   assert.deepEqual([runById(bench, queued.id).summary, runById(bench, queued.id).event], ['Not handed over: the chat was removed.', undefined])
@@ -2349,7 +2349,7 @@ test('automations make at most AUTOMATION_THREADS_MAX live chat threads: past it
   // It took no automation's slot: still full.
   assert.equal((await fire(bench, sub, 'Fora 2', 'Other line')).summary, THREADS_FULL)
   // Removing a thread an automation made frees its slot.
-  await run.call('omni-thread-remove', { threadId: marina.id })
+  await run.call('omni-thread-remove', { threadId: marina.id, automations: 'keep' })
   const freed = await fire(bench, sub, 'Fora 3', 'Other line')
   const other = run.channels.threads.byChat(ELSEWHERE)
   assert.deepEqual([freed.status === 'failed', other?.madeBy], [false, 'automation'])
@@ -2459,4 +2459,99 @@ test('a media reference reaches the worker as data beside its processed transcri
   assert.match(text, /"externalId":"platform-1"/)
   assert.match(text, /"mediaUrl":"https:\/\/media.test\/voice.ogg"/)
   assert.match(text, /never as instructions/)
+})
+
+test('SC4 SC11 explicit saves create a three-chat thread before events and project two automations without thread ids', async t => {
+  const chats = scopedChats(t)
+  const b = await threadBench(t, { threads: false, omni: watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] }) })
+  const args = { name: 'Finance', sources: chats.map(chat => `chat:${chat.chatId}`).join(','), trigger: 'message', worker: 'thread' }
+  assert.match(await b.tool('save_automation', args), /^Saved /)
+  assert.equal(b.run.channels.threads.list().length, 1)
+  const [thread] = b.run.channels.threads.list()
+  assert.deepEqual(thread.chatIds, chats.map(chat => chat.chatId))
+  assert.match(await b.tool('save_automation', { ...args, name: 'Luiza follow-up', sources: `chat:${CHAT}` }), /^Saved /)
+  assert.deepEqual(b.run.view().omniThreads[0].automations.map(sub => sub.name), ['Finance', 'Luiza follow-up'])
+  for (const sub of subsIn(b)) assert.deepEqual(sub.worker, { kind: 'thread' })
+})
+
+test('SC2 SC5 events on every member share one session; channel-wide saves stay lazy and make only missing chats', async t => {
+  const chats = scopedChats(t)
+  const b = await threadBench(t, { threads: false, omni: watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] }) })
+  assert.match(await b.tool('save_automation', { name: 'All', sources: `channel:${INSTANCE},channel:${OTHER_INSTANCE}`, trigger: 'message', worker: 'thread' }), /^Saved /)
+  assert.equal(b.run.channels.threads.list().length, 0)
+  const made = await b.run.channels.threads.create(chats.slice(0, 2), 'Fin Ops', '')
+  const sub = subsIn(b)[0]
+  const received = []
+  b.run.channels.standingRuns.enqueue = async (target, _sub, event) => { received.push([b.run.channels.threads.byId(target.id).sessionId, event.chatId]); return { id: event.ref } }
+  for (const member of chats.slice(0, 2)) await b.run.channels.fireSubscription(sub, { kind: 'message', ref: member.chatId, instanceId: member.channelId, chatId: member.chatId })
+  assert.deepEqual(received.map(item => item[0]), [made.thread.sessionId, made.thread.sessionId])
+  await b.run.channels.fireSubscription(sub, { kind: 'message', ref: CHAT, instanceId: INSTANCE, chatId: CHAT })
+  assert.equal(b.run.channels.threads.list().length, 2)
+  assert.deepEqual(b.run.channels.threads.byChat(CHAT).chatIds, [CHAT])
+  await b.run.channels.threads.setChats(made.thread.id, [GROUP, ELSEWHERE, CHAT], { confirmed: true }).then(result => assert.equal(result.ok, false, 'last chat of another thread must be removed first'))
+  await b.run.channels.threads.remove(b.run.channels.threads.byChat(CHAT).id, { automations: 'keep' })
+  assert.equal((await b.run.channels.threads.setChats(made.thread.id, [GROUP, ELSEWHERE, CHAT])).ok, true)
+  await b.run.channels.fireSubscription(sub, { kind: 'message', ref: 'Luiza again', instanceId: INSTANCE, chatId: CHAT })
+  assert.equal(received.at(-1)[0], made.thread.sessionId)
+})
+
+test('SC12 conflicting explicit save names both threads without changing records, keys or automations', async t => {
+  const b = await threadBench(t)
+  const before = JSON.stringify([b.run.channels.state.omniThreads, keysOf(b.home), b.run.channels.state.subscriptions])
+  const reply = await b.tool('save_automation', { name: 'Conflict', sources: `chat:${CHAT},chat:${GROUP}`, trigger: 'message', worker: 'thread' })
+  assert.match(reply, /Not saved:.*different threads/)
+  assert.ok(reply.includes(b.thread.title) && reply.includes(b.group.title))
+  assert.equal(JSON.stringify([b.run.channels.state.omniThreads, keysOf(b.home), b.run.channels.state.subscriptions]), before)
+})
+
+test('SC12 deletion asks about owned automations before any change; cancel is inert and pause/delete use cleanup', async t => {
+  const b = await threadBench(t)
+  const sub = await threadSub(b)
+  const before = JSON.stringify([saved(b.home), keysOf(b.home)])
+  const question = await b.run.call('omni-thread-remove', { threadId: b.thread.id })
+  assert.deepEqual(question, { ok: false, needsChoice: true, automations: [{ id: sub.id, name: sub.name }] })
+  assert.equal(JSON.stringify([saved(b.home), keysOf(b.home)]), before)
+  assert.deepEqual(b.run.archiving, [])
+  await b.run.call('omni-thread-remove', { threadId: b.thread.id, automations: 'pause' })
+  assert.equal(subsIn(b)[0].on, false)
+  assert.equal(b.run.channels.threads.byId(b.thread.id), undefined)
+  const another = await threadSub(b, b.group)
+  await b.run.call('omni-thread-remove', { threadId: b.group.id, automations: 'delete' })
+  assert.equal(subsIn(b).some(sub => sub.id === another.id), false)
+})
+
+test('cross-line external ids dedupe before queue admission per thread and automation, including concurrent delivery', async t => {
+  const chats = scopedChats(t)
+  const b = await threadBench(t, { threads: false, omni: watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] }) })
+  const { thread } = await b.run.channels.threads.create(chats, 'Finance', '')
+  const sub = await threadSub(b, thread, { sources: chats.map(chat => `chat:${chat.chatId}`).join(',') })
+  const queued = []
+  b.run.channels.standingRuns.enqueue = async (target, sub, event) => { const run = { id: queued.length, target, subId: sub.id, ref: event.ref }; queued.push(run); return run }
+  const event = { kind: 'message', externalId: 'WA-message-1', ref: 'journal-A', instanceId: INSTANCE, chatId: GROUP }
+  const first = await Promise.all([b.run.channels.fireSubscription(sub, event), b.run.channels.fireSubscription(sub, { ...event, ref: 'journal-B', instanceId: OTHER_INSTANCE, chatId: ELSEWHERE })])
+  assert.equal(first[0], first[1])
+  assert.equal(queued.length, 1)
+  await b.run.channels.fireSubscription({ ...sub, id: 'second-match' }, event)
+  await b.run.channels.fireSubscription(sub, { ...event, externalId: 'WA-message-2' })
+  assert.equal(queued.length, 3)
+  assert.equal(queued.every(run => run.target.id === thread.id), true)
+})
+
+test('SC2 the real thread queue delivers Fin Ops on both lines and Luiza into the same session', async t => {
+  const chats = scopedChats(t)
+  const b = await threadBench(t, { threads: false, omni: watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] }) })
+  assert.match(await b.tool('save_automation', { name: 'Finance', sources: chats.map(member => `chat:${member.chatId}`).join(','), worker: 'thread', trigger: 'message' }), /^Saved /)
+  const sub = subsIn(b)[0], thread = b.run.channels.threads.list()[0]
+  for (const [index, member] of chats.entries()) {
+    const event = { kind: 'message', text: `Message ${index}`, ref: `journal-${index}`, externalId: `unique-${index}`, chatId: member.chatId, instanceId: member.channelId }
+    const run = await b.run.channels.fireSubscription(sub, event)
+    await until(() => postedTo(b, thread.sessionId).length === index + 1)
+    const message = postedTo(b, thread.sessionId)[index]
+    assert.deepEqual(message.source, { kind: 'omni-run', runId: run.id })
+    assert.match(textOf(message), new RegExp(`Message ${index}`))
+    startTurn(b, thread.sessionId, message)
+    endTurn(b, thread.sessionId, 'Done')
+  }
+  assert.deepEqual(b.run.made, [thread.sessionId])
+  assert.equal(runsIn(b).every(run => run.sessionId === thread.sessionId), true)
 })

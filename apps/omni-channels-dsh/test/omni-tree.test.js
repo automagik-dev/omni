@@ -144,6 +144,14 @@ test('a thread row remounts when the team starts or stops passing the status hoo
   for (const [index, key] of bare.entries()) assert.notEqual(key, full[index])
 })
 
+// Selection does not create a session until the owner saves the complete set.
+function submitPicked(view) {
+  const chat = one(view.draw(), 'ot-picker-chat')
+  if (chat?.props['aria-pressed'] !== true) chat.props.onClick()
+  byLabel(view.draw(), 'Thread title').props.onChange({ target: { value: 'Selected chats' } })
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Create thread').props.onClick()
+}
+
 test('the + gets the focus back when its picker closes, and folding a channel closes its picker', async (t) => {
   linked()
   const { view } = tree(t, { roster: hooked() })
@@ -160,7 +168,7 @@ test('the + gets the focus back when its picker closes, and folding a channel cl
   assert.equal(focused, 1)
   open()
   await settle()
-  one(view.draw(), 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   await settle()
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
@@ -183,14 +191,14 @@ test('picking a chat opens its new thread once its row comes, the owner\'s own c
     byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
     view.draw()
     await settle()
-    one(view.draw(), 'ot-picker-chat').props.onClick()
+    submitPicked(view)
     await settle()
     await settle()
   }
   await pick()
   assert.deepEqual(opened, [])
   added = { ok: true, threadId: 't2', sessionId: 's2' }
-  one(view.draw(), 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   await settle()
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
@@ -207,7 +215,7 @@ test('picking a chat opens its new thread once its row comes, the owner\'s own c
   byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
   view.draw()
   await settle()
-  one(view.draw(), 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   props.roster = hooked({ omniThreads: [THREAD(2), THREAD(3), THREAD(4)] })
   view.draw()
@@ -345,11 +353,11 @@ test('picking a chat adds it on the host and closes the picker; a failed mint sh
   view.draw()
   await settle()
   let root = view.draw()
-  one(root, 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   await settle()
   root = view.draw()
-  assert.deepEqual(calls.find(([endpoint]) => endpoint === 'omni-thread-add'), ['omni-thread-add', { channelId: CHANNEL_A.id, chatId: 'c2' }])
+  assert.deepEqual(calls.find(([endpoint]) => endpoint === 'omni-thread-add'), ['omni-thread-add', { chats: [{ channelId: CHANNEL_A.id, chatId: 'c2' }], title: 'Selected chats', notes: '' }])
   const problem = one(root, 'ot-picker-problem')
   assert.deepEqual([problem.props.role, text(problem)], ['alert', 'Omni cannot make chat keys; update it.'])
   assert.equal(text(root).includes(reason), false)
@@ -361,7 +369,7 @@ test('picking a chat adds it on the host and closes the picker; a failed mint sh
   logged.length = 0
   const failure = new Error('Could not reach Omni. Try again in a moment.')
   answer = endpoint => (endpoint === 'omni-thread-add' ? failure : {})
-  one(root, 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   await settle()
   assert.equal(text(one(view.draw(), 'ot-picker-problem')), 'The chat was not added.')
@@ -370,7 +378,7 @@ test('picking a chat adds it on the host and closes the picker; a failed mint sh
   // Added: the picker closes; the row comes with the team's next roster.
   added = { ok: true, threadId: 't2' }
   answer = endpoint => (endpoint === 'omni-thread-add' ? added : {})
-  one(view.draw(), 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   await settle()
   assert.equal(all(view.draw(), 'ot-picker').length, 0)
@@ -855,7 +863,7 @@ for (const [label, failure] of [['Error', new Error('PRIVATE-CHAT-LIST-ERROR')],
     t.after(() => view.unmount())
     view.draw()
     await settle()
-    one(view.draw(), 'ot-picker-chat').props.onClick()
+    submitPicked(view)
     await settle()
     const root = view.draw()
     assert.equal(text(one(root, 'ot-picker-problem')), 'The chat was not added.')
@@ -887,7 +895,7 @@ test('the picker translates known add reason codes without rendering their diagn
   for (const [reasonCode, message] of ADD_REASONS) {
     logged.length = 0
     result = { ok: false, reasonCode, reason }
-    one(view.draw(), 'ot-picker-chat').props.onClick()
+    submitPicked(view)
     await settle()
     const root = view.draw()
     assert.equal(text(one(root, 'ot-picker-problem')), message, reasonCode)
@@ -908,7 +916,7 @@ test('an unknown add reason stays generic, even if its text resembles a known me
   for (const reasonCode of [undefined, 'unknown', '__proto__', 'constructor', {}, 42]) {
     logged.length = 0
     result = { ok: false, reasonCode, reason }
-    one(view.draw(), 'ot-picker-chat').props.onClick()
+    submitPicked(view)
     await settle()
     const root = view.draw()
     assert.equal(text(one(root, 'ot-picker-problem')), 'The chat was not added.')
@@ -925,10 +933,50 @@ test('a read-only add error shows the fixed guidance and logs its raw diagnostic
   t.after(() => view.unmount())
   view.draw()
   await settle()
-  one(view.draw(), 'ot-picker-chat').props.onClick()
+  submitPicked(view)
   await settle()
   const root = view.draw()
   assert.equal(text(one(root, 'ot-picker-problem')), ADD_REASONS.find(([code]) => code === 'read_only')[1])
   assert.equal(text(root).includes(failure.message), false)
   assert.deepEqual(logged, [['Could not add the chat:', failure]])
+})
+
+test('SC9 picker retains selections across channels and submits one set only on save', async t => {
+  linked()
+  const { view } = tree(t, { roster: hooked() })
+  answer = (endpoint, body) => endpoint === 'omni-thread-chats'
+    ? { chats: [{ id: body.channelId === CHANNEL_A.id ? 'fin-1' : 'fin-2', name: 'Fin Ops', added: false }] }
+    : endpoint === 'omni-thread-add' ? { ok: true, threadId: 'fin-thread' } : {}
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  byLabel(view.draw(), 'Channel').props.onChange({ target: { value: CHANNEL_B.id } })
+  view.draw()
+  await settle()
+  one(view.draw(), 'ot-picker-chat').props.onClick()
+  assert.equal(calls.filter(([name]) => name === 'omni-thread-add').length, 0)
+  byLabel(view.draw(), 'Thread title').props.onChange({ target: { value: 'Finance' } })
+  byLabel(view.draw(), 'Thread notes').props.onChange({ target: { value: 'Track invoices' } })
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Create thread').props.onClick()
+  await settle()
+  assert.deepEqual(calls.filter(([name]) => name === 'omni-thread-add'), [['omni-thread-add', {
+    chats: [{ channelId: CHANNEL_A.id, chatId: 'fin-1' }, { channelId: CHANNEL_B.id, chatId: 'fin-2' }], title: 'Finance', notes: 'Track invoices',
+  }]])
+})
+
+test('sidebar lists a set once, shows its automations and cancellation of its deletion question sends nothing', async t => {
+  linked()
+  const automations = [{ id: 'a1', name: 'Invoice follow-up' }]
+  const { view } = tree(t, { roster: hooked({ omniThreads: [THREAD(1, CHANNEL_A, { chatIds: ['c1', 'c3'], automations })] }) })
+  assert.equal(all(view.draw(), 'bt-thread').length, 1)
+  assert.match(text(one(view.draw(), 'ot-thread-automations')), /Invoice follow-up/)
+  answer = () => ({ ok: false, needsChoice: true, automations })
+  one(view.draw(), 'ot-thread-remove').props.onClick()
+  one(view.draw(), 'ot-thread-remove').props.onClick()
+  await settle()
+  assert.match(text(view.draw()), /What should happen to: Invoice follow-up/)
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Cancel').props.onClick()
+  assert.equal(calls.filter(([name]) => name === 'omni-thread-remove').length, 1)
+  assert.doesNotMatch(text(view.draw()), /What should happen to:/)
 })

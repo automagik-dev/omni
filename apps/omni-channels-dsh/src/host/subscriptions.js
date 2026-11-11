@@ -231,8 +231,16 @@ export function install(rt) {
     const problem = workerProblem(sub.worker)
     if (problem !== null) throw refused(problem)
     if (!sub.name) sub.name = sentenceOf(sub, nameOfWorker).replace(/^when /, '').slice(0, 60)
+    if (sub.worker.kind === 'thread' && sources.every(source => source.kind === 'chat')) {
+      const result = await rt.threads.create(sources.map(source => ({ channelId: source.channelId, chatId: source.id })), sub.name, '', { automation: true })
+      if (!result.ok) throw refused(result.reason)
+    }
     subs()[sub.id] = sub
-    await rt.save()
+    try { await rt.save() } catch (error) {
+      if (existing) subs()[sub.id] = existing
+      else delete subs()[sub.id]
+      throw error
+    }
     rt.syncOmniEvents?.()
     return sub
   }
@@ -361,6 +369,12 @@ export function install(rt) {
     rt.syncOmniEvents?.()
     for (const sessionId of new Set(freed)) void rt.standingRuns?.handOver(sessionId)
   }
+  // Ownership is projected from current membership; automations never store thread ids.
+  rt.threadAutomations = thread => Object.values(subs()).filter(sub => sub.worker?.kind === 'thread'
+    && sub.sources.some(source => source.kind === 'chat' ? thread.chatIds.includes(source.id)
+      : (thread.members ?? [{ channelId: thread.channelId }]).some(member => member.channelId === source.id)))
+    .map(({ id, name }) => ({ id, name }))
+
   // A run hands one event to the subscription's worker. Omni, and a Bot in task mode, get a
   // fresh Session of its own for it (owned like its group Sessions, so it speaks as that Bot
   // with its model and rules); a Bot in chat mode gets it in its chat. The run is done when that
@@ -439,12 +453,31 @@ export function install(rt) {
   // thread is made one first, the way the + makes one (threads.js ensure: its chat key, its
   // Session, its record); events of that chat share it from then on. An event from no chat, or
   // from one that cannot be a thread, runs nothing: a failed record on the board says why.
+  const delivered = new Map()
+  const DEDUPE_MAX = 2000
+  const DEDUPE_MS = 24 * 60 * 60 * 1000
   async function handToThread(sub, event) {
     const where = EventChat.safeParse(event ?? {})
     let summary = NO_CHAT
     if (where.success) {
       const made = await rt.threads.ensure(where.data.instanceId, where.data.chatId).catch(error => ({ ok: false, reason: error?.message ?? String(error) }))
-      if (made.ok) return rt.standingRuns.enqueue({ kind: 'thread', id: made.thread.id }, sub, event)
+      if (made.ok) {
+        // Include destination, automation and kind: two matches and separate reactions survive.
+        const identity = typeof event.externalId === 'string' && event.externalId !== '' && !event.test
+          ? JSON.stringify([made.thread.id, sub.id, event.kind, event.externalId]) : null
+        const now = Date.now()
+        for (const [key, entry] of delivered) if (now - entry.at > DEDUPE_MS) delivered.delete(key)
+        if (identity !== null && delivered.has(identity)) return delivered.get(identity).run
+        const run = Promise.resolve().then(() => rt.standingRuns.enqueue({ kind: 'thread', id: made.thread.id }, sub, event))
+        if (identity !== null) {
+          delivered.set(identity, { at: now, run })
+          if (delivered.size > DEDUPE_MAX) delivered.delete(delivered.keys().next().value)
+        }
+        try { return await run } catch (error) {
+          if (identity !== null) delivered.delete(identity)
+          throw error
+        }
+      }
       summary = noThread(made.reason)
     }
     const run = {

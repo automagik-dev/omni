@@ -44,8 +44,13 @@ const PROMPT_ORDER = 650
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const id = z.string().regex(ID)
 const ChatsPayload = z.object({ channelId: id, query: z.string().trim().max(100).optional() })
-const AddPayload = z.object({ channelId: id, chatId: id })
-const ThreadPayload = z.object({ threadId: id })
+const Member = z.object({ channelId: id, chatId: id })
+const CreatePayload = z.object({
+  chats: z.array(Member).min(1).max(100).refine(chats => new Set(chats.map(chat => chat.chatId)).size === chats.length),
+  title: z.string().trim().min(1).max(TITLE_MAX), notes: z.string().max(8000),
+})
+const AddPayload = z.union([CreatePayload, Member])
+const RemovePayload = z.object({ threadId: id, automations: z.enum(['keep', 'pause', 'delete']).optional() })
 // A thread's own choice for each, or null to follow the global default again; a field left
 // out stays as it is.
 const PermissionsPayload = z.object({
@@ -386,22 +391,60 @@ export function install(rt) {
     adding.set(chatId, making)
     return making
   }
-  async function make(channelId, chatId, byAutomation) {
-    let chat
+  // RFC-0001: owner and automation creation share one serialized host path.
+  async function create(chats, title, notes, { automation = false } = {}) {
+    const parsed = CreatePayload.safeParse({ chats, title, notes })
+    if (!parsed.success) return { ok: false, reason: 'Pick a nonempty set of chats, a title and notes.' }
+    if (!ready()) return { ok: false, reason: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
+    const readOnly = rt.readOnly?.()
+    if (readOnly !== undefined) return { ok: false, reason: readOnly, reasonCode: 'read_only' }
+    await rt.load()
+    return serial(async () => {
+      const owners = [...new Set(parsed.data.chats.map(member => byChat(member.chatId)).filter(Boolean))]
+      if (owners.length > 1) return { ok: false, reason: `Chats belong to different threads: ${owners.map(thread => JSON.stringify(thread.title ?? thread.chatName)).join(', ')}. Move the chats first with owner confirmation.` }
+      if (owners.length && !automation) return { ok: false, reason: ALREADY }
+      if (owners.length === 1 && parsed.data.chats.every(member => owners[0].chatIds.includes(member.chatId))) return { ok: true, thread: owners[0] }
+      // Resolve every channel/chat pair before creating or widening anything.
+      const resolved = await resolveMembers(parsed.data.chats)
+      if (!resolved.ok) return resolved
+      if (owners.length) {
+        const thread = owners[0]
+        const chatIds = [...new Set([...thread.chatIds, ...parsed.data.chats.map(member => member.chatId)])]
+        return chatIds.length === thread.chatIds.length ? { ok: true, thread } : setChatsNow(thread.id, chatIds)
+      }
+      if (automation && list().filter(thread => thread.madeBy === 'automation').length >= AUTOMATION_THREADS_MAX) return { ok: false, reason: THREADS_FULL }
+      return makeResolved(resolved.chats, automation, parsed.data.title, parsed.data.notes)
+    })
+  }
+  async function resolveMembers(members) {
+    const chats = []
     try {
-      const answer = ChatAnswer.safeParse(await ask(`/chats/${chatId}`))
-      if (!answer.success) return { ok: false, reason: 'Omni answered something else for that chat.' }
-      chat = answer.data.data
-    } catch (error) {
-      return { ok: false, reason: error.message }
-    }
-    if (chat.id !== chatId || chat.instanceId !== channelId) return { ok: false, reason: 'That chat is not on this channel.' }
-    chat = await namedChat(chat, channelId)
+      for (const member of members) {
+        const answer = ChatAnswer.safeParse(await ask(`/chats/${member.chatId}`))
+        if (!answer.success) return { ok: false, reason: 'Omni answered something else for that chat.' }
+        const chat = answer.data.data
+        if (chat.id !== member.chatId || chat.instanceId !== member.channelId) return { ok: false, reason: 'That chat is not on this channel.' }
+        chats.push(await namedChat(chat, member.channelId))
+      }
+      return { ok: true, chats }
+    } catch (error) { return { ok: false, reason: error.message } }
+  }
+  async function make(channelId, chatId, byAutomation) {
+    const resolved = await resolveMembers([{ channelId, chatId }])
+    if (!resolved.ok) return resolved
+    if (byAutomation && list().filter(thread => thread.madeBy === 'automation').length >= AUTOMATION_THREADS_MAX) return { ok: false, reason: THREADS_FULL }
+    return makeResolved(resolved.chats, byAutomation)
+  }
+  async function makeResolved(chats, byAutomation, title, notes = '') {
+    const chat = chats[0]
+    const channelId = chat.instanceId
+    const chatId = chat.id
+    const chatIds = chats.map(member => member.id)
     const link = rt.omniLink?.() ?? null
     const threadId = randomUUID()
-    const minted = await rt.threadKeys.mint(threadId, chatId)
+    const minted = await rt.threadKeys.mint(threadId, chatIds.length === 1 ? chatId : chatIds)
     if (!minted.ok) return minted
-    const name = chatNameOf(chat)
+    const name = title ?? chatNameOf(chat)
     const kind = chat.chatType === 'dm' ? 'direct' : 'group'
     const chatName = labelOf(name, kind)
     let sessionId
@@ -412,7 +455,7 @@ export function install(rt) {
       return { ok: false, reason: `The thread's Session could not be made: ${error?.message ?? error}` }
     }
     const thread = {
-      id: threadId, sessionId, chatId, chatIds: [chatId], notes: '', chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
+      id: threadId, sessionId, chatId, chatIds, notes, ...(title === undefined ? {} : { namedSet: true }), ...(chats.length === 1 ? {} : { members: chats.map(member => ({ chatId: member.id, channelId: member.instanceId })) }), chatJid: chat.externalId, chatName, channelId, origin: link?.url ?? '',
       self: minted.self ?? null, title: name?.slice(0, TITLE_MAX) ?? null, kind, status: 'idle', turnOpenAt: null, at: Date.now(),
       ...(byAutomation ? { madeBy: 'automation' } : {}),
     }
@@ -466,7 +509,7 @@ export function install(rt) {
   // finishes it (archiving again changes nothing). A
   // second remove while one runs is that one.
   const removing = new Map()
-  async function removeOnce(thread) {
+  async function removeOnce(thread, automationChoice) {
     const readOnly = rt.readOnly?.()
     if (readOnly !== undefined) throw refused(readOnly)
     try {
@@ -480,14 +523,21 @@ export function install(rt) {
     } catch (error) {
       throw refused(`The thread's chat key could not be cut, so the thread stays: ${error?.message ?? error}`)
     }
+    if (automationChoice !== 'keep') {
+      for (const automation of rt.threadAutomations?.(thread) ?? []) {
+        await rt.subscriptionEndpoint(automationChoice === 'delete' ? 'automation-delete' : 'automation-set-on', { id: automation.id, on: false })
+      }
+    }
     delete threads()[thread.id]
     await rt.save()
     await tell(removed, thread, 'removed')
   }
-  function remove(threadId) {
+  function remove(threadId, { automations } = {}) {
     const thread = byId(threadId)
     if (thread === undefined) return Promise.resolve()
-    if (!removing.has(thread.id)) removing.set(thread.id, serial(() => byId(thread.id) === undefined ? undefined : removeOnce(thread)).finally(() => removing.delete(thread.id)))
+    const owned = rt.threadAutomations?.(thread) ?? []
+    if (owned.length && !['keep', 'pause', 'delete'].includes(automations)) return Promise.resolve({ ok: false, needsChoice: true, automations: owned })
+    if (!removing.has(thread.id)) removing.set(thread.id, serial(() => byId(thread.id) === undefined ? undefined : removeOnce(thread, automations ?? 'keep')).finally(() => removing.delete(thread.id)))
     return removing.get(thread.id)
   }
 
@@ -496,7 +546,7 @@ export function install(rt) {
   // before the changed records are saved. A failed save leaves them disconnected.
   const Membership = z.array(id).min(1).refine(ids => new Set(ids).size === ids.length)
   const MoveOptions = z.object({ confirmed: z.boolean().optional() }).strict()
-  const setChats = (threadId, input, options = {}) => serial(async () => {
+  const setChatsNow = async (threadId, input, options = {}) => {
     const parsed = Membership.safeParse(input)
     const choice = MoveOptions.safeParse(options)
     if (!parsed.success || !choice.success) return { ok: false, reason: 'Pick a nonempty set of chats.' }
@@ -526,17 +576,21 @@ export function install(rt) {
       }
       for (const change of changes) {
         const first = rows.get(change.chatIds[0])
-        Object.assign(change.thread, { chatIds: [...change.chatIds], chatId: first.id, channelId: first.instanceId, chatJid: first.externalId })
+        Object.assign(change.thread, { chatIds: [...change.chatIds], members: change.chatIds.map(chatId => ({ chatId, channelId: rows.get(chatId).instanceId })), chatId: first.id, channelId: first.instanceId, chatJid: first.externalId })
       }
       await rt.save()
       return { ok: true, thread }
     } catch (error) {
-      for (const previous of before) Object.assign(previous.thread, previous.value)
+      for (const previous of before) {
+        if (previous.value.members === undefined) delete previous.thread.members
+        Object.assign(previous.thread, previous.value)
+      }
       // Do not let a retry mint a set that the records did not commit.
       for (const change of changes) await rt.threadKeys.revoke(change.thread.id).catch(failed => rt.warn('omni-channels: membership key could not be cut: %s', failed?.message ?? failed))
       return { ok: false, reason: error.message }
     }
-  })
+  }
+  const setChats = (threadId, input, options) => serial(() => setChatsNow(threadId, input, options))
 
   rt.threads = {
     list,
@@ -544,6 +598,7 @@ export function install(rt) {
     bySession,
     byChat,
     setChats,
+    create,
     add,
     ensure,
     remove,
@@ -579,7 +634,7 @@ export function install(rt) {
         const reasonCode = reasonCodes === null ? 'needs_newer_team' : reasonCodes.get(thread.id)
         const status = live && rt.teamResume?.running?.(thread.sessionId) !== true ? 'idle' : thread.status ?? 'idle'
         return {
-          id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
+          id: thread.id, sessionId: thread.sessionId, chatId: thread.chatId, chatIds: [...thread.chatIds], automations: rt.threadAutomations?.(thread) ?? [], channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
           status, connected: reason === null, reason, ...(reasonCode === undefined ? {} : { reasonCode }),
           permissions: permissionsOf(thread, state.omniSettings), ownPermissions: ownPermissionsOf(thread), defaultPermissions: permissionsOf(undefined, state.omniSettings),
         }
@@ -655,15 +710,16 @@ export function install(rt) {
   const ENDPOINTS = {
     'omni-thread-add': async (body) => {
       const payload = parse(AddPayload, body, 'Pick a chat of this channel')
-      const result = await add(payload.channelId, payload.chatId)
+      const result = payload.chats ? await create(payload.chats, payload.title, payload.notes) : await add(payload.channelId, payload.chatId)
       if (result.ok) return { ok: true, threadId: result.thread.id, sessionId: result.thread.sessionId }
       const reasonCode = result.reasonCode ?? ADD_REASON_CODES.get(result.reason)
       return reasonCode === undefined ? result : { ...result, reasonCode }
     },
     'omni-thread-remove': async (body) => {
-      const payload = parse(ThreadPayload, body, 'Pick a thread')
+      const payload = parse(RemovePayload, body, 'Pick a thread and what to do with its automations')
       await rt.load()
-      await remove(payload.threadId)
+      const result = await remove(payload.threadId, payload)
+      if (result?.needsChoice) return result
       return { ok: true }
     },
     // The owner's choice for one thread, from its row. Not served on a host that only reads
@@ -726,7 +782,7 @@ export function install(rt) {
     const pass = (async () => {
       await rt.load()
       if (rt.readOnly?.() !== undefined || (rt.omniLink?.() ?? null) === null) return
-      for (const thread of list().filter(unnamed)) {
+      for (const thread of list().filter(thread => !thread.namedSet && thread.chatIds.length === 1 && unnamed(thread))) {
         if (stopped) return
         await rename(thread).catch(error => rt.warn('omni-channels: the thread %s was not named again: %s', thread.id, error?.message ?? error))
       }
