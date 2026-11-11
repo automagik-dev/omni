@@ -44,8 +44,6 @@ const callBody = (body) => {
   if (typeof body !== 'string' || body === '') return body ?? undefined
   try { return JSON.parse(body) } catch { return undefined }
 }
-const confirmedCall = args => sensitiveCall(String(args?.method ?? 'GET').toUpperCase(), String(args?.path ?? '').trim().replace(/^\/api\/v2(?=\/)/, ''), callBody(args?.body)) !== null
-const writesOmni = exec => OMNI_ACTS.has(exec.name) || (exec.name === 'omni_call' && confirmedCall(exec.arguments))
 
 // The reactions that go without a card, until the owner edits the list.
 export const FREE_REACTIONS_DEFAULT = Object.freeze(['👍', '❤️', '😂', '😮', '😢', '🙏'])
@@ -366,6 +364,20 @@ export function install(rt) {
     return asksFirst ? { kind: 'ask', reason: automationAsk(exec.name) } : decision
   }, { prepend: true })
 
+  // Whether this call asks the user: the Omni Bot's confirmation, as omni-api.js decides it,
+  // minus a connector action the catalog declares a read (#1603). One place answers both.
+  const asksOmni = async (exec) => {
+    if (OMNI_ACTS.has(exec.name)) return true
+    if (exec.name !== 'omni_call') return false
+    const args = exec.arguments ?? {}
+    const method = String(args.method ?? 'GET').toUpperCase()
+    const path = String(args.path ?? '').trim().replace(/^\/api\/v2(?=\/)/, '')
+    const act = typeof rt.omniCallSensitivity === 'function'
+      ? await rt.omniCallSensitivity(method, path, callBody(args.body))
+      : sensitiveCall(method, path, callBody(args.body))
+    return act !== null
+  }
+
   // Omni's own tools in a thread work as the Omni Bot (grants.js), whose sends to a person and
   // deletes confirm on a card in its own chat; a thread's ask on DSH's card in the thread
   // instead, with what goes out. A send or a reaction into the thread's own chat follows that
@@ -373,7 +385,7 @@ export function install(rt) {
   // Omni Bot would confirm asks every time.
   ctx.on('tools/pre-execute', async (exec, next) => {
     const decision = await next()
-    if (!writesOmni(exec) || (decision?.kind !== 'allow' && decision?.kind !== 'ask')) return decision
+    if (!(await asksOmni(exec)) || (decision?.kind !== 'allow' && decision?.kind !== 'ask')) return decision
     const thread = rt.threads?.bySession(exec.agent?.id ?? exec.agent?.session?.id)
     if (thread === undefined) return decision
     const args = exec.arguments ?? {}

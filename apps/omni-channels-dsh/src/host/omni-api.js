@@ -258,6 +258,70 @@ export function install(rt) {
     return { status: response.status, ok: response.ok, data }
   }
 
+  // The connector catalog says whether an action only reads (#1603), so a read that arrives
+  // as a POST does not ask the user for permission to change Omni. Only an explicit "read"
+  // counts: a "write", an action without the field, an unknown provider or action, and a
+  // failed catalog read all keep the "change" card. The catalog is kept ten minutes; another
+  // Omni (a new link) is another cache.
+  const CONNECTOR_ACTION = /^\/connectors\/([^/]+)\/actions\/([^/]+)$/
+  const CATALOG_TTL_MS = 10 * 60_000
+  let catalog = null
+  async function connectorCatalog() {
+    const url = rt.omniLink?.()?.url ?? ''
+    if (catalog !== null && catalog.url === url && Date.now() - catalog.at < CATALOG_TTL_MS) return catalog
+    const reply = await call('GET', '/connectors/providers')
+    const list = reply.ok && Array.isArray(reply.data?.data) ? reply.data.data : null
+    if (list === null) throw invalid(`omni answered ${reply.status} for its connector catalog`)
+    const providers = new Map()
+    for (const provider of list) {
+      if (typeof provider?.id !== 'string') continue
+      const actions = new Map()
+      for (const action of Array.isArray(provider.actions) ? provider.actions : []) {
+        // A kind this app does not know stays unknown, and an unknown action asks.
+        if (typeof action?.key === 'string' && (action.access === 'read' || action.access === 'write')) actions.set(action.key, action.access)
+      }
+      providers.set(provider.id, actions)
+    }
+    catalog = { at: Date.now(), url, providers, byConnector: new Map() }
+    return catalog
+  }
+  async function connectorProvider(channel, connectorId) {
+    if (channel.byConnector.has(connectorId)) return channel.byConnector.get(connectorId)
+    const reply = await call('GET', `/connectors/${encodeURIComponent(connectorId)}`)
+    const provider = reply.ok && typeof reply.data?.data?.provider === 'string' ? reply.data.data.provider : null
+    if (provider === null) return null
+    channel.byConnector.set(connectorId, provider)
+    return provider
+  }
+  // 'read', 'write' or undefined when the catalog cannot say: an unknown route, provider or
+  // action, or a read that failed. Undefined is what every caller must treat as a write.
+  async function connectorActionAccess(method, path) {
+    if (method !== 'POST') return undefined
+    const match = CONNECTOR_ACTION.exec(path)
+    if (match === null) return undefined
+    try {
+      const channel = await connectorCatalog()
+      const provider = await connectorProvider(channel, decodeURIComponent(match[1]))
+      if (provider === null) return undefined
+      return channel.providers.get(provider)?.get(decodeURIComponent(match[2]))
+    } catch {
+      return undefined
+    }
+  }
+  // What an omni_call asks the user about: sensitiveCall's answer, except a connector action
+  // the catalog declares a read. A stricter answer (send, delete, disconnect) stays as it is.
+  async function sensitiveCallOf(method, path, body) {
+    const act = sensitiveCall(method, path, body)
+    if (act !== 'change') return act
+    return (await connectorActionAccess(method, path)) === 'read' ? null : act
+  }
+  // For another host module (thread-tools.js), which asks the same question of a thread's call.
+  rt.omniCallSensitivity = (method, path, body) => sensitiveCallOf(
+    String(method ?? 'GET').toUpperCase(),
+    String(path ?? '').trim().replace(/^\/api\/v2(?=\/)/, ''),
+    body,
+  )
+
   const parse = (text, what) => {
     if (text === undefined || text === null || text === '') return undefined
     if (typeof text === 'object') return text
@@ -310,7 +374,7 @@ export function install(rt) {
         if (!op) throw invalid(`${method} ${path} is not an omni API operation. Find it with omni_endpoints.`)
         const query = parse(args.query, 'query')
         const body = parse(args.body, 'body')
-        const act = sensitiveCall(method, path, body)
+        const act = await sensitiveCallOf(method, path, body)
         if (act !== null) {
           // The card shows the whole call, or nothing runs.
           const shown = body === undefined ? undefined : JSON.stringify(body, null, 2)
