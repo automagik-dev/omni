@@ -419,7 +419,9 @@ export const MetaSignatureModeSchema = z.enum(['x-hub-signature-256', 'x-webhook
  */
 export function isMetaHostUrl(url: string): boolean {
   try {
-    return /(^|\.)(facebook\.com|fbsbx\.com)$/.test(new URL(url).hostname.toLowerCase());
+    // A fully qualified name may end in a dot (`graph.facebook.com.`): it is the same host.
+    const host = new URL(url).hostname.toLowerCase().replace(/\.+$/, '');
+    return /(^|\.)(facebook\.com|fbsbx\.com)$/.test(host);
   } catch {
     return false;
   }

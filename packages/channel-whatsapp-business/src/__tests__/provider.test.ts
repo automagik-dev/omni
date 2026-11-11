@@ -457,7 +457,11 @@ describe('MetaWhatsAppClient transport', () => {
 
   test('x-api-key with a base URL on a Meta host is refused', () => {
     fetchSpy = spyOn(globalThis, 'fetch');
-    for (const baseUrl of ['https://graph.facebook.com/v24.0', 'https://graph-video.facebook.com/v24.0']) {
+    for (const baseUrl of [
+      'https://graph.facebook.com/v24.0',
+      'https://graph-video.facebook.com/v24.0',
+      'https://graph.facebook.com./v24.0',
+    ]) {
       expect(
         () =>
           new MetaWhatsAppClient({

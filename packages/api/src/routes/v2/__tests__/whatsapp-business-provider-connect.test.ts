@@ -197,16 +197,19 @@ describe('POST /:id/whatsapp-business/connect through a provider', () => {
   });
 
   test('a provider key with a Meta Graph base URL is refused before anything is stored or sent', async () => {
-    const { app, updates } = mount();
+    // The trailing-dot FQDN is the same host and must not slip past the guard.
+    for (const apiBaseUrl of ['https://graph.facebook.com/v24.0', 'https://graph.facebook.com./v24.0']) {
+      const { app, updates } = mount();
 
-    const res = await app.request(
-      `/${INSTANCE_ID}/whatsapp-business/connect`,
-      post({ ...META_DETAILS, apiBaseUrl: 'https://graph.facebook.com/v24.0', authMode: 'x-api-key' }),
-    );
+      const res = await app.request(
+        `/${INSTANCE_ID}/whatsapp-business/connect`,
+        post({ ...META_DETAILS, apiBaseUrl, authMode: 'x-api-key' }),
+      );
 
-    expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_PROVIDER_SETTINGS');
-    expect(updates).toEqual([]);
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('INVALID_PROVIDER_SETTINGS');
+      expect(updates).toEqual([]);
+    }
     expect(outbound()).toEqual([]);
   });
 
