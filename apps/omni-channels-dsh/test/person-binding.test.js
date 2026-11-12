@@ -126,6 +126,11 @@ test('person binding: A\'s context reaches only A\'s instructions, never B\'s or
   assert.match(b.prompt(a.sessionId), /## About this person[^\n]*\nA-CONTEXT: prefers morning calls\./)
   assert.doesNotMatch(b.prompt(a.sessionId), /B-CONTEXT/)
   assert.match(b.prompt(bee.sessionId), /B-CONTEXT: writes in Spanish\./)
+  // Each child is told of its own person's tools only.
+  assert.match(b.prompt(a.sessionId), /## This person's own tools\n[^\n]*"mcp__orders-a__"/)
+  assert.doesNotMatch(b.prompt(a.sessionId), /mcp__orders-b__/)
+  assert.match(b.prompt(bee.sessionId), /"mcp__orders-b__"/)
+  assert.doesNotMatch(b.prompt(bee.sessionId), /mcp__orders-a__/)
   assert.doesNotMatch(b.prompt(bee.sessionId), /A-CONTEXT/)
   assert.doesNotMatch(b.channels.botOf(ANSWER_MASTER).instructions, /CONTEXT/)
   assert.doesNotMatch(String(b.channels.botOf(ANSWER_MASTER).answer.sharedNotes), /CONTEXT/)
@@ -284,6 +289,7 @@ for (const [label, host, reason] of [
   else assert.match(warnings[0][3], reason)
   for (const name of ['mcp__orders-a__lookup', 'mcp__anything']) assert.match(guarded(b.ctx, child.sessionId, name), /Answer children/)
   assert.equal(child.personMounted, undefined)
+  assert.doesNotMatch(b.prompt(child.sessionId), /own tools|mcp__/)
 })
 
 test('person binding: an unbound child binds once, on its first message a one-person rule admits', async t => {

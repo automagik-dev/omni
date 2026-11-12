@@ -18,7 +18,7 @@ import { chatOf } from './omni.js'
 import { OPERATOR_RULES } from './omni-rules.js'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from './resume-hook.js'
 import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
-import { PERSON_HELD, personBindingRefusal } from './person-binding.js'
+import { PERSON_HELD, personBindingRefusal, toolPrefixOf } from './person-binding.js'
 
 // A thread's own chat tools, on top of DSH's and Omni's; no other Session lists them.
 export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
@@ -252,6 +252,9 @@ export function answerInstructions(thread, bot, person) {
     answer.visibility === 'collective' ? 'You may use answer_chats and thread_history to read the other chats owned by your bot. You may still reply and react only in your own chat.' : 'You may read only your own chat. Other chats and shared notes are private.',
     ...(answer.visibility === 'collective' && answer.sharedNotes ? [`## Shared notes (read only)\n${answer.sharedNotes}`] : []),
     ...(person?.context ? [`## About this person (staff notes from their access rule)\n${person.context}`] : []),
+    // While this child's Session holds its person's capability (thread-tools.js personMount).
+    ...(person?.capability && thread.personMounted === person.capability.name
+      ? [`## This person's own tools\nYou may also use the tools whose names start with ${JSON.stringify(toolPrefixOf(person.capability.name))}: staff gave them to this person, so use them for this person only.`] : []),
     ...(thread.notes ? [`## Child notes\n${thread.notes}`] : []),
   ].filter(Boolean).join('\n\n')
 }
