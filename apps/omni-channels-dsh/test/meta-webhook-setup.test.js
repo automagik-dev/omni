@@ -36,6 +36,8 @@ const ui = await bundleClient([
   "export { MetaWebhookSetup } from './meta-webhook-setup.js'", "export { ChannelSettings } from './channel-settings.js'", "export { LiveConnectFlow } from './channel-connect-live.js'",
 ], { team: { omni: { ...omni, call: (...args) => callReply(...args) } }, globals: { navigator: { clipboard: { writeText: async value => { if (clipboardFails) throw Error('test-secret'); copies.push(value) } } }, setTimeout, clearTimeout } })
 const button = (tree, label) => nodes(tree).find(node => node.type === 'button' && text(node) === label)
+// The Business page opens on the Kapso path; Meta's details are the other choice.
+const metaPath = tree => nodes(tree).find(node => node.type === 'button' && node.props.role === 'radio' && text(node).startsWith('With Meta')).props.onClick()
 function panel({ reply = { authorized: true, ...config }, writable = true, request } = {}) {
   const calls = []
   request ??= async name => { calls.push(name); return reply }
@@ -113,6 +115,7 @@ test('Business connect immediately shows setup with a masked token', async () =>
   callReply = async (endpoint, payload) => { calls.push([endpoint, plain(payload)]); return endpoint === 'omni-channel-types' ? { types: ['whatsapp-business'] } : endpoint === 'omni-wab-connect' ? { id: 'created-channel', type: 'whatsapp-business', name: 'Business' } : { authorized: true, ...config } }
   const view = mount(() => react.createElement(ui.LiveConnectFlow, { state: { page: { type: 'whatsapp-business' } }, omni: {}, Tile: () => null, PreviewChip: () => null }))
   view.draw(); await settle(); let tree = view.draw()
+  metaPath(tree); view.draw(); await settle(); tree = view.draw()
   for (const [index, value] of ['test-access-token', '12345678', '23456789'].entries()) { nodes(tree).filter(n => n.type === 'input')[index].props.onChange({ target: { value } }); tree = view.draw() }
   await button(tree, 'Connect').props.onClick(); view.draw(); await settle(); tree = view.draw()
   assert.equal(byLabel(tree, 'Callback URL').props.value, config.callbackUrl)
@@ -125,6 +128,7 @@ test('Business connect with the provider section left empty sends the Meta detai
   callReply = async (endpoint, payload) => { if (endpoint === 'omni-wab-connect') sent.push(JSON.stringify(payload)); return endpoint === 'omni-wab-connect' ? { id: 'created-channel', type: 'whatsapp-business', name: 'Business' } : { authorized: true, ...config } }
   const view = mount(() => react.createElement(ui.LiveConnectFlow, { state: { page: { type: 'whatsapp-business' } }, omni: {}, Tile: () => null, PreviewChip: () => null }))
   view.draw(); await settle(); let tree = view.draw()
+  metaPath(tree); view.draw(); await settle(); tree = view.draw()
   for (const [index, value] of ['test-access-token', '12345678', '23456789'].entries()) { nodes(tree).filter(n => n.type === 'input')[index].props.onChange({ target: { value } }); tree = view.draw() }
   await button(tree, 'Connect').props.onClick(); view.draw(); await settle()
   assert.deepEqual(sent, ['{"name":"WhatsApp Business","accessToken":"test-access-token","phoneNumberId":"12345678","wabaId":"23456789"}'])

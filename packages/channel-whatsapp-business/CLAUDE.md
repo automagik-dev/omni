@@ -31,6 +31,7 @@ src/
 ├── capabilities.ts              # WHATSAPP_BUSINESS_CAPABILITIES (hasMessagingWindow, sticker, buttons, etc.)
 ├── types.ts                     # Internal types (WhatsAppBusinessConfig, MetaOutboundMessage, …)
 ├── oauth.ts                     # exchangeCodeForToken / getWabaDetails / registerPhoneNumber / subscribeApp
+├── kapso.ts                     # Kapso Platform API: customer, setup link, numbers, Meta-forwarding webhook
 ├── templates.ts                 # Template CRUD + sync helpers
 ├── coexistence.ts               # Business app coexistence: rawPayload evidence, contact store helpers
 ├── senders/                     # One file per outbound content type

@@ -61,6 +61,9 @@ const token = async view => {
   await click(view, 'Connect')
 }
 const business = async view => {
+  // The Business page opens on the Kapso path; Meta's details are the other choice.
+  nodes(view.draw()).find(node => node.type === 'button' && node.props.role === 'radio' && text(node).startsWith('With Meta')).props.onClick()
+  await draw(view)
   change(view, input(view, props => props.type === 'password'), 'fixture-access-token')
   for (const node of nodes(view.draw()).filter(node => node.type === 'input' && node.props.inputMode === 'numeric')) change(view, node, '123456789')
   await click(view, 'Connect')

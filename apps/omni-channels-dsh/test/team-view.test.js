@@ -306,6 +306,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-slack-app',
     'effect omni-channels: omni-channel-settings',
     'effect omni-channels: omni-channel-agents',
+    'effect omni-channels: omni-kapso-numbers',
     'effect omni-channels: omni-channel-create',
     'effect omni-channels: omni-channel-phone-code',
     'effect omni-channels: omni-channel-cancel',
@@ -316,6 +317,10 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-wab-connect',
     'effect omni-channels: omni-channel-settings-save',
     'effect omni-channels: omni-wab-repair',
+    'effect omni-channels: omni-kapso-key',
+    'effect omni-channels: omni-kapso-setup-link',
+    'effect omni-channels: omni-kapso-connect',
+    'effect omni-channels: omni-kapso-test',
     'effect omni-channels: omni-wab-webhook-setup',
     'provide omniChannels',
   ])

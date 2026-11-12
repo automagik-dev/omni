@@ -37,7 +37,12 @@ interface MetaErrorEnvelope {
   };
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<Response> {
+/** The package's outbound HTTP call: `fetch` bounded by a timeout. Also used by `kapso.ts`. */
+export async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+): Promise<Response> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {

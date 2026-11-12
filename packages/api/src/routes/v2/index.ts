@@ -51,6 +51,7 @@ import { turnsRoutes } from './turns';
 import { voiceRoutes } from './voice';
 import { webhooksRoutes } from './webhooks';
 import { whatsappBusinessRoutes } from './whatsapp-business';
+import { whatsappBusinessKapsoRoutes } from './whatsapp-business-kapso';
 import { whatsappFlowsRoutes } from './whatsapp-flows';
 
 export const v2Routes = new Hono<{ Variables: AppVariables }>();
@@ -85,6 +86,7 @@ v2Routes.route('/metrics', metricsRoutes);
 v2Routes.route('/conversations', conversationsRoutes); // Cross-channel conversation continuity
 v2Routes.route('/chats', chatsRoutes); // Unified chat model - must be before root mounts with /:id
 v2Routes.route('/channels', channelsRoutes); // Capability matrix (#1187)
+v2Routes.route('/channels/whatsapp-business/kapso', whatsappBusinessKapsoRoutes); // Kapso setup by clicks (#1676) — auth-required, unlike the public channel webhooks
 v2Routes.route('/channels/harness', harnessRoutes); // E2E agent-test harness driving/inspection (#953) — auth-required, unlike the public channel webhooks
 v2Routes.route('/media', mediaRoutes); // Media file serving - must be before root mounts with /:id
 v2Routes.route('/batch-jobs', batchJobsRoutes); // Batch job routes - must be before root mounts with /:id
