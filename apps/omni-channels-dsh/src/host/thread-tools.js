@@ -20,6 +20,7 @@
 // host reads the message's row, checks it is in the thread's chat and has media, and only then
 // downloads it, saves it through DSH's attachments and hands the model the image beside Omni's
 // description of it.
+import { createHash } from 'node:crypto'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
@@ -316,6 +317,66 @@ export function install(rt) {
     const said = reply.json?.error?.message
     return `Omni answered ${reply.status}${typeof said === 'string' && said !== '' ? `: ${said.slice(0, 300)}` : '.'}`
   }
+  // RFC-0001 training drafts, from the card to the send: the text the card asked about, then
+  // staff's answer. A draft's id is its Session, its turn and DSH's call id: the turn is read from
+  // the Session's own log (its newest turn/start), which DSH keeps across a restart, so the same
+  // call replayed through the gate, the card and the body, then or after a restart, is the same
+  // draft and counts once (threads.js keeps the counted ids). A provider that issues the same
+  // call id in a later turn makes a new draft. With no call id, or no turn in the log, a draft
+  // counts for nothing.
+  const drafts = new Map()
+  const DRAFTS_MAX = 200
+  const TURN_SCAN = 1000
+  const turnOf = (session) => {
+    if (typeof session?.eventAt !== 'function') return null
+    const last = (session.seq ?? 0) - 1
+    for (let seq = last; seq >= 0 && seq > last - TURN_SCAN; seq -= 1) {
+      const event = session.eventAt(seq)
+      if (event?.type === 'turn/start') return Number.isInteger(event.data?.turn) ? event.data.turn : null
+    }
+    return null
+  }
+  const draftIdOf = (agent, callId) => {
+    const sessionId = agent?.session?.id ?? agent?.id
+    const turn = turnOf(agent?.session)
+    if (typeof callId !== 'string' || callId === '' || typeof sessionId !== 'string' || turn === null) return null
+    return createHash('sha256').update(JSON.stringify([sessionId, turn, callId])).digest('hex')
+  }
+  const noteDraft = (exec, open) => {
+    const draftId = draftIdOf(exec?.agent, exec?.callId)
+    if (draftId === null) return
+    drafts.delete(draftId)
+    drafts.set(draftId, { draftId, threadId: open.thread.id, text: open.args.text, approved: false })
+    if (drafts.size > DRAFTS_MAX) drafts.delete(drafts.keys().next().value)
+  }
+  const countDraft = async (exec, open, sent) => {
+    const draftId = draftIdOf(exec?.agent, exec?.callId)
+    const draft = draftId === null ? undefined : drafts.get(draftId)
+    if (draft?.approved !== true || draft.threadId !== open.thread.id) return
+    drafts.delete(draftId)
+    try {
+      await rt.recordAnswerDraft({ threadId: draft.threadId, draftId: draft.draftId, approvedText: draft.text, sentText: sent, outcome: draft.text === sent ? 'sent' : 'edited' })
+    } catch (error) {
+      rt.warn('omni-channels: an answer draft was sent but not counted: %s', error?.message ?? error)
+    }
+  }
+  // Staff's answer to a training card, from the thread's approval/request listener (threads.js):
+  // approved waits for the send; rejected ends the streak; cancelled or unavailable count for
+  // nothing. It never throws, so the outcome always passes through unchanged.
+  rt.answerApprovalOutcome = async (thread, request, outcome) => {
+    const draftId = draftIdOf(request?.agent, request?.callId)
+    const draft = draftId === null ? undefined : drafts.get(draftId)
+    if (draft === undefined || request.toolName !== 'thread_say' || thread?.id !== draft.threadId) return
+    if (outcome === 'allowed-once') {
+      draft.approved = true
+      return
+    }
+    drafts.delete(draftId)
+    if (outcome !== 'rejected') return
+    await rt.recordAnswerDraft({ threadId: draft.threadId, draftId: draft.draftId, approvedText: draft.text, sentText: '', outcome: 'rejected' })
+      .catch(error => rt.warn('omni-channels: a rejected answer draft was not counted: %s', error?.message ?? error))
+  }
+
   // Each tool: its gate first (thread, team, key), then its arguments, then its one call.
   const tool = (definition, run, out = output, refuse = text => text) => ctx.tools.register(defineTool({
     ...definition,
@@ -336,9 +397,10 @@ export function install(rt) {
     name: 'thread_say',
     description: 'Sends one text message into a selected member of this thread\'s chat set, as the user. Requires chatId for a multi-chat set. Follows the owner\'s global send default or their thread switch (ask first unless changed); no tool can grant send permission. Send only what the user asked for.',
     parameters: { chatId: { type: 'string', description: 'Member chat UUID; required when this thread has several chats' }, text: { type: 'string', required: true, description: `The message, exactly as it should arrive (at most ${TEXT_MAX} characters)` } },
-  }, async ({ text }, open) => {
+  }, async ({ text }, open, exec) => {
     const reply = await ask(open, 'POST', '/messages/send', { instanceId: open.chat.channelId, to: open.chat.chatJid, text })
     if (reply.status < 200 || reply.status >= 300) return `Not sent. ${omniSaid(reply)}`
+    await countDraft(exec, open, text)
     return `Sent into the chat.${reply.json?.data?.messageId ? ` Message id ${reply.json.data.messageId}.` : ''}`
   })
 
@@ -511,9 +573,18 @@ export function install(rt) {
     const allowed = permissionsOf(open.thread, state.omniSettings)
     const where = JSON.stringify(open.chat.chatName)
     if (exec.name === 'thread_say') {
-      if (!laterAsks && !asksFirst && allowed.sends === 'allow') return decision
       const { text } = open.args
-      return { kind: 'ask', reason: `Send into ${where} as you?\n\n${text.slice(0, CARD_TEXT_MAX)}${text.length > CARD_TEXT_MAX ? '…' : ''}` }
+      const card = { kind: 'ask', reason: `Send into ${where} as you?\n\n${text.slice(0, CARD_TEXT_MAX)}${text.length > CARD_TEXT_MAX ? '…' : ''}` }
+      // An answer child's own-chat send follows its sending mode alone (RFC-0001): the answer
+      // run's ask-first flag never holds back sending, and no allow default skips training.
+      // A later gate's ask or deny still stands.
+      if (isAnswerChild(open.thread)) {
+        if (!rt.answerNeedsApproval(open.thread.id)) return laterAsks ? card : decision
+        noteDraft(exec, open)
+        return card
+      }
+      if (!laterAsks && !asksFirst && allowed.sends === 'allow') return decision
+      return card
     }
     const { emoji, messageId } = open.args
     const free = isFreeReaction(emoji, freeReactions()) || allowed.reactions === 'any'
@@ -601,7 +672,12 @@ export function install(rt) {
     }
   }), 'omni-channels: thread Sessions')
   ctx.on('agent/created', async ({ agent } = {}) => {
-    await rt.load()
+    try {
+      await rt.load()
+    } catch (error) {
+      rt.warn('omni-channels: a thread\'s Session was not set up: %s', error?.message ?? error)
+      return
+    }
     await hold(agent)
   })
   ctx.effect(() => {

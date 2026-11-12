@@ -90,6 +90,8 @@ export function threadState(thread, { running = false, asking = false } = {}) {
  * the mark's title, or null while it asks for both as it does by default.
  */
 export function freeMarkOf(thread) {
+  // An answer child shows its sending mode by name instead (answerModeOf).
+  if (thread?.answerChild === true) return null
   const sends = thread?.permissions?.sends === 'allow'
   const any = thread?.permissions?.reactions === 'any'
   if (sends && any) return t('Sends messages and any reaction without asking you')
@@ -99,11 +101,33 @@ export function freeMarkOf(thread) {
 }
 
 /**
+ * An answer child's sending mode as the sidebar names it (host threads.js sendingModeOf), with
+ * its graduation progress while it trains and staff turned graduation on; null for any other
+ * thread.
+ */
+export function answerModeOf(thread) {
+  if (thread?.answerChild !== true) return null
+  const mode = thread.sendingMode === 'sending' ? 'sending' : 'training'
+  const after = Number.isInteger(thread.graduateAfter) && thread.graduateAfter > 0 ? thread.graduateAfter : null
+  const streak = Math.max(0, Math.min(Number(thread.approvedStreak) || 0, after ?? Infinity))
+  return {
+    mode,
+    label: mode === 'sending' ? 'Sending' : 'Training',
+    title: mode === 'sending' ? 'Sends in its chat without asking you' : 'Asks you before each send',
+    progress: mode === 'training' && after !== null ? `${streak} of ${after} approved drafts in a row. At ${after} it switches to sending.` : null,
+  }
+}
+
+/**
  * The thread's menu: for its messages and its reactions, follow the default (null) or its own
  * choice, the one in force checked. Each item is what `omni-thread-permissions` is sent.
  */
 export function permissionMenuOf(thread) {
-  if (thread?.answerChild === true) return []
+  if (thread?.answerChild === true) {
+    const mode = answerModeOf(thread).mode
+    const item = (value, label) => ({ field: 'sendingMode', value, label, checked: mode === value })
+    return [{ field: 'sendingMode', label: 'Sending', items: [item('training', 'Training: ask before each send'), item('sending', 'Sending: send without asking')] }]
+  }
   const own = thread?.ownPermissions ?? {}
   const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value })
   const sends = { ask: t('Ask me each time'), allow: t('Send without asking') }
@@ -174,10 +198,12 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     return () => { if (rowOpeners.get(thread.id) === opener) rowOpeners.delete(thread.id) }
   })
   const free = freeMarkOf(thread)
+  const answer = answerModeOf(thread)
   const state = threadState(thread, { running, asking })
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: 'needs_newer_team' }) : null
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', answer ? `${answer.label}: ${answer.title}` : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const menuLabel = answer ? `Sending mode in ${name}` : t('Asking first in {name}', { name })
   const onClick = () => {
     if (opens) {
       openThread(thread, actions, setProblem)
@@ -199,11 +225,15 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       setProblem(t('Could not remove this chat. Try again.'))
     })
   }
-  // The owner's choice for this thread; the row shows it on the team's next roster pull.
+  // The owner's choice for this thread; the row shows it on the team's next roster pull. An
+  // answer child's sending mode is a staff action of its own (set_child_sending).
   const choose = (choice) => {
     setMenu(false)
     setProblem(null)
-    call('omni-thread-permissions', { threadId: thread.id, [choice.field]: choice.value }).catch(error => {
+    const [endpoint, body] = choice.field === 'sendingMode'
+      ? ['set_child_sending', { threadId: thread.id, mode: choice.value }]
+      : ['omni-thread-permissions', { threadId: thread.id, [choice.field]: choice.value }]
+    call(endpoint, body).catch(error => {
       console.warn('Could not change the chat settings:', error)
       setProblem(t('Could not change this chat\'s settings. Try again.'))
     })
@@ -213,19 +243,20 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     event.stopPropagation()
     setMenu(false)
   }
-  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined },
+  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined, 'data-answer': answer ? true : undefined },
     h('button', {
       type: 'button', className: 'bt-thread', 'data-state': state, 'data-thread-id': thread.id, 'aria-label': label, title: reason ?? name,
       'aria-current': active ? 'page' : undefined, tabIndex: shown ? undefined : -1, onClick,
     },
     h('span', { className: state === 'waiting' ? 'bt-thread-wait' : state === 'working' ? 'bt-thread-spin' : 'ot-thread-idle', 'aria-hidden': true }),
     h('span', { className: 'bt-thread-title' }, name),
+    answer ? h('span', { className: 'ot-mode', 'data-mode': answer.mode, title: answer.title, 'aria-hidden': true }, answer.label) : null,
     reason ? h('span', { className: 'ot-thread-reason' }, reason) : null,
     free ? h('span', { className: 'ot-thread-free', title: free, 'aria-hidden': true }, h(SparkIcon)) : null,
     dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
     h('span', { className: 'ot-thread-acts', 'data-on': confirming || menu || undefined },
       confirming ? null : h('button', {
-        type: 'button', className: 'ot-thread-more', 'aria-label': t('Asking first in {name}', { name }), title: t('Asking first'),
+        type: 'button', className: 'ot-thread-more', 'aria-label': menuLabel, title: answer ? 'Sending mode' : t('Asking first'),
         'aria-haspopup': 'menu', 'aria-expanded': menu, tabIndex: shown ? undefined : -1, onClick: () => setMenu(open => !open),
       }, h(DotsIcon)),
       h('button', {
@@ -233,13 +264,14 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name }) : t('Remove {name}', { name }),
         title: confirming ? t('Click again to remove') : t('Remove'), tabIndex: shown ? undefined : -1, onClick: remove, onBlur: () => setConfirming(false),
       }, confirming ? t('Remove') : h(CloseIcon))),
-    menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': t('Asking first in {name}', { name }), onKeyDown: onMenuKey },
+    menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': menuLabel, onKeyDown: onMenuKey },
       permissionMenuOf(thread).map(group => h('div', { key: group.field, className: 'ot-thread-menu-group', role: 'group', 'aria-label': group.label },
         h('span', { className: 'ot-thread-menu-head' }, group.label),
         group.items.map(choice => h('button', {
           key: String(choice.value), type: 'button', role: 'menuitemradio', className: 'ot-thread-menu-item', 'aria-checked': choice.checked,
           'data-field': choice.field, 'data-value': choice.value ?? 'default', onClick: () => choose(choice),
-        }, choice.label))))) : null,
+        }, choice.label)))),
+      answer?.progress ? h('span', { className: 'ot-thread-menu-note' }, answer.progress) : null) : null,
     (thread.automations?.length ?? 0) > 0 ? h('ul', { className: 'ot-thread-automations', 'aria-label': 'Automations' },
       thread.automations.map(automation => h('li', { key: automation.id }, automation.name))) : null,
     deleting ? h('div', { className: 'ot-thread-menu', role: 'group', 'aria-label': 'What should happen to these automations?' },
@@ -442,6 +474,34 @@ export function ChannelBotForm({ channels, roster, onClose }) {
     h('button', { type: 'button', disabled: busy, onClick: onClose }, 'Close'))
 }
 
+// Short choice names, so a narrow sidebar never cuts a select; the note under it says what the choice does.
+const VISIBILITY = {
+  isolated: ['Isolated', 'Each child sees only its own chat.'],
+  collective: ['Collective', 'Each child also reads this bot’s other chats and the shared notes.'],
+}
+const NEW_CHILD_MODES = {
+  training: ['Training', 'A new child asks you before each send.'],
+  sending: ['Sending', 'A new child sends without asking.'],
+}
+// The read-only tools staff may add, in plain words. The tool's own name is the row's tooltip.
+const ANSWER_TOOLS = [['read', 'Read files'], ['read_image', 'Read images'], ['glob', 'Find files by name'], ['grep', 'Search inside files']]
+
+// The Bot team's switch (bt-switch) in a row that is not a label, as the team draws its own: a
+// click on the words must not flip it twice. The switch is named by the words.
+function SwitchRow({ label, title, on, onChange }) {
+  return h('div', { className: 'ot-answer-switch', title },
+    h('span', null, label),
+    h('button', { type: 'button', role: 'switch', className: 'bt-switch', 'aria-checked': on, 'aria-label': label, onClick: () => onChange(!on) },
+      h('span', { className: 'bt-switch-knob', 'aria-hidden': true })))
+}
+
+// A team field: its label holds the control; the note under it stays out of the control's name.
+function Field({ label, note, children }) {
+  return h('div', { className: 'bt-field ot-answer-field' },
+    h('label', { className: 'ot-answer-label' }, h('span', { className: 'bt-field-label' }, label), children),
+    note ? h('span', { className: 'bt-note' }, note) : null)
+}
+
 // Owner-only endpoint; no model tool can enable answer mode or widen its tools.
 export function AnswerSettings({ bot, value = {} }) {
   const [open, setOpen] = useState(false)
@@ -449,27 +509,50 @@ export function AnswerSettings({ bot, value = {} }) {
   const [visibility, setVisibility] = useState(value.visibility ?? 'isolated')
   const [allowedTools, setAllowedTools] = useState(value.allowedTools ?? [])
   const [sharedNotes, setSharedNotes] = useState(value.sharedNotes ?? '')
+  const [newChildMode, setNewChildMode] = useState(value.newChildMode ?? 'training')
+  const [graduates, setGraduates] = useState(Number.isInteger(value.graduateAfter))
+  const [graduateAfter, setGraduateAfter] = useState(String(value.graduateAfter ?? 5))
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
     setEnabled(value.enabled === true); setVisibility(value.visibility ?? 'isolated')
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes])
+    setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter])
+  // Graduation is off unless staff turn it on with a whole number of drafts (host GRADUATE_MAX).
+  const count = Number(graduateAfter)
+  const countOk = Number.isInteger(count) && count >= 1 && count <= 100
   const save = async () => {
     setBusy(true); setProblem(null)
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes }); setOpen(false) }
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
+  const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
   return h('div', null,
-    h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setOpen(before => !before) }, 'Answer mode'),
-    open ? h('div', { className: 'ot-picker', role: 'group', 'aria-label': 'Answer mode settings' },
-      h('label', null, h('input', { type: 'checkbox', checked: enabled, onChange: event => setEnabled(event.target.checked) }), 'Answer new messages'),
-      h('label', null, 'Visibility', h('select', { value: visibility, onChange: event => setVisibility(event.target.value) }, h('option', { value: 'isolated' }, 'Isolated: own chat only'), h('option', { value: 'collective' }, 'Collective: read this bot’s chats and shared notes'))),
-      h('p', null, 'Children always ask before sending and reply only in their own chat.'),
-      ['read', 'read_image', 'glob', 'grep'].map(name => h('label', { key: name }, h('input', { type: 'checkbox', checked: allowedTools.includes(name), onChange: event => setAllowedTools(before => event.target.checked ? [...before, name] : before.filter(item => item !== name)) }), `Allow ${name}`)),
-      h('label', null, 'Shared notes for collective children', h('textarea', { maxLength: 8000, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
-      problem ? h('p', { role: 'alert' }, hostText(problem)) : null,
-      h('button', { type: 'button', disabled: busy, onClick: save }, 'Save answer settings')) : null)
+    h('button', { type: 'button', className: 'ot-channel-row', 'aria-expanded': open, onClick: () => setOpen(before => !before) }, 'Answer mode'),
+    open ? h('div', { className: 'ot-picker ot-answer', role: 'group', 'aria-label': 'Answer mode settings' },
+      h(SwitchRow, { label: 'Answer new messages', on: enabled, onChange: setEnabled }),
+      h('p', { className: 'bt-note' }, 'Each child replies only in its own chat. Switch a child between training and sending from its menu in the list below.'),
+      h(Field, { label: 'Visibility', note: VISIBILITY[visibility]?.[1] },
+        h('select', { className: 'bt-select', value: visibility, onChange: event => setVisibility(event.target.value) },
+          Object.entries(VISIBILITY).map(([value, [label]]) => h('option', { key: value, value }, label)))),
+      h(Field, { label: 'New children start in', note: NEW_CHILD_MODES[newChildMode]?.[1] },
+        h('select', { className: 'bt-select', value: newChildMode, onChange: event => setNewChildMode(event.target.value) },
+          Object.entries(NEW_CHILD_MODES).map(([value, [label]]) => h('option', { key: value, value }, label)))),
+      h(SwitchRow, { label: 'Switch a training child to sending by itself', on: graduates, onChange: setGraduates }),
+      graduates ? h(Field, { label: 'Approved drafts in a row', note: 'Only drafts sent unchanged count. An edit or a rejection starts the count again.' },
+        h('input', {
+          className: 'bt-input ot-answer-count', type: 'number', min: 1, max: 100, step: 1, inputMode: 'numeric', value: graduateAfter,
+          'aria-invalid': !countOk || undefined, onChange: event => setGraduateAfter(event.target.value),
+        })) : null,
+      h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
+        h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
+        ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
+      h(Field, { label: 'Shared notes for collective children' },
+        h('textarea', { className: 'bt-input bt-input-area', maxLength: 8000, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
+      problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
+      h('div', { className: 'bt-actions' },
+        h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || (graduates && !countOk), onClick: save }, 'Save answer settings'))) : null)
 }
 
 export function OmniTree(props) {
@@ -550,8 +633,22 @@ export function ThreadDock({ sessionId, useRoster }) {
   return null
 }
 
+// An answer child's row on two lines: its name keeps the whole first line, and its mode, any
+// reason and the row's buttons share the second, where a spacer keeps the words clear of the
+// buttons while they show. Used in a narrow tree, and at any width while a reason shows.
+const stackedRow = row => `
+${row}{display:grid;grid-template-columns:minmax(0,1fr) auto}
+${row}>*{grid-column:1/-1}
+${row} .bt-thread{grid-row:1;flex-wrap:wrap;row-gap:1px}
+${row} .ot-thread-acts{grid-column:2;grid-row:1;align-self:end;z-index:1;margin-bottom:4px}
+${row} .bt-thread-title{flex-basis:calc(100% - 20px)}
+${row} .ot-mode{margin:2px 0 2px 20px}
+${row} .ot-thread-reason{flex:1 1 0;max-width:none}
+${row} .bt-thread::after{content:'';flex:none;width:0}
+${row}:is(:hover,:focus-within) .bt-thread::after,${row}:has(.ot-thread-acts[data-on]) .bt-thread::after{width:48px}`
+
 export const OMNI_TREE_CSS = `
-.ot-tree{display:grid;gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
+.ot-tree{container:ot-tree/inline-size;display:grid;grid-template-columns:minmax(0,1fr);gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
 .ot-channel-head{display:flex;align-items:center;gap:2px}
 .ot-channel-row{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:5px 8px 5px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
 .ot-channel-row:hover{background:var(--bt-hover)}
@@ -599,9 +696,30 @@ export const OMNI_TREE_CSS = `
 .ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
+/* An answer child's sending mode, always shown by name: amber while it trains, green once it sends. The title gives way first. */
+.ot-mode{flex:none;padding:0 6px;border-radius:999px;font-size:10.5px;line-height:16px;font-weight:600;white-space:nowrap}
+.ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
+.ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
+.ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
+${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
+@container ot-tree (max-width:259px){${stackedRow('.ot-thread[data-answer]')}}
+/* Answer settings: the Bot team's own switches, fields, selects, inputs and button (bt-*). */
+.ot-answer{gap:12px;padding:10px}
+.ot-answer-switch{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-width:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
+.ot-answer-switch>span{min-width:0;overflow-wrap:anywhere}
+.ot-answer-label{display:grid;gap:6px;min-width:0}
+.ot-answer .bt-field{gap:6px;min-width:0}
+.ot-answer .bt-note{margin:0}
+.ot-answer-tools{display:grid;gap:8px}
+.ot-answer .ot-answer-count{width:88px}
+.ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
+.ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
-.ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+.ot-picker{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+/* A narrow sidebar: the settings' controls and words wrap inside the panel, never widen the tree. */
+.ot-picker label,.ot-picker p{min-width:0;overflow-wrap:anywhere}
+.ot-picker select,.ot-picker textarea{box-sizing:border-box;max-width:100%;min-width:0}
 .ot-picker-head{display:flex;align-items:center;gap:4px}
 .ot-picker-search{flex:1;min-width:0;height:26px;padding:0 8px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px}
 .ot-picker-search:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-1px}

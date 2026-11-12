@@ -258,6 +258,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'on approval/request (prepend)',
     'effect omni-channels: thread instructions',
     'prompt omni-thread 650',
+    'effect omni-channels: set_child_sending',
     'effect omni-channels: answer settings',
     'effect omni-channels: answer settings view',
     'effect omni-channels: threads view',

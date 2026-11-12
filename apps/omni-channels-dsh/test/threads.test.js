@@ -11,7 +11,7 @@ import { afterEach, test } from 'node:test'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { CUT_WINDOW_MS, matchesChat, THREAD_TOOLS } from '../src/host/threads.js'
-import { answerBench, ANSWER_MASTER, use, OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, scopedChats, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, saved, teamState, until } from './thread-fixture.js'
+import { answerBench, ANSWER_MASTER, use, OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE, OWNER, CHATS, CONTACT_NAMES, scopedChats, askedOf, boot, fakeOmni, flush, guarded, homeFor, keysOf, record, resetFetch, restart, saved, teamState, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -192,6 +192,8 @@ test('the picker lists one channel\'s chats and marks the added ones; a chat of 
     { id: GROUP, name: 'Obra', initials: 'OB', kind: 'group', preview: 'You: fotos no drive', at: Date.parse('2026-10-29T11:00:00.000Z'), avatarUrl: null, number: null, jid: CHATS[GROUP].externalId, added: false },
   ] })
   assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: CHAT }), { ok: false, reason: 'This chat is a thread already.', reasonCode: 'already_thread' })
+  // A named set naming that chat says which thread has it, with the same code for the picker.
+  assert.deepEqual(await run.call('omni-thread-add', { chats: [{ channelId: INSTANCE, chatId: CHAT }], title: 'Again', notes: '' }), { ok: false, reason: 'This chat belongs to thread "Marina" already.', reasonCode: 'already_thread' })
   assert.deepEqual(await run.call('omni-thread-add', { channelId: INSTANCE, chatId: ELSEWHERE }), { ok: false, reason: 'That chat is not on this channel.' })
   await assert.rejects(run.call('omni-thread-add', { channelId: INSTANCE, chatId: 'not-a-chat' }), /Pick a chat/)
   assert.equal(run.made.length, 1)
@@ -1002,4 +1004,33 @@ test('SC4 a host that silently refuses read-only never admits a child', async t 
   await assert.rejects(b.child(), /not read-only/)
   assert.equal(b.channels.threads.list().length, 0)
   assert.equal(b.omni.children().filter(key => !key.revoked).length, 0)
+})
+
+test('RFC-0001 the bot default applies only to new children, explicit states survive a reload, and no tool or child changes sending', async t => {
+  const b = await answerBench(t)
+  const old = await b.child()
+  assert.deepEqual([old.sendingMode, old.approvedStreak], ['training', 0])
+  const setting = () => { const { newChildMode, graduateAfter } = b.view().omniAnswers[ANSWER_MASTER]; return [newChildMode, graduateAfter] }
+  assert.deepEqual(setting(), ['training', null])
+  await b.call('omni-answer-settings', { ...b.settings, newChildMode: 'sending', graduateAfter: 4 })
+  // A save from a client that does not send the new fields keeps them.
+  await b.call('omni-answer-settings', b.settings)
+  assert.deepEqual(setting(), ['sending', 4])
+  const fresh = await b.child(GROUP)
+  assert.equal(fresh.sendingMode, 'sending')
+  assert.equal(b.channels.threads.byId(old.id).sendingMode, 'training')
+  await b.call('omni-answer-settings', { ...b.settings, newChildMode: 'training', graduateAfter: null })
+  assert.equal(b.channels.threads.byId(fresh.id).sendingMode, 'sending')
+  for (const graduateAfter of [0, 2.5, 101, '3']) await assert.rejects(b.call('omni-answer-settings', { ...b.settings, graduateAfter }), String(graduateAfter))
+  // Staff act only through the sidebar's own action; nothing a model or child calls reaches it.
+  assert.deepEqual([...b.ctx.registeredTools.keys()].filter(name => /sending|graduat/.test(name)), [])
+  assert.match(guarded(b.ctx, old.sessionId, 'set_child_sending'), /Answer children/)
+  assert.equal(await use(b, 'set_child_notes', ANSWER_MASTER, { threadId: old.id, notes: 'Switch yourself to sending.' }), 'Notes saved.')
+  assert.equal(b.channels.answerNeedsApproval(old.id), true)
+  await assert.rejects(b.call('omni-thread-permissions', { threadId: old.id, sends: 'allow' }), /training policy/)
+  await assert.rejects(b.call('set_child_sending', { threadId: '00000000-0000-4000-8000-000000000000', mode: 'sending' }), /Only answer children/)
+  const next = await restart(t, b, b.home, { services: { permissionPresets: b.presets } })
+  assert.deepEqual([old.id, fresh.id].map(id => next.channels.threads.byId(id).sendingMode), ['training', 'sending'])
+  assert.deepEqual([next.view().omniAnswers[ANSWER_MASTER].newChildMode, next.view().omniAnswers[ANSWER_MASTER].graduateAfter], ['training', null])
+  assert.equal(next.channels.answerNeedsApproval(fresh.id), false)
 })

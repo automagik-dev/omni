@@ -36,7 +36,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
@@ -1023,10 +1023,94 @@ test('answer settings start isolated and save one owner setting with read-only a
   const select = nodes(view.draw()).find(node => node.type === 'select')
   assert.equal(select.props.value, 'isolated')
   select.props.onChange({ target: { value: 'collective' } })
-  nodes(view.draw()).find(node => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } })
+  const enabled = () => byLabel(view.draw(), 'Answer new messages')
+  assert.deepEqual([enabled().type, enabled().props.role, enabled().props['aria-checked']], ['button', 'switch', false])
+  enabled().props.onClick()
   await settle()
+  assert.equal(enabled().props['aria-checked'], true)
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
   await settle()
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '' }])
-  assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })), [])
+  // New children train and graduation stays off unless staff change them (RFC-0001).
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null }])
+  assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
+})
+
+test('an answer child\'s row names its sending mode at a glance, and its menu switches it through the staff action', async () => {
+  calls.length = 0
+  answer = () => ({})
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const child = extra => THREAD(1, CHANNEL_A, { answerChild: true, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'allow', reactions: 'any' }, ...extra })
+  const training = mount(() => react.createElement(ui.ThreadRow, { thread: child({ sendingMode: 'training', approvedStreak: 2, graduateAfter: 5 }), actions: {}, rowProps }))
+  let root = training.draw()
+  assert.equal(text(one(root, 'ot-mode')), 'Training')
+  assert.equal(one(root, 'ot-mode').props['data-mode'], 'training')
+  assert.match(one(root, 'bt-thread').props['aria-label'], /^Chat 1, Training: Asks you before each send$/)
+  // Marked for the narrow layout, where the mode drops under the name.
+  assert.equal(one(root, 'ot-thread').props['data-answer'], true)
+  assert.equal(one(root, 'ot-thread-free'), undefined)
+  const more = () => one(training.draw(), 'ot-thread-more')
+  assert.equal(more().props['aria-label'], 'Sending mode in Chat 1')
+  more().props.onClick()
+  root = training.draw()
+  const items = all(one(root, 'ot-thread-menu'), 'ot-thread-menu-item')
+  assert.deepEqual(items.map(item => [item.props['data-value'], item.props['aria-checked'], text(item)]), [['training', true, 'Training: ask before each send'], ['sending', false, 'Sending: send without asking']])
+  assert.equal(text(one(root, 'ot-thread-menu-note')), '2 of 5 approved drafts in a row. At 5 it switches to sending.')
+  items[1].props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['set_child_sending', { threadId: 't1', mode: 'sending' }]])
+  training.unmount()
+  // Sending: named so, and no progress line; with graduation off a training child shows none either.
+  const sending = mount(() => react.createElement(ui.ThreadRow, { thread: child({ sendingMode: 'sending', approvedStreak: 5, graduateAfter: 5, permissions: { sends: 'allow', reactions: 'list' } }), actions: {}, rowProps }))
+  assert.equal(text(one(sending.draw(), 'ot-mode')), 'Sending')
+  assert.equal(ui.freeMarkOf(child({ sendingMode: 'sending', permissions: { sends: 'allow' } })), null)
+  one(sending.draw(), 'ot-thread-more').props.onClick()
+  assert.equal(one(sending.draw(), 'ot-thread-menu-note'), undefined)
+  sending.unmount()
+  assert.equal(ui.answerModeOf(child({ sendingMode: 'training', graduateAfter: null })).progress, null)
+  assert.equal(ui.answerModeOf(THREAD(2)), null)
+  // An ordinary thread keeps its own row: no mode, its own menu.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(2)).map(group => group.field)), ['sends', 'reactions'])
+})
+
+test('answer settings choose the new-child default and optional graduation, off until staff turn it on', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = label => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith(label))
+  const note = label => text(one(nodes(view.draw()).find(node => classOf(node).includes('bt-field') && text(node).startsWith(label)), 'bt-note'))
+  assert.equal(field('Approved drafts in a row'), undefined, 'no count while graduation is off')
+  // Short choice names on the team's select, so a narrow sidebar never cuts them; the note says what each does.
+  const mode = nodes(field('New children start in')).find(node => node.type === 'select')
+  assert.deepEqual([classOf(mode), mode.props.value, ...nodes(mode).filter(node => node.type === 'option').map(text)], [['bt-select'], 'training', 'Training', 'Sending'])
+  assert.equal(note('New children start in'), 'A new child asks you before each send.')
+  assert.equal(note('Visibility'), 'Each child sees only its own chat.')
+  mode.props.onChange({ target: { value: 'sending' } })
+  await settle()
+  assert.equal(note('New children start in'), 'A new child sends without asking.')
+  const graduation = () => byLabel(view.draw(), 'Switch a training child to sending by itself')
+  assert.deepEqual([graduation().props.role, graduation().props['aria-checked'], classOf(graduation())], ['switch', false, ['bt-switch']])
+  graduation().props.onClick()
+  await settle()
+  const count = () => nodes(field('Approved drafts in a row')).find(node => node.type === 'input')
+  assert.deepEqual([count().props.value, count().props.min, count().props.max, classOf(count())], ['5', 1, 100, ['bt-input', 'ot-answer-count']])
+  const save = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings')
+  count().props.onChange({ target: { value: '0' } })
+  await settle()
+  assert.equal(save().props.disabled, true)
+  assert.equal(count().props['aria-invalid'], true)
+  count().props.onChange({ target: { value: '4' } })
+  await settle()
+  // The read-only tools are named in plain words on the team's switches; the tool's name is only the tooltip.
+  const tools = all(byLabel(view.draw(), 'Children may also'), 'ot-answer-switch')
+  assert.deepEqual(tools.map(row => [text(row), row.props.title]), [['Read files', 'read'], ['Read images', 'read_image'], ['Find files by name', 'glob'], ['Search inside files', 'grep']])
+  byLabel(view.draw(), 'Search inside files').props.onClick()
+  await settle()
+  assert.deepEqual([classOf(save()), classOf(nodes(field('Shared notes')).find(node => node.type === 'textarea'))], [['bt-soft', 'bt-soft-sm'], ['bt-input', 'bt-input-area']])
+  save().props.onClick()
+  await settle()
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4 }])
 })

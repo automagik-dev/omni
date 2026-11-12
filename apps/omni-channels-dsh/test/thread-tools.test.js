@@ -1119,3 +1119,17 @@ test('SC5 isolated and collective visibility never widen send keys and narrow li
   assert.match(await use(b, 'thread_history', id, { chatId: GROUP }), /cannot read/)
   assert.match((await use(b, 'thread_picture', id, { messageId: MESSAGE_IDS.elsewhere })).text, /cannot read/)
 })
+
+test('a thread Session\'s agent/created listener warns and sets nothing up when the state cannot load', async (t) => {
+  const presets = presetsFake()
+  const { run, thread } = await bench(t, { presets })
+  const setUp = run.ctx.listeners.get('agent/created').find(listener => String(listener).includes('hold(agent)'))
+  const warned = []
+  run.channels.warn = (...args) => { warned.push(args) }
+  run.channels.load = () => Promise.reject(new Error('state unreadable'))
+  t.after(() => { delete run.channels.warn; delete run.channels.load })
+  const agent = run.freshAgent(thread.sessionId)
+  await setUp({ agent })
+  assert.deepEqual(warned, [['omni-channels: a thread\'s Session was not set up: %s', 'state unreadable']])
+  assert.equal(run.executors.some(entry => entry.agent === agent), false)
+})
