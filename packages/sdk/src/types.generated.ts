@@ -7945,6 +7945,10 @@ export interface components {
             action: "block" | "allow" | "silent_block";
             /** @description Custom block message */
             blockMessage: string | null;
+            /** @description Free JSON object kept on the rule */
+            metadata: {
+                [key: string]: unknown;
+            } | null;
             /**
              * Format: date-time
              * @description Creation timestamp
@@ -8001,6 +8005,10 @@ export interface components {
             action: "block" | "allow" | "silent_block";
             /** @description Custom block message */
             blockMessage?: string;
+            /** @description Free JSON object kept on the rule, at most 16 KB; on update it replaces the whole object */
+            metadata?: {
+                [key: string]: unknown;
+            };
         };
         CheckAccessRequest: {
             /**
@@ -8060,6 +8068,10 @@ export interface components {
                 action: "block" | "allow" | "silent_block";
                 /** @description Custom block message */
                 blockMessage: string | null;
+                /** @description Free JSON object kept on the rule */
+                metadata: {
+                    [key: string]: unknown;
+                } | null;
                 /**
                  * Format: date-time
                  * @description Creation timestamp
@@ -18775,6 +18787,10 @@ export interface operations {
                             action: "block" | "allow" | "silent_block";
                             /** @description Custom block message */
                             blockMessage: string | null;
+                            /** @description Free JSON object kept on the rule */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -18845,6 +18861,10 @@ export interface operations {
                     action?: "block" | "allow" | "silent_block";
                     /** @description Custom block message */
                     blockMessage?: string;
+                    /** @description Free JSON object kept on the rule, at most 16 KB; on update it replaces the whole object */
+                    metadata?: {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -18899,6 +18919,10 @@ export interface operations {
                             action: "block" | "allow" | "silent_block";
                             /** @description Custom block message */
                             blockMessage: string | null;
+                            /** @description Free JSON object kept on the rule */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -18997,6 +19021,10 @@ export interface operations {
                             action: "block" | "allow" | "silent_block";
                             /** @description Custom block message */
                             blockMessage: string | null;
+                            /** @description Free JSON object kept on the rule */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -19138,6 +19166,10 @@ export interface operations {
                     action?: "block" | "allow" | "silent_block";
                     /** @description Custom block message */
                     blockMessage?: string;
+                    /** @description Free JSON object kept on the rule, at most 16 KB; on update it replaces the whole object */
+                    metadata?: {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -19192,6 +19224,10 @@ export interface operations {
                             action: "block" | "allow" | "silent_block";
                             /** @description Custom block message */
                             blockMessage: string | null;
+                            /** @description Free JSON object kept on the rule */
+                            metadata: {
+                                [key: string]: unknown;
+                            } | null;
                             /**
                              * Format: date-time
                              * @description Creation timestamp
@@ -19306,6 +19342,10 @@ export interface operations {
                                 action: "block" | "allow" | "silent_block";
                                 /** @description Custom block message */
                                 blockMessage: string | null;
+                                /** @description Free JSON object kept on the rule */
+                                metadata: {
+                                    [key: string]: unknown;
+                                } | null;
                                 /**
                                  * Format: date-time
                                  * @description Creation timestamp

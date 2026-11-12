@@ -20,6 +20,7 @@ export const AccessRuleSchema = z.object({
   expiresAt: z.string().datetime().nullable().openapi({ description: 'Expiration' }),
   action: z.enum(['block', 'allow', 'silent_block']).openapi({ description: 'Action' }),
   blockMessage: z.string().nullable().openapi({ description: 'Custom block message' }),
+  metadata: z.record(z.string(), z.unknown()).nullable().openapi({ description: 'Free JSON object kept on the rule' }),
   createdAt: z.string().datetime().openapi({ description: 'Creation timestamp' }),
   updatedAt: z.string().datetime().openapi({ description: 'Last update timestamp' }),
 });
@@ -37,6 +38,9 @@ export const CreateAccessRuleSchema = z.object({
   expiresAt: z.string().datetime().optional().openapi({ description: 'Expiration' }),
   action: z.enum(['block', 'allow', 'silent_block']).default('block').openapi({ description: 'Action' }),
   blockMessage: z.string().optional().openapi({ description: 'Custom block message' }),
+  metadata: z.record(z.string(), z.unknown()).optional().openapi({
+    description: 'Free JSON object kept on the rule, at most 16 KB; on update it replaces the whole object',
+  }),
 });
 
 // Check access request
