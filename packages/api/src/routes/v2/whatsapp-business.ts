@@ -427,7 +427,7 @@ whatsappBusinessRoutes.post(
 // POST /:id/whatsapp-business/kapso/connect
 // ---------------------------------------------------------------------------
 
-export const KapsoConnectBodySchema = z.object({
+const KapsoConnectBodySchema = z.object({
   phoneNumberId: z
     .string()
     .trim()

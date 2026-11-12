@@ -76,7 +76,7 @@ const WebhookListReply = z.object({ data: z.array(WebhookShape) });
 const ErrorReply = z.object({ error: z.string().min(1) });
 
 /** Kapso's origin without a trailing slash or a `/platform/v1` / `/meta/...` suffix. */
-export function kapsoOrigin(baseUrl: string = DEFAULT_KAPSO_API_BASE_URL): string {
+function kapsoOrigin(baseUrl: string = DEFAULT_KAPSO_API_BASE_URL): string {
   return new URL(baseUrl).origin;
 }
 
@@ -186,7 +186,7 @@ export async function upsertKapsoMetaWebhook(
 ): Promise<{ id: string; created: boolean }> {
   const base = `/whatsapp/phone_numbers/${encodeURIComponent(phoneNumberId)}/webhooks`;
   const listed = await kapsoRequest(options, 'list the number webhooks', 'GET', `${base}?kind=meta`, WebhookListReply);
-  const existing = listed.data.find((hook) => hook.kind === 'meta' || hook.kind == null);
+  const existing = listed.data.find((hook) => hook.kind === 'meta');
   const settings = { url: input.url, secret_key: input.secret, active: true };
   if (existing) {
     const reply = await kapsoRequest(

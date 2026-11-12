@@ -66,8 +66,12 @@ test('a saved key skips the key step; the setup link opens in a new tab and stay
   const again = nodes(tree).find(node => node.type === 'a' && text(node) === 'Open the setup link again')
   assert.equal(again.props.href, 'https://app.kapso.ai/whatsapp/setup/abc')
   tree = await press(view, button(tree, 'Refresh'))
-  assert.equal(named('omni-kapso-setup-link').length, 1)
   assert.equal(named('omni-kapso-numbers').length, 2)
+  // Meta's details and back: the same link, never a second one.
+  tree = await press(view, radio(tree, 'With Meta'))
+  tree = await press(view, radio(tree, 'Through Kapso'))
+  assert.ok(nodes(tree).find(node => node.type === 'a' && text(node) === 'Open the setup link again'))
+  assert.equal(named('omni-kapso-setup-link').length, 1)
   view.unmount()
 })
 

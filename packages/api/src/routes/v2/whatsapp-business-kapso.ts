@@ -39,7 +39,7 @@ const log = createLogger('api:whatsapp-business-kapso');
 
 export const whatsappBusinessKapsoRoutes = new Hono<{ Variables: AppVariables }>();
 
-export const KapsoKeyBodySchema = z.object({
+const KapsoKeyBodySchema = z.object({
   apiKey: z.string().trim().min(8).max(4096).regex(/^\S+$/, 'The key has no spaces'),
 });
 

@@ -389,6 +389,8 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
   const [path, setPath] = useState('kapso')
   const [channel, setChannel] = useState(null)
   const [tested, setTested] = useState(false)
+  // Kept here, so going to Meta's details and back never makes a second link (which revokes this one).
+  const [link, setLink] = useState(null)
   const kapso = path === 'kapso'
   let body
   if (channel && kapso) {
@@ -402,7 +404,7 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
           ['meta', t('With Meta\'s details'), t('Paste the access token and IDs from Meta\'s WhatsApp Manager or another provider.')]].map(([value, title, text]) => h('button', {
           key: value, type: 'button', role: 'radio', 'aria-checked': path === value, className: 'oc-seg-opt', onClick: () => setPath(value),
         }, h('strong', null, title), h('span', null, text)))),
-      kapso ? h(KapsoPath, { info, onConnected: setChannel }) : h(MetaDetails, { info, onConnected: setChannel }))
+      kapso ? h(KapsoPath, { info, link, setLink, onConnected: setChannel }) : h(MetaDetails, { info, onConnected: setChannel }))
   }
   const at = kapso ? (tested ? 2 : channel ? 1 : 0) : channel ? 1 : 0
   return h(FlowShell, { type, at, steps: kapso ? KAPSO_STEPS : undefined, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) }, body)
@@ -410,10 +412,9 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
 
 // Kapso: Omni keeps one Kapso project key and makes every Kapso call. The key is asked for only
 // while Omni has none; then a setup link (opened in a new tab), the project's numbers, Connect.
-function KapsoPath({ info, onConnected }) {
+function KapsoPath({ info, link, setLink, onConnected }) {
   const [kapso, setKapso] = useState(undefined)
   const [key, setKey] = useState('')
-  const [link, setLink] = useState(null)
   const [picked, setPicked] = useState(null)
   const [busy, setBusy] = useState(null)
   const [problem, setProblem] = useState(null)

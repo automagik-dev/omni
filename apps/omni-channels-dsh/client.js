@@ -11993,6 +11993,7 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
   const [path, setPath] = (0, import_react4.useState)("kapso");
   const [channel, setChannel] = (0, import_react4.useState)(null);
   const [tested, setTested] = (0, import_react4.useState)(false);
+  const [link, setLink] = (0, import_react4.useState)(null);
   const kapso = path === "kapso";
   let body;
   if (channel && kapso) {
@@ -12018,16 +12019,15 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
           onClick: () => setPath(value)
         }, (0, import_react4.createElement)("strong", null, title), (0, import_react4.createElement)("span", null, text)))
       ),
-      kapso ? (0, import_react4.createElement)(KapsoPath, { info, onConnected: setChannel }) : (0, import_react4.createElement)(MetaDetails, { info, onConnected: setChannel })
+      kapso ? (0, import_react4.createElement)(KapsoPath, { info, link, setLink, onConnected: setChannel }) : (0, import_react4.createElement)(MetaDetails, { info, onConnected: setChannel })
     );
   }
   const at2 = kapso ? tested ? 2 : channel ? 1 : 0 : channel ? 1 : 0;
   return (0, import_react4.createElement)(FlowShell, { type, at: at2, steps: kapso ? KAPSO_STEPS : void 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body);
 }
-function KapsoPath({ info, onConnected }) {
+function KapsoPath({ info, link, setLink, onConnected }) {
   const [kapso, setKapso] = (0, import_react4.useState)(void 0);
   const [key, setKey] = (0, import_react4.useState)("");
-  const [link, setLink] = (0, import_react4.useState)(null);
   const [picked, setPicked] = (0, import_react4.useState)(null);
   const [busy, setBusy] = (0, import_react4.useState)(null);
   const [problem, setProblem] = (0, import_react4.useState)(null);

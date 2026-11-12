@@ -44,7 +44,7 @@
   },
   "engines": {
     "dsh": ">=0.2.2-rc.1 <0.2.3-0",
-    "omni": ">=2.261112.7"
+    "omni": ">=2.261113.1"
   },
   "peerDependencies": {
     "@automagik/bots-dsh": ">=3.87.0 <3.261000.0",

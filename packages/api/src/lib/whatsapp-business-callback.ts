@@ -7,7 +7,7 @@
 
 import { BlockList, isIP } from 'node:net';
 
-export const WHATSAPP_BUSINESS_WEBHOOK_PATH = '/api/v2/channels/whatsapp-business/webhook' as const;
+const WHATSAPP_BUSINESS_WEBHOOK_PATH = '/api/v2/channels/whatsapp-business/webhook' as const;
 
 // Check parsed literal addresses without resolving DNS. BlockList also applies
 // IPv4 subnets to their IPv4-mapped IPv6 representations.
@@ -66,7 +66,7 @@ for (const [network, prefix, family] of [
   publicCallbackIpExceptions.addSubnet(network, prefix, family);
 
 /** The public HTTPS webhook URL for `publicUrl`, or null when it cannot serve as one. */
-export function whatsappBusinessCallbackUrl(publicUrl: string): string | null {
+function whatsappBusinessCallbackUrl(publicUrl: string): string | null {
   try {
     const url = new URL(publicUrl);
     const hostname = url.hostname.replace(/\.$/, '');

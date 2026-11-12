@@ -20,7 +20,7 @@ const refusal = (status: KapsoRefusal['status'], code: string, message: string):
   payload: { error: { code, message } },
 });
 
-export const KAPSO_MULTITENANCY = refusal(
+const KAPSO_MULTITENANCY = refusal(
   409,
   'KAPSO_NOT_AVAILABLE',
   'Connecting through Kapso is not available with multitenancy: its key would be shared by every tenant.',

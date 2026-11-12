@@ -260,10 +260,10 @@ test('connecting a Kapso number creates the channel, connects it, and removes it
 
   const refusedConnect = host({
     'POST /instances': created,
-    [`POST /instances/${CHANNEL}/whatsapp-business/kapso/connect`]: () => [409, { error: { code: 'PUBLIC_URL_MISSING', message: 'Omni has no public address. Nothing was created.' } }],
+    [`POST /instances/${CHANNEL}/whatsapp-business/kapso/connect`]: () => [502, { error: { code: 'KAPSO_ERROR', message: 'Kapso refused to create the number webhook: Url is not reachable.' } }],
     [`DELETE /instances/${CHANNEL}`]: () => [200, { success: true }],
   })
-  await assert.rejects(refusedConnect.run('omni-kapso-connect', { name: 'WhatsApp Business', phoneNumberId: PNID }), { message: 'Omni has no public address. Nothing was created.' })
+  await assert.rejects(refusedConnect.run('omni-kapso-connect', { name: 'WhatsApp Business', phoneNumberId: PNID }), { message: 'Kapso refused to create the number webhook: Url is not reachable.' })
   assert.equal(refusedConnect.calls.at(-1).method, 'DELETE')
 })
 
