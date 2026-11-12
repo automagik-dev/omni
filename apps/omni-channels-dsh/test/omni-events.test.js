@@ -26,11 +26,13 @@ function fixture(t, options = {}) {
     ...options.rt,
     omniRequest: async (method, path, args) => {
       calls.push([method, path, args])
+      if (path === '/access/check') return await options.access?.(args.body) ?? { ok: true, json: async () => ({ data: { allowed: true } }) }
+      if (path.startsWith('/instances/')) return await options.instance?.() ?? { ok: true, json: async () => ({ data: { channel: 'whatsapp-baileys', inboundMaxAgeMinutes: 10 } }) }
       if (path.startsWith('/messages/by-external')) return await options.message?.(path) ?? { ok: true, json: async () => ({ data: null }) }
       if (path.includes('/chats/')) {
         lookupEntered.resolve()
         if (options.lookup) return options.lookup()
-        return { ok: true, json: async () => ({ data: { name: 'chat' } }) }
+        return { ok: true, json: async () => ({ data: { name: 'chat', chatType: 'dm', externalId: '5511999999999@s.whatsapp.net', instanceId: 'instance-1' } }) }
       }
       if (path.endsWith('/ack')) {
         acks.push(args.body.cursor)
@@ -647,7 +649,7 @@ test('SC1 an ownership change while journal enrichment waits prevents the stale 
 
 
 test('answer admission keeps the message stream alive without a user automation', async t => {
-  const f = fixture(t)
+  const f = fixture(t, { rows: [personRow(1)] })
   f.rt.state.subscriptions = {}
   f.rt.syncAnswerSubscriptions = () => { f.rt.state.subscriptions.answer = { ...sub('answer child'), answerBotId: 'owner' } }
   await f.streamEntered.promise
@@ -660,7 +662,7 @@ test('answer admission keeps the message stream alive without a user automation'
 // canonical record proves too, in a chat an answer child serves; it pauses that child before the
 // row is acked, and is nobody's message to answer. An Omni API send never passes.
 const STAFF_AT = '2026-11-01T12:00:00.000Z'
-const personRow = journalSeq => ({ ...row(journalSeq), instanceId: 'instance-1' })
+const personRow = journalSeq => ({ ...row(journalSeq), instanceId: 'instance-1', chatId: '5511999999999@s.whatsapp.net', metadata: { from: '5511999999999' }, rawPayload: { upsertType: 'notify' } })
 const staffRow = (journalSeq = 1, raw = {}) => ({
   ...row(journalSeq), direction: 'outbound', instanceId: 'instance-1', externalId: `staff-${journalSeq}`, contentType: 'text',
   textContent: 'I will take it from here.', receivedAt: STAFF_AT,
@@ -676,6 +678,22 @@ const staffRecord = (event, change = {}) => ({
 // Persistence keeps that rawPayload and isFromMe, with no agent attribution.
 const echoRow = journalSeq => staffRow(journalSeq, { coexistence: 'smb_message_echoes', noAgentDispatch: true, messageTimestamp: 1794484800 })
 const answerSub = () => ({ ...sub('answer'), answerBotId: 'answer-bot', sources: [{ kind: 'channel', id: 'instance-1' }] })
+for (const [label, changes] of [
+  ['group', { chatId: '12000@g.us' }],
+  ['history', { rawPayload: { upsertType: 'append' } }],
+  ['stale', { rawPayload: { upsertType: 'notify', messageTimestamp: 1 } }],
+]) test(`answer-only ${label} filtering leaves an ordinary automation's match unchanged`, async t => {
+  const done = deferred()
+  const f = fixture(t, {
+    subscriptions: { answer: answerSub() }, rows: [{ ...personRow(1), ...changes }],
+    save: async () => done.resolve(),
+  })
+  await done.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.fired, [['first', 'event-1']])
+  assert.deepEqual(f.acks, [1])
+})
+
 function staffFixture(t, { rows, message, pause, save, threadOf, subscriptions = {} }) {
   const pauses = [], saved = deferred()
   const last = rows.at(-1).journalSeq
