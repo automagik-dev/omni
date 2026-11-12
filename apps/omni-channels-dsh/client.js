@@ -16986,8 +16986,9 @@ ${row}>*{grid-column:1/-1}
 ${row} .bt-thread{grid-row:1;flex-wrap:wrap;row-gap:1px}
 ${row} .ot-thread-acts{grid-column:2;grid-row:1;align-self:end;z-index:1;margin-bottom:4px}
 ${row} .bt-thread-title{flex-basis:calc(100% - 20px)}
-${row} .ot-mode{margin:2px 0 2px 20px}
-${row} .ot-thread-reason{flex:1 1 0;max-width:none}
+${row} .bt-thread .ot-mode{margin:2px 0 2px 20px}
+${row} .ot-thread-reason{flex:1 1 100%;max-width:none;box-sizing:border-box;padding-left:20px}
+${row}:is(:hover,:focus-within) .ot-thread-reason,${row}:has(.ot-thread-acts[data-on]) .ot-thread-reason{padding-right:48px}
 ${row} .bt-thread::after{content:'';flex:none;width:0}
 ${row}:is(:hover,:focus-within) .bt-thread::after,${row}:has(.ot-thread-acts[data-on]) .bt-thread::after{width:48px}`;
 var OMNI_TREE_CSS = `
@@ -17044,9 +17045,9 @@ var OMNI_TREE_CSS = `
 .ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
 .ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
 .ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
-/* A paused answer child: under its name, at every width, the pause, its time left and the team's Resume button. The time left is never cut: where the line is too short, Resume drops under it. */
+/* A paused answer child: under its name and aligned with it, at every width, the pause, its time left and the team's Resume button. The time left is never cut: where the line is too short, it wraps to the pill's left edge, and Resume drops under it. */
 .ot-mode[data-mode=paused]{color:color-mix(in srgb,var(--bt-accent, #22d3ee) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-accent, #22d3ee) 15%,transparent)}
-.ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 20px}
+.ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
 .ot-paused-left{flex:1 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
 .ot-paused .ot-resume{height:24px;padding:0 10px}
 .ot-answer-minutes{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--bt-ink-2)}
