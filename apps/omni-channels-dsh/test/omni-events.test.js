@@ -23,6 +23,7 @@ function fixture(t, options = {}) {
     omniConfigured: options.configured ?? (async () => true), warn: () => {},
     automationOwned: options.automationOwned,
     fireSubscription: async (subscription, event) => { fired.push([subscription.name, event.ref]); await options.fire?.(subscription, event) },
+    ...options.rt,
     omniRequest: async (method, path, args) => {
       calls.push([method, path, args])
       if (path.startsWith('/messages/by-external')) return await options.message?.(path) ?? { ok: true, json: async () => ({ data: null }) }
@@ -653,4 +654,180 @@ test('answer admission keeps the message stream alive without a user automation'
   for (let i = 0; i < 20 && f.acks.length === 0; i += 1) await turn()
   assert.deepEqual(f.fired, [['answer child', 'event-1']])
   assert.deepEqual(f.acks, [1])
+})
+
+// RFC-0001 SC7: staff take-over. A staff message is a journal row whose own-device receipt the
+// canonical record proves too, in a chat an answer child serves; it pauses that child before the
+// row is acked, and is nobody's message to answer. An Omni API send never passes.
+const STAFF_AT = '2026-11-01T12:00:00.000Z'
+const personRow = journalSeq => ({ ...row(journalSeq), instanceId: 'instance-1' })
+const staffRow = (journalSeq = 1, raw = {}) => ({
+  ...row(journalSeq), direction: 'outbound', instanceId: 'instance-1', externalId: `staff-${journalSeq}`, contentType: 'text',
+  textContent: 'I will take it from here.', receivedAt: STAFF_AT,
+  rawPayload: { upsertType: 'notify', isFromMe: true, key: { fromMe: true, id: `staff-${journalSeq}` }, ...raw },
+})
+const staffRecord = (event, change = {}) => ({
+  id: `message-${event.id}`, chatId: event.chatUuid, externalId: event.externalId, messageType: 'text', textContent: event.textContent,
+  isFromMe: true, senderAgentId: null, rawPayload: { ...event.rawPayload }, ...change,
+})
+// A business-app coexistence echo: the platform mirrors the app's own message with the same
+// own-device evidence as a phone message (isFromMe, key.fromMe, key.id, upsertType notify),
+// plus its own markers and no remoteJid.
+const echoRow = journalSeq => staffRow(journalSeq, { coexistence: true, noAgentDispatch: true, messageTimestamp: 1794484800 })
+const answerSub = () => ({ ...sub('answer'), answerBotId: 'answer-bot', sources: [{ kind: 'channel', id: 'instance-1' }] })
+function staffFixture(t, { rows, message, pause, save, threadOf, subscriptions = {} }) {
+  const pauses = [], saved = deferred()
+  const last = rows.at(-1).journalSeq
+  const f = fixture(t, {
+    subscriptions: { first: answerSub(), ...subscriptions }, rows,
+    message: message ?? (async path => {
+      const event = rows.find(item => path.endsWith(`externalId=${item.externalId}`))
+      return { ok: true, json: async () => ({ data: staffRecord(event) }) }
+    }),
+    save: async () => { await save?.(); if (f.acks.at(-1) === last) saved.resolve() },
+    rt: {
+      answerStaffThread: threadOf ?? (event => (event.chatUuid === 'chat-1' && event.instanceId === 'instance-1' ? 'child-1' : undefined)),
+      pauseAnswer: async input => { pauses.push({ ...input, acked: [...f.acks] }); await pause?.(input) },
+    },
+  })
+  return { ...f, pauses, saved: saved.promise }
+}
+
+for (const [label, make] of [['phone or linked-device text', staffRow], ['business-app coexistence echo', echoRow]]) test(`SC7 a ${label} pauses its chat's child before the ack and is nobody's to answer`, { timeout: 5000 }, async t => {
+  const event = make(1)
+  const f = staffFixture(t, { rows: [event] })
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.pauses, [{ threadId: 'child-1', receiptId: 'staff-1', staffAt: Date.parse(STAFF_AT), acked: [] }])
+  assert.deepEqual(f.fired, [], 'the answer child is not handed the staff message')
+  assert.deepEqual(f.acks, [1])
+  assert.equal(f.calls.filter(call => call[1].startsWith('/messages/by-external')).length, 1)
+})
+
+test('SC7 a receipt time ahead of this host\'s clock is taken as now, so it cannot stretch the pause', { timeout: 5000 }, async t => {
+  const event = { ...staffRow(1), receivedAt: new Date(Date.now() + 3_600_000).toISOString() }
+  const before = Date.now()
+  const f = staffFixture(t, { rows: [event] })
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.ok(f.pauses[0].staffAt >= before && f.pauses[0].staffAt <= Date.now())
+})
+
+test('SC7 a receipt claiming the own side, even marked inbound, never reaches an answer child as the person\'s message', { timeout: 5000 }, async t => {
+  const event = { ...staffRow(1), direction: 'inbound' }
+  const f = staffFixture(t, { rows: [event, personRow(2)] })
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.pauses.map(pause => pause.receiptId), ['staff-1'])
+  assert.deepEqual(f.fired, [['answer', 'event-2']])
+})
+
+for (const [label, journal, canonical] of [
+  ['append echo in the journal', { upsertType: 'append' }, {}],
+  ['history replay in the journal', { isHistorySync: true }, {}],
+  ['missing receipt type in the journal', { upsertType: undefined }, {}],
+  ['mismatched key id in the journal', { key: { fromMe: true, id: 'another' } }, {}],
+  ['not from me in the journal', { isFromMe: false }, {}],
+  ['append echo in the canonical record', {}, { rawPayload: { upsertType: 'append', isFromMe: true, key: { fromMe: true, id: 'staff-1' } } }],
+  ['history replay in the canonical record', {}, { rawPayload: { upsertType: 'notify', isHistorySync: true, isFromMe: true, key: { fromMe: true, id: 'staff-1' } } }],
+  ['agent-attributed API send', {}, { senderAgentId: 'agent-1' }],
+  ['unattributed API send', {}, { rawPayload: { externalId: 'staff-1', isFromMe: true, mediaSource: 'url' } }],
+  ['missing attribution field', {}, { senderAgentId: undefined }],
+  ['canonical not from me', {}, { isFromMe: false }],
+  ['record of another chat', {}, { chatId: 'another-chat' }],
+]) test(`SC7 no own-device proof, no pause: ${label}`, { timeout: 5000 }, async t => {
+  const event = staffRow(1, journal)
+  if (journal.upsertType === undefined && 'upsertType' in journal) delete event.rawPayload.upsertType
+  const warnings = []
+  const f = staffFixture(t, { rows: [event, personRow(2)], message: async () => ({ ok: true, json: async () => ({ data: staffRecord(staffRow(1), canonical) }) }) })
+  f.rt.warn = (...args) => warnings.push(args)
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.pauses, [])
+  assert.deepEqual(f.fired, [['answer', 'event-2']])
+  assert.deepEqual(f.acks, [1, 2])
+  const looked = f.calls.some(call => call[1].startsWith('/messages/by-external'))
+  // A journal row without its own proof is never looked up; a canonical refusal is warned once.
+  assert.equal(looked, Object.keys(journal).length === 0)
+  assert.equal(warnings.length, Object.keys(journal).length === 0 ? 1 : 0)
+})
+
+test('SC7 an own-device row in a chat no answer child serves is not looked up and pauses nothing', { timeout: 5000 }, async t => {
+  const f = staffFixture(t, { rows: [staffRow(1)], threadOf: () => undefined })
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual([f.pauses, f.fired, f.acks], [[], [], [1]])
+  assert.equal(f.calls.some(call => call[1].startsWith('/messages/by-external')), false)
+})
+
+for (const failure of [503, 404]) test(`SC7 a canonical lookup ${failure} is retried, then the proven receipt pauses once`, { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const event = staffRow(1), failed = deferred()
+  let attempts = 0
+  const f = staffFixture(t, { rows: [event], message: async () => {
+    attempts += 1
+    if (attempts === 1) { failed.resolve(); return { ok: false, status: failure } }
+    return { ok: true, json: async () => ({ data: staffRecord(event) }) }
+  } })
+  await failed.promise
+  await turn()
+  assert.deepEqual([f.pauses, f.acks], [[], []], 'not acked while the record could still prove it')
+  t.mock.timers.tick(2000)
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.equal(attempts, 2)
+  assert.deepEqual(f.pauses.map(pause => pause.receiptId), ['staff-1'])
+  assert.deepEqual(f.acks, [1])
+})
+
+test('SC7 a lookup that keeps failing is capped at three attempts, warned and acked without a pause', { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const warnings = [], waits = []
+  let attempts = 0
+  const f = staffFixture(t, { rows: [staffRow(1), personRow(2)], message: async () => { attempts += 1; return { ok: false, status: 404 } } })
+  const waited = [deferred(), deferred()]
+  f.rt.warn = (format, ...args) => {
+    if (format.includes('not proven')) { warnings.push(args); return }
+    waits.push(args.at(-1))
+    waited[waits.length - 1]?.resolve()
+  }
+  await waited[0].promise
+  t.mock.timers.tick(2000)
+  await waited[1].promise
+  t.mock.timers.tick(5000)
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.equal(attempts, 3)
+  assert.deepEqual(warnings, [['event-1', 'lookup retries exhausted']])
+  assert.deepEqual([f.pauses, f.fired, f.acks], [[], [['answer', 'event-2']], [1, 2]])
+})
+
+test('SC7 a pause that fails to save leaves the row unacked; the replay pauses and acks it', { timeout: 5000 }, async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const failed = deferred()
+  let tries = 0
+  const f = staffFixture(t, { rows: [staffRow(1)], pause: async () => { tries += 1; if (tries === 1) { failed.resolve(); throw new Error('disk full') } } })
+  await failed.promise
+  await turn()
+  assert.deepEqual(f.acks, [])
+  t.mock.timers.tick(2000)
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.pauses.map(pause => [pause.receiptId, pause.acked]), [['staff-1', []], ['staff-1', []]])
+  assert.deepEqual(f.acks, [1])
+})
+
+test('SC7 a staff voice note pauses the child and still reaches an opted-in automation, from one lookup', { timeout: 5000 }, async t => {
+  const event = { ...staffRow(1), contentType: 'audio' }, events = []
+  const f = staffFixture(t, {
+    rows: [event], subscriptions: { voice: voice() },
+    message: async () => ({ ok: true, json: async () => ({ data: { ...staffRecord(event), messageType: 'audio', textContent: null, transcription: 'On my way.', mediaUrl: 'https://media.test/staff.ogg' } }) }),
+  })
+  f.rt.fireSubscription = async (subscription, value) => { f.fired.push([subscription.name, value.ref]); events.push(value) }
+  await f.saved
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.pauses.map(pause => pause.receiptId), ['staff-1'])
+  assert.deepEqual(f.fired, [['voice', 'event-1']])
+  assert.equal(events[0].text, 'On my way.')
+  assert.equal(f.calls.filter(call => call[1].startsWith('/messages/by-external')).length, 1)
 })

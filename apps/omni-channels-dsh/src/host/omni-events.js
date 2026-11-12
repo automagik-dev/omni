@@ -127,11 +127,14 @@ export function install(rt) {
   }
 
   // Uncached, scoped reads. Transport failures, timeouts, throttling and server errors retry;
-  // missing/forbidden/malformed records must not block the whole durable stream.
-  async function messageOf(row, required = false) {
+  // missing/forbidden/malformed records must not block the whole durable stream. A staff
+  // receipt also retries a record not written yet (`retryMissing`): skipping it would let a
+  // child talk over staff.
+  async function messageOf(row, required = false, retryMissing = false) {
     if (!row.chatUuid || !row.externalId) return undefined
     const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
-    if (required && (response?.status >= 500 || [408, 429].includes(response?.status))) throw new Error('own-device media lookup temporarily unavailable')
+    if (required && (response?.status >= 500 || [408, 429].includes(response?.status))) throw new Error('own-device message lookup temporarily unavailable')
+    if (required && retryMissing && response?.status === 404) throw new Error('own-device message not recorded yet')
     if (!response?.ok) return undefined
     let data
     try { data = await response.json() } catch (error) {
@@ -150,10 +153,38 @@ export function install(rt) {
       && raw.key?.fromMe === true && raw.key.id === externalId
   }
 
-  function ownDeviceMedia(row, message) {
+  // Any kind of message, text included: outbound direction or a missing agent attribution alone
+  // proves nothing, so an Omni API send (attributed or not) never passes.
+  function ownDeviceMessage(row, message) {
     return message.chatId === row.chatUuid && message.externalId === row.externalId
       && message.senderAgentId === null && message.isFromMe === true
       && ownerReceipt(row.rawPayload, row.externalId) && ownerReceipt(message.rawPayload, row.externalId)
+  }
+
+  // The canonical record a row names, read once per row against a per-row budget kept outside
+  // the reconnect loop (and across reconfigure): a transient failure throws, so the stream
+  // retries the row; an exhausted budget answers `exhausted`, so one unavailable lookup cannot
+  // hold the stream.
+  async function ownRecordOf(row, retryMissing = false) {
+    const exhausted = () => mediaLookupFailure?.id === row.id && mediaLookupFailure.attempts >= MEDIA_LOOKUP_ATTEMPTS
+    if (exhausted()) return { exhausted: true }
+    try { return { message: await messageOf(row, true, retryMissing) } } catch (error) {
+      mediaLookupFailure = { id: row.id, attempts: mediaLookupFailure?.id === row.id ? mediaLookupFailure.attempts + 1 : 1 }
+      if (!exhausted()) throw error
+      return { exhausted: true }
+    }
+  }
+
+  // RFC-0001 staff take-over: a journal row that claims the owner's own device, in a chat an
+  // answer child serves, is read from its canonical record; only both proofs make it staff's.
+  async function staffOf(row) {
+    if (row.eventType !== 'message.received' || !ownerReceipt(row.rawPayload, row.externalId)) return undefined
+    const threadId = rt.answerStaffThread?.(row)
+    if (threadId === undefined) return undefined
+    const looked = await ownRecordOf(row, true)
+    if (looked.message && ownDeviceMessage(row, looked.message)) return { threadId, looked }
+    rt.warn('ds-bot: an own-device claim in an answer chat was not proven %s (%s)', row.id, looked.exhausted ? 'lookup retries exhausted' : 'unavailable or non-device record')
+    return { looked }
   }
 
   function messageContext(row, message) {
@@ -165,22 +196,16 @@ export function install(rt) {
 
   // What the worker gets: the message (for a reaction, the one reacted to), its
   // processed content and media reference, and the ids of its chat and channel.
-  async function eventOf(row) {
+  // `looked`: the canonical read the staff check already made for this row, if any.
+  async function eventOf(row, looked) {
     const outboundMedia = row.eventType === 'message.received' && row.direction === 'outbound'
     const media = ['audio', 'image', 'video', 'document', 'sticker'].includes(row.contentType)
     let message
     if (outboundMedia) {
-      // Keep the per-row budget outside the reconnect loop (and across reconfigure).
-      // Exhaustion refuses the row so one unavailable lookup cannot hold the stream.
-      const exhausted = () => mediaLookupFailure?.id === row.id && mediaLookupFailure.attempts >= MEDIA_LOOKUP_ATTEMPTS
-      if (!exhausted()) {
-        try { message = await messageOf(row, true) } catch (error) {
-          mediaLookupFailure = { id: row.id, attempts: mediaLookupFailure?.id === row.id ? mediaLookupFailure.attempts + 1 : 1 }
-          if (!exhausted()) throw error
-        }
-      }
-      if (!message || !ownDeviceMedia(row, message)) {
-        rt.warn('ds-bot: refused outbound media event %s (%s)', row.id, exhausted() ? 'lookup retries exhausted' : 'unavailable or non-device record')
+      const found = looked ?? await ownRecordOf(row)
+      message = found.message
+      if (!message || !ownDeviceMessage(row, message)) {
+        rt.warn('ds-bot: refused outbound media event %s (%s)', row.id, found.exhausted ? 'lookup retries exhausted' : 'unavailable or non-device record')
         return undefined
       }
     } else if (row.eventType === 'reaction.received' || media) {
@@ -214,9 +239,20 @@ export function install(rt) {
     if (cancelled(controller)) return 'cancelled'
     await rt.waitChannelOwnership?.(row.instanceId)
     rt.syncAnswerSubscriptions?.()
-    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
+    // Staff take-over comes before any dispatch, and its pause is saved before this row is
+    // acked. The staff message itself is nobody's to answer.
+    const staff = await staffOf(row)
+    if (staff?.threadId !== undefined) {
+      if (cancelled(controller)) return 'cancelled'
+      const now = Date.now()
+      await rt.pauseAnswer({ threadId: staff.threadId, receiptId: row.externalId, staffAt: Math.min(Date.parse(row.receivedAt) || now, now) })
+    }
+    // A message that claims the number's own side never reaches an answer child as the person's.
+    const ownSide = row.rawPayload?.isFromMe === true
+    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !(ownSide && typeof sub.answerBotId === 'string')
+      && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
     if (due().length === 0) return 'unmatched'
-    const event = await eventOf(row)
+    const event = await eventOf(row, staff?.looked)
     if (event === undefined) return 'unmatched'
     if (cancelled(controller)) return 'cancelled'
     await rt.waitChannelOwnership?.(row.instanceId)

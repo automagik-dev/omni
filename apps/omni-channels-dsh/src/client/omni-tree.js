@@ -118,6 +118,41 @@ export function answerModeOf(thread) {
   }
 }
 
+// Time left in plain words: whole minutes under an hour, then hours and minutes.
+const leftOf = (ms) => {
+  const minutes = Math.max(1, Math.ceil(ms / 60_000))
+  if (minutes < 60) return `${minutes} min left`
+  const hours = Math.floor(minutes / 60)
+  return minutes % 60 === 0 ? `${hours} h left` : `${hours} h ${minutes % 60} min left`
+}
+
+/**
+ * An answer child staff took over (host threads.js pausedUntilOf): it reads its chat but sends
+ * nothing until staff resume it, or until `pausedUntil` passes with no newer staff message. Its
+ * time left at `now`, in plain words; null for any thread that is not paused.
+ */
+export function pauseOf(thread, now = Date.now()) {
+  if (thread?.answerChild !== true || thread.paused !== true) return null
+  const until = Number.isFinite(thread.pausedUntil) ? thread.pausedUntil : null
+  return {
+    label: 'Paused',
+    left: until === null ? 'until you resume it' : until <= now ? 'resuming…' : leftOf(until - now),
+    title: until === null ? 'Staff are answering this chat. It answers again when you resume it.' : 'Staff are answering this chat. It answers again when you resume it, or by itself once staff stay quiet there long enough.',
+  }
+}
+
+// The clock a paused row counts down by: it ticks only while the row shows a countdown.
+function useNow(on) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!on) return undefined
+    setNow(Date.now())
+    const timer = setInterval(() => setNow(Date.now()), 15_000)
+    return () => clearInterval(timer)
+  }, [on])
+  return now
+}
+
 /**
  * The thread's menu: for its messages and its reactions, follow the default (null) or its own
  * choice, the one in force checked. Each item is what `omni-thread-permissions` is sent.
@@ -199,10 +234,12 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   })
   const free = freeMarkOf(thread)
   const answer = answerModeOf(thread)
+  const now = useNow(thread.answerChild === true && thread.paused === true)
+  const pause = pauseOf(thread, now)
   const state = threadState(thread, { running, asking })
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: 'needs_newer_team' }) : null
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', answer ? `${answer.label}: ${answer.title}` : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', answer ? `${answer.label}: ${answer.title}` : '', pause ? `${pause.label}, ${pause.left}` : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const menuLabel = answer ? `Sending mode in ${name}` : t('Asking first in {name}', { name })
   const onClick = () => {
     if (opens) {
@@ -238,19 +275,27 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       setProblem(t('Could not change this chat\'s settings. Try again.'))
     })
   }
+  // Staff's own resume (host threads.js resume_answer_child); the row follows on the next pull.
+  const resume = () => {
+    setProblem(null)
+    call('resume_answer_child', { threadId: thread.id }).catch(error => {
+      console.warn('Could not resume the chat:', error)
+      setProblem('Could not resume this chat. Try again.')
+    })
+  }
   const onMenuKey = (event) => {
     if (event.key !== 'Escape') return
     event.stopPropagation()
     setMenu(false)
   }
-  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined, 'data-answer': answer ? true : undefined },
+  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined, 'data-answer': answer ? true : undefined, 'data-paused': pause ? true : undefined },
     h('button', {
       type: 'button', className: 'bt-thread', 'data-state': state, 'data-thread-id': thread.id, 'aria-label': label, title: reason ?? name,
       'aria-current': active ? 'page' : undefined, tabIndex: shown ? undefined : -1, onClick,
     },
     h('span', { className: state === 'waiting' ? 'bt-thread-wait' : state === 'working' ? 'bt-thread-spin' : 'ot-thread-idle', 'aria-hidden': true }),
     h('span', { className: 'bt-thread-title' }, name),
-    answer ? h('span', { className: 'ot-mode', 'data-mode': answer.mode, title: answer.title, 'aria-hidden': true }, answer.label) : null,
+    answer && !pause ? h('span', { className: 'ot-mode', 'data-mode': answer.mode, title: answer.title, 'aria-hidden': true }, answer.label) : null,
     reason ? h('span', { className: 'ot-thread-reason' }, reason) : null,
     free ? h('span', { className: 'ot-thread-free', title: free, 'aria-hidden': true }, h(SparkIcon)) : null,
     dot ? h('span', { className: 'bt-unread', 'aria-hidden': true }) : null),
@@ -264,6 +309,14 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name }) : t('Remove {name}', { name }),
         title: confirming ? t('Click again to remove') : t('Remove'), tabIndex: shown ? undefined : -1, onClick: remove, onBlur: () => setConfirming(false),
       }, confirming ? t('Remove') : h(CloseIcon))),
+    // Paused: its own line under the name, at every width, with the time left and Resume.
+    pause ? h('div', { className: 'ot-paused', title: pause.title },
+      h('span', { className: 'ot-mode', 'data-mode': 'paused', 'aria-hidden': true }, pause.label),
+      h('span', { className: 'ot-paused-left', 'aria-hidden': true }, pause.left),
+      h('button', {
+        type: 'button', className: 'bt-soft bt-soft-sm ot-resume', 'aria-label': `Resume answering in ${name}`, title: 'Let it answer this chat again',
+        tabIndex: shown ? undefined : -1, onClick: resume,
+      }, 'Resume')) : null,
     menu ? h('div', { className: 'ot-thread-menu', role: 'menu', 'aria-label': menuLabel, onKeyDown: onMenuKey },
       permissionMenuOf(thread).map(group => h('div', { key: group.field, className: 'ot-thread-menu-group', role: 'group', 'aria-label': group.label },
         h('span', { className: 'ot-thread-menu-head' }, group.label),
@@ -483,6 +536,10 @@ const NEW_CHILD_MODES = {
   training: ['Training', 'A new child asks you before each send.'],
   sending: ['Sending', 'A new child sends without asking.'],
 }
+// A paused child's quiet interval in whole minutes, as the settings field shows it.
+const RESUME_MINUTES_DEFAULT = 30
+const RESUME_MINUTES_MAX = 24 * 60
+const minutesOf = ms => String(Number.isInteger(ms) && ms >= 60_000 ? Math.round(ms / 60_000) : RESUME_MINUTES_DEFAULT)
 // The read-only tools staff may add, in plain words. The tool's own name is the row's tooltip.
 const ANSWER_TOOLS = [['read', 'Read files'], ['read_image', 'Read images'], ['glob', 'Find files by name'], ['grep', 'Search inside files']]
 
@@ -512,19 +569,24 @@ export function AnswerSettings({ bot, value = {} }) {
   const [newChildMode, setNewChildMode] = useState(value.newChildMode ?? 'training')
   const [graduates, setGraduates] = useState(Number.isInteger(value.graduateAfter))
   const [graduateAfter, setGraduateAfter] = useState(String(value.graduateAfter ?? 5))
+  const [resumeMinutes, setResumeMinutes] = useState(minutesOf(value.resumeAfterMs))
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
     setEnabled(value.enabled === true); setVisibility(value.visibility ?? 'isolated')
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter])
+    setResumeMinutes(minutesOf(value.resumeAfterMs))
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs])
   // Graduation is off unless staff turn it on with a whole number of drafts (host GRADUATE_MAX).
   const count = Number(graduateAfter)
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100
+  // Staff take-over: whole minutes, one to a day (host RESUME_AFTER_MIN_MS..RESUME_AFTER_MAX_MS).
+  const minutes = Number(resumeMinutes)
+  const minutesOk = Number.isInteger(minutes) && minutes >= 1 && minutes <= RESUME_MINUTES_MAX
   const save = async () => {
     setBusy(true); setProblem(null)
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null }); setOpen(false) }
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000 }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -545,6 +607,13 @@ export function AnswerSettings({ bot, value = {} }) {
           className: 'bt-input ot-answer-count', type: 'number', min: 1, max: 100, step: 1, inputMode: 'numeric', value: graduateAfter,
           'aria-invalid': !countOk || undefined, onChange: event => setGraduateAfter(event.target.value),
         })) : null,
+      h(Field, { label: 'Resume a paused child after', note: 'A child pauses when staff write in its chat from their own phone. It answers again after this many minutes with no staff message there, or when you press Resume.' },
+        h('span', { className: 'ot-answer-minutes' },
+          h('input', {
+            className: 'bt-input ot-answer-count', type: 'number', min: 1, max: RESUME_MINUTES_MAX, step: 1, inputMode: 'numeric', value: resumeMinutes,
+            'aria-invalid': !minutesOk || undefined, onChange: event => setResumeMinutes(event.target.value),
+          }),
+          h('span', { 'aria-hidden': true }, 'minutes'))),
       h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
         h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
         ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
@@ -552,7 +621,7 @@ export function AnswerSettings({ bot, value = {} }) {
         h('textarea', { className: 'bt-input bt-input-area', maxLength: 8000, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
       problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
       h('div', { className: 'bt-actions' },
-        h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || (graduates && !countOk), onClick: save }, 'Save answer settings'))) : null)
+        h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || (graduates && !countOk) || !minutesOk, onClick: save }, 'Save answer settings'))) : null)
 }
 
 export function OmniTree(props) {
@@ -701,6 +770,12 @@ export const OMNI_TREE_CSS = `
 .ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
 .ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
 .ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
+/* A paused answer child: under its name, at every width, the pause, its time left and the team's Resume button. The time left is never cut: where the line is too short, Resume drops under it. */
+.ot-mode[data-mode=paused]{color:color-mix(in srgb,var(--bt-accent, #22d3ee) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-accent, #22d3ee) 15%,transparent)}
+.ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 20px}
+.ot-paused-left{flex:1 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.ot-paused .ot-resume{height:24px;padding:0 10px}
+.ot-answer-minutes{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--bt-ink-2)}
 ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 @container ot-tree (max-width:259px){${stackedRow('.ot-thread[data-answer]')}}
 /* Answer settings: the Bot team's own switches, fields, selects, inputs and button (bt-*). */

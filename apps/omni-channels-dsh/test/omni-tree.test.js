@@ -36,11 +36,11 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, pauseOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
-], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
+], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL, URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
 const ui = await loadTree()
 
 test('only the Bot of kind omni carries the channel tree', () => {
@@ -1031,7 +1031,7 @@ test('answer settings start isolated and save one owner setting with read-only a
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
   await settle()
   // New children train and graduation stays off unless staff change them (RFC-0001).
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null }])
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000 }])
   assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
 })
 
@@ -1112,5 +1112,85 @@ test('answer settings choose the new-child default and optional graduation, off 
   assert.deepEqual([classOf(save()), classOf(nodes(field('Shared notes')).find(node => node.type === 'textarea'))], [['bt-soft', 'bt-soft-sm'], ['bt-input', 'bt-input-area']])
   save().props.onClick()
   await settle()
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4 }])
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000 }])
+})
+
+// RFC-0001 SC7 in the sidebar: a paused child shows the pause, its time left and Resume.
+test('a paused answer child shows the pause under its name with the time left, and Resume sends the staff action', async () => {
+  calls.length = 0
+  answer = () => ({})
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const now = Date.now()
+  const child = extra => THREAD(1, CHANNEL_A, { answerChild: true, sendingMode: 'training', approvedStreak: 0, graduateAfter: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, ...extra })
+  const paused = mount(() => react.createElement(ui.ThreadRow, { thread: child({ paused: true, pausedUntil: now + 12 * 60_000 - 1 }), actions: {}, rowProps }))
+  let root = paused.draw()
+  assert.equal(one(root, 'ot-thread').props['data-paused'], true)
+  // The mode gives way to the pause line; the name keeps its own line.
+  assert.equal(one(one(root, 'bt-thread'), 'ot-mode'), undefined)
+  const line = one(root, 'ot-paused')
+  assert.equal(text(one(line, 'ot-mode')), 'Paused')
+  assert.equal(one(line, 'ot-mode').props['data-mode'], 'paused')
+  assert.equal(text(one(line, 'ot-paused-left')), '12 min left')
+  assert.match(one(root, 'bt-thread').props['aria-label'], /^Chat 1, Training: Asks you before each send, Paused, 12 min left$/)
+  const button = one(line, 'ot-resume')
+  assert.deepEqual([button.type, classOf(button), button.props['aria-label'], text(button)], ['button', ['bt-soft', 'bt-soft-sm', 'ot-resume'], 'Resume answering in Chat 1', 'Resume'])
+  button.props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['resume_answer_child', { threadId: 't1' }]])
+  // A refused resume says so in the row.
+  answer = () => { throw new Error('nope') }
+  one(paused.draw(), 'ot-resume').props.onClick()
+  await settle()
+  assert.equal(text(one(paused.draw(), 'ot-thread-problem')), 'Could not resume this chat. Try again.')
+  paused.unmount()
+  // Not paused: the mode pill is back, and no pause line.
+  const answering = mount(() => react.createElement(ui.ThreadRow, { thread: child({}), actions: {}, rowProps }))
+  root = answering.draw()
+  assert.deepEqual([text(one(root, 'ot-mode')), one(root, 'ot-paused'), one(root, 'ot-thread').props['data-paused']], ['Training', undefined, undefined])
+  answering.unmount()
+})
+
+test('pauseOf names the time left in plain words, says when it is resuming, and is null for any other thread', () => {
+  const at = Date.parse('2026-11-12T12:00:00.000Z')
+  const paused = pausedUntil => ({ answerChild: true, paused: true, pausedUntil })
+  assert.equal(ui.pauseOf(paused(at + 30 * 60_000), at).left, '30 min left')
+  assert.equal(ui.pauseOf(paused(at + 29 * 60_000 + 59_000), at).left, '30 min left')
+  assert.equal(ui.pauseOf(paused(at + 1000), at).left, '1 min left')
+  assert.equal(ui.pauseOf(paused(at + 60 * 60_000), at).left, '1 h left')
+  assert.equal(ui.pauseOf(paused(at + 95 * 60_000), at).left, '1 h 35 min left')
+  assert.equal(ui.pauseOf(paused(at), at).left, 'resuming…')
+  assert.equal(ui.pauseOf(paused(null), at).left, 'until you resume it')
+  assert.equal(ui.pauseOf({ answerChild: true, paused: false }, at), null)
+  assert.equal(ui.pauseOf({ paused: true, pausedUntil: at + 1000 }, at), null)
+  assert.equal(ui.pauseOf(THREAD(2), at), null)
+})
+
+test('answer settings set the quiet interval in whole minutes, 30 by default, one to a day', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = () => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith('Resume a paused child after'))
+  const input = () => nodes(field()).find(node => node.type === 'input')
+  const save = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings')
+  assert.deepEqual([input().props.value, input().props.min, input().props.max, classOf(input()), text(field()).endsWith('minutes')], ['30', 1, 1440, ['bt-input', 'ot-answer-count'], true])
+  for (const value of ['0', '1441', '2.5', '']) {
+    input().props.onChange({ target: { value } })
+    await settle()
+    assert.deepEqual([save().props.disabled, input().props['aria-invalid']], [true, true], value)
+  }
+  input().props.onChange({ target: { value: '45' } })
+  await settle()
+  assert.equal(save().props.disabled, false)
+  save().props.onClick()
+  await settle()
+  assert.equal(calls.at(-1)[1].resumeAfterMs, 45 * 60_000)
+  const custom = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, resumeAfterMs: 5 * 60_000 } }))
+  nodes(custom.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  assert.equal(nodes(nodes(custom.draw()).find(node => node.type === 'label' && text(node).startsWith('Resume a paused child after'))).find(node => node.type === 'input').props.value, '5')
+  custom.unmount()
 })
