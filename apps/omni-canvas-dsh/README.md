@@ -3,9 +3,9 @@
 `@automagik/omni-canvas-dsh` lets Omni, the Main Bot of the Bot team for DeepSeek Harness
 (DSH), show what it found as a canvas: an openui-lang program that the chat renders as live
 UI (an overview, a list, numbers, a channel's QR code, a chat). It sits on the team plugin
-(`@automagik/bots-dsh`, from automagik-dev/automagik; or its former name
-`@automagik/omni-dsh`) and the channels plugin (`@automagik/omni-channels-dsh`), and needs
-both: a canvas reads omni through Omni's own reads. The team's
+(`@automagik/bots-dsh`, from automagik-dev/automagik) and the channels plugin
+(`@automagik/omni-channels-dsh`), and needs both: a canvas reads omni through Omni's own
+reads. The team's
 [README](https://github.com/automagik-dev/automagik/tree/dev/apps/bots-dsh#three-plugins) shows how the three fit.
 
 > Labs release. Features, tools and the saved data format can still change.

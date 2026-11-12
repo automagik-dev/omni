@@ -14,8 +14,7 @@ const PLATFORM = {
 }
 
 export function loadTeamClient(platform = PLATFORM) {
-  // The bundle's own registration comes first; the Bot team's client also registers under
-  // its former name (@automagik/omni-dsh), which hands over the same module.
+  // Take the Bot team's own bundle registration.
   let registration
   runInNewContext(readFileSync(join(process.env.OMNI_DSH_CORE, 'client.js'), 'utf8'), { window: { __ModuleLoader__: { load: (entry) => { registration ??= entry } } } })
   return registration.factory(name => platform[name] ?? (() => { throw new Error(`no platform module ${name}`) })())

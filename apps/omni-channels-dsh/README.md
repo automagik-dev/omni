@@ -6,11 +6,6 @@ operate the platform and run your automations. It sits on the team plugin
 (`@automagik/bots-dsh`, [apps/bots-dsh in automagik-dev/automagik](https://github.com/automagik-dev/automagik/tree/dev/apps/bots-dsh#three-plugins))
 and needs it; the canvas plugin (`@automagik/omni-canvas-dsh`) sits on this one.
 
-The team was `@automagik/omni-dsh` (this repository's `apps/omni-ui-dsh`) until it moved to
-Automagik. This plugin works on either: in a DSH that still runs `@automagik/omni-dsh`, its
-client takes the team's client under that name (`scripts/build-client.mjs`), and the team
-runtime is the same `omniTeam` service.
-
 > Labs release. Features, tools and the saved data format can still change.
 
 ## What it adds
@@ -189,8 +184,8 @@ deletion is reported separately, without treating deletion as failed
   `automation-*` endpoints of `POST /api/omni-ui` (the reads also on a host that only reads
   the team), the automations in the team view, the events Omni listens to in every state
   answer, and the operator rules. It provides its runtime as `omniChannels`.
-- **Browser**: `client.js` names `@automagik/bots-dsh/client` (and the team's former name,
-  `@automagik/omni-dsh/client`) in `dsh.client.external`, so DSH loads the team's bundle
+- **Browser**: `client.js` names `@automagik/bots-dsh/client` in `dsh.client.external`, so
+  DSH loads the team's bundle
   first and this one shares it: the host call, the interface
   copy (this plugin's Chinese copy joins it with `addStrings`), and the registries it adds
   its tool cards, account-menu row, row badge, header button and Bot-surface panels to. It
