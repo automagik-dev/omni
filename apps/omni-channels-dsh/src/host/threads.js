@@ -13,6 +13,8 @@
 // Removing a thread archives its Session (its work stops too) and cuts its key; adding the
 // chat again makes a new thread with a new key.
 import { randomUUID } from 'node:crypto'
+import { realpath, stat } from 'node:fs/promises'
+import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { chatOf } from './omni.js'
 import { OPERATOR_RULES } from './omni-rules.js'
@@ -31,6 +33,13 @@ export function servedToolNamesOf(ctx) {
   if (!Array.isArray(schemas)) throw new Error('This host cannot verify which answer tools are served.')
   return new Set(schemas.map(schema => schema?.name).filter(name => typeof name === 'string'))
 }
+// #1689: a bot's knowledge folder gives its children those of these the host serves (thread-
+// tools.js containAnswer), every call scoped to the folder (knowledgeRefusal there); staff set it
+// only through omni-answer-settings, and only while the host serves read.
+export const KNOWLEDGE_TOOLS = Object.freeze(['read', 'glob', 'grep'])
+export const KNOWLEDGE_FOLDER_REFUSAL = 'The knowledge folder must be the absolute path of an existing folder.'
+export const KNOWLEDGE_NOT_SERVED = 'This DeepSeek Harness does not serve the read tool, so children could not read a knowledge folder. Leave the knowledge folder empty.'
+const knowledgeFolderOf = value => (typeof value === 'string' && isAbsolute(value) ? value : null)
 // RFC-0001 answer children train first: each send asks staff until staff, or an optional
 // graduation after N approved unchanged drafts in a row, switch the child to sending.
 export const SENDING_MODES = Object.freeze(['training', 'sending'])
@@ -49,7 +58,7 @@ export const answerSettingsOf = bot => ({
   enabled: bot?.answer?.enabled === true, visibility: bot?.answer?.visibility === 'collective' ? 'collective' : 'isolated',
   allowedTools: (Array.isArray(bot?.answer?.allowedTools) ? bot.answer.allowedTools : []).filter(name => ANSWER_EXTRA_TOOLS.includes(name)), sharedNotes: String(bot?.answer?.sharedNotes ?? ''),
   newChildMode: bot?.answer?.newChildMode === 'sending' ? 'sending' : 'training', graduateAfter: graduateOf(bot?.answer?.graduateAfter),
-  resumeAfterMs: resumeAfterOf(bot?.answer?.resumeAfterMs),
+  resumeAfterMs: resumeAfterOf(bot?.answer?.resumeAfterMs), knowledgeFolder: knowledgeFolderOf(bot?.answer?.knowledgeFolder),
 })
 export const isAnswerChild = thread => thread?.answerChild === true
 /** When a paused child answers again by itself: its last staff message plus its bot's interval; null when not paused. */
@@ -248,6 +257,7 @@ export function answerInstructions(thread, bot) {
     'When staff write in your chat from their own phone, you are paused: read what arrives, but send, react and draft nothing until staff resume you or a quiet interval passes with no staff message.',
     answer.visibility === 'collective' ? 'You may use answer_chats and thread_history to read the other chats owned by your bot. You may still reply and react only in your own chat.' : 'You may read only your own chat. Other chats and shared notes are private.',
     ...(answer.visibility === 'collective' && answer.sharedNotes ? [`## Shared notes (read only)\n${answer.sharedNotes}`] : []),
+    ...(answer.knowledgeFolder ? [`## Knowledge folder\nThe files in ${JSON.stringify(answer.knowledgeFolder)} are the business's reference (its instructions, FAQ and the like): look answers up there with read, glob and grep (whichever of them you have). Give each call an absolute path inside that folder; a read anywhere else is refused.`] : []),
     ...(thread.notes ? [`## Child notes\n${thread.notes}`] : []),
   ].filter(Boolean).join('\n\n')
 }
@@ -801,7 +811,16 @@ export function install(rt) {
     // Optional so an earlier client's save keeps them.
     newChildMode: z.enum(SENDING_MODES).optional(), graduateAfter: z.number().int().min(1).max(GRADUATE_MAX).nullable().optional(),
     resumeAfterMs: z.number().int().min(RESUME_AFTER_MIN_MS).max(RESUME_AFTER_MAX_MS).optional(),
+    // #1689: an absolute path, stored as its real path; null or empty clears it.
+    knowledgeFolder: z.string().max(4096).nullable().optional(),
   }).strict()
+  const realFolderOf = async value => {
+    if (!value) return null
+    const real = isAbsolute(value) ? await realpath(value).catch(() => null) : null
+    if (real === null || !(await stat(real).catch(() => null))?.isDirectory()) throw refused(KNOWLEDGE_FOLDER_REFUSAL)
+    if (!servedToolNamesOf(ctx).has('read')) throw refused(KNOWLEDGE_NOT_SERVED)
+    return real
+  }
   ctx.effect(() => rt.hooks.endpoint('omni-answer-settings', async body => {
     const input = AnswerSettings.parse(body)
     await rt.load()
@@ -819,10 +838,11 @@ export function install(rt) {
     if (input.enabled && answerable().some(thread => thread.chatIds.length !== 1)) throw refused('Split existing multi-chat threads before enabling answer mode.')
     const before = bot.answer
     const kept = answerSettingsOf(bot)
+    const folder = input.knowledgeFolder === undefined ? kept.knowledgeFolder : await realFolderOf(input.knowledgeFolder)
     bot.answer = {
       enabled: input.enabled, visibility: input.visibility, allowedTools: [...new Set(input.allowedTools)], sharedNotes: input.sharedNotes,
       newChildMode: input.newChildMode ?? kept.newChildMode, graduateAfter: input.graduateAfter === undefined ? kept.graduateAfter : input.graduateAfter,
-      resumeAfterMs: input.resumeAfterMs ?? kept.resumeAfterMs,
+      resumeAfterMs: input.resumeAfterMs ?? kept.resumeAfterMs, ...(folder ? { knowledgeFolder: folder } : {}),
     }
     try {
       if (input.enabled) for (const thread of answerable()) {
