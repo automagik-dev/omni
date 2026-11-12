@@ -27,10 +27,11 @@ function tooOld(raw, minutes) {
 
 export function answerIntake(rt) {
   const cache = new Map(), warned = new Set()
-  async function cached(key, read) {
+  async function cached(key, read, cacheWhen = () => true) {
     const now = Date.now(), hit = cache.get(key)
     if (hit && now - hit.at < TTL_MS) return hit.value
     const value = await read()
+    if (!cacheWhen(value)) return value
     for (const [key, entry] of cache) if (now - entry.at >= TTL_MS) cache.delete(key)
     if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value)
     cache.set(key, { at: now, value })
@@ -73,7 +74,7 @@ export function answerIntake(rt) {
           if (result.allowed) return true
         }
         return false
-      })
+      }, value => value === true)
     } catch {
       if (!warned.has(row.instanceId)) {
         warned.add(row.instanceId)
