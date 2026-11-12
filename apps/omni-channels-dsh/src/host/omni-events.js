@@ -128,8 +128,8 @@ export function install(rt) {
 
   // Uncached, scoped reads. Transport failures, timeouts, throttling and server errors retry;
   // missing/forbidden/malformed records must not block the whole durable stream. A staff
-  // receipt also retries a record not written yet (`retryMissing`): skipping it would let a
-  // child talk over staff.
+  // receipt also retries a record not written yet (`retryMissing`; Omni answers 200 with null
+  // data, or 404): skipping it would let a child talk over staff.
   async function messageOf(row, required = false, retryMissing = false) {
     if (!row.chatUuid || !row.externalId) return undefined
     const response = await rt.omniRequest('GET', `/messages/by-external?chatId=${encodeURIComponent(row.chatUuid)}&externalId=${encodeURIComponent(row.externalId)}`)
@@ -142,6 +142,7 @@ export function install(rt) {
       throw error
     }
     const reply = messageReplySchema.safeParse(data)
+    if (required && retryMissing && reply.success && reply.data.data == null) throw new Error('own-device message not recorded yet')
     return reply.success ? reply.data.data ?? undefined : undefined
   }
 

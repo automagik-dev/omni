@@ -670,10 +670,11 @@ const staffRecord = (event, change = {}) => ({
   id: `message-${event.id}`, chatId: event.chatUuid, externalId: event.externalId, messageType: 'text', textContent: event.textContent,
   isFromMe: true, senderAgentId: null, rawPayload: { ...event.rawPayload }, ...change,
 })
-// A business-app coexistence echo: the platform mirrors the app's own message with the same
-// own-device evidence as a phone message (isFromMe, key.fromMe, key.id, upsertType notify),
-// plus its own markers and no remoteJid.
-const echoRow = journalSeq => staffRow(journalSeq, { coexistence: true, noAgentDispatch: true, messageTimestamp: 1794484800 })
+// A business-app coexistence echo, as the channel records it: external id = key.id (the
+// platform's message id), the same own-device evidence as a phone message (isFromMe,
+// key.fromMe, key.id, upsertType notify), its own markers, no remoteJid and no history flag.
+// Persistence keeps that rawPayload and isFromMe, with no agent attribution.
+const echoRow = journalSeq => staffRow(journalSeq, { coexistence: 'smb_message_echoes', noAgentDispatch: true, messageTimestamp: 1794484800 })
 const answerSub = () => ({ ...sub('answer'), answerBotId: 'answer-bot', sources: [{ kind: 'channel', id: 'instance-1' }] })
 function staffFixture(t, { rows, message, pause, save, threadOf, subscriptions = {} }) {
   const pauses = [], saved = deferred()
@@ -760,13 +761,13 @@ test('SC7 an own-device row in a chat no answer child serves is not looked up an
   assert.equal(f.calls.some(call => call[1].startsWith('/messages/by-external')), false)
 })
 
-for (const failure of [503, 404]) test(`SC7 a canonical lookup ${failure} is retried, then the proven receipt pauses once`, { timeout: 5000 }, async t => {
+for (const failure of [503, 404, 'not recorded yet']) test(`SC7 a canonical lookup ${failure} is retried, then the proven receipt pauses once`, { timeout: 5000 }, async t => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const event = staffRow(1), failed = deferred()
   let attempts = 0
   const f = staffFixture(t, { rows: [event], message: async () => {
     attempts += 1
-    if (attempts === 1) { failed.resolve(); return { ok: false, status: failure } }
+    if (attempts === 1) { failed.resolve(); return typeof failure === 'number' ? { ok: false, status: failure } : { ok: true, status: 200, json: async () => ({ data: null }) } }
     return { ok: true, json: async () => ({ data: staffRecord(event) }) }
   } })
   await failed.promise
@@ -784,7 +785,11 @@ test('SC7 a lookup that keeps failing is capped at three attempts, warned and ac
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const warnings = [], waits = []
   let attempts = 0
-  const f = staffFixture(t, { rows: [staffRow(1), personRow(2)], message: async () => { attempts += 1; return { ok: false, status: 404 } } })
+  // Not recorded yet (200 with null data), then 404, then a server error: one budget for all.
+  const f = staffFixture(t, { rows: [staffRow(1), personRow(2)], message: async () => {
+    attempts += 1
+    return attempts === 1 ? { ok: true, status: 200, json: async () => ({ data: null }) } : { ok: false, status: attempts === 2 ? 404 : 503 }
+  } })
   const waited = [deferred(), deferred()]
   f.rt.warn = (format, ...args) => {
     if (format.includes('not proven')) { warnings.push(args); return }
