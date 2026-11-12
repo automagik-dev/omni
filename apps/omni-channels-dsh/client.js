@@ -17084,7 +17084,9 @@ function OmniTree(props) {
   }, []);
   if (!isOmniBot(bot)) return null;
   const rowProps = rowPropsOf(props, roster?.omniRowProps);
-  const defaultBotId = roster?.omniOwnership?.defaultBotId ?? roster?.eventsBotId ?? bot.id;
+  const saved = roster?.omniOwnership?.defaultBotId;
+  const removed = saved != null && roster?.byId !== void 0 && roster.byId[saved] === void 0;
+  const defaultBotId = (removed ? void 0 : saved) ?? roster?.eventsBotId ?? bot.id;
   const ownerOf = (id) => roster?.omniOwnership?.channels?.[id] ?? defaultBotId;
   const threads = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter((thread) => (thread.ownerBotId ?? ownerOf(thread.channelId)) === bot.id);
   const ownedChannels = state.channels.filter((channel) => ownerOf(channel.id) === bot.id);
@@ -17111,7 +17113,7 @@ function OmniTree(props) {
   return (0, import_react16.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
-    bot.id !== defaultBotId ? (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }) : null,
+    (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
     bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {

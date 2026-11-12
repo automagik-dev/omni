@@ -108,8 +108,12 @@ export function install(rt) {
   // The team's Omni Bot runs automations, else its first Main Bot; it was a Bot of its own
   // (Autopilot) before. Any Bot that operates Omni manages them, and a chat thread as the Omni
   // Bot (grants.js omniActorOf). Loads the team first: the check reads the Bots from the saved
-  // state.
-  const eventsBotId = () => state.omniOwnership?.defaultBotId ?? Object.values(state.bots ?? {}).find(bot => bot?.kind === 'omni')?.id ?? state.mainBotIds.find(id => rt.botOf(id))
+  // state. A saved default whose Bot was removed counts as none set.
+  const savedDefault = () => {
+    const id = state.omniOwnership?.defaultBotId
+    return id != null && rt.botOf(id) ? id : undefined
+  }
+  const eventsBotId = () => savedDefault() ?? Object.values(state.bots ?? {}).find(bot => bot?.kind === 'omni')?.id ?? state.mainBotIds.find(id => rt.botOf(id))
   const ownerOf = sub => sub?.ownerBotId ?? eventsBotId()
   const sourceChannels = sub => sub.sources.map(source => source.kind === 'channel' ? source.id : source.channelId)
   const ownsAutomation = (botId, sub) => ownerOf(sub) === botId && sourceChannels(sub).every(id => rt.canChannel(botId, id, 'automate'))
@@ -137,11 +141,13 @@ export function install(rt) {
     && (!event?.instanceId || rt.canChannel(ownerOf(sub), event.instanceId, 'automate'))
 
   // Answer admission reuses the durable standing-run queue. Internal subscriptions are
-  // host-owned policy records, not model-editable automations or another responder.
+  // host-owned policy records, not model-editable automations or another responder. The default
+  // bot answers too, but only on the channels it owns explicitly, never on those it holds as
+  // the catch-all.
   const internalAnswer = sub => typeof sub?.answerBotId === 'string'
   rt.syncAnswerSubscriptions = () => {
     for (const bot of Object.values(state.bots ?? {})) {
-      if (bot.kind !== 'omni' || bot.id === eventsBotId()) continue
+      if (bot.kind !== 'omni') continue
       const answer = answerSettingsOf(bot)
       const id = `answer:${bot.id}`
       if (!answer.enabled && !subs()[id]) continue
