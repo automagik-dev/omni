@@ -7,10 +7,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { apply as applyTeam, createRuntime as createTeam } from '@automagik/bots-dsh'
-import { fakeContext } from '@automagik/bots-dsh/test/fake-ctx.js'
+import { fakeContext as coreFakeContext } from '@automagik/bots-dsh/test/fake-ctx.js'
 import { apply, createRuntime } from '../index.js'
 
-export { fakeContext }
+// The real host's global registry serves the plugin's tools alongside the vetted
+// read-only tools. Keep the fake registry aligned, while individual tests may
+// replace `ctx.tools.schemas` to model a narrower host or an earlier restriction.
+export function fakeContext(options) {
+  const ctx = coreFakeContext(options)
+  const served = ['read', 'read_image', 'glob', 'grep']
+  ctx.tools.schemas = () => [...new Set([...ctx.registeredTools.keys(), ...served])].map(name => ({ name }))
+  return ctx
+}
 
 // A file of the team's checkout (harness-resolve.mjs finds it), such as a test fixture.
 export const teamFile = path => new URL(path, `${pathToFileURL(process.env.OMNI_DSH_CORE).href}/`)
