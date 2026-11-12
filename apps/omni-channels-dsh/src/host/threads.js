@@ -23,10 +23,21 @@ import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
 export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
 // Explicitly vetted, read-only local tools. Unknown tools never acquire authority by name.
 export const ANSWER_EXTRA_TOOLS = Object.freeze(['read', 'read_image', 'glob', 'grep'])
+// The host's global registry is the served set accepted by tools.restrict(). A scoped view can
+// already be narrowed by an earlier restriction, so it must not be used for answer admission.
+export function servedToolNamesOf(ctx) {
+  if (typeof ctx?.tools?.schemas !== 'function') throw new Error('This host cannot verify which answer tools are served.')
+  const schemas = ctx.tools.schemas()
+  if (!Array.isArray(schemas)) throw new Error('This host cannot verify which answer tools are served.')
+  return new Set(schemas.map(schema => schema?.name).filter(name => typeof name === 'string'))
+}
 // RFC-0001 answer children train first: each send asks staff until staff, or an optional
 // graduation after N approved unchanged drafts in a row, switch the child to sending.
 export const SENDING_MODES = Object.freeze(['training', 'sending'])
 export const GRADUATE_MAX = 100
+// How many characters an answer bot's shared notes may hold; a child's own notes keep 8000. The
+// settings page's textarea holds the same number (src/client/omni-tree.js; a test keeps them equal).
+export const SHARED_NOTES_MAX = 32000
 const graduateOf = value => (Number.isInteger(value) && value >= 1 && value <= GRADUATE_MAX ? value : null)
 // RFC-0001 staff take-over: a proven staff message pauses its chat's child until staff resume it
 // or this long passes with no newer staff message there; each answer bot sets its own.
@@ -786,7 +797,7 @@ export function install(rt) {
   }, 'omni-channels: paused answer children')
 
   const AnswerSettings = z.object({
-    botId: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['isolated', 'collective']), allowedTools: z.array(z.enum(ANSWER_EXTRA_TOOLS)).max(ANSWER_EXTRA_TOOLS.length), sharedNotes: z.string().max(8000),
+    botId: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['isolated', 'collective']), allowedTools: z.array(z.enum(ANSWER_EXTRA_TOOLS)).max(ANSWER_EXTRA_TOOLS.length), sharedNotes: z.string().max(SHARED_NOTES_MAX),
     // Optional so an earlier client's save keeps them.
     newChildMode: z.enum(SENDING_MODES).optional(), graduateAfter: z.number().int().min(1).max(GRADUATE_MAX).nullable().optional(),
     resumeAfterMs: z.number().int().min(RESUME_AFTER_MIN_MS).max(RESUME_AFTER_MAX_MS).optional(),
@@ -797,6 +808,9 @@ export function install(rt) {
     if (rt.readOnly?.() !== undefined) throw refused(rt.readOnly())
     const bot = rt.botOf(input.botId)
     if (bot?.kind !== 'omni') throw refused('Answer mode needs a channel bot.')
+    const served = servedToolNamesOf(ctx)
+    const unserved = [...new Set(input.allowedTools)].find(name => !served.has(name))
+    if (unserved !== undefined) throw refused(`Answer tool "${unserved}" is not served by this host.`)
     // Only threads with a chat on a channel the bot owns explicitly become its children; the
     // default bot's threads on channels it holds as the catch-all stay ordinary threads. Any
     // member counts, so a multi-chat thread is refused whichever channel its first chat is on.

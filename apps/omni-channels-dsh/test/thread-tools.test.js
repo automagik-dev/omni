@@ -23,7 +23,7 @@ import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
 import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
-import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
+import { ANSWER_CHAT_TOOLS, THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
 import { matches } from '../src/host/omni-events.js'
 import { answerBench, ANSWER_MASTER, askedOf, boot, CHAT, defaultAnswerState, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, OTHER_INSTANCE, PNG, preExecute, record, resetFetch, saved, signal, teamState, fakeOmni, until, use, watchedOmni } from './thread-fixture.js'
 
@@ -1091,6 +1091,47 @@ test('SC4 answer children refuse forged tools, raw API and wrong-chat writes whi
   for (const name of ['shell', 'write', 'omni_call', 'thread_ask_omni', 'subagent', 'unknown_tool']) await assert.rejects(b.call('omni-answer-settings', { ...b.settings, allowedTools: [name] }))
   assert.match(await use(b, 'set_child_notes', id, { threadId: child.id, notes: 'escalate' }), /Only the owning/)
   assert.match(await use(b, 'set_answer_shared_notes', id, { botId: ANSWER_MASTER, notes: 'escalate' }), /Only the owning/)
+})
+
+test('an answer child omits an extra the global host no longer serves and warns once per bot and tool', async t => {
+  const b = await answerBench(t, { allowedTools: ['read'] })
+  const globallyServed = b.ctx.tools.schemas()
+  b.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'read')
+  const warned = []
+  b.channels.warn = (...args) => { warned.push(args) }
+  const child = await b.child()
+  assert.deepEqual(b.restricts.at(-1).filter.allow, ANSWER_CHAT_TOOLS)
+  assert.deepEqual(warned, [['omni-channels: answer bot %s allowed tool %s is not served; leaving it out', ANSWER_MASTER, 'read']])
+  await b.child()
+  assert.equal(warned.length, 1)
+  assert.equal((await preExecute(b, 'read', child.sessionId)).kind, 'deny')
+  assert.notEqual((await preExecute(b, 'thread_say', child.sessionId, { text: 'hello' })).kind, 'deny')
+})
+
+test('an answer child fails closed when a chat tool is not globally served', async t => {
+  const b = await answerBench(t)
+  const globallyServed = b.ctx.tools.schemas()
+  b.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'thread_say')
+  await assert.rejects(b.child(), /does not serve answer chat tool "thread_say"/)
+  assert.equal(b.channels.threads.list().length, 0)
+})
+
+test('answer save refuses an extra that is not globally served', async t => {
+  const b = await answerBench(t)
+  const globallyServed = b.ctx.tools.schemas()
+  b.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'read')
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, allowedTools: ['read'] }), /Answer tool "read" is not served/)
+  assert.deepEqual(b.view().omniAnswers[ANSWER_MASTER].allowedTools, [])
+})
+
+test('answer admission uses the global served set when an agent scope is already narrowed', async t => {
+  const b = await answerBench(t, { allowedTools: ['read'] })
+  const child = await b.child()
+  const globallyServed = b.ctx.tools.schemas()
+  const fresh = b.freshAgent(child.sessionId)
+  fresh.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'read')
+  await Promise.all((b.ctx.listeners.get('agent/created') ?? []).map(listener => listener({ agent: fresh })))
+  assert.deepEqual(b.restricts.filter(entry => entry.agent === fresh).at(-1).filter.allow, [...ANSWER_CHAT_TOOLS, 'read'])
 })
 
 test('SC5 isolated and collective visibility never widen send keys and narrow live children immediately', async t => {
