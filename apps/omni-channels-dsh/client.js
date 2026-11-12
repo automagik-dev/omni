@@ -16414,6 +16414,31 @@ function answerModeOf(thread) {
     progress: mode === "training" && after !== null ? `${streak} of ${after} approved drafts in a row. At ${after} it switches to sending.` : null
   };
 }
+var leftOf = (ms2) => {
+  const minutes = Math.max(1, Math.ceil(ms2 / 6e4));
+  if (minutes < 60) return `${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 === 0 ? `${hours} h left` : `${hours} h ${minutes % 60} min left`;
+};
+function pauseOf(thread, now = Date.now()) {
+  if (thread?.answerChild !== true || thread.paused !== true) return null;
+  const until = Number.isFinite(thread.pausedUntil) ? thread.pausedUntil : null;
+  return {
+    label: "Paused",
+    left: until === null ? "until you resume it" : until <= now ? "resuming…" : leftOf(until - now),
+    title: until === null ? "Staff are answering this chat. It answers again when you resume it." : "Staff are answering this chat. It answers again when you resume it, or by itself once staff stay quiet there long enough."
+  };
+}
+function useNow(on2) {
+  const [now, setNow] = (0, import_react16.useState)(() => Date.now());
+  (0, import_react16.useEffect)(() => {
+    if (!on2) return void 0;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 15e3);
+    return () => clearInterval(timer);
+  }, [on2]);
+  return now;
+}
 function permissionMenuOf(thread) {
   if (thread?.answerChild === true) {
     const mode = answerModeOf(thread).mode;
@@ -16472,10 +16497,12 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   });
   const free = freeMarkOf(thread);
   const answer = answerModeOf(thread);
+  const now = useNow(thread.answerChild === true && thread.paused === true);
+  const pause = pauseOf(thread, now);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: "needs_newer_team" }) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", answer ? `${answer.label}: ${answer.title}` : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", answer ? `${answer.label}: ${answer.title}` : "", pause ? `${pause.label}, ${pause.left}` : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const menuLabel = answer ? `Sending mode in ${name}` : t("Asking first in {name}", { name });
   const onClick = () => {
     if (opens) {
@@ -16509,6 +16536,13 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       setProblem(t("Could not change this chat's settings. Try again."));
     });
   };
+  const resume = () => {
+    setProblem(null);
+    call("resume_answer_child", { threadId: thread.id }).catch((error) => {
+      console.warn("Could not resume the chat:", error);
+      setProblem("Could not resume this chat. Try again.");
+    });
+  };
   const onMenuKey = (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
@@ -16516,7 +16550,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   };
   return (0, import_react16.createElement)(
     "div",
-    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0, "data-answer": answer ? true : void 0 },
+    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0, "data-answer": answer ? true : void 0, "data-paused": pause ? true : void 0 },
     (0, import_react16.createElement)(
       "button",
       {
@@ -16532,7 +16566,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       },
       (0, import_react16.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
       (0, import_react16.createElement)("span", { className: "bt-thread-title" }, name),
-      answer ? (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": answer.mode, title: answer.title, "aria-hidden": true }, answer.label) : null,
+      answer && !pause ? (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": answer.mode, title: answer.title, "aria-hidden": true }, answer.label) : null,
       reason ? (0, import_react16.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
       free ? (0, import_react16.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react16.createElement)(SparkIcon)) : null,
       dot ? (0, import_react16.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
@@ -16561,6 +16595,21 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         onBlur: () => setConfirming(false)
       }, confirming ? t("Remove") : (0, import_react16.createElement)(CloseIcon))
     ),
+    // Paused: its own line under the name, at every width, with the time left and Resume.
+    pause ? (0, import_react16.createElement)(
+      "div",
+      { className: "ot-paused", title: pause.title },
+      (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": "paused", "aria-hidden": true }, pause.label),
+      (0, import_react16.createElement)("span", { className: "ot-paused-left", "aria-hidden": true }, pause.left),
+      (0, import_react16.createElement)("button", {
+        type: "button",
+        className: "bt-soft bt-soft-sm ot-resume",
+        "aria-label": `Resume answering in ${name}`,
+        title: "Let it answer this chat again",
+        tabIndex: shown ? void 0 : -1,
+        onClick: resume
+      }, "Resume")
+    ) : null,
     menu ? (0, import_react16.createElement)(
       "div",
       { className: "ot-thread-menu", role: "menu", "aria-label": menuLabel, onKeyDown: onMenuKey },
@@ -16872,6 +16921,9 @@ var NEW_CHILD_MODES = {
   training: ["Training", "A new child asks you before each send."],
   sending: ["Sending", "A new child sends without asking."]
 };
+var RESUME_MINUTES_DEFAULT = 30;
+var RESUME_MINUTES_MAX = 24 * 60;
+var minutesOf = (ms2) => String(Number.isInteger(ms2) && ms2 >= 6e4 ? Math.round(ms2 / 6e4) : RESUME_MINUTES_DEFAULT);
 var ANSWER_TOOLS = [["read", "Read files"], ["read_image", "Read images"], ["glob", "Find files by name"], ["grep", "Search inside files"]];
 function SwitchRow({ label, title, on: on2, onChange }) {
   return (0, import_react16.createElement)(
@@ -16902,6 +16954,7 @@ function AnswerSettings({ bot, value = {} }) {
   const [newChildMode, setNewChildMode] = (0, import_react16.useState)(value.newChildMode ?? "training");
   const [graduates, setGraduates] = (0, import_react16.useState)(Number.isInteger(value.graduateAfter));
   const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
+  const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   (0, import_react16.useEffect)(() => {
@@ -16912,14 +16965,17 @@ function AnswerSettings({ bot, value = {} }) {
     setNewChildMode(value.newChildMode ?? "training");
     setGraduates(Number.isInteger(value.graduateAfter));
     setGraduateAfter(String(value.graduateAfter ?? 5));
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter]);
+    setResumeMinutes(minutesOf(value.resumeAfterMs));
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs]);
   const count = Number(graduateAfter);
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
+  const minutes = Number(resumeMinutes);
+  const minutesOk = Number.isInteger(minutes) && minutes >= 1 && minutes <= RESUME_MINUTES_MAX;
   const save = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4 });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -16972,6 +17028,26 @@ function AnswerSettings({ bot, value = {} }) {
         })
       ) : null,
       (0, import_react16.createElement)(
+        Field,
+        { label: "Resume a paused child after", note: "A child pauses when staff write in its chat from their own phone. It answers again after this many minutes with no staff message there, or when you press Resume." },
+        (0, import_react16.createElement)(
+          "span",
+          { className: "ot-answer-minutes" },
+          (0, import_react16.createElement)("input", {
+            className: "bt-input ot-answer-count",
+            type: "number",
+            min: 1,
+            max: RESUME_MINUTES_MAX,
+            step: 1,
+            inputMode: "numeric",
+            value: resumeMinutes,
+            "aria-invalid": !minutesOk || void 0,
+            onChange: (event) => setResumeMinutes(event.target.value)
+          }),
+          (0, import_react16.createElement)("span", { "aria-hidden": true }, "minutes")
+        )
+      ),
+      (0, import_react16.createElement)(
         "div",
         { className: "ot-answer-tools", role: "group", "aria-label": "Children may also" },
         (0, import_react16.createElement)("span", { className: "bt-field-label", "aria-hidden": true }, "Children may also"),
@@ -16986,7 +17062,7 @@ function AnswerSettings({ bot, value = {} }) {
       (0, import_react16.createElement)(
         "div",
         { className: "bt-actions" },
-        (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || graduates && !countOk, onClick: save }, "Save answer settings")
+        (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || graduates && !countOk || !minutesOk, onClick: save }, "Save answer settings")
       )
     ) : null
   );
@@ -17079,8 +17155,9 @@ ${row}>*{grid-column:1/-1}
 ${row} .bt-thread{grid-row:1;flex-wrap:wrap;row-gap:1px}
 ${row} .ot-thread-acts{grid-column:2;grid-row:1;align-self:end;z-index:1;margin-bottom:4px}
 ${row} .bt-thread-title{flex-basis:calc(100% - 20px)}
-${row} .ot-mode{margin:2px 0 2px 20px}
-${row} .ot-thread-reason{flex:1 1 0;max-width:none}
+${row} .bt-thread .ot-mode{margin:2px 0 2px 20px}
+${row} .ot-thread-reason{flex:1 1 100%;max-width:none;box-sizing:border-box;padding-left:20px}
+${row}:is(:hover,:focus-within) .ot-thread-reason,${row}:has(.ot-thread-acts[data-on]) .ot-thread-reason{padding-right:48px}
 ${row} .bt-thread::after{content:'';flex:none;width:0}
 ${row}:is(:hover,:focus-within) .bt-thread::after,${row}:has(.ot-thread-acts[data-on]) .bt-thread::after{width:48px}`;
 var OMNI_TREE_CSS = `
@@ -17137,6 +17214,12 @@ var OMNI_TREE_CSS = `
 .ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
 .ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
 .ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
+/* A paused answer child: under its name and aligned with it, at every width, the pause, its time left and the team's Resume button. The time left is never cut: where the line is too short, it wraps to the pill's left edge, and Resume drops under it. */
+.ot-mode[data-mode=paused]{color:color-mix(in srgb,var(--bt-accent, #22d3ee) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-accent, #22d3ee) 15%,transparent)}
+.ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
+.ot-paused-left{flex:1 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.ot-paused .ot-resume{height:24px;padding:0 10px}
+.ot-answer-minutes{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--bt-ink-2)}
 ${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
 @container ot-tree (max-width:259px){${stackedRow(".ot-thread[data-answer]")}}
 /* Answer settings: the Bot team's own switches, fields, selects, inputs and button (bt-*). */

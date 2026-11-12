@@ -268,12 +268,36 @@ export function install(rt) {
     return queued
   }
 
+  // RFC-0001: who spoke in each Session's open turn, by DSH's message sources, so only staff
+  // resume a paused answer child from its master's chat (thread-tools.js). Staff are a prompt a
+  // client sent through DSH's session RPC: its `user` source with the request id DSH keeps on the
+  // accepted message, as DSH's own browser-prompt check reads it. The harness's own context forms
+  // and a person's answer to a card are neutral. Anything else (another bot's relay, an automation
+  // event, a schedule, recalled material, a note the host wrote as the user's) marks the turn as
+  // carrying other people's words until it ends. A message logged while no turn is open counts
+  // for the next one.
+  const NEUTRAL_FORMS = new Set(['instructions', 'catalog', 'snapshot', 'notice'])
+  const voices = new Map()
+  const hear = (sessionId, source) => {
+    if (!voices.has(sessionId)) voices.set(sessionId, { open: false, staff: false, others: false })
+    const turn = voices.get(sessionId)
+    if (source?.kind === 'user' && typeof source.rpcId === 'string' && source.form === undefined) turn.staff = true
+    else if (!(source?.kind === 'user-question-reply' || (NEUTRAL_FORMS.has(source?.form) && !['bot', 'omni-run'].includes(source.kind)))) turn.others = true
+  }
+  const staffAsked = (sessionId) => {
+    const turn = voices.get(sessionId)
+    return turn?.open === true && turn.staff && !turn.others
+  }
+
   ctx.on('session/event', (session, event) => {
     const id = session?.id
     if (id === undefined) return
     if (event?.type === 'turn/start') {
       turns.set(id, { turnId: String(event.data?.turn ?? event.seq ?? Date.now()), runIds: [], words: undefined })
+      const waiting = voices.get(id)?.open === false ? voices.get(id) : undefined
+      voices.set(id, { open: true, staff: waiting?.staff === true, others: waiting?.others === true })
     } else if (event?.type === 'user/message') {
+      hear(id, event.data?.source)
       const tag = runTagOf(event.data)
       if (tag === null) return
       // Gated whatever its run's status; bound only to a run of this Session.
@@ -286,6 +310,7 @@ export function install(rt) {
       const text = wordsOf(event)
       if (text) turn.words = text
     } else if (event?.type === 'turn/end') {
+      voices.delete(id)
       const turn = adopted(id)
       turns.delete(id)
       if (turn === undefined || turn.runIds.length === 0) return
@@ -385,6 +410,7 @@ export function install(rt) {
     release,
     requeue,
     taken: id => claimed.has(id),
+    staffAsked,
     get stopping() { return stopping },
   }
 }

@@ -446,8 +446,10 @@ export const answerState = () => teamState({
   bots: { ...teamState().bots, [ANSWER_MASTER]: { id: ANSWER_MASTER, kind: 'omni', name: 'Service', instructions: 'MASTER: help customers with orders.', model: 'deepseek/pro', createdAt: 2 } },
   omniOwnership: { defaultBotId: 'm1', channels: { [INSTANCE]: ANSWER_MASTER } },
 })
-export async function answerBench(t, { visibility = 'isolated', allowedTools = [], presets: supplied, enabled = true } = {}) {
-  t.mock.timers.enable({ apis: ['setTimeout'] })
+// `clock`: a start time for a fake clock that also moves Date (staff take-over deadlines).
+export const ANSWER_CLOCK = Date.parse('2026-11-12T12:00:00.000Z')
+export async function answerBench(t, { visibility = 'isolated', allowedTools = [], presets: supplied, enabled = true, clock } = {}) {
+  t.mock.timers.enable(clock === undefined ? { apis: ['setTimeout'] } : { apis: ['setTimeout', 'Date'], now: clock })
   const omni = watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] })
   const home = homeFor(t, omni, answerState())
   const selected = new Map()
