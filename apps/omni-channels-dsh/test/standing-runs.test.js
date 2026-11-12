@@ -9,7 +9,7 @@
 // edited draft (sent text differs from the approved one) is proven at rt.recordAnswerDraft.
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { answerBench, ANSWER_MASTER, CHAT, CHATS, GROUP, guarded, MESSAGE_IDS, preExecute, resetFetch, restart, signal, until } from './thread-fixture.js'
+import { answerBench, ANSWER_MASTER, CHAT, CHATS, GROUP, guarded, logOf, MESSAGE_IDS, preExecute, resetFetch, restart, signal, until } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -47,6 +47,8 @@ async function answering(t, b, settings = {}) {
   const message = b.agentOf(child.sessionId).calls[0]
   b.emit(child.sessionId, 'turn/start', { turn: 1 }, Date.now())
   b.emit(child.sessionId, 'user/message', { content: message.content, source: message.source })
+  // The Session's log, which a draft's id reads its turn from.
+  logOf(b, child.sessionId, [{ type: 'turn/start', data: { turn: 1 } }, { type: 'user/message', data: { content: message.content, source: message.source } }])
   assert.equal(b.channels.standingRuns.asksFirst(child.sessionId), true, 'the answer run asks first')
   return child
 }
@@ -152,9 +154,19 @@ test('SC6 a rejected or edited draft ends the streak; cancelled, unavailable and
 test('SC6 a retried send and a replayed approval of one draft count once, also after a restart', async t => {
   const b = await answerBench(t)
   const child = await answering(t, b, { graduateAfter: 2 })
+  // The child's Session log as DSH keeps it, across a restart too.
+  const log = [{ type: 'turn/start', data: { turn: 1 } }]
+  logOf(b, child.sessionId, log)
   const first = await say(b, child, 'Only once.', { callId: 'call-retried' })
   assert.equal(first.card, true)
+  assert.match(first.result, /^Sent into the chat/)
   assert.deepEqual(stateOf(b, child), ['training', 1])
+  // The same call replayed in the same turn through the whole pipeline (gate, card, approval,
+  // body) is the same draft: one approved draft sent twice neither counts twice nor graduates.
+  const again = await say(b, child, 'Only once.', { callId: 'call-retried' })
+  assert.deepEqual([again.card, again.result?.startsWith('Sent into the chat')], [true, true])
+  assert.deepEqual(stateOf(b, child), ['training', 1])
+  assert.equal(b.channels.threads.byId(child.id).countedDrafts.length, 1)
   // DSH replays the approval and retries the body under the same call id.
   const approvals = [...b.ctx.listeners.get('approval/request')].reverse()
   const request = { agent: b.agentOf(child.sessionId), toolName: 'thread_say', callId: 'call-retried', reason: first.decision.reason }
@@ -162,9 +174,7 @@ test('SC6 a retried send and a replayed approval of one draft count once, also a
   assert.equal(await replay(0), 'allowed-once')
   assert.match(await b.ctx.registeredTools.get('thread_say').execute({ text: 'Only once.' }, { agent: b.agentOf(child.sessionId), callId: 'call-retried' }), /^Sent into the chat/)
   assert.deepEqual(stateOf(b, child), ['training', 1])
-  // The draft is kept by the host's own id for that card; recording it again counts nothing.
   const [counted] = b.channels.threads.byId(child.id).countedDrafts
-  assert.equal(b.channels.threads.byId(child.id).countedDrafts.length, 1)
   assert.equal((await b.channels.recordAnswerDraft({ threadId: child.id, draftId: counted, approvedText: 'Only once.', sentText: 'Only once.', outcome: 'sent' })).counted, false)
   // A call with no identity is never counted.
   const exec = { name: 'thread_say', arguments: { text: 'No id.' }, agent: b.agentOf(child.sessionId) }
@@ -173,14 +183,20 @@ test('SC6 a retried send and a replayed approval of one draft count once, also a
   assert.equal((await gate(0)).kind, 'ask')
   await b.ctx.registeredTools.get('thread_say').execute({ text: 'No id.' }, { agent: b.agentOf(child.sessionId) })
   assert.deepEqual(stateOf(b, child), ['training', 1])
-  // A provider that issues the same call id again in a later turn makes a new card and draft.
-  assert.equal((await say(b, child, 'A later answer.', { callId: 'call-retried' })).card, true)
-  assert.deepEqual(stateOf(b, child), ['sending', 2])
 
-  // The mode, the streak and the counted drafts are kept across a restart.
-  const again = await restart(t, b, b.home, { services: { permissionPresets: b.presets } })
-  const kept = again.channels.threads.byId(child.id)
-  assert.deepEqual([kept.sendingMode, kept.approvedStreak, kept.countedDrafts.length], ['sending', 2, 2])
-  assert.equal((await again.channels.recordAnswerDraft({ threadId: child.id, draftId: counted, approvedText: 'Only once.', sentText: 'Only once.', outcome: 'sent' })).counted, false)
-  assert.equal(again.channels.answerNeedsApproval(child.id), false)
+  // After a restart, the same call replayed through the whole pipeline is still that draft.
+  const after = await restart(t, b, b.home, { services: { permissionPresets: b.presets } })
+  logOf(after, child.sessionId, log)
+  const kept = after.channels.threads.byId(child.id)
+  assert.deepEqual([kept.sendingMode, kept.approvedStreak, kept.countedDrafts], ['training', 1, [counted]])
+  const replayed = await say(after, child, 'Only once.', { callId: 'call-retried' })
+  assert.deepEqual([replayed.card, replayed.result?.startsWith('Sent into the chat')], [true, true])
+  assert.deepEqual(stateOf(after, child), ['training', 1])
+  assert.equal(after.channels.answerNeedsApproval(child.id), true)
+  // A provider that issues the same call id again in a later turn makes a new card and draft.
+  log.push({ type: 'turn/start', data: { turn: 2 } })
+  logOf(after, child.sessionId, log)
+  assert.equal((await say(after, child, 'A later answer.', { callId: 'call-retried' })).card, true)
+  assert.deepEqual(stateOf(after, child), ['sending', 2])
+  assert.equal(after.channels.answerNeedsApproval(child.id), false)
 })

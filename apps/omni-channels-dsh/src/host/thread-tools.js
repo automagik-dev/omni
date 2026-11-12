@@ -20,7 +20,7 @@
 // host reads the message's row, checks it is in the thread's chat and has media, and only then
 // downloads it, saves it through DSH's attachments and hands the model the image beside Omni's
 // description of it.
-import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
@@ -317,21 +317,43 @@ export function install(rt) {
     const said = reply.json?.error?.message
     return `Omni answered ${reply.status}${typeof said === 'string' && said !== '' ? `: ${said.slice(0, 300)}` : '.'}`
   }
-  // RFC-0001 training drafts, keyed by DSH's call id from the card to the send: the text the
-  // card asked about, then staff's answer. Each card gets a draft id of the host's own, since a
-  // provider may issue the same call id again in a later turn. With no call id a draft counts
-  // for nothing.
+  // RFC-0001 training drafts, from the card to the send: the text the card asked about, then
+  // staff's answer. A draft's id is its Session, its turn and DSH's call id: the turn is read from
+  // the Session's own log (its newest turn/start), which DSH keeps across a restart, so the same
+  // call replayed through the gate, the card and the body, then or after a restart, is the same
+  // draft and counts once (threads.js keeps the counted ids). A provider that issues the same
+  // call id in a later turn makes a new draft. With no call id, or no turn in the log, a draft
+  // counts for nothing.
   const drafts = new Map()
   const DRAFTS_MAX = 200
+  const TURN_SCAN = 1000
+  const turnOf = (session) => {
+    if (typeof session?.eventAt !== 'function') return null
+    const last = (session.seq ?? 0) - 1
+    for (let seq = last; seq >= 0 && seq > last - TURN_SCAN; seq -= 1) {
+      const event = session.eventAt(seq)
+      if (event?.type === 'turn/start') return Number.isInteger(event.data?.turn) ? event.data.turn : null
+    }
+    return null
+  }
+  const draftIdOf = (agent, callId) => {
+    const sessionId = agent?.session?.id ?? agent?.id
+    const turn = turnOf(agent?.session)
+    if (typeof callId !== 'string' || callId === '' || typeof sessionId !== 'string' || turn === null) return null
+    return createHash('sha256').update(JSON.stringify([sessionId, turn, callId])).digest('hex')
+  }
   const noteDraft = (exec, open) => {
-    if (typeof exec?.callId !== 'string' || exec.callId === '') return
-    drafts.set(exec.callId, { draftId: randomUUID(), threadId: open.thread.id, text: open.args.text, approved: false })
+    const draftId = draftIdOf(exec?.agent, exec?.callId)
+    if (draftId === null) return
+    drafts.delete(draftId)
+    drafts.set(draftId, { draftId, threadId: open.thread.id, text: open.args.text, approved: false })
     if (drafts.size > DRAFTS_MAX) drafts.delete(drafts.keys().next().value)
   }
   const countDraft = async (exec, open, sent) => {
-    const draft = typeof exec?.callId === 'string' ? drafts.get(exec.callId) : undefined
+    const draftId = draftIdOf(exec?.agent, exec?.callId)
+    const draft = draftId === null ? undefined : drafts.get(draftId)
     if (draft?.approved !== true || draft.threadId !== open.thread.id) return
-    drafts.delete(exec.callId)
+    drafts.delete(draftId)
     try {
       await rt.recordAnswerDraft({ threadId: draft.threadId, draftId: draft.draftId, approvedText: draft.text, sentText: sent, outcome: draft.text === sent ? 'sent' : 'edited' })
     } catch (error) {
@@ -342,13 +364,14 @@ export function install(rt) {
   // approved waits for the send; rejected ends the streak; cancelled or unavailable count for
   // nothing. It never throws, so the outcome always passes through unchanged.
   rt.answerApprovalOutcome = async (thread, request, outcome) => {
-    const draft = typeof request?.callId === 'string' ? drafts.get(request.callId) : undefined
+    const draftId = draftIdOf(request?.agent, request?.callId)
+    const draft = draftId === null ? undefined : drafts.get(draftId)
     if (draft === undefined || request.toolName !== 'thread_say' || thread?.id !== draft.threadId) return
     if (outcome === 'allowed-once') {
       draft.approved = true
       return
     }
-    drafts.delete(request.callId)
+    drafts.delete(draftId)
     if (outcome !== 'rejected') return
     await rt.recordAnswerDraft({ threadId: draft.threadId, draftId: draft.draftId, approvedText: draft.text, sentText: '', outcome: 'rejected' })
       .catch(error => rt.warn('omni-channels: a rejected answer draft was not counted: %s', error?.message ?? error))
