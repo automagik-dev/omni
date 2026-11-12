@@ -17,6 +17,16 @@ const listQuerySchema = z.object({
   type: RuleTypeSchema.optional(),
 });
 
+// A rule's own notes for whoever reads it (#1704: the omni-channels plugin reads a person's
+// `context` and `capability` from their allow rule). One JSON object of at most 16 KB.
+export const RULE_METADATA_MAX_BYTES = 16 * 1024;
+const ruleMetadataSchema = z
+  .record(z.string(), z.unknown())
+  .refine((value) => new TextEncoder().encode(JSON.stringify(value)).length <= RULE_METADATA_MAX_BYTES, {
+    message: `metadata must be at most ${RULE_METADATA_MAX_BYTES} bytes as JSON`,
+  })
+  .describe('Free JSON object kept on the rule (at most 16 KB)');
+
 // Create rule schema
 const createRuleSchema = z.object({
   instanceId: z.string().uuid().optional().nullable().describe('Instance ID (null for global rule)'),
@@ -30,9 +40,10 @@ const createRuleSchema = z.object({
   expiresAt: optionalDateParam('expiresAt').describe('Optional expiration (ISO 8601 date string)'),
   action: z.enum(['block', 'allow', 'silent_block']).default('block').describe('Action to take'),
   blockMessage: z.string().optional().describe('Custom block message'),
+  metadata: ruleMetadataSchema.optional(),
 });
 
-// Update rule schema
+// Update rule schema: metadata, when given, replaces the rule's whole object.
 const updateRuleSchema = createRuleSchema.partial();
 
 // Check access schema
@@ -115,6 +126,11 @@ accessRoutes.patch('/rules/:id', zValidator('json', updateRuleSchema), async (c)
   const id = c.req.param('id');
   const data = c.req.valid('json');
   const services = c.get('services');
+
+  // A pairing request's metadata belongs to the pairing flow (its code and consumed mark).
+  if (data.metadata !== undefined && (await services.access.getById(id)).ruleType === 'pending_pairing') {
+    return c.json({ error: { code: 'VALIDATION_ERROR', message: 'A pairing request keeps its own metadata' } }, 400);
+  }
 
   const rule = await services.access.update(id, data);
 

@@ -1246,6 +1246,38 @@ test('pauseOf names the time left in plain words, says when it is resuming, and 
   assert.equal(ui.pauseOf(THREAD(2), at), null)
 })
 
+test('answer settings bind each child to its person only when staff switch it on, and send it off again', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const value = { enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null }
+  const open = view => { nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick() }
+  const control = view => nodes(view.draw()).find(node => node.props?.role === 'switch' && node.props['aria-label'] === 'Bind each child to its person')
+  const save = async view => { nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick(); await settle() }
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value }))
+  t.after(() => view.unmount())
+  open(view)
+  await settle()
+  assert.equal(control(view).props['aria-checked'], false)
+  await save(view)
+  assert.equal('personBinding' in calls.at(-1)[1], false, 'a bot that never used it saves as before')
+  open(view)
+  await settle()
+  control(view).props.onClick()
+  await settle()
+  assert.equal(control(view).props['aria-checked'], true)
+  await save(view)
+  assert.equal(calls.at(-1)[1].personBinding, true)
+  const on = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { ...value, personBinding: true } }))
+  t.after(() => on.unmount())
+  open(on)
+  await settle()
+  assert.equal(control(on).props['aria-checked'], true)
+  control(on).props.onClick()
+  await settle()
+  await save(on)
+  assert.equal(calls.at(-1)[1].personBinding, false)
+})
+
 test('answer settings set the quiet interval in whole minutes, 30 by default, one to a day', async t => {
   calls.length = 0
   answer = () => ({})

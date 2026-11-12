@@ -16956,6 +16956,7 @@ function AnswerSettings({ bot, value = {} }) {
   const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
   const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
   const [knowledgeFolder, setKnowledgeFolder] = (0, import_react16.useState)(value.knowledgeFolder ?? "");
+  const [personBinding, setPersonBinding] = (0, import_react16.useState)(value.personBinding === true);
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   (0, import_react16.useEffect)(() => {
@@ -16968,7 +16969,8 @@ function AnswerSettings({ bot, value = {} }) {
     setGraduateAfter(String(value.graduateAfter ?? 5));
     setResumeMinutes(minutesOf(value.resumeAfterMs));
     setKnowledgeFolder(value.knowledgeFolder ?? "");
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder]);
+    setPersonBinding(value.personBinding === true);
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding]);
   const count = Number(graduateAfter);
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
   const minutes = Number(resumeMinutes);
@@ -16976,8 +16978,9 @@ function AnswerSettings({ bot, value = {} }) {
   const save = async () => {
     setBusy(true);
     setProblem(null);
+    const person = personBinding || value.personBinding === true ? { personBinding } : {};
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null, ...person });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -17061,6 +17064,8 @@ function AnswerSettings({ bot, value = {} }) {
         { label: "Knowledge folder", note: "The business's own files, such as instructions and FAQ. While a folder is set, children read, find and search files there, and nowhere else. Full path; empty for none." },
         (0, import_react16.createElement)("input", { className: "bt-input ot-answer-folder", type: "text", value: knowledgeFolder, title: knowledgeFolder || void 0, placeholder: "/path/to/folder", spellCheck: false, autoComplete: "off", onChange: (event) => setKnowledgeFolder(event.target.value) })
       ),
+      (0, import_react16.createElement)(SwitchRow, { label: "Bind each child to its person", on: personBinding, onChange: setPersonBinding }),
+      (0, import_react16.createElement)("p", { className: "bt-note" }, "A child then takes the notes and the capability in its person's access rule, and answers only messages that rule lets in. Needs isolated visibility, and the file tools off or limited to a knowledge folder."),
       (0, import_react16.createElement)(
         Field,
         { label: "Shared notes for collective children" },

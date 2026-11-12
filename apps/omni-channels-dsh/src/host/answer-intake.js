@@ -1,12 +1,14 @@
 // RFC-0001: answer subscriptions obey the instance's intake policy before any child
 // is created or woken. Ordinary automations keep their own admission contract.
 import { z } from 'zod'
+import { personOfRule } from './person-binding.js'
 
 const TTL_MS = 30_000
 const CACHE_MAX = 1_000
 const instanceReply = z.object({ data: z.object({ channel: z.string().min(1), inboundMaxAgeMinutes: z.number().finite() }) })
 const chatReply = z.object({ data: z.object({ chatType: z.string(), externalId: z.string(), instanceId: z.string() }) })
-const accessReply = z.object({ data: z.object({ allowed: z.boolean() }) })
+// #1704: the rule that decided rides along; only person binding reads it (person-binding.js).
+const accessReply = z.object({ data: z.object({ allowed: z.boolean(), rule: z.unknown().optional() }) })
 const rawSchema = z.object({
   isFromMe: z.boolean().optional(), isHistorySync: z.boolean().optional(), ingestMode: z.string().optional(),
   upsertType: z.string().optional(), resolvedSenderPhone: z.string().optional(),
@@ -42,7 +44,13 @@ export function answerIntake(rt) {
     if (!response?.ok) throw new Error('answer intake unavailable')
     return schema.parse(await response.json()).data
   }
-  return async row => {
+  // `detail`: false, or what admitted the message: `{ person }`, the person the allow rule names
+  // (null when no rule, or a rule that names no one person, admitted it), or `{ staff: true }`.
+  return async (row, { detail = false } = {}) => {
+    const admitted = await admit(row)
+    return detail || admitted === false ? admitted : true
+  }
+  async function admit(row) {
     if (!row.instanceId || !row.chatUuid) return false
     const parsed = rawSchema.safeParse(row.rawPayload ?? {})
     if (!parsed.success) return false
@@ -63,7 +71,7 @@ export function answerIntake(rt) {
       if (chat.instanceId !== row.instanceId || chat.chatType !== 'dm' || forbiddenJid(chat.externalId)) return false
       // Proven staff receipts are checked separately against the canonical message.
       // Staff is not the external sender and must not depend on the person's allowlist.
-      if (raw.isFromMe === true) return true
+      if (raw.isFromMe === true) return { staff: true }
       const primary = row.metadata?.from
       if (typeof primary !== 'string' || !primary) return false
       const phone = value => typeof value === 'string' && /^\d{7,15}$/.test(value) ? value : undefined
@@ -71,10 +79,10 @@ export function answerIntake(rt) {
       return await cached(JSON.stringify(['access', row.instanceId, instance.channel, ids]), async () => {
         for (const platformUserId of ids) {
           const result = await read('POST', '/access/check', accessReply, { instanceId: row.instanceId, platformUserId, channel: instance.channel })
-          if (result.allowed) return true
+          if (result.allowed) return { person: personOfRule(result.rule) }
         }
         return false
-      }, value => value === true)
+      }, value => value !== false)
     } catch {
       if (!warned.has(row.instanceId)) {
         warned.add(row.instanceId)
