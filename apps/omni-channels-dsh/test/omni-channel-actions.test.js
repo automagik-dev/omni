@@ -210,3 +210,66 @@ test('nothing the page gets back carries the key', async () => {
   assert.equal(JSON.stringify(replies).includes(KEY), false)
   assert.equal(JSON.stringify(replies).includes('omni_sk_'), false)
 })
+
+// -------------------------------------------------------------------------
+// Kapso (#1676): Omni makes the Kapso calls; the host only relays the page's clicks.
+
+const KAPSO_KEY = 'fixture-kapso-project-key'
+const PNID = '106540352242922'
+const KAPSO_NUMBERS = { data: { items: [{ phoneNumberId: PNID, wabaId: '102290129340398', displayPhoneNumber: '+1 555-000-0000', name: 'Fixture Store' }], webhookUrl: 'https://omni.example.com/api/v2/channels/whatsapp-business/webhook' } }
+
+test('Kapso numbers: the list, whether Omni has a public address, and when a key is still needed', async () => {
+  const listed = host({ 'GET /channels/whatsapp-business/kapso/numbers': () => [200, KAPSO_NUMBERS] })
+  assert.deepEqual(await listed.run('omni-kapso-numbers'), { configured: true, numbers: KAPSO_NUMBERS.data.items, publicAddress: true })
+  const noAddress = host({ 'GET /channels/whatsapp-business/kapso/numbers': () => [200, { data: { items: [], webhookUrl: null } }] })
+  assert.equal((await noAddress.run('omni-kapso-numbers')).publicAddress, false)
+  const noKey = host({ 'GET /channels/whatsapp-business/kapso/numbers': () => [409, { error: { code: 'KAPSO_NOT_CONFIGURED', message: 'no key' } }] })
+  assert.deepEqual(await noKey.run('omni-kapso-numbers'), { configured: false })
+  const badKey = host({ 'GET /channels/whatsapp-business/kapso/numbers': () => [502, { error: { code: 'KAPSO_KEY_REFUSED', message: 'Kapso refused to list its numbers: Invalid API key.' } }] })
+  assert.deepEqual(await badKey.run('omni-kapso-numbers'), { configured: false, message: 'Kapso refused to list its numbers: Invalid API key.' })
+  const multi = host({ 'GET /channels/whatsapp-business/kapso/numbers': () => [409, { error: { code: 'KAPSO_NOT_AVAILABLE', message: 'Connecting through Kapso is not available with multitenancy.' } }] })
+  await assert.rejects(multi.run('omni-kapso-numbers'), { message: 'Connecting through Kapso is not available with multitenancy.' })
+  await assert.rejects(host({}).run('omni-kapso-numbers'), { message: "This Omni can't connect through Kapso yet. Update Omni first." })
+})
+
+test('the Kapso key goes to Omni once and is never returned', async () => {
+  const { run, calls } = host({ 'PUT /channels/whatsapp-business/kapso/key': () => [200, { data: { saved: true } }] })
+  const reply = await run('omni-kapso-key', { apiKey: KAPSO_KEY })
+  assert.deepEqual(reply, { saved: true })
+  assert.deepEqual(calls, [{ method: 'PUT', path: '/channels/whatsapp-business/kapso/key', body: { apiKey: KAPSO_KEY }, key: KEY }])
+  const refusedKey = host({ 'PUT /channels/whatsapp-business/kapso/key': () => [502, { error: { code: 'KAPSO_KEY_REFUSED', message: 'Kapso refused to list its numbers: Invalid API key.' } }] })
+  await assert.rejects(refusedKey.run('omni-kapso-key', { apiKey: KAPSO_KEY }), error => error.message === 'Kapso refused to list its numbers: Invalid API key.' && !error.message.includes(KAPSO_KEY))
+  await assert.rejects(run('omni-kapso-key', { apiKey: 'short' }), { code: 'bot/invalid' })
+})
+
+test('a Kapso setup link is made by Omni and only an https link is opened', async () => {
+  const link = { url: 'https://app.kapso.ai/whatsapp/setup/abc', expiresAt: '2026-12-12T00:00:00Z' }
+  assert.deepEqual(await host({ 'POST /channels/whatsapp-business/kapso/setup-link': () => [200, { data: link }] }).run('omni-kapso-setup-link'), link)
+  const plain = host({ 'POST /channels/whatsapp-business/kapso/setup-link': () => [200, { data: { url: 'http://app.kapso.ai/x', expiresAt: null } }] })
+  await assert.rejects(plain.run('omni-kapso-setup-link'), { message: 'Omni sent a setup link that is not https' })
+})
+
+test('connecting a Kapso number creates the channel, connects it, and removes it again when Omni refuses', async () => {
+  const ok = host({
+    'POST /instances': created,
+    [`POST /instances/${CHANNEL}/whatsapp-business/kapso/connect`]: () => [200, { data: { instanceId: CHANNEL, status: 'connected', displayPhoneNumber: '+1 555-000-0000', qualityRating: 'GREEN', webhookUrl: 'https://omni.example.com/x' } }],
+  })
+  assert.deepEqual(await ok.run('omni-kapso-connect', { name: 'WhatsApp Business', phoneNumberId: PNID }), { id: CHANNEL, type: 'whatsapp-business', name: 'WhatsApp Business', detail: '+1 555-000-0000' })
+  assert.deepEqual(ok.calls.map(call => `${call.method} ${call.path}`), ['POST /instances', `POST /instances/${CHANNEL}/whatsapp-business/kapso/connect`])
+  assert.deepEqual(ok.calls[1].body, { phoneNumberId: PNID })
+
+  const refusedConnect = host({
+    'POST /instances': created,
+    [`POST /instances/${CHANNEL}/whatsapp-business/kapso/connect`]: () => [409, { error: { code: 'PUBLIC_URL_MISSING', message: 'Omni has no public address. Nothing was created.' } }],
+    [`DELETE /instances/${CHANNEL}`]: () => [200, { success: true }],
+  })
+  await assert.rejects(refusedConnect.run('omni-kapso-connect', { name: 'WhatsApp Business', phoneNumberId: PNID }), { message: 'Omni has no public address. Nothing was created.' })
+  assert.equal(refusedConnect.calls.at(-1).method, 'DELETE')
+})
+
+test('the Kapso test message goes only to the typed number, through Omni', async () => {
+  const { run, calls } = host({ 'POST /messages/send': () => [200, { data: { id: 'm1' } }] })
+  assert.deepEqual(await run('omni-kapso-test', { id: CHANNEL, phone: '+1 (555) 000-0001' }), { sent: true })
+  assert.deepEqual(calls[0].body, { instanceId: CHANNEL, to: '+15550000001', text: 'Omni test message: this WhatsApp Business number is connected.' })
+  await assert.rejects(run('omni-kapso-test', { id: CHANNEL, phone: '12' }), { code: 'bot/invalid' })
+})

@@ -1,7 +1,7 @@
 // Changing Omni's channels from the Channels page, on the linked Omni: add one (WhatsApp by
 // its QR code or a phone-number code, Telegram and Discord by a bot token, Slack through
-// Slack's own sign-in as a bot or as the person, WhatsApp Business with its Meta details),
-// reconnect, pause and resume it, and reply in a chat. Every call goes through this host with
+// Slack's own sign-in as a bot or as the person, WhatsApp Business with its Meta details or
+// through Kapso), reconnect, pause and resume it, and reply in a chat. Every call goes through this host with
 // the linked key (rt.omniRequest, omni.js), so the key never reaches the page: the page gets
 // the channel, the code to scan, the connection state and Omni's own words when it refuses.
 // A token or access token the person types goes from the page to here once and is not
@@ -75,6 +75,19 @@ const WabPayload = z.object({
   webhookSecret: token.optional(),
   signatureMode: z.enum(['x-hub-signature-256', 'x-webhook-signature']).optional(),
 })
+
+// Kapso: the Omni keeps one Kapso project key; the page picks one of the project's numbers.
+const KapsoKeyPayload = z.object({ apiKey: token })
+const KapsoConnectPayload = z.object({ name: z.string().trim().min(1).max(80), phoneNumberId: metaId })
+const KapsoTestPayload = z.object({ id, phone: z.string().trim().regex(/^\+?[\d\s().-]{8,24}$/) })
+const KapsoNumbers = z.object({ data: z.object({
+  items: z.array(z.object({ phoneNumberId: z.string().max(40), wabaId: z.string().max(40), displayPhoneNumber: z.string().max(64).nullable(), name: z.string().max(200).nullable() })).max(500),
+  webhookUrl: z.string().url().max(2048).nullable(),
+}) })
+const KapsoLink = z.object({ data: z.object({ url: z.string().url().max(4096), expiresAt: z.string().max(64).nullable() }) })
+const KapsoConnected = z.object({ data: z.object({ displayPhoneNumber: z.string().max(64).nullable() }).passthrough() })
+export const KAPSO_TEST_TEXT = 'Omni test message: this WhatsApp Business number is connected.'
+export const KAPSO_OUTDATED = 'This Omni can\'t connect through Kapso yet. Update Omni first.'
 
 const Deleted = z.object({ success: z.literal(true) })
 const Instance = z.object({ data: z.object({ id, name: z.string(), channel: z.string() }).passthrough() })
@@ -219,6 +232,60 @@ export function install(rt) {
     return { id: channelId, type: 'whatsapp-business', name: created.data.name }
   }
 
+  // Kapso: Omni makes every Kapso call itself (its /channels/whatsapp-business/kapso routes);
+  // the key goes from the page to Omni once and is never read back. A channel is created only
+  // for a picked number, and removed again when the connect fails.
+  async function kapsoReply(method, path, body) {
+    const reply = await request(method, path, body)
+    if (reply.status === 401 || reply.status === 403) throw refused(FORBIDDEN_CHANGE)
+    // An Omni from before these routes answers 404; the only 404 they give is an unknown number.
+    if (reply.status === 404 && reply.json?.error?.code !== 'KAPSO_NUMBER_NOT_FOUND') throw refused(KAPSO_OUTDATED)
+    return reply
+  }
+  async function kapsoNumbers() {
+    const reply = await kapsoReply('GET', '/channels/whatsapp-business/kapso/numbers')
+    const code = reply.json?.error?.code
+    if (code === 'KAPSO_NOT_CONFIGURED') return { configured: false }
+    if (code === 'KAPSO_KEY_REFUSED') return { configured: false, message: reply.message }
+    if (!reply.ok) throw refused(reply.message ?? `Omni answered ${reply.status}`)
+    const { items, webhookUrl } = parse(KapsoNumbers, reply.json, 'Omni did not return the Kapso numbers').data
+    return { configured: true, numbers: items, publicAddress: webhookUrl !== null }
+  }
+  async function kapsoKey(body) {
+    const { apiKey } = parse(KapsoKeyPayload, body, 'Paste the Kapso project API key')
+    const reply = await kapsoReply('PUT', '/channels/whatsapp-business/kapso/key', { apiKey })
+    if (!reply.ok) throw refused(reply.message ?? `Omni answered ${reply.status}`)
+    return { saved: true }
+  }
+  async function kapsoSetupLink() {
+    const reply = await kapsoReply('POST', '/channels/whatsapp-business/kapso/setup-link')
+    if (!reply.ok) throw refused(reply.message ?? `Omni answered ${reply.status}`)
+    const { url, expiresAt } = parse(KapsoLink, reply.json, 'Omni did not return a setup link').data
+    if (new URL(url).protocol !== 'https:') throw refused('Omni sent a setup link that is not https')
+    return { url, expiresAt }
+  }
+  async function kapsoConnect(body) {
+    const { name, phoneNumberId } = parse(KapsoConnectPayload, body, 'Pick one of your Kapso numbers')
+    const created = parse(Instance, await must('POST', '/instances', { name, channel: 'whatsapp-business' }), 'Omni did not return the new channel')
+    const channelId = created.data.id
+    let connected
+    try {
+      const reply = await kapsoReply('POST', `/instances/${channelId}/whatsapp-business/kapso/connect`, { phoneNumberId })
+      if (!reply.ok) throw refused(reply.message ?? `Omni answered ${reply.status}`)
+      connected = parse(KapsoConnected, reply.json, 'Omni did not confirm the connection')
+    } catch (error) {
+      await request('DELETE', `/instances/${channelId}`).catch(() => {})
+      throw error
+    }
+    return { id: channelId, type: 'whatsapp-business', name: created.data.name, detail: connected.data.displayPhoneNumber }
+  }
+  // Sent only when the person presses the button, to the number they typed.
+  async function kapsoTest(body) {
+    const { id: channelId, phone } = parse(KapsoTestPayload, body, 'Type the phone number with its country code')
+    await must('POST', '/messages/send', { instanceId: channelId, to: `+${phone.replace(/\D/g, '')}`, text: KAPSO_TEST_TEXT }, FORBIDDEN_SEND)
+    return { sent: true }
+  }
+
   // Where pairing stands: the connection state and, while WhatsApp waits for a scan, the code.
   async function webhookSetup() {
     const reply = await request('GET', '/channels/whatsapp-business/webhook-setup')
@@ -326,11 +393,12 @@ export function install(rt) {
     'omni-channel-create': create, 'omni-channel-phone-code': phoneCode, 'omni-channel-cancel': cancel, 'omni-channel-act': act, 'omni-send': send,
     'omni-slack-start': slackStart, 'omni-slack-result': slackResult, 'omni-wab-connect': wabConnect,
     'omni-channel-settings-save': saveSettings, 'omni-wab-repair': wabRepair,
+    'omni-kapso-key': kapsoKey, 'omni-kapso-setup-link': kapsoSetupLink, 'omni-kapso-connect': kapsoConnect, 'omni-kapso-test': kapsoTest,
     // Secret retrieval requires the team's writable-host gate as well as API authorization.
     'omni-wab-webhook-setup': webhookSetup,
   }
   const READS = { 'omni-channel-abilities': readAbilities, 'omni-channel-pairing': pairing, 'omni-channel-types': types, 'omni-slack-app': slackApp,
-    'omni-channel-settings': settings, 'omni-channel-agents': agents }
+    'omni-channel-settings': settings, 'omni-channel-agents': agents, 'omni-kapso-numbers': kapsoNumbers }
   rt.omniChannelEndpoint = (endpoint, body) => {
     const run = READS[endpoint] ?? ENDPOINTS[endpoint]
     if (!run) throw invalid(`Unknown endpoint ${endpoint}`)

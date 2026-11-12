@@ -230,6 +230,27 @@ omni instances connect <instance-id> \
 - The webhook secret is stored like `metaAccessToken` (plain column) and never returned: `GET .../connection` shows
   `hasWebhookSecret` only.
 
+### By clicks (Omni Channels plugin)
+
+In the Omni Channels DSH plugin, Add a channel → WhatsApp Business → **Through Kapso** does all of the above without
+typing an ID. Omni makes every Kapso call itself, with one Kapso project key per deployment:
+
+1. **Key**, asked only while Omni has none. `PUT /channels/whatsapp-business/kapso/key` checks it with Kapso, then
+   stores the sealed install-wide setting `kapso.api_key` (env fallback `KAPSO_API_KEY`). No route returns it.
+2. **Create setup link** opens Kapso's page in a new tab (`POST .../kapso/setup-link`): a coexistence link, so the
+   number keeps working in the WhatsApp Business app; no number is provisioned. It is made for this Omni's Kapso
+   customer, created on first use and remembered in `kapso.customer_id`. A new link revokes the previous one.
+3. **Pick a number** from the project's list (`GET .../kapso/numbers`, with a refresh), then **Connect**
+   (`POST /instances/:id/whatsapp-business/kapso/connect`): Omni points that number's Meta-forwarding webhook (kind
+   `meta`; an existing one is updated) at `${server.public_url}/api/v2/channels/whatsapp-business/webhook` with a
+   secret it generates, and connects with the Kapso base URL, `x-api-key` and `x-webhook-signature`.
+4. **Send a test message** to a number you type. WhatsApp delivers it only inside the 24-hour window.
+
+`kapso.api_base_url` (env `KAPSO_API_BASE_URL`) overrides `https://api.kapso.ai`. Without a public https
+`server.public_url` (env `OMNI_PUBLIC_URL`) the connect stops before anything is created. With multitenancy on, every
+Kapso route answers `409 KAPSO_NOT_AVAILABLE`: the key is install-wide. The Kapso routes need `instances:write`
+(`numbers`: `instances:read`), which a paired device's key carries.
+
 ## Templates HSM lifecycle
 
 ```

@@ -11396,7 +11396,7 @@ var waitingRuns = (roster, waiting = /* @__PURE__ */ new Set()) => (roster?.subs
 // src/client/channel-add.js
 var ADD = {
   "whatsapp-baileys": { time: "1 min", how: "Scan a code", steps: ["Name it", "Scan", "Done"] },
-  "whatsapp-business": { time: "3 min", how: "Enter your Meta details", steps: ["Enter the details", "Done"] },
+  "whatsapp-business": { time: "3 min", how: "Through Kapso or Meta", steps: ["Enter the details", "Done"] },
   slack: { time: "1 min", how: "Connect with Slack", steps: ["Choose how it joins", "Approve in Slack", "Done"] },
   telegram: { time: "2 min", how: "Create a bot", steps: ["Create the bot", "Paste its token", "Say hi"] },
   discord: { time: "2 min", how: "Add your bot", steps: ["Paste the bot token", "Invite it to a server", "Done"] }
@@ -11562,7 +11562,7 @@ function AddGrid({ types, loading = false, writable = true, onPick, onBack, Tile
     }))
   );
 }
-function FlowShell({ type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack, children }) {
+function FlowShell({ type, at: at2, steps, Tile: Tile2, PreviewChip: PreviewChip2, onBack, children }) {
   const info = CHANNEL_TYPES[type];
   const add = ADD[type];
   return (0, import_react4.createElement)(
@@ -11578,7 +11578,7 @@ function FlowShell({ type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBa
     (0, import_react4.createElement)(
       "div",
       { className: "oc-guide" },
-      (0, import_react4.createElement)("ol", { className: "oc-guide-steps" }, add.steps.map((label, index) => (0, import_react4.createElement)(
+      (0, import_react4.createElement)("ol", { className: "oc-guide-steps" }, (steps ?? add.steps).map((label, index) => (0, import_react4.createElement)(
         "li",
         { key: label, "data-state": stepState(index, at2) },
         (0, import_react4.createElement)("span", null, index < at2 ? "✓" : String(index + 1)),
@@ -11987,6 +11987,181 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   }
   return (0, import_react4.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react4.createElement)(Problem, { text: problem }));
 }
+var KAPSO_STEPS = ["Pick your number", "Send a test", "Done"];
+function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
+  const info = CHANNEL_TYPES[type];
+  const [path, setPath] = (0, import_react4.useState)("kapso");
+  const [channel, setChannel] = (0, import_react4.useState)(null);
+  const [tested, setTested] = (0, import_react4.useState)(false);
+  const kapso = path === "kapso";
+  let body;
+  if (channel && kapso) {
+    body = (0, import_react4.createElement)(Connected, { type, channel, detail: channel.detail, omni: omni2 }, (0, import_react4.createElement)(KapsoTest, { channel, onSent: () => setTested(true) }));
+  } else if (channel) {
+    body = (0, import_react4.createElement)(Connected, { type, channel, omni: omni2 }, (0, import_react4.createElement)(MetaWebhookSetup, { initiallyOpen: true }));
+  } else {
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
+      null,
+      (0, import_react4.createElement)(
+        "div",
+        { className: "oc-seg", role: "radiogroup", "aria-label": t("How to connect the number") },
+        [
+          ["kapso", t("Through Kapso"), t("Log in with Facebook on Kapso's page and pick your number. It keeps working in the WhatsApp Business app.")],
+          ["meta", t("With Meta's details"), t("Paste the access token and IDs from Meta's WhatsApp Manager or another provider.")]
+        ].map(([value, title, text]) => (0, import_react4.createElement)("button", {
+          key: value,
+          type: "button",
+          role: "radio",
+          "aria-checked": path === value,
+          className: "oc-seg-opt",
+          onClick: () => setPath(value)
+        }, (0, import_react4.createElement)("strong", null, title), (0, import_react4.createElement)("span", null, text)))
+      ),
+      kapso ? (0, import_react4.createElement)(KapsoPath, { info, onConnected: setChannel }) : (0, import_react4.createElement)(MetaDetails, { info, onConnected: setChannel })
+    );
+  }
+  const at2 = kapso ? tested ? 2 : channel ? 1 : 0 : channel ? 1 : 0;
+  return (0, import_react4.createElement)(FlowShell, { type, at: at2, steps: kapso ? KAPSO_STEPS : void 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body);
+}
+function KapsoPath({ info, onConnected }) {
+  const [kapso, setKapso] = (0, import_react4.useState)(void 0);
+  const [key, setKey] = (0, import_react4.useState)("");
+  const [link, setLink] = (0, import_react4.useState)(null);
+  const [picked, setPicked] = (0, import_react4.useState)(null);
+  const [busy, setBusy] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const run = async (what, work) => {
+    setBusy(what);
+    setProblem(null);
+    try {
+      await work();
+    } catch (error) {
+      console.warn("Kapso step failed:", what, error);
+      setProblem(error?.message || t("Could not reach Kapso through Omni. Try again."));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const refresh = () => run("refresh", async () => {
+    const reply = await call("omni-kapso-numbers");
+    setKapso(reply);
+    if (reply.message) setProblem(reply.message);
+    const numbers2 = reply.numbers ?? [];
+    setPicked((current) => numbers2.some((number) => number.phoneNumberId === current) ? current : numbers2.length === 1 ? numbers2[0].phoneNumberId : null);
+  });
+  (0, import_react4.useEffect)(() => {
+    void refresh();
+  }, []);
+  const saveKey = () => run("key", async () => {
+    await call("omni-kapso-key", { apiKey: key.trim() });
+    setKey("");
+    const reply = await call("omni-kapso-numbers");
+    setKapso(reply);
+  });
+  const makeLink = () => run("link", async () => {
+    const made = await call("omni-kapso-setup-link");
+    setLink(made);
+    window.open(made.url, "_blank", "noopener,noreferrer");
+  });
+  const connect = () => run("connect", async () => {
+    const number = kapso.numbers.find((item) => item.phoneNumberId === picked);
+    const name = (number?.name || number?.displayPhoneNumber || info.label).slice(0, 80);
+    onConnected(await call("omni-kapso-connect", { name, phoneNumberId: picked }));
+  });
+  if (kapso === void 0) return (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)(Spinner, { text: t("Asking Omni about Kapso…") }), (0, import_react4.createElement)(Problem, { text: problem }));
+  if (kapso === null || !kapso.configured) {
+    return (0, import_react4.createElement)(
+      import_react4.Fragment,
+      null,
+      (0, import_react4.createElement)("h2", null, t("Add your Kapso key")),
+      (0, import_react4.createElement)("p", null, rich("Omni keeps one Kapso project key for all its numbers. Find it in {kapso} → API keys.", { kapso: (0, import_react4.createElement)("a", { href: "https://app.kapso.ai", target: "_blank", rel: "noreferrer" }, "Kapso") })),
+      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Kapso project API key")), (0, import_react4.createElement)("input", {
+        type: "password",
+        value: key,
+        autoComplete: "off",
+        autoFocus: true,
+        onChange: (event) => setKey(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key === "Enter" && key.trim().length >= 8 && !busy) void saveKey();
+        }
+      })),
+      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: key.trim().length < 8 || busy !== null, onClick: saveKey }, busy === "key" ? t("Checking with Kapso…") : t("Save key"))),
+      (0, import_react4.createElement)("p", { className: "oc-fine" }, t("Omni checks the key with Kapso and never shows it again.")),
+      (0, import_react4.createElement)(Problem, { text: problem })
+    );
+  }
+  const numbers = kapso.numbers ?? [];
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
+    null,
+    (0, import_react4.createElement)("h2", null, t("Connect your number in Kapso")),
+    (0, import_react4.createElement)("p", null, t("Kapso's page asks you to log in with Facebook and pick your number. Come back here when it says done.")),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oc-row" },
+      link ? (0, import_react4.createElement)("a", { className: "oc-secondary", href: link.url, target: "_blank", rel: "noreferrer" }, t("Open the setup link again")) : (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: busy !== null, onClick: makeLink }, busy === "link" ? t("Making the link…") : t("Create setup link"))
+    ),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oc-row" },
+      (0, import_react4.createElement)("strong", null, t("Your Kapso numbers")),
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", disabled: busy !== null, onClick: refresh }, busy === "refresh" ? t("Refreshing…") : t("Refresh"))
+    ),
+    numbers.length === 0 ? (0, import_react4.createElement)("p", { className: "oc-fine" }, t("No numbers yet. Finish the setup link, then refresh.")) : (0, import_react4.createElement)("div", { className: "oc-seg", role: "radiogroup", "aria-label": t("Your Kapso numbers") }, numbers.map((number) => (0, import_react4.createElement)("button", {
+      key: number.phoneNumberId,
+      type: "button",
+      role: "radio",
+      "aria-checked": picked === number.phoneNumberId,
+      className: "oc-seg-opt",
+      onClick: () => setPicked(number.phoneNumberId)
+    }, (0, import_react4.createElement)("strong", null, number.displayPhoneNumber || number.phoneNumberId), (0, import_react4.createElement)("span", null, number.name || t("No name yet"))))),
+    kapso.publicAddress ? null : (0, import_react4.createElement)("p", { className: "oc-problem", role: "alert" }, t("Omni has no public https address, so Kapso cannot send it messages. Set server.public_url (OMNI_PUBLIC_URL) on your Omni, then refresh.")),
+    (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !picked || !kapso.publicAddress || busy !== null, onClick: connect }, busy === "connect" ? t("Connecting…") : t("Connect"))),
+    (0, import_react4.createElement)(Problem, { text: problem })
+  );
+}
+function KapsoTest({ channel, onSent }) {
+  const [phone, setPhone] = (0, import_react4.useState)("");
+  const [sending, setSending] = (0, import_react4.useState)(false);
+  const [sent, setSent] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const send = async () => {
+    setSending(true);
+    setProblem(null);
+    try {
+      await call("omni-kapso-test", { id: channel.id, phone });
+      setSent(true);
+      onSent();
+    } catch (error) {
+      console.warn("Could not send the test message:", error);
+      setProblem(error?.message || t("Could not send the test message. Try again."));
+    } finally {
+      setSending(false);
+    }
+  };
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
+    null,
+    (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Send a test message to")), (0, import_react4.createElement)("input", {
+      value: phone,
+      inputMode: "tel",
+      placeholder: "+55 11 91234-5678",
+      onChange: (event) => {
+        setPhone(event.target.value);
+        setSent(false);
+      }
+    })),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oc-row" },
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: phone.replace(/\D/g, "").length < 8 || sending, onClick: send }, sending ? t("Sending…") : t("Send a test message")),
+      sent ? (0, import_react4.createElement)("span", { className: "oc-fine" }, t("Sent. Look at that phone.")) : null
+    ),
+    (0, import_react4.createElement)("p", { className: "oc-fine" }, t("WhatsApp delivers it only if that number wrote to yours in the last 24 hours.")),
+    (0, import_react4.createElement)(Problem, { text: problem })
+  );
+}
 var BUSINESS_FIELDS = { accessToken: "", phoneNumberId: "", wabaId: "", apiBaseUrl: "", authMode: "x-api-key", webhookSecret: "", signatureMode: "x-webhook-signature" };
 function businessDetails(fields) {
   const apiBaseUrl = fields.apiBaseUrl.trim();
@@ -11999,10 +12174,8 @@ function businessDetails(fields) {
     ...webhookSecret ? { webhookSecret, signatureMode: fields.signatureMode } : {}
   };
 }
-function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
-  const info = CHANNEL_TYPES[type];
+function MetaDetails({ info, onConnected }) {
   const [fields, setFields] = (0, import_react4.useState)(BUSINESS_FIELDS);
-  const [channel, setChannel] = (0, import_react4.useState)(null);
   const [busy, setBusy] = (0, import_react4.useState)(false);
   const [problem, setProblem] = (0, import_react4.useState)(null);
   const set3 = (key) => (event) => setFields((value) => ({ ...value, [key]: event.target.value }));
@@ -12014,7 +12187,7 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
     try {
       const made = await call("omni-wab-connect", { name: info.label, ...businessDetails(fields) });
       setFields(BUSINESS_FIELDS);
-      setChannel(made);
+      onConnected(made);
     } catch (error) {
       console.warn("Could not connect the Business number:", error);
       setProblem(t("Could not connect the Business number. Check its details and try again."));
@@ -12030,28 +12203,24 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
     (0, import_react4.createElement)("select", { value: fields[key], onChange: set3(key) }, options.map(([value, text]) => (0, import_react4.createElement)("option", { key: value, value }, text)))
   );
   return (0, import_react4.createElement)(
-    FlowShell,
-    { type, at: channel ? 1 : 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
-    channel ? (0, import_react4.createElement)(Connected, { type, channel, omni: omni2 }, (0, import_react4.createElement)(MetaWebhookSetup, { initiallyOpen: true })) : (0, import_react4.createElement)(
-      import_react4.Fragment,
-      null,
-      (0, import_react4.createElement)("h2", null, t("Connect your Business number")),
-      (0, import_react4.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react4.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
-      field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
-      field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
-      field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
-      (0, import_react4.createElement)(
-        "details",
-        { className: "oc-field" },
-        (0, import_react4.createElement)("summary", null, t("Through a provider such as Kapso (optional)")),
-        field("apiBaseUrl", t("Provider API address"), { inputMode: "url", placeholder: "https://api.kapso.ai/meta/whatsapp/v24.0" }),
-        choice("authMode", t("Send the access token as"), [["x-api-key", t("Provider key (X-API-Key)")], ["bearer", t("Bearer token")]]),
-        field("webhookSecret", t("Provider webhook secret"), { type: "password" }),
-        choice("signatureMode", t("Webhook signature"), [["x-webhook-signature", t("Provider (X-Webhook-Signature)")], ["x-hub-signature-256", t("Meta app secret (X-Hub-Signature-256)")]])
-      ),
-      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
-      (0, import_react4.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages."))
+    import_react4.Fragment,
+    null,
+    (0, import_react4.createElement)("h2", null, t("Connect your Business number")),
+    (0, import_react4.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react4.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
+    field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
+    field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
+    field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
+    (0, import_react4.createElement)(
+      "details",
+      { className: "oc-field" },
+      (0, import_react4.createElement)("summary", null, t("Through a provider such as Kapso (optional)")),
+      field("apiBaseUrl", t("Provider API address"), { inputMode: "url", placeholder: "https://api.kapso.ai/meta/whatsapp/v24.0" }),
+      choice("authMode", t("Send the access token as"), [["x-api-key", t("Provider key (X-API-Key)")], ["bearer", t("Bearer token")]]),
+      field("webhookSecret", t("Provider webhook secret"), { type: "password" }),
+      choice("signatureMode", t("Webhook signature"), [["x-webhook-signature", t("Provider (X-Webhook-Signature)")], ["x-hub-signature-256", t("Meta app secret (X-Hub-Signature-256)")]])
     ),
+    (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
+    (0, import_react4.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages.")),
     (0, import_react4.createElement)(Problem, { text: problem })
   );
 }
@@ -17818,6 +17987,36 @@ var STRINGS = {
   "Phone number ID": "电话号码 ID",
   "WhatsApp Business Account ID": "WhatsApp 企业账户 ID",
   "Through a provider such as Kapso (optional)": "通过 Kapso 等服务商连接（可选）",
+  "How to connect the number": "如何连接这个号码",
+  "Through Kapso": "通过 Kapso",
+  "Log in with Facebook on Kapso's page and pick your number. It keeps working in the WhatsApp Business app.": "在 Kapso 的页面上用 Facebook 登录并选择你的号码。它仍可在 WhatsApp Business 应用中使用。",
+  "With Meta's details": "使用 Meta 的信息",
+  "Paste the access token and IDs from Meta's WhatsApp Manager or another provider.": "粘贴来自 Meta WhatsApp Manager 或其他服务商的访问令牌和 ID。",
+  "Pick your number": "选择你的号码",
+  "Send a test": "发送测试",
+  "Could not reach Kapso through Omni. Try again.": "无法通过 Omni 连接 Kapso。请重试。",
+  "Asking Omni about Kapso…": "正在向 Omni 询问 Kapso…",
+  "Add your Kapso key": "添加你的 Kapso 密钥",
+  "Omni keeps one Kapso project key for all its numbers. Find it in {kapso} → API keys.": "Omni 为它的所有号码保存一个 Kapso 项目密钥。可在 {kapso} → API keys 中找到。",
+  "Kapso project API key": "Kapso 项目 API 密钥",
+  "Checking with Kapso…": "正在向 Kapso 核对…",
+  "Omni checks the key with Kapso and never shows it again.": "Omni 会向 Kapso 核对这个密钥，之后不再显示它。",
+  "Connect your number in Kapso": "在 Kapso 中连接你的号码",
+  "Kapso's page asks you to log in with Facebook and pick your number. Come back here when it says done.": "Kapso 的页面会请你用 Facebook 登录并选择你的号码。显示完成后回到这里。",
+  "Open the setup link again": "再次打开设置链接",
+  "Making the link…": "正在生成链接…",
+  "Create setup link": "生成设置链接",
+  "Your Kapso numbers": "你的 Kapso 号码",
+  "Refreshing…": "正在刷新…",
+  "Refresh": "刷新",
+  "No numbers yet. Finish the setup link, then refresh.": "还没有号码。完成设置链接后再刷新。",
+  "No name yet": "暂无名称",
+  "Omni has no public https address, so Kapso cannot send it messages. Set server.public_url (OMNI_PUBLIC_URL) on your Omni, then refresh.": "Omni 没有公开的 https 地址，所以 Kapso 无法向它发送消息。请在你的 Omni 上设置 server.public_url（OMNI_PUBLIC_URL），然后刷新。",
+  "Could not send the test message. Try again.": "无法发送测试消息。请重试。",
+  "Send a test message to": "发送测试消息到",
+  "Send a test message": "发送测试消息",
+  "Sent. Look at that phone.": "已发送。请查看那部手机。",
+  "WhatsApp delivers it only if that number wrote to yours in the last 24 hours.": "只有当该号码在过去 24 小时内给你的号码发过消息时，WhatsApp 才会送达。",
   "Provider API address": "服务商 API 地址",
   "Send the access token as": "访问令牌的发送方式",
   "Provider key (X-API-Key)": "服务商密钥（X-API-Key）",
@@ -17832,7 +18031,7 @@ var STRINGS = {
   "Hide until the next version": "在下个版本前隐藏",
   "Whoever runs this Omni updates it with:": "运行这个 Omni 的人可以用以下命令更新：",
   "Ask whoever runs your Omni to update it.": "请让运行你的 Omni 的人更新它。",
-  "Enter your Meta details": "填写你的 Meta 信息",
+  "Through Kapso or Meta": "通过 Kapso 或 Meta",
   "Scan a code": "扫码",
   "Create a bot": "创建机器人",
   "Add your bot": "添加你的机器人",
