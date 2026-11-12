@@ -6,6 +6,7 @@
 import { hostname } from 'node:os'
 import { z } from 'zod'
 import { answerIntake } from './answer-intake.js'
+import { answerAutomationMatcher } from './answer-automations.js'
 
 const BACKOFF_MS = [2_000, 5_000, 15_000, 60_000]
 const MEDIA_LOOKUP_ATTEMPTS = 3
@@ -105,6 +106,7 @@ export async function* frames(body) {
 export function install(rt) {
   const { ctx, state } = rt
   const admitAnswer = answerIntake(rt)
+  const handledByAutomation = answerAutomationMatcher(rt)
   const consumerName = suffix => `omni-ui-dsh.${hostname().toLowerCase().replace(/[^a-z0-9.-]/g, '-')}.${suffix}`
   const cursors = () => (state.omniEventCursors ??= {})
   const loops = new Map()
@@ -258,6 +260,11 @@ export function install(rt) {
     const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !((ownSide || !answerAllowed) && typeof sub.answerBotId === 'string')
       && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
     if (due().length === 0) return 'unmatched'
+    // Before any child creation or wake-up. Keep ordinary subscriptions running;
+    // the journaled message remains available through chat history afterwards.
+    const skipAnswer = due().some(sub => typeof sub.answerBotId === 'string') && await handledByAutomation(row)
+    if (cancelled(controller)) return 'cancelled'
+    if (skipAnswer && due().every(sub => typeof sub.answerBotId === 'string')) return 'unmatched'
     const event = await eventOf(row, staff?.looked)
     if (event === undefined) return 'unmatched'
     if (cancelled(controller)) return 'cancelled'
@@ -266,6 +273,7 @@ export function install(rt) {
     // Admission is the first dispatch, not the lookup. Once entered, finish this whole
     // captured row (even after stop), then ack it before the run can settle.
     for (const sub of due()) {
+      if (skipAnswer && typeof sub.answerBotId === 'string') continue
       if (rt.automationOwned?.(sub, event) === false) continue
       try {
         await rt.fireSubscription(sub, { ...event, ref: row.id })

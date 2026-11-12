@@ -22,6 +22,7 @@ async function bench(t, { channel = 'whatsapp-baileys', access = () => true } = 
   b.channels.omniRequest = async (method, path, args) => {
     if (path === `/instances/${INSTANCE}`) return reply({ channel, inboundMaxAgeMinutes: 10 })
     if (path === '/access/check') return reply({ allowed: access(args.body.platformUserId) })
+    if (path === '/automations?enabled=true') return { ok: true, json: async () => ({ items: [] }) }
     if (path === '/events/consumers' || method === 'DELETE' && path.startsWith('/events/consumers/')) return { ok: true }
     if (path.endsWith('/ack')) { acks.push(args.body.cursor); return { ok: true } }
     if (path.endsWith('/stream')) {

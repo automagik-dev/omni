@@ -28,6 +28,7 @@ function fixture(t, options = {}) {
       calls.push([method, path, args])
       if (path === '/access/check') return await options.access?.(args.body) ?? { ok: true, json: async () => ({ data: { allowed: true } }) }
       if (path.startsWith('/instances/')) return await options.instance?.() ?? { ok: true, json: async () => ({ data: { channel: 'whatsapp-baileys', inboundMaxAgeMinutes: 10 } }) }
+      if (path === '/automations?enabled=true') return { ok: true, json: async () => ({ items: [] }) }
       if (path.startsWith('/messages/by-external')) return await options.message?.(path) ?? { ok: true, json: async () => ({ data: null }) }
       if (path.includes('/chats/')) {
         lookupEntered.resolve()
@@ -61,6 +62,15 @@ function fixture(t, options = {}) {
 }
 
 // All waits are explicit barriers; the test timeout is only a deadlock guard.
+test('ordinary one-bot subscriptions do not list or test Omni automations', { timeout: 5000 }, async t => {
+  const acked = deferred()
+  const f = fixture(t, { ack: async () => { acked.resolve(); return { ok: true } } })
+  await acked.promise
+  await f.rt.quiesceOmniEvents()
+  assert.deepEqual(f.fired, [['first', 'event-1']])
+  assert.equal(f.calls.some(([, path]) => path.startsWith('/automations')), false)
+})
+
 test('sanitized #1407 repro: suspended lookup cannot dispatch after synchronous disposal', { timeout: 5000 }, async t => {
   const lookup = deferred()
   const f = fixture(t, { lookup: async () => { await lookup.promise; return { ok: true, json: async () => ({ data: { name: 'mock' } }) } } })
