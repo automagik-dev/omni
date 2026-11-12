@@ -14,7 +14,8 @@ const { ChevronLeftIcon } = icons
 // - Telegram and Discord: a bot token connects it; Discord then offers the invite to a server.
 // - Slack: Omni signs in to Slack itself, as a bot or as the person (omni-slack-start), and the
 //   page waits for how it ended (omni-slack-result).
-// - WhatsApp Business: the Meta details, created and connected in one go (omni-wab-connect).
+// - WhatsApp Business: through Kapso by clicks (a key once, a setup link, pick a number:
+//   omni-kapso-*), or the Meta details, created and connected in one go (omni-wab-connect).
 // A channel created here and left before it connects is deleted again (omni-channel-cancel).
 
 const POLL_MS = 2000
@@ -60,7 +61,7 @@ export function AddGrid({ types, loading = false, writable = true, onPick, onBac
 }
 
 // A guided page: the steps on the left, the current one on the right.
-function FlowShell({ type, at, Tile, PreviewChip, onBack, children }) {
+function FlowShell({ type, at, steps, Tile, PreviewChip, onBack, children }) {
   const info = CHANNEL_TYPES[type]
   const add = ADD[type]
   return h(Fragment, null,
@@ -69,7 +70,7 @@ function FlowShell({ type, at, Tile, PreviewChip, onBack, children }) {
       h('h1', null, h(Tile, { type, size: 34 }), info.label, h(PreviewChip)),
       h('p', null, t('About {time}. You can disconnect any time from the channel\'s page.', { time: add.time })))),
     h('div', { className: 'oc-guide' },
-      h('ol', { className: 'oc-guide-steps' }, add.steps.map((label, index) => h('li', { key: label, 'data-state': stepState(index, at) },
+      h('ol', { className: 'oc-guide-steps' }, (steps ?? add.steps).map((label, index) => h('li', { key: label, 'data-state': stepState(index, at) },
         h('span', null, index < at ? '✓' : String(index + 1)), t(label)))),
       h('section', { className: 'oc-guide-pane' }, children)))
 }
@@ -379,23 +380,175 @@ function SlackFlow({ type, omni, Tile, PreviewChip }) {
 }
 
 // -------------------------------------------------------------------------
-// WhatsApp Business: the details from Meta's WhatsApp Manager.
+// WhatsApp Business: through Kapso by clicks, or the details from Meta's WhatsApp Manager.
+
+const KAPSO_STEPS = ['Pick your number', 'Send a test', 'Done']
 
 function BusinessFlow({ type, omni, Tile, PreviewChip }) {
   const info = CHANNEL_TYPES[type]
-  const [fields, setFields] = useState({ accessToken: '', phoneNumberId: '', wabaId: '' })
+  const [path, setPath] = useState('kapso')
   const [channel, setChannel] = useState(null)
+  const [tested, setTested] = useState(false)
+  // Kept here, so going to Meta's details and back never makes a second link (which revokes this one).
+  const [link, setLink] = useState(null)
+  const kapso = path === 'kapso'
+  let body
+  if (channel && kapso) {
+    body = h(Connected, { type, channel, detail: channel.detail, omni }, h(KapsoTest, { channel, onSent: () => setTested(true) }))
+  } else if (channel) {
+    body = h(Connected, { type, channel, omni }, h(MetaWebhookSetup, { initiallyOpen: true }))
+  } else {
+    body = h(Fragment, null,
+      h('div', { className: 'oc-seg', role: 'radiogroup', 'aria-label': t('How to connect the number') },
+        [['kapso', t('Through Kapso'), t('Log in with Facebook on Kapso\'s page and pick your number. It keeps working in the WhatsApp Business app.')],
+          ['meta', t('With Meta\'s details'), t('Paste the access token and IDs from Meta\'s WhatsApp Manager or another provider.')]].map(([value, title, text]) => h('button', {
+          key: value, type: 'button', role: 'radio', 'aria-checked': path === value, className: 'oc-seg-opt', onClick: () => setPath(value),
+        }, h('strong', null, title), h('span', null, text)))),
+      kapso ? h(KapsoPath, { info, link, setLink, onConnected: setChannel }) : h(MetaDetails, { info, onConnected: setChannel }))
+  }
+  const at = kapso ? (tested ? 2 : channel ? 1 : 0) : channel ? 1 : 0
+  return h(FlowShell, { type, at, steps: kapso ? KAPSO_STEPS : undefined, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) }, body)
+}
+
+// Kapso: Omni keeps one Kapso project key and makes every Kapso call. The key is asked for only
+// while Omni has none; then a setup link (opened in a new tab), the project's numbers, Connect.
+function KapsoPath({ info, link, setLink, onConnected }) {
+  const [kapso, setKapso] = useState(undefined)
+  const [key, setKey] = useState('')
+  const [picked, setPicked] = useState(null)
+  const [busy, setBusy] = useState(null)
+  const [problem, setProblem] = useState(null)
+  const run = async (what, work) => {
+    setBusy(what)
+    setProblem(null)
+    try {
+      await work()
+    } catch (error) {
+      console.warn('Kapso step failed:', what, error)
+      setProblem(error?.message || t('Could not reach Kapso through Omni. Try again.'))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const refresh = () => run('refresh', async () => {
+    const reply = await call('omni-kapso-numbers')
+    setKapso(reply)
+    if (reply.message) setProblem(reply.message)
+    const numbers = reply.numbers ?? []
+    setPicked(current => (numbers.some(number => number.phoneNumberId === current) ? current : numbers.length === 1 ? numbers[0].phoneNumberId : null))
+  })
+  useEffect(() => { void refresh() }, [])
+  const saveKey = () => run('key', async () => {
+    await call('omni-kapso-key', { apiKey: key.trim() })
+    setKey('')
+    const reply = await call('omni-kapso-numbers')
+    setKapso(reply)
+  })
+  // Kapso revokes the previous link when it makes one, so this one stays on the page.
+  const makeLink = () => run('link', async () => {
+    const made = await call('omni-kapso-setup-link')
+    setLink(made)
+    window.open(made.url, '_blank', 'noopener,noreferrer')
+  })
+  const connect = () => run('connect', async () => {
+    const number = kapso.numbers.find(item => item.phoneNumberId === picked)
+    const name = (number?.name || number?.displayPhoneNumber || info.label).slice(0, 80)
+    onConnected(await call('omni-kapso-connect', { name, phoneNumberId: picked }))
+  })
+
+  if (kapso === undefined) return h(Fragment, null, h(Spinner, { text: t('Asking Omni about Kapso…') }), h(Problem, { text: problem }))
+  if (kapso === null || !kapso.configured) {
+    return h(Fragment, null,
+      h('h2', null, t('Add your Kapso key')),
+      h('p', null, rich('Omni keeps one Kapso project key for all its numbers. Find it in {kapso} → API keys.', { kapso: h('a', { href: 'https://app.kapso.ai', target: '_blank', rel: 'noreferrer' }, 'Kapso') })),
+      h('label', { className: 'oc-field' }, h('span', null, t('Kapso project API key')), h('input', {
+        type: 'password', value: key, autoComplete: 'off', autoFocus: true, onChange: event => setKey(event.target.value),
+        onKeyDown: (event) => { if (event.key === 'Enter' && key.trim().length >= 8 && !busy) void saveKey() },
+      })),
+      h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: key.trim().length < 8 || busy !== null, onClick: saveKey }, busy === 'key' ? t('Checking with Kapso…') : t('Save key'))),
+      h('p', { className: 'oc-fine' }, t('Omni checks the key with Kapso and never shows it again.')),
+      h(Problem, { text: problem }))
+  }
+  const numbers = kapso.numbers ?? []
+  return h(Fragment, null,
+    h('h2', null, t('Connect your number in Kapso')),
+    h('p', null, t('Kapso\'s page asks you to log in with Facebook and pick your number. Come back here when it says done.')),
+    h('div', { className: 'oc-row' },
+      link ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => window.open(link.url, '_blank', 'noopener,noreferrer') }, t('Open the setup link again'))
+        : h('button', { type: 'button', className: 'oc-secondary', disabled: busy !== null, onClick: makeLink }, busy === 'link' ? t('Making the link…') : t('Create setup link'))),
+    h('div', { className: 'oc-row' },
+      h('strong', null, t('Your Kapso numbers')),
+      h('button', { type: 'button', className: 'oc-link', disabled: busy !== null, onClick: refresh }, busy === 'refresh' ? t('Refreshing…') : t('Refresh'))),
+    numbers.length === 0
+      ? h('p', { className: 'oc-fine' }, t('No numbers yet. Finish the setup link, then refresh.'))
+      : h('div', { className: 'oc-seg', role: 'radiogroup', 'aria-label': t('Your Kapso numbers') }, numbers.map(number => h('button', {
+        key: number.phoneNumberId, type: 'button', role: 'radio', 'aria-checked': picked === number.phoneNumberId, className: 'oc-seg-opt', onClick: () => setPicked(number.phoneNumberId),
+      }, h('strong', null, number.displayPhoneNumber || number.phoneNumberId), h('span', null, number.name || t('No name yet'))))),
+    kapso.publicAddress ? null : h('p', { className: 'oc-problem', role: 'alert' }, t('Omni has no public https address, so Kapso cannot send it messages. Set server.public_url (OMNI_PUBLIC_URL) on your Omni, then refresh.')),
+    h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !picked || !kapso.publicAddress || busy !== null, onClick: connect }, busy === 'connect' ? t('Connecting…') : t('Connect'))),
+    h(Problem, { text: problem }))
+}
+
+// The first message, sent only when the person presses the button, to the number they typed.
+function KapsoTest({ channel, onSent }) {
+  const [phone, setPhone] = useState('')
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [problem, setProblem] = useState(null)
+  const send = async () => {
+    setSending(true)
+    setProblem(null)
+    try {
+      await call('omni-kapso-test', { id: channel.id, phone })
+      setSent(true)
+      onSent()
+    } catch (error) {
+      console.warn('Could not send the test message:', error)
+      setProblem(error?.message || t('Could not send the test message. Try again.'))
+    } finally {
+      setSending(false)
+    }
+  }
+  return h(Fragment, null,
+    h('label', { className: 'oc-field' }, h('span', null, t('Send a test message to')), h('input', {
+      value: phone, inputMode: 'tel', placeholder: '+55 11 91234-5678', onChange: (event) => { setPhone(event.target.value); setSent(false) },
+    })),
+    h('div', { className: 'oc-row' },
+      h('button', { type: 'button', className: 'oc-secondary', disabled: phone.replace(/\D/g, '').length < 8 || sending, onClick: send }, sending ? t('Sending…') : t('Send a test message')),
+      sent ? h('span', { className: 'oc-fine' }, t('Sent. Look at that phone.')) : null),
+    h('p', { className: 'oc-fine' }, t('WhatsApp delivers it only if that number wrote to yours in the last 24 hours.')),
+    h(Problem, { text: problem }))
+}
+
+// Meta's details from WhatsApp Manager, or another Meta-compatible provider's.
+
+const BUSINESS_FIELDS = { accessToken: '', phoneNumberId: '', wabaId: '', apiBaseUrl: '', authMode: 'x-api-key', webhookSecret: '', signatureMode: 'x-webhook-signature' }
+
+// The connect body: Meta's details, plus a provider's only when its address or secret is filled in.
+function businessDetails(fields) {
+  const apiBaseUrl = fields.apiBaseUrl.trim()
+  const webhookSecret = fields.webhookSecret.trim()
+  return {
+    accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim(),
+    ...(apiBaseUrl ? { apiBaseUrl, authMode: fields.authMode } : {}),
+    ...(webhookSecret ? { webhookSecret, signatureMode: fields.signatureMode } : {}),
+  }
+}
+
+function MetaDetails({ info, onConnected }) {
+  const [fields, setFields] = useState(BUSINESS_FIELDS)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const set = key => event => setFields(value => ({ ...value, [key]: event.target.value }))
-  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim())
+  const providerReady = !fields.apiBaseUrl.trim() || /^https:\/\/\S+$/.test(fields.apiBaseUrl.trim())
+  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim()) && providerReady
   const connect = async () => {
     setBusy(true)
     setProblem(null)
     try {
-      const made = await call('omni-wab-connect', { name: info.label, accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim() })
-      setFields({ accessToken: '', phoneNumberId: '', wabaId: '' })
-      setChannel(made)
+      const made = await call('omni-wab-connect', { name: info.label, ...businessDetails(fields) })
+      setFields(BUSINESS_FIELDS)
+      onConnected(made)
     } catch (error) {
       console.warn('Could not connect the Business number:', error)
       setProblem(t('Could not connect the Business number. Check its details and try again.'))
@@ -404,15 +557,20 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
     }
   }
   const field = (key, label, extra) => h('label', { className: 'oc-field' }, h('span', null, label), h('input', { value: fields[key], onChange: set(key), autoComplete: 'off', ...extra }))
-  return h(FlowShell, { type, at: channel ? 1 : 0, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) },
-    channel ? h(Connected, { type, channel, omni }, h(MetaWebhookSetup, { initiallyOpen: true }))
-      : h(Fragment, null,
-        h('h2', null, t('Connect your Business number')),
-        h('p', null, rich('Find these in Meta\'s {manager} → API setup.', { manager: h('a', { href: 'https://business.facebook.com/wa/manage/home/', target: '_blank', rel: 'noreferrer' }, t('WhatsApp Manager')) })),
-        field('accessToken', t('Access token'), { type: 'password', placeholder: 'EAAG…', autoFocus: true }),
-        field('phoneNumberId', t('Phone number ID'), { inputMode: 'numeric', placeholder: '123456789012345' }),
-        field('wabaId', t('WhatsApp Business Account ID'), { inputMode: 'numeric', placeholder: '987654321098765' }),
-        h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !ready || busy, onClick: connect }, busy ? t('Connecting…') : t('Connect'))),
-        h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Omni only gets that number\'s messages.'))),
+  const choice = (key, label, options) => h('label', { className: 'oc-field' }, h('span', null, label),
+    h('select', { value: fields[key], onChange: set(key) }, options.map(([value, text]) => h('option', { key: value, value }, text))))
+  return h(Fragment, null,
+    h('h2', null, t('Connect your Business number')),
+    h('p', null, rich('Find these in Meta\'s {manager} → API setup.', { manager: h('a', { href: 'https://business.facebook.com/wa/manage/home/', target: '_blank', rel: 'noreferrer' }, t('WhatsApp Manager')) })),
+    field('accessToken', t('Access token'), { type: 'password', placeholder: 'EAAG…', autoFocus: true }),
+    field('phoneNumberId', t('Phone number ID'), { inputMode: 'numeric', placeholder: '123456789012345' }),
+    field('wabaId', t('WhatsApp Business Account ID'), { inputMode: 'numeric', placeholder: '987654321098765' }),
+    h('details', { className: 'oc-field' }, h('summary', null, t('Through a provider such as Kapso (optional)')),
+      field('apiBaseUrl', t('Provider API address'), { inputMode: 'url', placeholder: 'https://api.kapso.ai/meta/whatsapp/v24.0' }),
+      choice('authMode', t('Send the access token as'), [['x-api-key', t('Provider key (X-API-Key)')], ['bearer', t('Bearer token')]]),
+      field('webhookSecret', t('Provider webhook secret'), { type: 'password' }),
+      choice('signatureMode', t('Webhook signature'), [['x-webhook-signature', t('Provider (X-Webhook-Signature)')], ['x-hub-signature-256', t('Meta app secret (X-Hub-Signature-256)')]])),
+    h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !ready || busy, onClick: connect }, busy ? t('Connecting…') : t('Connect'))),
+    h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Omni only gets that number\'s messages.')),
     h(Problem, { text: problem }))
 }

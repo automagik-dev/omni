@@ -685,7 +685,14 @@
       "idx": 97,
       "version": "7",
       "when": 1789500000000,
-      "tag": "0097_zenvia_media_hosts",
+      "tag": "0097_whatsapp_business_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1789600000000,
+      "tag": "0098_zenvia_media_hosts",
       "breakpoints": true
     }
   ]

@@ -58,6 +58,8 @@ In Meta App Dashboard → **WhatsApp** → **Configuration**:
    - `account_update` — account-level state changes (banned, verified, etc.)
    - `phone_number_quality_update` — quality_rating drops (GREEN → YELLOW → RED)
    - `phone_number_name_update` — verified_name approvals / rejections
+   - For a number that stays on the WhatsApp Business app (coexistence): `smb_message_echoes`, `history`,
+     `smb_app_state_sync` — see [Coexistence](#coexistence-whatsapp-business-app-on-the-same-number)
 
 Meta will GET your webhook URL with `hub.mode=subscribe&hub.verify_token=<token>&hub.challenge=<n>`. Omni's handler responds with the challenge if the token matches.
 
@@ -173,6 +175,82 @@ Beyond message + template lifecycle, Meta pushes operator-facing alerts on the W
 
 A single Meta webhook fans out to N events when N Omni instances share the WABA. Subscribe via `eventBus.subscribe('channel.alert', …)` from any consumer (notification worker, dashboard badge, etc.).
 
+## Coexistence (WhatsApp Business app on the same number)
+
+A number onboarded through Embedded Signup coexistence keeps working in the WhatsApp Business app. Meta mirrors the
+app into three webhook fields; Omni records them like this:
+
+| Meta field | Omni |
+|---|---|
+| `smb_message_echoes` — the business sent a message from the app or a companion device | `message.received` in the customer's chat with `rawPayload.isFromMe`, `key.fromMe`, `key.id` and `upsertType: 'notify'` (the shape of a Baileys phone-sent message). An API send emits `message.sent` instead, so the two never mix. **Omni's agents are never dispatched for an echo.** DSH automations that opt in to the owner's own messages (`allowOutbound`) still see it. Reaction echoes are not recorded yet. |
+| `history` — chats shared once at onboarding (up to 180 days) | `message.received` with `ingestMode: 'history-sync'`: the chats fill with their past and no agent is dispatched. Media arrives as `media_placeholder` (skipped); Meta sends the asset of messages from the last 14 days in a later `history` webhook, which Omni records in the same chat. Code `2593109` (the business declined sharing) is logged. |
+| `smb_app_state_sync` — the app's contacts | Stored per instance, named in DM chats at once (`custom.contacts.names`), and upserted as identities by the next contacts sync (daily, or a manual contacts sync). Contacts without a phone number are skipped. |
+
+Echoes and history carry `rawPayload.noAgentDispatch`, the channel-neutral marker the agent dispatcher drops.
+
+## Through a Meta-compatible provider (Kapso)
+
+A provider such as Kapso holds the Meta connection and exposes the same Graph API under its own base URL and key.
+Omni then talks to the provider instead of `graph.facebook.com`. Four optional connect fields set this per instance;
+an instance without them is Meta direct, exactly as before.
+
+| Field | Meta direct (default) | Kapso |
+|---|---|---|
+| `apiBaseUrl` | unset → `https://graph.facebook.com/{version}` | `https://api.kapso.ai/meta/whatsapp/v24.0` (https only) |
+| `authMode` | `bearer` → `Authorization: Bearer <accessToken>` | `x-api-key` → `X-API-Key: <accessToken>` (the Kapso project key) |
+| `webhookSecret` | unset (or the instance's own Meta app secret) | the secret of the Kapso webhook that forwards Meta events |
+| `signatureMode` | `x-hub-signature-256` (with `webhookSecret` when set, else `META_APP_SECRET`) | `x-webhook-signature` (hex HMAC-SHA256 of the raw body with `webhookSecret`) |
+
+```bash
+omni instances connect <instance-id> \
+  --access-token <kapso-project-key> \
+  --phone-number-id <pnid> \
+  --waba-id <waba> \
+  --api-base-url https://api.kapso.ai/meta/whatsapp/v24.0 \
+  --auth-mode x-api-key \
+  --webhook-secret <kapso-webhook-secret> \
+  --signature-mode x-webhook-signature
+```
+
+- **Webhook.** Point the Kapso webhook ("Meta webhook forwarding") at the same global URL,
+  `${META_WEBHOOK_BASE_URL}/api/v2/channels/whatsapp-business/webhook`. Omni finds every instance a body addresses
+  (by `phone_number_id`, or by WABA for alerts and template status) and checks each one's own mode and secret. A
+  provider instance needs `X-Webhook-Signature` with its secret; an `X-Hub-Signature-256` signed with
+  `META_APP_SECRET` never stands in for it. An instance on `x-hub-signature-256` with its own `webhookSecret` (its own
+  Meta app) verifies with that secret only. `META_APP_SECRET` is used only for Meta-direct instances without a secret,
+  and for bodies that address no connected instance; it is not needed when every instance has its own secret.
+- **Re-connect.** A connect that omits a provider field keeps the stored value; `null` clears it (a mode resets to
+  Meta's default). `authMode: x-api-key` without a provider `apiBaseUrl` (unset, or a Meta host such as
+  `graph.facebook.com`), and `signatureMode: x-webhook-signature` without `webhookSecret`, are refused with 400.
+- **Media.** Downloads use the provider's `download_url` (no key needed); a media URL off the provider's origin is
+  refused, and a provider key is never sent to a Meta host.
+- **Meta-only routes.** Number registration, app subscription, conversation analytics, profile photo upload and
+  template header media upload use Meta's own app-scoped endpoints. A provider instance gets
+  `400 NOT_SUPPORTED_VIA_PROVIDER`; do these in the provider's dashboard.
+- The webhook secret is stored like `metaAccessToken` (plain column) and never returned: `GET .../connection` shows
+  `hasWebhookSecret` only.
+
+### By clicks (Omni Channels plugin)
+
+In the Omni Channels DSH plugin, Add a channel → WhatsApp Business → **Through Kapso** does all of the above without
+typing an ID. Omni makes every Kapso call itself, with one Kapso project key per deployment:
+
+1. **Key**, asked only while Omni has none. `PUT /channels/whatsapp-business/kapso/key` checks it with Kapso, then
+   stores the sealed install-wide setting `kapso.api_key` (env fallback `KAPSO_API_KEY`). No route returns it.
+2. **Create setup link** opens Kapso's page in a new tab (`POST .../kapso/setup-link`): a coexistence link, so the
+   number keeps working in the WhatsApp Business app; no number is provisioned. It is made for this Omni's Kapso
+   customer, created on first use and remembered in `kapso.customer_id`. A new link revokes the previous one.
+3. **Pick a number** from the project's list (`GET .../kapso/numbers`, with a refresh), then **Connect**
+   (`POST /instances/:id/whatsapp-business/kapso/connect`): Omni points that number's Meta-forwarding webhook (kind
+   `meta`; an existing one is updated) at `${server.public_url}/api/v2/channels/whatsapp-business/webhook` with a
+   secret it generates, and connects with the Kapso base URL, `x-api-key` and `x-webhook-signature`.
+4. **Send a test message** to a number you type. WhatsApp delivers it only inside the 24-hour window.
+
+`kapso.api_base_url` (env `KAPSO_API_BASE_URL`) overrides `https://api.kapso.ai`. Without a public https
+`server.public_url` (env `OMNI_PUBLIC_URL`) the connect stops before anything is created. With multitenancy on, every
+Kapso route answers `409 KAPSO_NOT_AVAILABLE`: the key is install-wide. The Kapso routes need `instances:write`
+(`numbers`: `instances:read`), which a paired device's key carries.
+
 ## Templates HSM lifecycle
 
 ```
@@ -196,6 +274,8 @@ Use the `template.status_changed` core event (`packages/core/src/events/types.ts
 ### Webhook returns 401
 
 - `X-Hub-Signature-256` HMAC mismatch. Check `META_APP_SECRET` matches the App you're using.
+- Through a provider: `X-Webhook-Signature` must verify with the instance's `webhookSecret`, and the instance must have
+  `signatureMode: x-webhook-signature`. Every instance the body addresses must verify with its own secret.
 - Common cause: editing the App Secret in Meta dashboard but not updating env.
 
 ### Webhook returns 200 but no events fire

@@ -423,6 +423,8 @@ export function install(rt) {
       if (typeof threadId !== 'string' || threadId === '' || !Array.isArray(chatIds) || chatIds.length === 0 ||
           !chatIds.every(id => typeof id === 'string' && ID.test(id)) || new Set(chatIds).size !== chatIds.length) return { ok: false, reason: 'Unknown chat set.' }
       if (rt.teamResume?.ready !== true) return { ok: false, reason: rt.teamResume?.reason ?? NEEDS_NEWER_TEAM }
+      const child = rt.threads?.byId(threadId)
+      if (child?.answerChild === true && (chatIds.length !== 1 || chatIds[0] !== child.chatId)) return { ok: false, reason: 'An answer child key stays locked to its one chat.' }
       const file = read()
       const link = rt.omniLink?.() ?? null
       const entry = file.threads[threadId]
@@ -462,6 +464,8 @@ export function install(rt) {
     }),
     keyFor: (threadId) => {
       const entry = read().threads[threadId]
+      const child = rt.threads?.byId(threadId)
+      if (child?.answerChild === true && (entry?.chatIds?.length !== 1 || entry.chatIds[0] !== child.chatId)) return null
       return !blocked.has(threadId) && live(entry, rt.omniLink?.() ?? null) ? entry.key : null
     },
     connected: threadId => rt.threadKeys.keyFor(threadId) !== null,

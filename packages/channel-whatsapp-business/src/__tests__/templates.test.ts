@@ -384,7 +384,7 @@ describe('handleTemplateStatusUpdate', () => {
       event: 'APPROVED',
     };
 
-    await handleTemplateStatusUpdate(db, update, plugin);
+    await handleTemplateStatusUpdate(db, update, plugin, WABA_ID);
 
     expect(calls.updates.length).toBeGreaterThanOrEqual(1);
     expect(calls.updates[0]!.setPatch.status).toBe('APPROVED');
@@ -421,6 +421,7 @@ describe('handleTemplateStatusUpdate', () => {
         reason: 'Promotional content not allowed in UTILITY category',
       },
       plugin,
+      WABA_ID,
     );
 
     expect(handleTemplateStatusChanged).toHaveBeenCalledTimes(1);
@@ -447,6 +448,7 @@ describe('handleTemplateStatusUpdate', () => {
         event: 'APPROVED',
       },
       plugin,
+      WABA_ID,
     );
 
     expect(handleTemplateStatusChanged).not.toHaveBeenCalled();

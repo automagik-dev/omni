@@ -45,7 +45,7 @@ export const operatesHere = (rt, sessionId) => (rt.omniNamed?.() ?? Boolean(rt.c
 export const isThreadSession = (rt, sessionId) => rt.threads?.bySession(sessionId) !== undefined
 
 /** The Bot a Session works on Omni as: its own Bot, or for a chat thread the Omni Bot. */
-export const omniActorOf = (rt, sessionId) => rt.selfOf(sessionId) ?? (isThreadSession(rt, sessionId) ? rt.eventsBotId?.() : undefined)
+export const omniActorOf = (rt, sessionId) => rt.selfOf(sessionId) ?? (isThreadSession(rt, sessionId) ? rt.threads.bySession(sessionId).ownerBotId ?? rt.eventsBotId?.() : undefined)
 
 /** Whether `grant` lets `botId` do `action` on `resource` at `now`. */
 export function covers(grant, { botId, resource, action, now = Date.now() }) {
@@ -118,9 +118,12 @@ export function install(rt) {
   rt.omniPermit = async (exec, { action, resource, call, preview = {}, force }) => {
     await rt.load()
     const sessionId = exec.agent?.id
+    if (rt.threads?.bySession(sessionId)?.answerChild === true) return 'Answer children use their own scoped chat tools; generic Omni grants cannot widen them.'
     const botId = omniActorOf(rt, sessionId)
     if (rt.botOf(botId) === undefined) return 'Only Bots on the team use Omni.'
     const main = operatesOmni(rt, botId)
+    const ownership = rt.omniOwnershipRefusal?.(botId, resource, action)
+    if (ownership) return ownership
     // A thread's acts were asked on DSH's card in the thread before they ran (thread-tools.js).
     if (main && isThreadSession(rt, sessionId)) return null
     // A run for an automation's event reads text other people wrote. A Bot's own chat is not
@@ -190,13 +193,15 @@ export function install(rt) {
     }
     const run = executors.get(entry.call?.tool)
     if (run === undefined) throw invalid('This request can no longer run')
+    const ownership = rt.omniOwnershipRefusal?.(botId, entry.resource, entry.action)
+    if (ownership) throw invalid(ownership)
     // Running first, so a second click finds it answered.
     entry.status = 'running'
     if (choice === 'always' || choice === 'channel') addGrant(botId, entry.resource, entry.action, choice === 'channel')
     await rt.save()
     let result
     try {
-      result = await run(entry.call.args ?? {})
+      result = await run(entry.call.args ?? {}, { botId, resource: entry.resource, action: entry.action })
     } catch (error) {
       result = JSON.stringify({ status: 0, error: error?.message ?? String(error) })
     }

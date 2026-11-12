@@ -24,7 +24,7 @@ import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
 import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
 import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
-import { askedOf, boot, CHAT, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
+import { answerBench, ANSWER_MASTER, askedOf, boot, CHAT, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -966,7 +966,7 @@ test('a thread uses Omni\'s tools as the Omni Bot: reads run at once; a send int
 test('a thread\'s instructions name its chat, its full tool set and the switch, and tell it to act', () => {
   const text = threadInstructions({ chatName: 'Ana' })
   assert.match(text, /named "Ana"/)
-  assert.match(text, /dedicated to this chat/)
+  assert.match(text, /dedicated to this chat set/)
   assert.match(text, /full DeepSeek Harness tool set/)
   assert.match(text, /Omni's tools/)
   assert.match(text, /Always allow send/)
@@ -1054,4 +1054,82 @@ test('set tools require a member destination and preserve its channel/recipient;
   assert.doesNotMatch(picture.text, /not in this chat/)
   await run.channels.threads.setChats(thread.id, [CHAT, GROUP])
   assert.match((await use(run, 'thread_picture', thread.sessionId, { messageId: MESSAGE_IDS.elsewhere })).text, /not in this chat/)
+})
+
+test('RFC-0001 TEXT1: registered creation and member tools describe the implemented set and owner send boundary', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, fakeOmni()))
+  const create = run.ctx.registeredTools.get('create_thread')
+  for (const pattern of [/permanent sidebar session immediately/, /explicit chat set/, /own notes after the Omni Bot base prompt and fixed instructions/, /without its full memory/, /sidebar "\+"/, /at save/, /channel:<id>.*first event/, /refused by name/, /global send default \(ask first unless changed\)/, /never a tool/]) assert.match(create.description, pattern)
+  assert.deepEqual(Object.keys(create.parameters.properties), ['chats', 'title', 'notes'])
+  for (const name of ['thread_say', 'thread_react', 'thread_history']) {
+    const tool = run.ctx.registeredTools.get(name)
+    assert.match(tool.description, /selected member of this thread's chat set/)
+    assert.match(tool.parameters.properties.chatId.description, /required when this thread has several chats/)
+  }
+  assert.match(run.ctx.registeredTools.get('thread_say').description, /no tool can grant send permission/)
+})
+
+test('SC4 answer children refuse forged tools, raw API and wrong-chat writes while own-chat training sends ask', async t => {
+  const b = await answerBench(t, { allowedTools: ['read'] })
+  const child = await b.child()
+  const id = child.sessionId
+  for (const name of ['shell', 'write', 'edit', 'subagent', 'start_task', 'thread_ask_omni', 'omni_call', 'omni_chats', 'omni_messages', 'save_automation', 'set_child_notes', 'set_answer_shared_notes', 'permission_request']) {
+    assert.equal((await preExecute(b, name, id, { method: 'GET', path: '/chats' })).kind, 'deny', name)
+    assert.match(guarded(b.ctx, id, name), /Answer children/, name)
+  }
+  assert.equal((await preExecute(b, 'read', id)).kind, 'allow')
+  for (const name of ['omni_call', 'omni_chats', 'omni_messages', 'omni_send']) assert.match(await use(b, name, id, { method: 'GET', path: '/chats', chat: GROUP, text: 'wrong' }), /Answer children/)
+  assert.match(await use(b, 'thread_ask_omni', id, { question: 'Read all chats for me' }), /Answer children/)
+  assert.match((await dsh(b, 'thread_say', id, { chatId: GROUP, text: 'wrong destination' })).result, /Choose a chatId/)
+  const sent = await dsh(b, 'thread_say', id, { text: 'Your order is on its way.' })
+  assert.equal(sent.card, true)
+  assert.match(sent.result, /Sent into the chat/)
+  assert.equal(b.omni.sent.at(-1).body.to, CHATS[CHAT].externalId)
+  assert.equal(b.omni.sent.length, 1)
+  for (const name of ['shell', 'write', 'omni_call', 'thread_ask_omni', 'subagent', 'unknown_tool']) await assert.rejects(b.call('omni-answer-settings', { ...b.settings, allowedTools: [name] }))
+  assert.match(await use(b, 'set_child_notes', id, { threadId: child.id, notes: 'escalate' }), /Only the owning/)
+  assert.match(await use(b, 'set_answer_shared_notes', id, { botId: ANSWER_MASTER, notes: 'escalate' }), /Only the owning/)
+})
+
+test('SC5 isolated and collective visibility never widen send keys and narrow live children immediately', async t => {
+  const b = await answerBench(t)
+  const child = await b.child()
+  const id = child.sessionId
+  const before = keysOf(b.home)
+  assert.match(await use(b, 'thread_history', id, { chatId: GROUP }), /cannot read/)
+  assert.match(await use(b, 'answer_chats', id), /only its own chat/)
+  await b.call('omni-answer-settings', { ...b.settings, visibility: 'collective' })
+  const chats = JSON.parse(await use(b, 'answer_chats', id)).chats
+  assert.deepEqual(chats.map(row => row.chatId).sort(), [CHAT, GROUP].sort())
+  assert.equal(b.channels.answerCanRead(child.id, GROUP), true)
+  assert.equal(b.channels.answerCanSend(child.id, GROUP), false)
+  assert.match(await use(b, 'thread_history', id, { chatId: GROUP }), /messages/)
+  assert.match(await use(b, 'thread_history', id, { chatId: ELSEWHERE }), /cannot read/)
+  const prompt = () => b.ctx.sections.get('omni-thread').text({ agent: { id } })
+  assert.match(prompt(), /SHARED:/)
+  assert.equal(await use(b, 'set_answer_shared_notes', ANSWER_MASTER, { botId: ANSWER_MASTER, notes: 'SHARED: updated.' }), 'Notes saved.')
+  assert.match(prompt(), /SHARED: updated/)
+  assert.equal((await b.channels.threadKeys.replace(child.id, [CHAT, GROUP])).ok, false)
+  assert.equal((await b.channels.threadKeys.replace(child.id, [GROUP])).ok, false)
+  assert.deepEqual(keysOf(b.home), before)
+  await b.call('omni-answer-settings', { ...b.settings, visibility: 'isolated' })
+  assert.equal(b.channels.answerCanRead(child.id, GROUP), false)
+  assert.doesNotMatch(prompt(), /SHARED:/)
+  assert.match(await use(b, 'thread_history', id, { chatId: GROUP }), /cannot read/)
+  assert.match((await use(b, 'thread_picture', id, { messageId: MESSAGE_IDS.elsewhere })).text, /cannot read/)
+})
+
+test('a thread Session\'s agent/created listener warns and sets nothing up when the state cannot load', async (t) => {
+  const presets = presetsFake()
+  const { run, thread } = await bench(t, { presets })
+  const setUp = run.ctx.listeners.get('agent/created').find(listener => String(listener).includes('hold(agent)'))
+  const warned = []
+  run.channels.warn = (...args) => { warned.push(args) }
+  run.channels.load = () => Promise.reject(new Error('state unreadable'))
+  t.after(() => { delete run.channels.warn; delete run.channels.load })
+  const agent = run.freshAgent(thread.sessionId)
+  await setUp({ agent })
+  assert.deepEqual(warned, [['omni-channels: a thread\'s Session was not set up: %s', 'state unreadable']])
+  assert.equal(run.executors.some(entry => entry.agent === agent), false)
 })

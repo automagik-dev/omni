@@ -5,7 +5,7 @@
  * @omni/core → packages/core/src/types/whatsapp-business.ts.
  */
 
-import type { WhatsAppTemplateComponent } from '@omni/core/schemas';
+import type { MetaAuthMode, MetaSignatureMode, WhatsAppTemplateComponent } from '@omni/core/schemas';
 import type { MetaTemplateCategory, MetaTemplateStatus } from '@omni/core/types';
 
 /** Per-instance Meta config persisted on `instances` table. */
@@ -19,6 +19,12 @@ export interface WhatsAppBusinessConfig {
   /** Provenance: 'manual' | 'embedded_signup' */
   connectionMethod: string;
   displayPhoneNumber?: string;
+  /** Meta-compatible provider API base URL (version included); unset = Graph API. */
+  apiBaseUrl?: string;
+  authMode: MetaAuthMode;
+  /** Secret a provider signs forwarded webhooks with. Never logged. */
+  webhookSecret?: string;
+  signatureMode: MetaSignatureMode;
 }
 
 /** Global app-level config from env (META_APP_SECRET, META_VERIFY_TOKEN, etc.). */

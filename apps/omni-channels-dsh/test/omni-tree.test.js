@@ -36,11 +36,11 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, pauseOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
-], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL, URLSearchParams, setTimeout, clearTimeout, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
+], { globals: { console: { ...console, warn: (...args) => logged.push(args) }, URL, URLSearchParams, setTimeout, clearTimeout, setInterval, clearInterval, document, localStorage }, team: { omni: { ...omni, call: fakeCall } } })
 const ui = await loadTree()
 
 test('only the Bot of kind omni carries the channel tree', () => {
@@ -979,4 +979,218 @@ test('sidebar lists a set once, shows its automations and cancellation of its de
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Cancel').props.onClick()
   assert.equal(calls.filter(([name]) => name === 'omni-thread-remove').length, 1)
   assert.doesNotMatch(text(view.draw()), /What should happen to:/)
+})
+
+
+test('SC1 sidebar rows and threads follow each channel owner; unassigned channels stay with the default', t => {
+  linked()
+  const ownership = { defaultBotId: BOT.id, channels: { [CHANNEL_B.id]: 'dedicated' } }
+  const roster = hooked({ omniOwnership: ownership, omniThreads: [THREAD(1, CHANNEL_A, { ownerBotId: BOT.id }), THREAD(3, CHANNEL_B, { ownerBotId: 'dedicated' })] })
+  const main = tree(t, { roster }).view.draw()
+  assert.ok(channelOf(main, CHANNEL_A))
+  assert.equal(channelOf(main, CHANNEL_B), undefined)
+  const dedicated = tree(t, { roster, bot: { id: 'dedicated', name: 'Service', kind: 'omni' } }).view.draw()
+  assert.equal(channelOf(dedicated, CHANNEL_A), undefined)
+  assert.ok(channelOf(dedicated, CHANNEL_B))
+  assert.deepEqual(all(dedicated, 'bt-thread').map(node => node.props['data-thread-id']), ['t3'])
+})
+
+test('SC2 sidebar creation proposes first; only the separate confirmation button commits', async t => {
+  calls.length = 0
+  const view = mount(() => react.createElement(ui.ChannelBotForm, { channels: [CHANNEL_A], roster: {}, onClose: () => {} }))
+  t.after(() => view.unmount())
+  answer = endpoint => endpoint === 'propose_answer_bot' ? { proposalId: 'proposal-1' } : { botId: 'dedicated' }
+  let root = view.draw()
+  byLabel(root, 'Bot name').props.onChange({ target: { value: 'Service' } })
+  root = view.draw()
+  nodes(root).find(node => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } })
+  root = view.draw()
+  await nodes(root).find(node => node.type === 'button' && text(node) === 'Review hand-over').props.onClick()
+  assert.deepEqual(calls, [['propose_answer_bot', { name: 'Service', channelIds: [CHANNEL_A.id] }]])
+  root = view.draw()
+  await nodes(root).find(node => node.type === 'button' && text(node) === 'Confirm hand-over').props.onClick()
+  assert.deepEqual(calls.at(-1), ['confirm_answer_bot', { proposalId: 'proposal-1' }])
+})
+
+
+test('answer settings start isolated and save one owner setting with read-only additions and shared notes', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: {} }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const select = nodes(view.draw()).find(node => node.type === 'select')
+  assert.equal(select.props.value, 'isolated')
+  select.props.onChange({ target: { value: 'collective' } })
+  const enabled = () => byLabel(view.draw(), 'Answer new messages')
+  assert.deepEqual([enabled().type, enabled().props.role, enabled().props['aria-checked']], ['button', 'switch', false])
+  enabled().props.onClick()
+  await settle()
+  assert.equal(enabled().props['aria-checked'], true)
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
+  await settle()
+  // New children train and graduation stays off unless staff change them (RFC-0001).
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000 }])
+  assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
+})
+
+test('an answer child\'s row names its sending mode at a glance, and its menu switches it through the staff action', async () => {
+  calls.length = 0
+  answer = () => ({})
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const child = extra => THREAD(1, CHANNEL_A, { answerChild: true, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'allow', reactions: 'any' }, ...extra })
+  const training = mount(() => react.createElement(ui.ThreadRow, { thread: child({ sendingMode: 'training', approvedStreak: 2, graduateAfter: 5 }), actions: {}, rowProps }))
+  let root = training.draw()
+  assert.equal(text(one(root, 'ot-mode')), 'Training')
+  assert.equal(one(root, 'ot-mode').props['data-mode'], 'training')
+  assert.match(one(root, 'bt-thread').props['aria-label'], /^Chat 1, Training: Asks you before each send$/)
+  // Marked for the narrow layout, where the mode drops under the name.
+  assert.equal(one(root, 'ot-thread').props['data-answer'], true)
+  assert.equal(one(root, 'ot-thread-free'), undefined)
+  const more = () => one(training.draw(), 'ot-thread-more')
+  assert.equal(more().props['aria-label'], 'Sending mode in Chat 1')
+  more().props.onClick()
+  root = training.draw()
+  const items = all(one(root, 'ot-thread-menu'), 'ot-thread-menu-item')
+  assert.deepEqual(items.map(item => [item.props['data-value'], item.props['aria-checked'], text(item)]), [['training', true, 'Training: ask before each send'], ['sending', false, 'Sending: send without asking']])
+  assert.equal(text(one(root, 'ot-thread-menu-note')), '2 of 5 approved drafts in a row. At 5 it switches to sending.')
+  items[1].props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['set_child_sending', { threadId: 't1', mode: 'sending' }]])
+  training.unmount()
+  // Sending: named so, and no progress line; with graduation off a training child shows none either.
+  const sending = mount(() => react.createElement(ui.ThreadRow, { thread: child({ sendingMode: 'sending', approvedStreak: 5, graduateAfter: 5, permissions: { sends: 'allow', reactions: 'list' } }), actions: {}, rowProps }))
+  assert.equal(text(one(sending.draw(), 'ot-mode')), 'Sending')
+  assert.equal(ui.freeMarkOf(child({ sendingMode: 'sending', permissions: { sends: 'allow' } })), null)
+  one(sending.draw(), 'ot-thread-more').props.onClick()
+  assert.equal(one(sending.draw(), 'ot-thread-menu-note'), undefined)
+  sending.unmount()
+  assert.equal(ui.answerModeOf(child({ sendingMode: 'training', graduateAfter: null })).progress, null)
+  assert.equal(ui.answerModeOf(THREAD(2)), null)
+  // An ordinary thread keeps its own row: no mode, its own menu.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(2)).map(group => group.field)), ['sends', 'reactions'])
+})
+
+test('answer settings choose the new-child default and optional graduation, off until staff turn it on', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = label => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith(label))
+  const note = label => text(one(nodes(view.draw()).find(node => classOf(node).includes('bt-field') && text(node).startsWith(label)), 'bt-note'))
+  assert.equal(field('Approved drafts in a row'), undefined, 'no count while graduation is off')
+  // Short choice names on the team's select, so a narrow sidebar never cuts them; the note says what each does.
+  const mode = nodes(field('New children start in')).find(node => node.type === 'select')
+  assert.deepEqual([classOf(mode), mode.props.value, ...nodes(mode).filter(node => node.type === 'option').map(text)], [['bt-select'], 'training', 'Training', 'Sending'])
+  assert.equal(note('New children start in'), 'A new child asks you before each send.')
+  assert.equal(note('Visibility'), 'Each child sees only its own chat.')
+  mode.props.onChange({ target: { value: 'sending' } })
+  await settle()
+  assert.equal(note('New children start in'), 'A new child sends without asking.')
+  const graduation = () => byLabel(view.draw(), 'Switch a training child to sending by itself')
+  assert.deepEqual([graduation().props.role, graduation().props['aria-checked'], classOf(graduation())], ['switch', false, ['bt-switch']])
+  graduation().props.onClick()
+  await settle()
+  const count = () => nodes(field('Approved drafts in a row')).find(node => node.type === 'input')
+  assert.deepEqual([count().props.value, count().props.min, count().props.max, classOf(count())], ['5', 1, 100, ['bt-input', 'ot-answer-count']])
+  const save = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings')
+  count().props.onChange({ target: { value: '0' } })
+  await settle()
+  assert.equal(save().props.disabled, true)
+  assert.equal(count().props['aria-invalid'], true)
+  count().props.onChange({ target: { value: '4' } })
+  await settle()
+  // The read-only tools are named in plain words on the team's switches; the tool's name is only the tooltip.
+  const tools = all(byLabel(view.draw(), 'Children may also'), 'ot-answer-switch')
+  assert.deepEqual(tools.map(row => [text(row), row.props.title]), [['Read files', 'read'], ['Read images', 'read_image'], ['Find files by name', 'glob'], ['Search inside files', 'grep']])
+  byLabel(view.draw(), 'Search inside files').props.onClick()
+  await settle()
+  assert.deepEqual([classOf(save()), classOf(nodes(field('Shared notes')).find(node => node.type === 'textarea'))], [['bt-soft', 'bt-soft-sm'], ['bt-input', 'bt-input-area']])
+  save().props.onClick()
+  await settle()
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000 }])
+})
+
+// RFC-0001 SC7 in the sidebar: a paused child shows the pause, its time left and Resume.
+test('a paused answer child shows the pause under its name with the time left, and Resume sends the staff action', async () => {
+  calls.length = 0
+  answer = () => ({})
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const now = Date.now()
+  const child = extra => THREAD(1, CHANNEL_A, { answerChild: true, sendingMode: 'training', approvedStreak: 0, graduateAfter: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, ...extra })
+  const paused = mount(() => react.createElement(ui.ThreadRow, { thread: child({ paused: true, pausedUntil: now + 12 * 60_000 - 1 }), actions: {}, rowProps }))
+  let root = paused.draw()
+  assert.equal(one(root, 'ot-thread').props['data-paused'], true)
+  // The mode gives way to the pause line; the name keeps its own line.
+  assert.equal(one(one(root, 'bt-thread'), 'ot-mode'), undefined)
+  const line = one(root, 'ot-paused')
+  assert.equal(text(one(line, 'ot-mode')), 'Paused')
+  assert.equal(one(line, 'ot-mode').props['data-mode'], 'paused')
+  assert.equal(text(one(line, 'ot-paused-left')), '12 min left')
+  assert.match(one(root, 'bt-thread').props['aria-label'], /^Chat 1, Training: Asks you before each send, Paused, 12 min left$/)
+  const button = one(line, 'ot-resume')
+  assert.deepEqual([button.type, classOf(button), button.props['aria-label'], text(button)], ['button', ['bt-soft', 'bt-soft-sm', 'ot-resume'], 'Resume answering in Chat 1', 'Resume'])
+  button.props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['resume_answer_child', { threadId: 't1' }]])
+  // A refused resume says so in the row.
+  answer = () => { throw new Error('nope') }
+  one(paused.draw(), 'ot-resume').props.onClick()
+  await settle()
+  assert.equal(text(one(paused.draw(), 'ot-thread-problem')), 'Could not resume this chat. Try again.')
+  paused.unmount()
+  // Not paused: the mode pill is back, and no pause line.
+  const answering = mount(() => react.createElement(ui.ThreadRow, { thread: child({}), actions: {}, rowProps }))
+  root = answering.draw()
+  assert.deepEqual([text(one(root, 'ot-mode')), one(root, 'ot-paused'), one(root, 'ot-thread').props['data-paused']], ['Training', undefined, undefined])
+  answering.unmount()
+})
+
+test('pauseOf names the time left in plain words, says when it is resuming, and is null for any other thread', () => {
+  const at = Date.parse('2026-11-12T12:00:00.000Z')
+  const paused = pausedUntil => ({ answerChild: true, paused: true, pausedUntil })
+  assert.equal(ui.pauseOf(paused(at + 30 * 60_000), at).left, '30 min left')
+  assert.equal(ui.pauseOf(paused(at + 29 * 60_000 + 59_000), at).left, '30 min left')
+  assert.equal(ui.pauseOf(paused(at + 1000), at).left, '1 min left')
+  assert.equal(ui.pauseOf(paused(at + 60 * 60_000), at).left, '1 h left')
+  assert.equal(ui.pauseOf(paused(at + 95 * 60_000), at).left, '1 h 35 min left')
+  assert.equal(ui.pauseOf(paused(at), at).left, 'resuming…')
+  assert.equal(ui.pauseOf(paused(null), at).left, 'until you resume it')
+  assert.equal(ui.pauseOf({ answerChild: true, paused: false }, at), null)
+  assert.equal(ui.pauseOf({ paused: true, pausedUntil: at + 1000 }, at), null)
+  assert.equal(ui.pauseOf(THREAD(2), at), null)
+})
+
+test('answer settings set the quiet interval in whole minutes, 30 by default, one to a day', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = () => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith('Resume a paused child after'))
+  const input = () => nodes(field()).find(node => node.type === 'input')
+  const save = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings')
+  assert.deepEqual([input().props.value, input().props.min, input().props.max, classOf(input()), text(field()).endsWith('minutes')], ['30', 1, 1440, ['bt-input', 'ot-answer-count'], true])
+  for (const value of ['0', '1441', '2.5', '']) {
+    input().props.onChange({ target: { value } })
+    await settle()
+    assert.deepEqual([save().props.disabled, input().props['aria-invalid']], [true, true], value)
+  }
+  input().props.onChange({ target: { value: '45' } })
+  await settle()
+  assert.equal(save().props.disabled, false)
+  save().props.onClick()
+  await settle()
+  assert.equal(calls.at(-1)[1].resumeAfterMs, 45 * 60_000)
+  const custom = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, resumeAfterMs: 5 * 60_000 } }))
+  nodes(custom.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  assert.equal(nodes(nodes(custom.draw()).find(node => node.type === 'label' && text(node).startsWith('Resume a paused child after'))).find(node => node.type === 'input').props.value, '5')
+  custom.unmount()
 })

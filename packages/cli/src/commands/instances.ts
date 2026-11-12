@@ -267,6 +267,7 @@ const SECRET_BODY_FIELDS = [
   'webhookVerifyToken',
   'twilioAuthToken',
   'metaAccessToken',
+  'metaWebhookSecret',
   'ascToken',
   'hermesPassword',
   'zenviaApiToken',
@@ -892,6 +893,17 @@ export function createInstancesCommand(): Command {
     .option('--waba-id <id>', 'WhatsApp Business Account id (WABA id)')
     .option('--meta-app-id <id>', 'Optional override for META_APP_ID (when the tenant owns its own Meta App)')
     .option('--meta-business-id <id>', 'Optional Meta Business Manager id')
+    // Meta-compatible provider (e.g. Kapso). Omit all four for Meta direct.
+    .option(
+      '--api-base-url <url>',
+      'Provider API base, version included (https), e.g. https://api.kapso.ai/meta/whatsapp/v24.0',
+    )
+    .option('--auth-mode <mode>', 'How --access-token is sent: bearer (Meta) or x-api-key (provider key)')
+    .option('--webhook-secret <secret>', 'Provider webhook signing secret (with --signature-mode x-webhook-signature)')
+    .option(
+      '--signature-mode <mode>',
+      'Webhook signature: x-hub-signature-256 (Meta app secret) or x-webhook-signature (provider)',
+    )
     .action(
       async (
         rawId: string,
@@ -911,6 +923,10 @@ export function createInstancesCommand(): Command {
           wabaId?: string;
           metaAppId?: string;
           metaBusinessId?: string;
+          apiBaseUrl?: string;
+          authMode?: string;
+          webhookSecret?: string;
+          signatureMode?: string;
         },
       ) => {
         const client = getClient();
@@ -946,6 +962,10 @@ export function createInstancesCommand(): Command {
                 wabaId: options.wabaId,
                 appId: options.metaAppId,
                 businessId: options.metaBusinessId,
+                apiBaseUrl: options.apiBaseUrl,
+                authMode: options.authMode,
+                webhookSecret: options.webhookSecret,
+                signatureMode: options.signatureMode,
               }),
             });
 

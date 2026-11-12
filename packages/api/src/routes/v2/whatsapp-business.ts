@@ -6,6 +6,7 @@
  * Surface (Group 5 of the wish — Embedded Signup + connection lifecycle):
  *   - POST   /oauth/exchange     — code → access_token + WABA discovery
  *   - POST   /connect            — persist Meta config + plugin.connect()
+ *   - POST   /kapso/connect      — a Kapso project number: its webhook, then the same connect (#1676)
  *   - POST   /register           — POST /{phone_number_id}/register
  *   - POST   /subscribe-app      — POST /{waba_id}/subscribed_apps
  *   - GET    /connection         — read persisted Meta config (no access token)
@@ -23,28 +24,51 @@
  * codebase). Instance allowlists are still enforced.
  */
 
+import { randomBytes } from 'node:crypto';
 import { zValidator } from '@hono/zod-validator';
 import {
+  type KapsoPhoneNumber,
   MetaApiError,
   MetaErrorCode,
   MetaWhatsAppClient,
   exchangeCodeForToken,
   getWabaDetails,
+  kapsoMetaApiBaseUrl,
+  listKapsoPhoneNumbers,
   registerPhoneNumber as registerPhoneNumberOAuth,
   subscribeApp,
   uploadHeaderMedia,
+  upsertKapsoMetaWebhook,
 } from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import {
   EmbeddedSignupExchangeRequestSchema,
+  type MetaAuthMode,
+  MetaAuthModeSchema,
+  type MetaSignatureMode,
+  MetaSignatureModeSchema,
   WhatsAppBusinessConnectRequestSchema,
   WhatsAppBusinessRegisterRequestSchema,
+  isMetaHostUrl,
 } from '@omni/core/schemas';
 import { type Context, Hono } from 'hono';
 import { z } from 'zod';
 import * as oauthTokenCache from '../../lib/oauth-token-cache';
 import { runOutsideProducerScope } from '../../lib/producer-scope';
-import { resolveMetaApiVersion } from '../../lib/whatsapp-business-connection';
+import { resolveWhatsAppBusinessCallback } from '../../lib/whatsapp-business-callback';
+import {
+  metaClientTransport,
+  metaOnlyRouteError,
+  resolveMetaApiVersion,
+  usesMetaProvider,
+} from '../../lib/whatsapp-business-connection';
+import {
+  KAPSO_NOT_CONFIGURED,
+  PUBLIC_URL_MISSING,
+  kapsoErrorReply,
+  kapsoUnavailable,
+  resolveKapso,
+} from '../../lib/whatsapp-business-kapso';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
@@ -98,6 +122,8 @@ function buildClientFromInstance(instance: {
   metaPhoneNumberId: string | null;
   metaWabaId: string | null;
   metaApiVersion: string | null;
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
 }): MetaWhatsAppClient | null {
   if (!instance.metaAccessToken || !instance.metaPhoneNumberId) return null;
   return new MetaWhatsAppClient(
@@ -105,9 +131,60 @@ function buildClientFromInstance(instance: {
       phoneNumberId: instance.metaPhoneNumberId,
       accessToken: instance.metaAccessToken,
       apiVersion: instance.metaApiVersion ?? 'v25.0',
+      ...metaClientTransport(instance),
     },
     instance.metaWabaId ?? undefined,
   );
+}
+
+type ConnectBody = z.infer<typeof WhatsAppBusinessConnectRequestSchema>;
+
+/** Provider columns as the connect route writes them; null = Meta direct for that field. */
+interface ProviderColumns {
+  metaApiBaseUrl: string | null;
+  metaAuthMode: MetaAuthMode | null;
+  metaWebhookSecret: string | null;
+  metaSignatureMode: MetaSignatureMode | null;
+}
+
+/**
+ * The provider settings a connect leaves on the instance. A field the body
+ * omits keeps the stored value (a re-connect that re-enters only the token
+ * never moves an instance between Meta and its provider); `null` clears it.
+ * Refuses a combination that could not work or would send a key to the
+ * wrong host: a provider key header without a provider base URL, or a
+ * provider signature without a webhook secret.
+ */
+function resolveProviderSettings(
+  stored: {
+    metaApiBaseUrl?: string | null;
+    metaAuthMode?: string | null;
+    metaWebhookSecret?: string | null;
+    metaSignatureMode?: string | null;
+  },
+  body: ConnectBody,
+): { ok: true; columns: ProviderColumns } | { ok: false; payload: { error: { code: string; message: string } } } {
+  const pick = <T>(value: T | null | undefined, kept: T | null | undefined): T | null =>
+    value === undefined ? (kept ?? null) : value;
+  const authMode = MetaAuthModeSchema.safeParse(pick(body.authMode, stored.metaAuthMode));
+  const signatureMode = MetaSignatureModeSchema.safeParse(pick(body.signatureMode, stored.metaSignatureMode));
+  const columns: ProviderColumns = {
+    metaApiBaseUrl: pick(body.apiBaseUrl, stored.metaApiBaseUrl),
+    metaAuthMode: authMode.success ? authMode.data : null,
+    metaWebhookSecret: pick(body.webhookSecret, stored.metaWebhookSecret),
+    metaSignatureMode: signatureMode.success ? signatureMode.data : null,
+  };
+  const invalid = (message: string) => ({
+    ok: false as const,
+    payload: { error: { code: 'INVALID_PROVIDER_SETTINGS', message } },
+  });
+  if (columns.metaAuthMode === 'x-api-key' && (!columns.metaApiBaseUrl || isMetaHostUrl(columns.metaApiBaseUrl))) {
+    return invalid('authMode x-api-key needs a provider apiBaseUrl: a provider key is never sent to Meta');
+  }
+  if (columns.metaSignatureMode === 'x-webhook-signature' && !columns.metaWebhookSecret) {
+    return invalid('signatureMode x-webhook-signature needs webhookSecret');
+  }
+  return { ok: true, columns };
 }
 
 // ---------------------------------------------------------------------------
@@ -156,6 +233,136 @@ whatsappBusinessRoutes.post(
   },
 );
 
+/** What a connect stores and starts the channel with, whichever way the details came in. */
+interface ConnectInput {
+  accessToken: string;
+  phoneNumberId: string;
+  wabaId: string;
+  appId?: string;
+  businessId?: string;
+  connectionMethod: 'manual' | 'embedded_signup' | 'kapso';
+  /** Known before the probe (Kapso lists it); the probe's answer wins. */
+  displayPhoneNumber?: string;
+  provider: ProviderColumns;
+}
+
+type ConnectOutcome =
+  | {
+      ok: true;
+      data: {
+        instanceId: string;
+        status: 'connected';
+        displayPhoneNumber: string | null;
+        qualityRating: string | null;
+      };
+    }
+  | { ok: false; status: 500; payload: { error: { code: string; message: string } } };
+
+/**
+ * Store the Meta details and provider settings on the instance, probe the number, and start the
+ * channel. Shared by the manual / Embedded Signup connect and the Kapso connect.
+ */
+async function connectInstance(
+  c: Context<{ Variables: AppVariables }>,
+  id: string,
+  input: ConnectInput,
+): Promise<ConnectOutcome> {
+  const services = c.get('services');
+  const channelRegistry = c.get('channelRegistry');
+  const { apiVersion } = readMetaAppEnv();
+
+  // Persist Meta config on the instance row first.
+  const updated = await services.instances.update(id, {
+    metaAccessToken: input.accessToken,
+    metaPhoneNumberId: input.phoneNumberId,
+    metaWabaId: input.wabaId,
+    metaAppId: input.appId ?? undefined,
+    metaBusinessId: input.businessId ?? undefined,
+    metaApiVersion: apiVersion,
+    metaConnectionMethod: input.connectionMethod,
+    metaConnectedAt: new Date(),
+    ...(input.displayPhoneNumber ? { metaDisplayPhoneNumber: input.displayPhoneNumber } : {}),
+    ...input.provider,
+    isActive: true,
+  });
+
+  // Resolve display_phone_number + quality_rating by hitting GET /{phone_number_id}
+  // before booting the plugin. Best-effort: failures don't block connect.
+  let displayPhoneNumber: string | undefined = input.displayPhoneNumber;
+  let qualityRating: string | undefined;
+  try {
+    const probe = new MetaWhatsAppClient(
+      {
+        phoneNumberId: input.phoneNumberId,
+        accessToken: input.accessToken,
+        apiVersion,
+        ...metaClientTransport(input.provider),
+      },
+      input.wabaId,
+    );
+    const info = (await probe.getPhoneNumberInfo()) as {
+      display_phone_number?: string;
+      verified_name?: string;
+      quality_rating?: string;
+    };
+    displayPhoneNumber = info.display_phone_number ?? displayPhoneNumber;
+    qualityRating = info.quality_rating;
+
+    if (info.display_phone_number) {
+      await services.instances.update(id, { metaDisplayPhoneNumber: displayPhoneNumber });
+    }
+  } catch (err) {
+    log.warn('Failed to fetch phone_number info during connect — continuing', {
+      instanceId: id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  // Boot the plugin runtime — passes credentials via InstanceConfig.
+  const plugin = channelRegistry?.get('whatsapp-business');
+  if (!plugin) {
+    return {
+      ok: false,
+      status: 500,
+      payload: { error: { code: 'PLUGIN_NOT_FOUND', message: 'whatsapp-business plugin not registered' } },
+    };
+  }
+
+  try {
+    await runOutsideProducerScope(() =>
+      plugin.connect(id, {
+        instanceId: id,
+        credentials: {
+          metaAccessToken: input.accessToken,
+          metaPhoneNumberId: input.phoneNumberId,
+          metaWabaId: input.wabaId,
+          metaAppId: input.appId,
+          metaBusinessId: input.businessId,
+          metaApiVersion: apiVersion,
+          metaConnectionMethod: input.connectionMethod,
+          metaDisplayPhoneNumber: displayPhoneNumber,
+          ...input.provider,
+        },
+        options: {},
+      }),
+    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Unknown error';
+    log.error('plugin.connect failed for whatsapp-business', { instanceId: id, error: message });
+    return { ok: false, status: 500, payload: { error: { code: 'CONNECT_FAILED', message } } };
+  }
+
+  return {
+    ok: true,
+    data: {
+      instanceId: updated.id,
+      status: 'connected',
+      displayPhoneNumber: displayPhoneNumber ?? null,
+      qualityRating: qualityRating ?? null,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // POST /:id/whatsapp-business/connect
 // ---------------------------------------------------------------------------
@@ -167,8 +374,6 @@ whatsappBusinessRoutes.post(
     const id = c.req.param('id');
     const body = c.req.valid('json');
     const services = c.get('services');
-    const channelRegistry = c.get('channelRegistry');
-    const { apiVersion } = readMetaAppEnv();
 
     const instance = await services.instances.getById(id);
     const guard = ensureWhatsAppBusiness(instance);
@@ -202,87 +407,94 @@ whatsappBusinessRoutes.post(
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'accessToken or exchangeHandle is required' } }, 400);
     }
 
-    // Persist Meta config on the instance row first.
-    const updated = await services.instances.update(id, {
-      metaAccessToken: accessToken,
-      metaPhoneNumberId: body.phoneNumberId,
-      metaWabaId: body.wabaId,
-      metaAppId: body.appId ?? undefined,
-      metaBusinessId: body.businessId ?? undefined,
-      metaApiVersion: apiVersion,
-      metaConnectionMethod: connectionMethod,
-      metaConnectedAt: new Date(),
-      isActive: true,
+    const provider = resolveProviderSettings(instance, body);
+    if (!provider.ok) return c.json(provider.payload, 400);
+
+    const outcome = await connectInstance(c, id, {
+      accessToken,
+      phoneNumberId: body.phoneNumberId,
+      wabaId: body.wabaId,
+      appId: body.appId,
+      businessId: body.businessId,
+      connectionMethod,
+      provider: provider.columns,
     });
+    return outcome.ok ? c.json({ data: outcome.data }) : c.json(outcome.payload, outcome.status);
+  },
+);
 
-    // Resolve display_phone_number + quality_rating by hitting GET /{phone_number_id}
-    // before booting the plugin. Best-effort: failures don't block connect.
-    let displayPhoneNumber: string | undefined;
-    let qualityRating: string | undefined;
+// ---------------------------------------------------------------------------
+// POST /:id/whatsapp-business/kapso/connect
+// ---------------------------------------------------------------------------
+
+const KapsoConnectBodySchema = z.object({
+  phoneNumberId: z
+    .string()
+    .trim()
+    .regex(/^\d{5,25}$/),
+});
+
+/**
+ * Connect the instance to a number of the deployment's Kapso project (#1676): point that
+ * number's Meta-forwarding webhook at this Omni with a secret generated here, then connect
+ * through Kapso's Meta-compatible API with the project key. Refuses before calling Kapso when
+ * multitenancy is on, no key is saved, or Omni has no public address.
+ */
+whatsappBusinessRoutes.post(
+  '/:id/whatsapp-business/kapso/connect',
+  zValidator('json', KapsoConnectBodySchema),
+  async (c) => {
+    const unavailable = kapsoUnavailable();
+    if (unavailable) return c.json(unavailable.payload, unavailable.status);
+    const id = c.req.param('id');
+    const { phoneNumberId } = c.req.valid('json');
+    const services = c.get('services');
+
+    const instance = await services.instances.getById(id);
+    const guard = ensureWhatsAppBusiness(instance);
+    if (!guard.ok) return c.json(guard.payload, 400);
+    const kapso = await resolveKapso(services.settings);
+    if (!kapso) return c.json(KAPSO_NOT_CONFIGURED.payload, KAPSO_NOT_CONFIGURED.status);
+    const { callbackUrl } = await resolveWhatsAppBusinessCallback(services.settings);
+    if (!callbackUrl) return c.json(PUBLIC_URL_MISSING.payload, PUBLIC_URL_MISSING.status);
+
+    const webhookSecret = randomBytes(32).toString('hex');
+    let number: KapsoPhoneNumber | undefined;
     try {
-      const probe = new MetaWhatsAppClient(
-        {
-          phoneNumberId: body.phoneNumberId,
-          accessToken,
-          apiVersion,
-        },
-        body.wabaId,
-      );
-      const info = (await probe.getPhoneNumberInfo()) as {
-        display_phone_number?: string;
-        verified_name?: string;
-        quality_rating?: string;
-      };
-      displayPhoneNumber = info.display_phone_number;
-      qualityRating = info.quality_rating;
-
-      if (displayPhoneNumber) {
-        await services.instances.update(id, { metaDisplayPhoneNumber: displayPhoneNumber });
-      }
-    } catch (err) {
-      log.warn('Failed to fetch phone_number info during connect — continuing', {
-        instanceId: id,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-
-    // Boot the plugin runtime — passes credentials via InstanceConfig.
-    const plugin = channelRegistry?.get('whatsapp-business');
-    if (!plugin) {
-      return c.json({ error: { code: 'PLUGIN_NOT_FOUND', message: 'whatsapp-business plugin not registered' } }, 500);
-    }
-
-    try {
-      await runOutsideProducerScope(() =>
-        plugin.connect(id, {
-          instanceId: id,
-          credentials: {
-            metaAccessToken: accessToken,
-            metaPhoneNumberId: body.phoneNumberId,
-            metaWabaId: body.wabaId,
-            metaAppId: body.appId,
-            metaBusinessId: body.businessId,
-            metaApiVersion: apiVersion,
-            metaConnectionMethod: connectionMethod,
-            metaDisplayPhoneNumber: displayPhoneNumber,
+      number = (await listKapsoPhoneNumbers(kapso)).find((listed) => listed.phoneNumberId === phoneNumberId);
+      if (!number) {
+        return c.json(
+          {
+            error: {
+              code: 'KAPSO_NUMBER_NOT_FOUND',
+              message: 'That number is not in this Kapso project. Refresh the list and pick it again.',
+            },
           },
-          options: {},
-        }),
-      );
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unknown error';
-      log.error('plugin.connect failed for whatsapp-business', { instanceId: id, error: message });
-      return c.json({ error: { code: 'CONNECT_FAILED', message } }, 500);
+          404,
+        );
+      }
+      await upsertKapsoMetaWebhook(kapso, phoneNumberId, { url: callbackUrl, secret: webhookSecret });
+    } catch (error) {
+      const refused = kapsoErrorReply(error);
+      if (!refused) throw error;
+      return c.json(refused.payload, refused.status);
     }
 
-    return c.json({
-      data: {
-        instanceId: updated.id,
-        status: 'connected',
-        displayPhoneNumber: displayPhoneNumber ?? null,
-        qualityRating: qualityRating ?? null,
+    const outcome = await connectInstance(c, id, {
+      accessToken: kapso.apiKey,
+      phoneNumberId,
+      wabaId: number.wabaId,
+      connectionMethod: 'kapso',
+      displayPhoneNumber: number.displayPhoneNumber ?? undefined,
+      provider: {
+        metaApiBaseUrl: kapsoMetaApiBaseUrl(kapso.baseUrl),
+        metaAuthMode: 'x-api-key',
+        metaWebhookSecret: webhookSecret,
+        metaSignatureMode: 'x-webhook-signature',
       },
     });
+    if (!outcome.ok) return c.json(outcome.payload, outcome.status);
+    return c.json({ data: { ...outcome.data, webhookUrl: callbackUrl } });
   },
 );
 
@@ -307,6 +519,7 @@ whatsappBusinessRoutes.post(
         409,
       );
     }
+    if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Registering the number'), 400);
 
     try {
       await registerPhoneNumberOAuth(
@@ -338,6 +551,7 @@ whatsappBusinessRoutes.post('/:id/whatsapp-business/subscribe-app', async (c) =>
   if (!instance.metaAccessToken || !instance.metaWabaId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected (missing WABA id)' } }, 409);
   }
+  if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Subscribing the app'), 400);
 
   try {
     const result = await subscribeApp(
@@ -377,6 +591,11 @@ whatsappBusinessRoutes.get('/:id/whatsapp-business/connection', async (c) => {
       connectionMethod: instance.metaConnectionMethod,
       connectedAt: instance.metaConnectedAt,
       connected: Boolean(instance.metaAccessToken && instance.metaPhoneNumberId),
+      // Provider settings; the webhook secret itself is never returned.
+      apiBaseUrl: instance.metaApiBaseUrl ?? null,
+      authMode: instance.metaAuthMode ?? 'bearer',
+      signatureMode: instance.metaSignatureMode ?? 'x-hub-signature-256',
+      hasWebhookSecret: Boolean(instance.metaWebhookSecret),
     },
   });
 });
@@ -419,6 +638,10 @@ whatsappBusinessRoutes.delete('/:id/whatsapp-business/connection', async (c) => 
     metaConnectionMethod: null,
     metaDisplayPhoneNumber: null,
     metaConnectedAt: null,
+    metaApiBaseUrl: null,
+    metaAuthMode: null,
+    metaWebhookSecret: null,
+    metaSignatureMode: null,
     isActive: false,
   });
 
@@ -470,6 +693,8 @@ whatsappBusinessRoutes.get('/:id/whatsapp-business/analytics', zValidator('query
   if (!instance.metaAccessToken || !instance.metaWabaId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
   }
+  // The analytics call below goes straight to graph.facebook.com.
+  if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Conversation analytics'), 400);
 
   const apiVersion = instance.metaApiVersion ?? 'v25.0';
   const now = Math.floor(Date.now() / 1000);
@@ -626,6 +851,8 @@ whatsappBusinessRoutes.post('/:id/whatsapp-business/profile/photo', async (c) =>
   if (!instance.metaAccessToken || !instance.metaPhoneNumberId) {
     return c.json({ error: { code: 'NOT_CONNECTED', message: 'Instance is not connected' } }, 409);
   }
+  // The resumable upload goes to graph.facebook.com with the app id.
+  if (usesMetaProvider(instance)) return c.json(metaOnlyRouteError('Profile photo upload'), 400);
 
   const upload = await readProfilePhotoUpload(c);
   if (!upload.ok) return c.json(upload.payload, 400);

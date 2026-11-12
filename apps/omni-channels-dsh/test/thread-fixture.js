@@ -439,3 +439,30 @@ export function scopedChats(t) {
   t.after(() => Object.assign(CHATS, before))
   return [GROUP, ELSEWHERE, CHAT].map(chatId => ({ chatId, channelId: CHATS[chatId].instanceId }))
 }
+
+// Separate answer-mode bench; legacy one-bot input fixtures above stay unchanged.
+export const ANSWER_MASTER = 'answer-master'
+export const answerState = () => teamState({
+  bots: { ...teamState().bots, [ANSWER_MASTER]: { id: ANSWER_MASTER, kind: 'omni', name: 'Service', instructions: 'MASTER: help customers with orders.', model: 'deepseek/pro', createdAt: 2 } },
+  omniOwnership: { defaultBotId: 'm1', channels: { [INSTANCE]: ANSWER_MASTER } },
+})
+// `clock`: a start time for a fake clock that also moves Date (staff take-over deadlines).
+export const ANSWER_CLOCK = Date.parse('2026-11-12T12:00:00.000Z')
+export async function answerBench(t, { visibility = 'isolated', allowedTools = [], presets: supplied, enabled = true, clock } = {}) {
+  t.mock.timers.enable(clock === undefined ? { apis: ['setTimeout'] } : { apis: ['setTimeout', 'Date'], now: clock })
+  const omni = watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] })
+  const home = homeFor(t, omni, answerState())
+  const selected = new Map()
+  const presets = supplied ?? {
+    available: true,
+    catalog() { return { options: this.available ? [{ value: 'read-only' }] : [], defaultPreset: 'workspace-write' } },
+    current: session => selected.get(session.id) ?? 'workspace-write',
+    set(session, preset) { if (!this.available) throw new Error('preset unavailable'); selected.set(session.id, preset) },
+  }
+  const run = await boot(t, home, { services: { permissionPresets: presets } })
+  const settings = { botId: ANSWER_MASTER, enabled, visibility, allowedTools, sharedNotes: 'SHARED: returns within 30 days.' }
+  await run.call('omni-answer-settings', settings)
+  const child = (chatId = CHAT) => run.channels.threads.answerFor({ ownerBotId: ANSWER_MASTER, channelId: INSTANCE, chatId })
+  const incoming = (chatId = CHAT, externalId = 'incoming-1') => ({ ...eventFor('Where is my order?', CHATS[chatId].name), externalId })
+  return { ...run, home, omni, presets, settings, child, incoming }
+}

@@ -26,12 +26,28 @@ import type {
 import type { Logger } from '@omni/core';
 import { ERROR_CODES, OmniError, markdownToWhatsApp } from '@omni/core';
 import type { EventPayloadMap } from '@omni/core/events';
-import { WhatsAppFlowSendSchema } from '@omni/core/schemas';
-import type { MetaInboundMessage, MetaTemplateStatusUpdate, MetaWebhookStatusEntry } from '@omni/core/schemas';
+import { MetaInboundMessageSchema, MetaProviderSettingsSchema, WhatsAppFlowSendSchema } from '@omni/core/schemas';
+import type {
+  MetaHistoryMessage,
+  MetaInboundMessage,
+  MetaMessageEcho,
+  MetaProviderSettings,
+  MetaStateSyncItem,
+  MetaTemplateStatusUpdate,
+  MetaWebhookStatusEntry,
+} from '@omni/core/schemas';
 import type { ChannelType, ContentType } from '@omni/core/types';
 
 import { WHATSAPP_BUSINESS_CAPABILITIES } from './capabilities';
 import { MetaWhatsAppClient } from './client';
+import {
+  CONTACT_KEY_PREFIX,
+  type CoexistenceContact,
+  contactStorageKey,
+  echoEvidence,
+  historyEvidence,
+  toCoexistenceContact,
+} from './coexistence';
 import { FlowResolverRegistry } from './flows/resolver';
 import { handleFlowDataRequest } from './handlers/flow-data';
 import { handleMetaWebhook } from './handlers/webhook';
@@ -51,7 +67,7 @@ import {
 } from './senders';
 import type { MetaSendResponse, WhatsAppBusinessConfig } from './types';
 import { MetaApiError, MetaErrorCode } from './utils/errors';
-import { toWaId } from './utils/identity';
+import { phonesEqual, toWaId } from './utils/identity';
 
 const META_MEDIA_TYPES: ReadonlySet<string> = new Set(['image', 'audio', 'video', 'document', 'sticker']);
 
@@ -72,10 +88,36 @@ interface WhatsAppBusinessInstanceState {
    * (`sendTyping` looks the wamid up here), so we remember one per chat.
    */
   lastInboundWamid: Map<string, string>;
+  /**
+   * Coexistence history: wamid of a `media_placeholder` → its chat. The media
+   * asset arrives later in its own history webhook, without the thread, so
+   * this is how a business-sent asset finds its chat. Bounded FIFO.
+   */
+  historyPlaceholderChats: Map<string, string>;
 }
 
 /** Cap on remembered chats per instance — oldest insertion evicted beyond it. */
 const MAX_TYPING_WAMID_CHATS = 1000;
+const MAX_HISTORY_PLACEHOLDERS = 10_000;
+
+/** How the shared emit path addresses and marks one Meta message. */
+interface MetaMessageRoute {
+  chatId: string;
+  from: string;
+  senderName?: string;
+  /** Set when this instance's own account sent the message. */
+  senderInstanceId?: string;
+  isHistorySync?: boolean;
+  /** Journey timings: live messages only. */
+  timed: boolean;
+  /** Meta's message object as received, kept under rawPayload.meta. */
+  meta: Record<string, unknown>;
+  /** Extra top-level rawPayload keys (coexistence evidence). */
+  evidence?: Record<string, unknown>;
+}
+
+/** Outcome of one coexistence history message, for the per-chunk log. */
+export type HistoryMessageOutcome = 'ingested' | 'placeholder' | 'skipped';
 
 export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
   readonly id = 'whatsapp-business' as ChannelType;
@@ -160,14 +202,25 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     const displayPhoneNumber = (creds.metaDisplayPhoneNumber ?? opts.metaDisplayPhoneNumber) as string | undefined;
     const connectionMethod =
       ((creds.metaConnectionMethod ?? opts.metaConnectionMethod) as string | undefined) ?? 'manual';
+    const provider = readProviderSettings(creds, opts);
 
-    this.logger.info('Connecting WhatsApp Cloud instance', { instanceId, phoneNumberId, wabaId, connectionMethod });
+    this.logger.info('Connecting WhatsApp Cloud instance', {
+      instanceId,
+      phoneNumberId,
+      wabaId,
+      connectionMethod,
+      apiBaseUrl: provider.apiBaseUrl,
+      authMode: provider.authMode,
+      signatureMode: provider.signatureMode,
+    });
 
     const client = new MetaWhatsAppClient(
       {
         phoneNumberId,
         accessToken,
         apiVersion,
+        baseUrl: provider.apiBaseUrl,
+        authMode: provider.authMode,
       },
       wabaId,
     );
@@ -191,11 +244,18 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
       apiVersion,
       connectionMethod,
       displayPhoneNumber,
+      ...provider,
     };
     const dedupeCache = createInboundDedupeCache();
     const lastInboundWamid = new Map<string, string>();
 
-    this.waInstances.set(instanceId, { client, config: businessConfig, dedupeCache, lastInboundWamid });
+    this.waInstances.set(instanceId, {
+      client,
+      config: businessConfig,
+      dedupeCache,
+      lastInboundWamid,
+      historyPlaceholderChats: new Map(),
+    });
     this.byPhoneNumberId.set(phoneNumberId, instanceId);
     let wabaSet = this.byWabaId.get(wabaId);
     if (!wabaSet) {
@@ -344,7 +404,9 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
     const appSecret = process.env.META_APP_SECRET ?? '';
     const verifyToken = process.env.META_VERIFY_TOKEN ?? '';
 
-    if (!appSecret || !verifyToken) {
+    // An instance with its own webhook secret verifies without the app secret,
+    // so the Meta env is only required when no instance can verify without it.
+    if ((!appSecret || !verifyToken) && !this.hasInstanceWebhookSecret()) {
       this.logger.error('META_APP_SECRET or META_VERIFY_TOKEN missing — refusing to handle webhook', {
         method: request.method,
       });
@@ -604,7 +666,7 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
         channel: 'whatsapp-business',
       });
     }
-    const bytes = await state.client.downloadMedia(media.url);
+    const bytes = await state.client.downloadMedia(media);
     return { buffer: Buffer.from(bytes), mimeType: media.mime_type };
   }
 
@@ -626,6 +688,14 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
   /** Look up the live state for an instance — used by the webhook handler. */
   getInstanceState(instanceId: string): WhatsAppBusinessInstanceState | undefined {
     return this.waInstances.get(instanceId);
+  }
+
+  /** Whether any connected instance verifies webhooks with its own secret (provider or own Meta app). */
+  hasInstanceWebhookSecret(): boolean {
+    for (const state of this.waInstances.values()) {
+      if (state.config.webhookSecret) return true;
+    }
+    return false;
   }
 
   /** Iterate all connected instance ids — used by webhook for phone_number_id → instance resolution. */
@@ -708,6 +778,170 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
 
     this.rememberInboundWamid(instanceId, msg.from, wamid);
 
+    return this.emitMetaMessage(instanceId, msg, {
+      chatId: msg.from,
+      from: msg.from,
+      senderName: contacts?.find((c) => c.wa_id === msg.from)?.profile?.name,
+      timed: true,
+      meta: msg as unknown as Record<string, unknown>,
+    });
+  }
+
+  /**
+   * Coexistence echo (`smb_message_echoes`): the business sent this from the
+   * WhatsApp Business app or a companion device. It is recorded the way a
+   * Baileys phone-sent message is: `message.received` in the customer's chat
+   * with own-device evidence on rawPayload (see `echoEvidence`), so consumers
+   * tell it apart from an API send, which emits `message.sent`. It never
+   * dispatches an agent (owner decision 2026-11-11, `noAgentDispatch`).
+   * Reaction echoes are not recorded yet.
+   */
+  async handleMessageEcho(instanceId: string, echo: MetaMessageEcho, dedupeCache: DedupeCache): Promise<boolean> {
+    const skip = (reason: string): false => {
+      this.logger.debug('[whatsapp-business] message echo skipped', { instanceId, wamid: echo.id, reason });
+      return false;
+    };
+    // `to` is omitted for a user known only by business-scoped user id.
+    if (!echo.to) return skip('no recipient phone number');
+    if (echo.type === 'reaction') return skip('reaction echo');
+    const parsed = MetaInboundMessageSchema.safeParse(echo);
+    if (!parsed.success) return skip(`unsupported type ${echo.type}`);
+    if (dedupeCache.isDuplicate(instanceId, echo.id, 'whatsapp-business', this.logger)) return skip('duplicate');
+
+    return this.emitMetaMessage(instanceId, parsed.data, {
+      chatId: echo.to,
+      from: echo.from,
+      senderInstanceId: instanceId,
+      timed: true,
+      meta: echo,
+      evidence: echoEvidence(echo.id, echo.timestamp),
+    });
+  }
+
+  /**
+   * One message of a coexistence `history` webhook, ingested as history-sync
+   * (channel-sdk `ingestMode: 'history-sync'`) so the chat fills with its past
+   * and no agent is dispatched. `chatId` is the thread's customer number; it
+   * is absent for a media asset that follows a `media_placeholder` in its own
+   * webhook, and then the chat comes from the sender or the placeholder.
+   */
+  async handleHistoryMessage(
+    instanceId: string,
+    item: MetaHistoryMessage,
+    chatId: string | undefined,
+    businessPhone: string | undefined,
+  ): Promise<HistoryMessageOutcome> {
+    const state = this.waInstances.get(instanceId);
+    // In a thread, a message not from the thread's customer is the business's.
+    // Comparing with the display number instead could miss a business wa_id
+    // written without the Brazilian ninth digit. `from_user_id` marks a user.
+    const fromMe =
+      !item.from_user_id &&
+      (chatId ? !phonesEqual(item.from, chatId) : businessPhone !== undefined && phonesEqual(item.from, businessPhone));
+
+    if (item.type === 'media_placeholder') {
+      if (state && chatId) rememberBounded(state.historyPlaceholderChats, item.id, chatId, MAX_HISTORY_PLACEHOLDERS);
+      return 'placeholder';
+    }
+    const chat = chatId ?? (fromMe ? (item.to ?? state?.historyPlaceholderChats.get(item.id)) : item.from);
+    const parsed = MetaInboundMessageSchema.safeParse(item);
+    if (!chat || !parsed.success || parsed.data.type === 'reaction') {
+      this.logger.debug('[whatsapp-business] history message skipped', {
+        instanceId,
+        wamid: item.id,
+        type: item.type,
+        hasChat: Boolean(chat),
+      });
+      return 'skipped';
+    }
+
+    const emitted = await this.emitMetaMessage(instanceId, parsed.data, {
+      chatId: chat,
+      from: item.from,
+      ...(fromMe ? { senderInstanceId: instanceId } : {}),
+      isHistorySync: true,
+      timed: false,
+      meta: item,
+      evidence: historyEvidence(item.id, fromMe, item.timestamp, item.history_context?.status),
+    });
+    return emitted ? 'ingested' : 'skipped';
+  }
+
+  /**
+   * Coexistence address book (`smb_app_state_sync`). `add` (added or edited)
+   * stores the contact for the contacts sync job, which upserts the identity
+   * through the existing path (`fetchContacts` → sync-worker →
+   * `findOrCreateIdentity`), and announces its name at once on
+   * `custom.contacts.names` so the DM chat is named. `remove` drops the stored
+   * contact; identities already created stay, as on every channel.
+   */
+  async handleContactSync(instanceId: string, items: MetaStateSyncItem[]): Promise<void> {
+    const names: Array<{ jid: string; name: string }> = [];
+    let stored = 0;
+    let removed = 0;
+    for (const item of items) {
+      if (item.type !== 'contact') continue;
+      const contact = toCoexistenceContact(item);
+      if (!contact) continue;
+      const key = contactStorageKey(instanceId, contact.platformUserId);
+      if (item.action === 'remove') {
+        if (await this.storage.delete(key)) removed++;
+        continue;
+      }
+      if (item.action !== 'add') continue;
+      await this.storage.set(key, contact);
+      stored++;
+      if (contact.name) names.push({ jid: contact.platformUserId, name: contact.name });
+    }
+
+    this.logger.info('[whatsapp-business] coexistence contacts synced', {
+      instanceId,
+      received: items.length,
+      stored,
+      removed,
+    });
+    if (names.length === 0) return;
+    await this.eventBus.publishGeneric(
+      'custom.contacts.names',
+      { names },
+      {
+        instanceId,
+        channelType: this.id,
+        source: `channel:${this.id}`,
+        correlationId: `contacts-names-${instanceId}`,
+      },
+    );
+  }
+
+  /** Contacts stored from the coexistence address book, for the contacts sync job. */
+  async fetchContacts(
+    instanceId: string,
+    options: {
+      onContact?: (contact: CoexistenceContact) => void | Promise<void>;
+      onProgress?: (fetched: number) => void | Promise<void>;
+    } = {},
+  ): Promise<{ totalFetched: number; contacts: CoexistenceContact[] }> {
+    const contacts: CoexistenceContact[] = [];
+    for (const key of await this.storage.keys(`${CONTACT_KEY_PREFIX}${instanceId}:*`)) {
+      const contact = await this.storage.get<CoexistenceContact>(key);
+      if (!contact) continue;
+      contacts.push(contact);
+      await options.onContact?.(contact);
+    }
+    await options.onProgress?.(contacts.length);
+    return { totalFetched: contacts.length, contacts };
+  }
+
+  /**
+   * Content extraction, sanitizing and `message.received` for one Meta
+   * message object: live inbound, coexistence echoes and history imports.
+   */
+  private async emitMetaMessage(
+    instanceId: string,
+    msg: MetaInboundMessage,
+    route: MetaMessageRoute,
+  ): Promise<boolean> {
+    const wamid = msg.id;
     const content = extractInboundContent(msg);
     if (!content) {
       this.logger.warn('[whatsapp-business] inbound message has no extractable content', {
@@ -720,21 +954,22 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
 
     if (!this.sanitizeInboundContent(instanceId, wamid, content)) return false;
 
-    const senderName = contacts?.find((c) => c.wa_id === msg.from)?.profile?.name;
     const tsSeconds = Number.parseInt(msg.timestamp, 10);
     const platformTimestampMs = Number.isFinite(tsSeconds) ? tsSeconds * 1000 : Date.now();
     const replyToId = 'context' in msg ? msg.context?.id : undefined;
 
     // Journey timing: T0 (platformReceivedAt) + T1 (pluginReceivedAt), then
     // T2 (eventPublishedAt) after the event is on the bus.
-    const timings = this.captureInboundTimings(platformTimestampMs);
+    const timings = route.timed ? this.captureInboundTimings(platformTimestampMs) : undefined;
 
     const correlationId = await this.emitMessageReceived({
       instanceId,
       externalId: wamid,
-      chatId: msg.from,
-      from: msg.from,
-      senderName,
+      chatId: route.chatId,
+      from: route.from,
+      senderName: route.senderName,
+      ...(route.senderInstanceId ? { senderInstanceId: route.senderInstanceId } : {}),
+      ...(route.isHistorySync ? { isHistorySync: true } : {}),
       content: {
         type: content.type,
         text: content.text ?? content.caption,
@@ -750,10 +985,11 @@ export class WhatsAppBusinessPlugin extends BaseChannelPlugin {
       },
       replyToId,
       rawPayload: {
-        meta: msg as unknown as Record<string, unknown>,
+        meta: route.meta,
         mediaId: content.mediaId,
         filename: content.filename,
         platformTimestampMs,
+        ...route.evidence,
       },
       timings,
     });
@@ -1196,6 +1432,38 @@ const MEDIA_TYPE_MAP: Partial<Record<MetaInboundMessage['type'], ContentType>> =
  * the webhook handler synchronous so we don't owe Meta a 2xx while waiting
  * on a Graph API roundtrip.
  */
+/**
+ * Per-instance Meta-compatible provider settings from the stored instance
+ * (`metaApiBaseUrl`, `metaAuthMode`, `metaWebhookSecret`, `metaSignatureMode`).
+ * All unset = Meta direct, exactly as before.
+ */
+function readProviderSettings(creds: Record<string, unknown>, opts: Record<string, unknown>): MetaProviderSettings {
+  const pick = (key: string) => (creds[key] ?? opts[key] ?? undefined) || undefined;
+  const parsed = MetaProviderSettingsSchema.safeParse({
+    apiBaseUrl: pick('metaApiBaseUrl'),
+    authMode: pick('metaAuthMode'),
+    webhookSecret: pick('metaWebhookSecret'),
+    signatureMode: pick('metaSignatureMode'),
+  });
+  if (!parsed.success) {
+    throw new MetaApiError(MetaErrorCode.INVALID_REQUEST, 'Invalid Meta-compatible provider settings', {
+      operation: 'connect',
+      raw: { fields: parsed.error.issues.map((issue) => issue.path.join('.')) },
+    });
+  }
+  return parsed.data;
+}
+
+/** Insert into a FIFO-bounded map, evicting the oldest insertion beyond `max`. */
+function rememberBounded(map: Map<string, string>, key: string, value: string, max: number): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > max) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
+  }
+}
+
 function extractInboundContent(msg: MetaInboundMessage): ExtractedInboundContent | null {
   if (msg.type === 'text') {
     return { type: 'text', text: msg.text.body };

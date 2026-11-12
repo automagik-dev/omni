@@ -31,7 +31,9 @@ src/
 ├── capabilities.ts              # WHATSAPP_BUSINESS_CAPABILITIES (hasMessagingWindow, sticker, buttons, etc.)
 ├── types.ts                     # Internal types (WhatsAppBusinessConfig, MetaOutboundMessage, …)
 ├── oauth.ts                     # exchangeCodeForToken / getWabaDetails / registerPhoneNumber / subscribeApp
+├── kapso.ts                     # Kapso Platform API: customer, setup link, numbers, Meta-forwarding webhook
 ├── templates.ts                 # Template CRUD + sync helpers
+├── coexistence.ts               # Business app coexistence: rawPayload evidence, contact store helpers
 ├── senders/                     # One file per outbound content type
 │   ├── text.ts
 │   ├── media.ts                 # image / audio / video / document / sticker
@@ -81,6 +83,7 @@ Cross-package audit (lives in @omni/api because it imports the scrub module):
 
 - `metaAccessToken` is stored **plain text** in `instances.meta_access_token` (parity with `discord_bot_token`, `telegram_bot_token`, `gupshup_auth_token`). Encryption at-rest is repo-wide tech debt — do NOT add column-level encryption here in isolation.
 - NEVER log the access token. Sentry scrubbing (`@omni/api/src/lib/sentry-scrub.ts`) masks `EAA<…>` patterns and `Authorization` headers.
+- `metaWebhookSecret` (provider webhook secret) follows the same rule: plain column, never logged, never returned.
 
 ### Webhook resolution
 
@@ -94,6 +97,21 @@ Inbound `wamid` values must be deduped via `createInboundDedupeCache` (shared wi
 
 `X-Hub-Signature-256: sha256=<hex>` over the **raw request body** using HMAC-SHA256 with `META_APP_SECRET`. Compare using a constant-time check (Web Crypto `crypto.subtle` + manual constant-time byte compare). Reject with 401 + warn-log on mismatch — do not include any token diff in the log.
 
+Verification is per instance (`verifyWebhookSignature` in `handlers/webhook.ts`). Every instance the body addresses —
+routed exactly as the handlers route it (phone_number_id, or WABA for alerts and template status) — must pass its own
+check: `x-webhook-signature` (a provider such as Kapso: bare hex HMAC with the instance's `webhookSecret`), or
+`x-hub-signature-256` with the instance's `webhookSecret` when set, else `META_APP_SECRET`. The app secret never
+stands in for an instance that has its own secret. A body addressing no connected instance is checked with
+`META_APP_SECRET`.
+
+### Meta-compatible provider
+
+`MetaWhatsAppClient` takes `baseUrl` + `authMode` (`bearer` | `x-api-key`). `authMode` only applies with a provider
+`baseUrl`; `x-api-key` with a base on a Meta host (`isMetaHostUrl`) throws, so a provider key never reaches Meta.
+`downloadMedia` uses the provider's `download_url` and refuses either media URL off the provider origin. Template `paging.next` URLs are reduced to a path under the client's base. The API
+side builds every client through `metaClientTransport(instance)` (`@omni/api` `lib/whatsapp-business-connection.ts`)
+and refuses Meta-only routes for a provider instance with `metaOnlyRouteError`.
+
 ### WhatsApp Flows
 
 Full guide: `docs/channels/whatsapp-flows.md`. Package-side pieces: the flow
@@ -103,6 +121,21 @@ data-exchange contract (421 = can't decrypt → check key `signature_status`,
 427 = bad token, 432 = bad HMAC); screen logic registers on
 `plugin.flowResolvers` and must resolve within ~8s. Private keys are unsealed
 by the API route (`app.ts`), never read here.
+
+### Coexistence (WhatsApp Business app on the same number)
+
+Three webhook fields mirror the Business app; all resolve the instance by `metadata.phone_number_id`:
+
+- `smb_message_echoes` → `handleMessageEcho`: `message.received` in the customer's chat (`to`) with own-device
+  evidence on rawPayload (`isFromMe`, `key.id`, `key.fromMe`, `upsertType: 'notify'`; no `key.remoteJid`), so it is
+  never confused with an API send (`message.sent`). It carries `rawPayload.noAgentDispatch`, so Omni's agent
+  dispatcher never dispatches it (owner decision 2026-11-11). DSH automations with `allowOutbound` still see it.
+  Reaction echoes are skipped.
+- `history` → `handleHistoryMessage`: `ingestMode: 'history-sync'` with `rawPayload.messageTimestamp` (persistence
+  drops a history message without it) and `noAgentDispatch`. `media_placeholder` is skipped; its asset arrives later
+  as `value.messages` on the same field and finds its chat through `historyPlaceholderChats`.
+- `smb_app_state_sync` → `handleContactSync`: stored in plugin storage (`coexistence-contact:<instanceId>:<phone>`),
+  read by `fetchContacts` for the contacts sync job (identity upsert), and announced on `custom.contacts.names`.
 
 ### 24h window enforcement
 

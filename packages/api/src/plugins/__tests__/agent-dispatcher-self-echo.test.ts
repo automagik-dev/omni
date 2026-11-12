@@ -206,3 +206,67 @@ describe('shouldProcessMessage self-echo guard (#938)', () => {
     expect(h.messageLookups).toEqual([]);
   });
 });
+
+/**
+ * WhatsApp Business coexistence (#1661): an echo of a message the business sent
+ * from the WhatsApp Business app, and a shared-history message, carry
+ * `rawPayload.noAgentDispatch`. Owner decision 2026-11-11: an echo NEVER
+ * dispatches an agent, unlike a Baileys phone-sent message (#344 above).
+ * The instance has no stale-age guard (0), so the marker is the only reason.
+ */
+describe('shouldProcessMessage noAgentDispatch marker (coexistence)', () => {
+  const coexistence = {
+    channel: 'whatsapp-business',
+    ownerIdentifier: '15550783881',
+    inboundMaxAgeMinutes: 0,
+  };
+  const echoRaw = {
+    isFromMe: true,
+    key: { id: 'wamid.echo-1', fromMe: true },
+    upsertType: 'notify',
+    messageTimestamp: Math.floor(Date.now() / 1000),
+    coexistence: 'smb_message_echoes',
+  };
+  const echo = (raw: Record<string, unknown>) =>
+    payload({ externalId: 'wamid.echo-1', chatId: '16505551234', from: '15550783881', rawPayload: raw });
+
+  test('a coexistence echo never dispatches, before any DB lookup', async () => {
+    const h = harness({ instanceOverrides: coexistence, persistedMessage: null });
+
+    const instance = await run(h, echo({ ...echoRaw, noAgentDispatch: true }));
+
+    expect(instance).toBeNull();
+    expect(h.messageLookups).toEqual([]);
+  });
+
+  test('a shared-history message never dispatches', async () => {
+    const h = harness({ instanceOverrides: coexistence, persistedMessage: null });
+
+    const instance = await run(
+      h,
+      payload({
+        externalId: 'wamid.hist-1',
+        chatId: '16505551234',
+        from: '16505551234',
+        rawPayload: {
+          isFromMe: false,
+          key: { id: 'wamid.hist-1', fromMe: false },
+          isHistorySync: true,
+          messageTimestamp: Math.floor(Date.now() / 1000),
+          coexistence: 'history',
+          noAgentDispatch: true,
+        },
+      }),
+    );
+
+    expect(instance).toBeNull();
+  });
+
+  test('control: the same echo without the marker dispatches (the #344 owner-phone rule)', async () => {
+    const h = harness({ instanceOverrides: coexistence, persistedMessage: null });
+
+    const instance = await run(h, echo(echoRaw));
+
+    expect(instance).not.toBeNull();
+  });
+});

@@ -8,6 +8,7 @@
  *   https://developers.facebook.com/docs/whatsapp/cloud-api/reference
  */
 
+import { type MetaAuthMode, isMetaHostUrl } from '@omni/core/schemas';
 import type {
   MetaApiError as MetaApiErrorEnvelope,
   MetaOutboundMessage,
@@ -81,8 +82,16 @@ export interface MetaWhatsAppClientOptions {
   accessToken: string;
   /** Default: 'v25.0'. */
   apiVersion?: string;
-  /** Optional override for the Graph API base URL (mostly for tests). */
+  /**
+   * API base URL, version included. Default: `https://graph.facebook.com/{apiVersion}`.
+   * A Meta-compatible provider (e.g. Kapso: `https://api.kapso.ai/meta/whatsapp/v24.0`) sets its own.
+   */
   baseUrl?: string;
+  /**
+   * How `accessToken` is sent: `bearer` (Meta, default) as `Authorization: Bearer`,
+   * or `x-api-key` (provider key) as `X-API-Key`.
+   */
+  authMode?: MetaAuthMode;
   timeoutMs?: number;
 }
 
@@ -91,8 +100,13 @@ export class MetaWhatsAppClient {
   readonly wabaId?: string;
   readonly apiVersion: string;
 
+  /** API base the client calls, version included, no trailing slash. */
+  readonly baseUrl: string;
+
   private readonly accessToken: string;
-  private readonly baseUrl: string;
+  /** Set when a Meta-compatible provider replaces the Graph API base. */
+  private readonly providerOrigin?: string;
+  private readonly authMode: MetaAuthMode;
   private readonly timeoutMs: number;
 
   constructor(opts: MetaWhatsAppClientOptions, wabaId?: string) {
@@ -100,7 +114,21 @@ export class MetaWhatsAppClient {
     this.accessToken = opts.accessToken;
     this.apiVersion = opts.apiVersion ?? 'v25.0';
     this.wabaId = wabaId;
-    this.baseUrl = opts.baseUrl ?? `https://graph.facebook.com/${this.apiVersion}`;
+    this.baseUrl = (opts.baseUrl ?? `https://graph.facebook.com/${this.apiVersion}`).replace(/\/+$/, '');
+    // A base on one of Meta's own hosts is Meta direct, whatever URL spells it.
+    const provider = Boolean(opts.baseUrl) && !isMetaHostUrl(this.baseUrl);
+    // A provider key never goes to Meta: refuse it on a Meta host, ignore it without a provider base.
+    if (opts.baseUrl && !provider && opts.authMode === 'x-api-key') {
+      throw new MetaApiErrorClass(
+        MetaErrorCode.INVALID_REQUEST,
+        'x-api-key auth needs a provider base URL, not a Meta host',
+        {
+          operation: 'client',
+        },
+      );
+    }
+    this.providerOrigin = provider ? new URL(this.baseUrl).origin : undefined;
+    this.authMode = provider ? (opts.authMode ?? 'bearer') : 'bearer';
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   }
 
@@ -285,17 +313,26 @@ export class MetaWhatsAppClient {
     }
   }
 
-  /** GET /{media_id} — returns a temporary download URL for inbound media. */
-  async getMediaUrl(mediaId: string): Promise<{ url: string; mime_type: string; sha256?: string; file_size?: number }> {
+  /**
+   * GET /{media_id} — returns a temporary download URL for inbound media. A
+   * provider proxy may add `download_url`, a URL with its own signed token.
+   */
+  async getMediaUrl(
+    mediaId: string,
+  ): Promise<{ url: string; download_url?: string; mime_type: string; sha256?: string; file_size?: number }> {
     return this.get(`/${mediaId}`);
   }
 
-  /** Download bytes from a media URL (must include Bearer auth — URL is short-lived). */
-  async downloadMedia(downloadUrl: string): Promise<ArrayBuffer> {
-    const res = await this.fetchWithTimeout(downloadUrl, {
-      method: 'GET',
-      headers: { Authorization: `Bearer ${this.accessToken}` },
-    });
+  /**
+   * Download the bytes of a media lookup. Meta direct: `url` with the token.
+   * Through a provider, the credentials never leave the provider's origin: its
+   * `download_url` carries its own signed token and gets no auth header, a
+   * `url` on the provider's origin gets the token, and any other `url` (Meta's
+   * lookaside, which needs a Meta token the provider holds) is refused.
+   */
+  async downloadMedia(media: { url: string; download_url?: string }): Promise<ArrayBuffer> {
+    const { target, headers } = this.mediaRequest(media);
+    const res = await this.fetchWithTimeout(target, { method: 'GET', headers });
     if (!res.ok) throw await this.errorFromResponse(res, 'GET media');
     return res.arrayBuffer();
   }
@@ -392,7 +429,7 @@ export class MetaWhatsAppClient {
   private async postForm<T = unknown>(path: string, form: FormData): Promise<T> {
     const res = await this.fetchWithTimeout(`${this.baseUrl}${path}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${this.accessToken}` },
+      headers: this.authHeaders(),
       body: form,
     });
     if (!res.ok) throw await this.errorFromResponse(res, `POST ${path}`);
@@ -411,10 +448,39 @@ export class MetaWhatsAppClient {
   }
 
   private headers(): Record<string, string> {
-    return {
-      Authorization: `Bearer ${this.accessToken}`,
-      'Content-Type': 'application/json',
-    };
+    return { ...this.authHeaders(), 'Content-Type': 'application/json' };
+  }
+
+  private mediaRequest(media: { url: string; download_url?: string }): {
+    target: string;
+    headers: Record<string, string>;
+  } {
+    if (!this.providerOrigin) return { target: media.url, headers: this.authHeaders() };
+    // The signed download_url needs no key; either URL is fetched only on the provider's origin.
+    if (media.download_url) {
+      if (this.onProviderOrigin(media.download_url)) return { target: media.download_url, headers: {} };
+    } else if (this.onProviderOrigin(media.url)) {
+      return { target: media.url, headers: this.authHeaders() };
+    }
+    throw new MetaApiErrorClass(
+      MetaErrorCode.INVALID_REQUEST,
+      'Provider media lookup returned a URL off the provider origin',
+      { operation: 'GET media' },
+    );
+  }
+
+  private onProviderOrigin(url: string): boolean {
+    try {
+      return new URL(url).origin === this.providerOrigin;
+    } catch {
+      return false;
+    }
+  }
+
+  private authHeaders(): Record<string, string> {
+    return this.authMode === 'x-api-key'
+      ? { 'X-API-Key': this.accessToken }
+      : { Authorization: `Bearer ${this.accessToken}` };
   }
 
   private async fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {

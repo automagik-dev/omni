@@ -36,8 +36,8 @@ test('the Omni Bot has no hand-off tool but the team\'s browser_handoff, and not
   for (const text of said) assert.doesNotMatch(text, /hand.?off|session under (you|your row)|dshBot|start_task|\bTasks\b/, text)
   // No word of tasks, which it does not start, but the one line that says so.
   const lines = said.flatMap(text => text.split('\n'))
-  assert.deepEqual(lines.filter(line => /\btasks?\b/i.test(line)), ['- You have no shell and no files, and you start no tasks. For code, a repository, a document, research or a long investigation, tell the user in a line what the work needs, so they can give it to a Bot that has a computer.'])
-  assert.match(OPERATOR_RULES, /## Work that needs a computer is not yours\n- You have no shell and no files, and you start no tasks\./)
+  assert.deepEqual(lines.filter(line => /\btasks?\b/i.test(line)), ['- In the Omni Bot\'s own chat: You have no shell and no files, and you start no tasks. For code, a repository, a document, research or a long investigation, tell the user in a line what the work needs, so they can give it to a Bot that has a computer.'])
+  assert.match(OPERATOR_RULES, /## In the Omni Bot's own chat, work that needs a computer is not yours\n- In the Omni Bot's own chat: You have no shell and no files, and you start no tasks\./)
   assert.deepEqual(run.channels.state.agents, {})
 })
 

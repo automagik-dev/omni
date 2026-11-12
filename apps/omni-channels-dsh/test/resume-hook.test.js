@@ -920,8 +920,9 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
   for (const sentence of sentences) assert.deepEqual(Object.keys(files).filter(name => files[name].includes(sentence)), [], sentence)
   assert.deepEqual(count(/resumed\s*:\s*true/), {})
   // Timers only where nothing restarts: the event stream's backoff and its 30 s sync, the local
-  // CLI's kill, the pairing poll, and the key file's lock wait, heartbeat and drain.
-  assert.deepEqual(count(/\bset(Timeout|Interval)\(/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
+  // CLI's kill, the pairing poll, the key file's lock wait, heartbeat and drain, and a paused
+  // answer child's staff-silence resume deadline (a wake-up for its stored time, rebuilt at start).
+  assert.deepEqual(count(/\bset(Timeout|Interval)\(/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4, 'threads.js': 1 })
   // Every delivery and follow-up: an ask, a permission note, an automation's task; a
   // handed-over event, an ask's answer; the wake. None carries the marker or the team's resume
   // roles.
@@ -966,7 +967,7 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
   assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
   assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'standing-runs.js': 3 })
   assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'standing-recovery.js': 7, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
-  assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4 })
+  assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4, 'threads.js': 1 })
   assert.deepEqual(raw(/\bresumed\b/), { 'asks.js': 1, 'resume-hook.js': 15, 'standing-recovery.js': 7 })
   assert.deepEqual(raw(/\brequeue\b|\bwakeOnce\b/), { 'standing-recovery.js': 4, 'standing-runs.js': 2 })
 })

@@ -11396,7 +11396,7 @@ var waitingRuns = (roster, waiting = /* @__PURE__ */ new Set()) => (roster?.subs
 // src/client/channel-add.js
 var ADD = {
   "whatsapp-baileys": { time: "1 min", how: "Scan a code", steps: ["Name it", "Scan", "Done"] },
-  "whatsapp-business": { time: "3 min", how: "Enter your Meta details", steps: ["Enter the details", "Done"] },
+  "whatsapp-business": { time: "3 min", how: "Through Kapso or Meta", steps: ["Enter the details", "Done"] },
   slack: { time: "1 min", how: "Connect with Slack", steps: ["Choose how it joins", "Approve in Slack", "Done"] },
   telegram: { time: "2 min", how: "Create a bot", steps: ["Create the bot", "Paste its token", "Say hi"] },
   discord: { time: "2 min", how: "Add your bot", steps: ["Paste the bot token", "Invite it to a server", "Done"] }
@@ -11562,7 +11562,7 @@ function AddGrid({ types, loading = false, writable = true, onPick, onBack, Tile
     }))
   );
 }
-function FlowShell({ type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack, children }) {
+function FlowShell({ type, at: at2, steps, Tile: Tile2, PreviewChip: PreviewChip2, onBack, children }) {
   const info = CHANNEL_TYPES[type];
   const add = ADD[type];
   return (0, import_react4.createElement)(
@@ -11578,7 +11578,7 @@ function FlowShell({ type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBa
     (0, import_react4.createElement)(
       "div",
       { className: "oc-guide" },
-      (0, import_react4.createElement)("ol", { className: "oc-guide-steps" }, add.steps.map((label, index) => (0, import_react4.createElement)(
+      (0, import_react4.createElement)("ol", { className: "oc-guide-steps" }, (steps ?? add.steps).map((label, index) => (0, import_react4.createElement)(
         "li",
         { key: label, "data-state": stepState(index, at2) },
         (0, import_react4.createElement)("span", null, index < at2 ? "✓" : String(index + 1)),
@@ -11987,21 +11987,207 @@ function SlackFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }
   }
   return (0, import_react4.createElement)(FlowShell, { type, at: at2, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body, (0, import_react4.createElement)(Problem, { text: problem }));
 }
+var KAPSO_STEPS = ["Pick your number", "Send a test", "Done"];
 function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip2 }) {
   const info = CHANNEL_TYPES[type];
-  const [fields, setFields] = (0, import_react4.useState)({ accessToken: "", phoneNumberId: "", wabaId: "" });
+  const [path, setPath] = (0, import_react4.useState)("kapso");
   const [channel, setChannel] = (0, import_react4.useState)(null);
+  const [tested, setTested] = (0, import_react4.useState)(false);
+  const [link, setLink] = (0, import_react4.useState)(null);
+  const kapso = path === "kapso";
+  let body;
+  if (channel && kapso) {
+    body = (0, import_react4.createElement)(Connected, { type, channel, detail: channel.detail, omni: omni2 }, (0, import_react4.createElement)(KapsoTest, { channel, onSent: () => setTested(true) }));
+  } else if (channel) {
+    body = (0, import_react4.createElement)(Connected, { type, channel, omni: omni2 }, (0, import_react4.createElement)(MetaWebhookSetup, { initiallyOpen: true }));
+  } else {
+    body = (0, import_react4.createElement)(
+      import_react4.Fragment,
+      null,
+      (0, import_react4.createElement)(
+        "div",
+        { className: "oc-seg", role: "radiogroup", "aria-label": t("How to connect the number") },
+        [
+          ["kapso", t("Through Kapso"), t("Log in with Facebook on Kapso's page and pick your number. It keeps working in the WhatsApp Business app.")],
+          ["meta", t("With Meta's details"), t("Paste the access token and IDs from Meta's WhatsApp Manager or another provider.")]
+        ].map(([value, title, text]) => (0, import_react4.createElement)("button", {
+          key: value,
+          type: "button",
+          role: "radio",
+          "aria-checked": path === value,
+          className: "oc-seg-opt",
+          onClick: () => setPath(value)
+        }, (0, import_react4.createElement)("strong", null, title), (0, import_react4.createElement)("span", null, text)))
+      ),
+      kapso ? (0, import_react4.createElement)(KapsoPath, { info, link, setLink, onConnected: setChannel }) : (0, import_react4.createElement)(MetaDetails, { info, onConnected: setChannel })
+    );
+  }
+  const at2 = kapso ? tested ? 2 : channel ? 1 : 0 : channel ? 1 : 0;
+  return (0, import_react4.createElement)(FlowShell, { type, at: at2, steps: kapso ? KAPSO_STEPS : void 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) }, body);
+}
+function KapsoPath({ info, link, setLink, onConnected }) {
+  const [kapso, setKapso] = (0, import_react4.useState)(void 0);
+  const [key, setKey] = (0, import_react4.useState)("");
+  const [picked, setPicked] = (0, import_react4.useState)(null);
+  const [busy, setBusy] = (0, import_react4.useState)(null);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const run = async (what, work) => {
+    setBusy(what);
+    setProblem(null);
+    try {
+      await work();
+    } catch (error) {
+      console.warn("Kapso step failed:", what, error);
+      setProblem(error?.message || t("Could not reach Kapso through Omni. Try again."));
+    } finally {
+      setBusy(null);
+    }
+  };
+  const refresh = () => run("refresh", async () => {
+    const reply = await call("omni-kapso-numbers");
+    setKapso(reply);
+    if (reply.message) setProblem(reply.message);
+    const numbers2 = reply.numbers ?? [];
+    setPicked((current) => numbers2.some((number) => number.phoneNumberId === current) ? current : numbers2.length === 1 ? numbers2[0].phoneNumberId : null);
+  });
+  (0, import_react4.useEffect)(() => {
+    void refresh();
+  }, []);
+  const saveKey = () => run("key", async () => {
+    await call("omni-kapso-key", { apiKey: key.trim() });
+    setKey("");
+    const reply = await call("omni-kapso-numbers");
+    setKapso(reply);
+  });
+  const makeLink = () => run("link", async () => {
+    const made = await call("omni-kapso-setup-link");
+    setLink(made);
+    window.open(made.url, "_blank", "noopener,noreferrer");
+  });
+  const connect = () => run("connect", async () => {
+    const number = kapso.numbers.find((item) => item.phoneNumberId === picked);
+    const name = (number?.name || number?.displayPhoneNumber || info.label).slice(0, 80);
+    onConnected(await call("omni-kapso-connect", { name, phoneNumberId: picked }));
+  });
+  if (kapso === void 0) return (0, import_react4.createElement)(import_react4.Fragment, null, (0, import_react4.createElement)(Spinner, { text: t("Asking Omni about Kapso…") }), (0, import_react4.createElement)(Problem, { text: problem }));
+  if (kapso === null || !kapso.configured) {
+    return (0, import_react4.createElement)(
+      import_react4.Fragment,
+      null,
+      (0, import_react4.createElement)("h2", null, t("Add your Kapso key")),
+      (0, import_react4.createElement)("p", null, rich("Omni keeps one Kapso project key for all its numbers. Find it in {kapso} → API keys.", { kapso: (0, import_react4.createElement)("a", { href: "https://app.kapso.ai", target: "_blank", rel: "noreferrer" }, "Kapso") })),
+      (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Kapso project API key")), (0, import_react4.createElement)("input", {
+        type: "password",
+        value: key,
+        autoComplete: "off",
+        autoFocus: true,
+        onChange: (event) => setKey(event.target.value),
+        onKeyDown: (event) => {
+          if (event.key === "Enter" && key.trim().length >= 8 && !busy) void saveKey();
+        }
+      })),
+      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: key.trim().length < 8 || busy !== null, onClick: saveKey }, busy === "key" ? t("Checking with Kapso…") : t("Save key"))),
+      (0, import_react4.createElement)("p", { className: "oc-fine" }, t("Omni checks the key with Kapso and never shows it again.")),
+      (0, import_react4.createElement)(Problem, { text: problem })
+    );
+  }
+  const numbers = kapso.numbers ?? [];
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
+    null,
+    (0, import_react4.createElement)("h2", null, t("Connect your number in Kapso")),
+    (0, import_react4.createElement)("p", null, t("Kapso's page asks you to log in with Facebook and pick your number. Come back here when it says done.")),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oc-row" },
+      link ? (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => window.open(link.url, "_blank", "noopener,noreferrer") }, t("Open the setup link again")) : (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: busy !== null, onClick: makeLink }, busy === "link" ? t("Making the link…") : t("Create setup link"))
+    ),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oc-row" },
+      (0, import_react4.createElement)("strong", null, t("Your Kapso numbers")),
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-link", disabled: busy !== null, onClick: refresh }, busy === "refresh" ? t("Refreshing…") : t("Refresh"))
+    ),
+    numbers.length === 0 ? (0, import_react4.createElement)("p", { className: "oc-fine" }, t("No numbers yet. Finish the setup link, then refresh.")) : (0, import_react4.createElement)("div", { className: "oc-seg", role: "radiogroup", "aria-label": t("Your Kapso numbers") }, numbers.map((number) => (0, import_react4.createElement)("button", {
+      key: number.phoneNumberId,
+      type: "button",
+      role: "radio",
+      "aria-checked": picked === number.phoneNumberId,
+      className: "oc-seg-opt",
+      onClick: () => setPicked(number.phoneNumberId)
+    }, (0, import_react4.createElement)("strong", null, number.displayPhoneNumber || number.phoneNumberId), (0, import_react4.createElement)("span", null, number.name || t("No name yet"))))),
+    kapso.publicAddress ? null : (0, import_react4.createElement)("p", { className: "oc-problem", role: "alert" }, t("Omni has no public https address, so Kapso cannot send it messages. Set server.public_url (OMNI_PUBLIC_URL) on your Omni, then refresh.")),
+    (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !picked || !kapso.publicAddress || busy !== null, onClick: connect }, busy === "connect" ? t("Connecting…") : t("Connect"))),
+    (0, import_react4.createElement)(Problem, { text: problem })
+  );
+}
+function KapsoTest({ channel, onSent }) {
+  const [phone, setPhone] = (0, import_react4.useState)("");
+  const [sending, setSending] = (0, import_react4.useState)(false);
+  const [sent, setSent] = (0, import_react4.useState)(false);
+  const [problem, setProblem] = (0, import_react4.useState)(null);
+  const send = async () => {
+    setSending(true);
+    setProblem(null);
+    try {
+      await call("omni-kapso-test", { id: channel.id, phone });
+      setSent(true);
+      onSent();
+    } catch (error) {
+      console.warn("Could not send the test message:", error);
+      setProblem(error?.message || t("Could not send the test message. Try again."));
+    } finally {
+      setSending(false);
+    }
+  };
+  return (0, import_react4.createElement)(
+    import_react4.Fragment,
+    null,
+    (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, t("Send a test message to")), (0, import_react4.createElement)("input", {
+      value: phone,
+      inputMode: "tel",
+      placeholder: "+55 11 91234-5678",
+      onChange: (event) => {
+        setPhone(event.target.value);
+        setSent(false);
+      }
+    })),
+    (0, import_react4.createElement)(
+      "div",
+      { className: "oc-row" },
+      (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: phone.replace(/\D/g, "").length < 8 || sending, onClick: send }, sending ? t("Sending…") : t("Send a test message")),
+      sent ? (0, import_react4.createElement)("span", { className: "oc-fine" }, t("Sent. Look at that phone.")) : null
+    ),
+    (0, import_react4.createElement)("p", { className: "oc-fine" }, t("WhatsApp delivers it only if that number wrote to yours in the last 24 hours.")),
+    (0, import_react4.createElement)(Problem, { text: problem })
+  );
+}
+var BUSINESS_FIELDS = { accessToken: "", phoneNumberId: "", wabaId: "", apiBaseUrl: "", authMode: "x-api-key", webhookSecret: "", signatureMode: "x-webhook-signature" };
+function businessDetails(fields) {
+  const apiBaseUrl = fields.apiBaseUrl.trim();
+  const webhookSecret = fields.webhookSecret.trim();
+  return {
+    accessToken: fields.accessToken.trim(),
+    phoneNumberId: fields.phoneNumberId.trim(),
+    wabaId: fields.wabaId.trim(),
+    ...apiBaseUrl ? { apiBaseUrl, authMode: fields.authMode } : {},
+    ...webhookSecret ? { webhookSecret, signatureMode: fields.signatureMode } : {}
+  };
+}
+function MetaDetails({ info, onConnected }) {
+  const [fields, setFields] = (0, import_react4.useState)(BUSINESS_FIELDS);
   const [busy, setBusy] = (0, import_react4.useState)(false);
   const [problem, setProblem] = (0, import_react4.useState)(null);
   const set3 = (key) => (event) => setFields((value) => ({ ...value, [key]: event.target.value }));
-  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim());
+  const providerReady = !fields.apiBaseUrl.trim() || /^https:\/\/\S+$/.test(fields.apiBaseUrl.trim());
+  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim()) && providerReady;
   const connect = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      const made = await call("omni-wab-connect", { name: info.label, accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim() });
-      setFields({ accessToken: "", phoneNumberId: "", wabaId: "" });
-      setChannel(made);
+      const made = await call("omni-wab-connect", { name: info.label, ...businessDetails(fields) });
+      setFields(BUSINESS_FIELDS);
+      onConnected(made);
     } catch (error) {
       console.warn("Could not connect the Business number:", error);
       setProblem(t("Could not connect the Business number. Check its details and try again."));
@@ -12010,20 +12196,31 @@ function BusinessFlow({ type, omni: omni2, Tile: Tile2, PreviewChip: PreviewChip
     }
   };
   const field = (key, label, extra) => (0, import_react4.createElement)("label", { className: "oc-field" }, (0, import_react4.createElement)("span", null, label), (0, import_react4.createElement)("input", { value: fields[key], onChange: set3(key), autoComplete: "off", ...extra }));
+  const choice = (key, label, options) => (0, import_react4.createElement)(
+    "label",
+    { className: "oc-field" },
+    (0, import_react4.createElement)("span", null, label),
+    (0, import_react4.createElement)("select", { value: fields[key], onChange: set3(key) }, options.map(([value, text]) => (0, import_react4.createElement)("option", { key: value, value }, text)))
+  );
   return (0, import_react4.createElement)(
-    FlowShell,
-    { type, at: channel ? 1 : 0, Tile: Tile2, PreviewChip: PreviewChip2, onBack: () => omni2.showPage({ type: null, step: 0 }) },
-    channel ? (0, import_react4.createElement)(Connected, { type, channel, omni: omni2 }, (0, import_react4.createElement)(MetaWebhookSetup, { initiallyOpen: true })) : (0, import_react4.createElement)(
-      import_react4.Fragment,
-      null,
-      (0, import_react4.createElement)("h2", null, t("Connect your Business number")),
-      (0, import_react4.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react4.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
-      field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
-      field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
-      field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
-      (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
-      (0, import_react4.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages."))
+    import_react4.Fragment,
+    null,
+    (0, import_react4.createElement)("h2", null, t("Connect your Business number")),
+    (0, import_react4.createElement)("p", null, rich("Find these in Meta's {manager} → API setup.", { manager: (0, import_react4.createElement)("a", { href: "https://business.facebook.com/wa/manage/home/", target: "_blank", rel: "noreferrer" }, t("WhatsApp Manager")) })),
+    field("accessToken", t("Access token"), { type: "password", placeholder: "EAAG…", autoFocus: true }),
+    field("phoneNumberId", t("Phone number ID"), { inputMode: "numeric", placeholder: "123456789012345" }),
+    field("wabaId", t("WhatsApp Business Account ID"), { inputMode: "numeric", placeholder: "987654321098765" }),
+    (0, import_react4.createElement)(
+      "details",
+      { className: "oc-field" },
+      (0, import_react4.createElement)("summary", null, t("Through a provider such as Kapso (optional)")),
+      field("apiBaseUrl", t("Provider API address"), { inputMode: "url", placeholder: "https://api.kapso.ai/meta/whatsapp/v24.0" }),
+      choice("authMode", t("Send the access token as"), [["x-api-key", t("Provider key (X-API-Key)")], ["bearer", t("Bearer token")]]),
+      field("webhookSecret", t("Provider webhook secret"), { type: "password" }),
+      choice("signatureMode", t("Webhook signature"), [["x-webhook-signature", t("Provider (X-Webhook-Signature)")], ["x-hub-signature-256", t("Meta app secret (X-Hub-Signature-256)")]])
     ),
+    (0, import_react4.createElement)("div", { className: "oc-row" }, (0, import_react4.createElement)("button", { type: "button", className: "oc-primary", disabled: !ready || busy, onClick: connect }, busy ? t("Connecting…") : t("Connect"))),
+    (0, import_react4.createElement)("p", { className: "oc-fine" }, t("The token stays with your Omni. Omni only gets that number's messages.")),
     (0, import_react4.createElement)(Problem, { text: problem })
   );
 }
@@ -15434,7 +15631,7 @@ function useChatPoll(chatId, on2) {
   }, [chatId, on2]);
   return read.chatId === chatId ? read : { chatId, messages: null, error: null };
 }
-var sendsAllowed = (thread) => thread?.permissions?.sends === "allow";
+var sendsAllowed = (thread) => thread?.answerChild === true ? thread.sendingMode === "sending" : thread?.permissions?.sends === "allow";
 function SendSwitch({ thread }) {
   const on2 = sendsAllowed(thread);
   const [wanted, setWanted] = (0, import_react13.useState)(null);
@@ -15447,7 +15644,8 @@ function SendSwitch({ thread }) {
     const next = !shown;
     setWanted(next);
     setProblem(null);
-    call("omni-thread-permissions", { threadId: thread.id, sends: next ? "allow" : "ask" }).catch((error) => {
+    const [endpoint, body] = thread.answerChild === true ? ["set_child_sending", { threadId: thread.id, mode: next ? "sending" : "training" }] : ["omni-thread-permissions", { threadId: thread.id, sends: next ? "allow" : "ask" }];
+    call(endpoint, body).catch((error) => {
       console.warn("Could not change the chat settings:", error);
       setWanted(null);
       setProblem(t("Could not change this chat's settings. Try again."));
@@ -15612,11 +15810,17 @@ var import_react14 = require("react");
 var { AtIcon, FileIcon, KeywordIcon, MessageIcon, ShieldIcon, UnplugIcon, VoiceIcon } = icons;
 var TRIGGER_ICONS = { message: MessageIcon, mention: AtIcon, keyword: KeywordIcon, voice: VoiceIcon, media: FileIcon, down: UnplugIcon };
 var FRESH_MS = 6e3;
-var isEventsBot = (roster, id) => Boolean(roster?.eventsBotId) && roster.byId?.[id]?.id === roster.eventsBotId;
+var isEventsBot = (roster, id) => Boolean(id) && (id === roster?.eventsBotId || roster?.byId?.[id]?.kind === "omni");
+var ownedRoster = (roster, botId) => {
+  if (!botId) return roster;
+  const subscriptions = (roster.subscriptions ?? []).filter((sub) => (sub.ownerBotId ?? roster.eventsBotId) === botId);
+  const ids = new Set(subscriptions.map((sub) => sub.id));
+  return { ...roster, subscriptions, subscriptionRuns: (roster.subscriptionRuns ?? []).filter((run) => ids.has(run.subId)) };
+};
 var headCount = (roster) => (roster?.subscriptions ?? []).length || null;
 function workerOf(worker, roster, where = {}) {
   if (worker.kind === "events" || worker.kind === "main") {
-    const bot2 = roster?.byId?.[roster.eventsBotId ?? roster.mainBotId];
+    const bot2 = roster?.byId?.[where.ownerBotId ?? roster.eventsBotId ?? roster.mainBotId];
     return { name: bot2?.name ?? "Omni", bot: bot2, look: MAIN_LOOK };
   }
   if (worker.kind === "thread") {
@@ -15692,11 +15896,13 @@ var RUN_STATUS = {
   failed: { label: "Did not finish", tone: "bad" }
 };
 var useWaiting = (useWork) => new Set((useWork ? useWork((work) => (work.approvals ?? []).map((entry) => entry.sessionId).join(",")) : "").split(",").filter(Boolean));
-function EventsBadge({ roster, useWork }) {
+function EventsBadge({ roster, useWork, botId }) {
+  roster = ownedRoster(roster, botId);
   const waiting = waitingRuns(roster, useWaiting(useWork));
   return waiting > 0 ? (0, import_react14.createElement)("span", { className: "os-pending", title: t("{n} waiting for you", { n: waiting }) }, String(waiting)) : null;
 }
-function SubscriptionsButton({ roster, onToggle, useWork }) {
+function SubscriptionsButton({ roster, onToggle, useWork, botId }) {
+  roster = ownedRoster(roster, botId);
   const count = headCount(roster);
   const waiting = waitingRuns(roster, useWaiting(useWork));
   return (0, import_react14.createElement)(
@@ -15739,10 +15945,12 @@ function SavedAutomationCard({ argValue, content, done, roster }) {
 var BOARD_KIND = "omni-subscriptions";
 var BOARD_TAB_ID = "ds-bot/omni-subscriptions";
 var boardTabDefinition = () => ({ id: BOARD_TAB_ID, kind: BOARD_KIND, title: () => t("Automations") });
-function BoardTab({ useRoster, useWork, actions }) {
+function BoardTab({ useRoster, useWork, actions, useTabInfo, sessionId }) {
   const roster = useRoster((value) => value);
   const waiting = useWaiting(useWork);
-  const bot = roster.byId?.[roster.eventsBotId];
+  const tab = typeof useTabInfo === "function" ? useTabInfo()?.tab : void 0;
+  const ownerId = tab?.navigation?.params?.botId ?? Object.values(roster.byId ?? {}).find((bot2) => bot2.sessionId === sessionId || bot2.parts?.includes(sessionId))?.id ?? roster.eventsBotId;
+  const bot = roster.byId?.[ownerId];
   if (!bot) return (0, import_react14.createElement)("div", { className: "os-board" }, (0, import_react14.createElement)("p", { className: "os-board-note" }, t("Automations belong to the Main Bot, which this team does not have.")));
   return (0, import_react14.createElement)(SubscriptionsBoard, { bot, roster, actions, waiting });
 }
@@ -15751,6 +15959,7 @@ function SubscriptionsBoard({ bot, roster, actions, waiting }) {
   (0, import_react14.useEffect)(() => {
     startLive(call);
   }, []);
+  roster = ownedRoster(roster, bot.id);
   const subs = roster.subscriptions ?? [];
   const runs = runsOf(roster);
   const watched = new Set(subs.filter((sub) => sub.on).flatMap((sub) => sub.sources.map((source) => `${source.kind}:${source.id}`))).size;
@@ -16185,6 +16394,7 @@ function threadState(thread, { running = false, asking = false } = {}) {
   return "idle";
 }
 function freeMarkOf(thread) {
+  if (thread?.answerChild === true) return null;
   const sends = thread?.permissions?.sends === "allow";
   const any = thread?.permissions?.reactions === "any";
   if (sends && any) return t("Sends messages and any reaction without asking you");
@@ -16192,7 +16402,49 @@ function freeMarkOf(thread) {
   if (any) return t("Reacts with any emoji without asking you");
   return null;
 }
+function answerModeOf(thread) {
+  if (thread?.answerChild !== true) return null;
+  const mode = thread.sendingMode === "sending" ? "sending" : "training";
+  const after = Number.isInteger(thread.graduateAfter) && thread.graduateAfter > 0 ? thread.graduateAfter : null;
+  const streak = Math.max(0, Math.min(Number(thread.approvedStreak) || 0, after ?? Infinity));
+  return {
+    mode,
+    label: mode === "sending" ? "Sending" : "Training",
+    title: mode === "sending" ? "Sends in its chat without asking you" : "Asks you before each send",
+    progress: mode === "training" && after !== null ? `${streak} of ${after} approved drafts in a row. At ${after} it switches to sending.` : null
+  };
+}
+var leftOf = (ms2) => {
+  const minutes = Math.max(1, Math.ceil(ms2 / 6e4));
+  if (minutes < 60) return `${minutes} min left`;
+  const hours = Math.floor(minutes / 60);
+  return minutes % 60 === 0 ? `${hours} h left` : `${hours} h ${minutes % 60} min left`;
+};
+function pauseOf(thread, now = Date.now()) {
+  if (thread?.answerChild !== true || thread.paused !== true) return null;
+  const until = Number.isFinite(thread.pausedUntil) ? thread.pausedUntil : null;
+  return {
+    label: "Paused",
+    left: until === null ? "until you resume it" : until <= now ? "resuming…" : leftOf(until - now),
+    title: until === null ? "Staff are answering this chat. It answers again when you resume it." : "Staff are answering this chat. It answers again when you resume it, or by itself once staff stay quiet there long enough."
+  };
+}
+function useNow(on2) {
+  const [now, setNow] = (0, import_react16.useState)(() => Date.now());
+  (0, import_react16.useEffect)(() => {
+    if (!on2) return void 0;
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 15e3);
+    return () => clearInterval(timer);
+  }, [on2]);
+  return now;
+}
 function permissionMenuOf(thread) {
+  if (thread?.answerChild === true) {
+    const mode = answerModeOf(thread).mode;
+    const item2 = (value, label) => ({ field: "sendingMode", value, label, checked: mode === value });
+    return [{ field: "sendingMode", label: "Sending", items: [item2("training", "Training: ask before each send"), item2("sending", "Sending: send without asking")] }];
+  }
   const own = thread?.ownPermissions ?? {};
   const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value });
   const sends = { ask: t("Ask me each time"), allow: t("Send without asking") };
@@ -16244,10 +16496,14 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     };
   });
   const free = freeMarkOf(thread);
+  const answer = answerModeOf(thread);
+  const now = useNow(thread.answerChild === true && thread.paused === true);
+  const pause = pauseOf(thread, now);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: "needs_newer_team" }) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", answer ? `${answer.label}: ${answer.title}` : "", pause ? `${pause.label}, ${pause.left}` : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const menuLabel = answer ? `Sending mode in ${name}` : t("Asking first in {name}", { name });
   const onClick = () => {
     if (opens) {
       openThread(thread, actions, setProblem);
@@ -16274,9 +16530,17 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const choose = (choice) => {
     setMenu(false);
     setProblem(null);
-    call("omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }).catch((error) => {
+    const [endpoint, body] = choice.field === "sendingMode" ? ["set_child_sending", { threadId: thread.id, mode: choice.value }] : ["omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }];
+    call(endpoint, body).catch((error) => {
       console.warn("Could not change the chat settings:", error);
       setProblem(t("Could not change this chat's settings. Try again."));
+    });
+  };
+  const resume = () => {
+    setProblem(null);
+    call("resume_answer_child", { threadId: thread.id }).catch((error) => {
+      console.warn("Could not resume the chat:", error);
+      setProblem("Could not resume this chat. Try again.");
     });
   };
   const onMenuKey = (event) => {
@@ -16286,7 +16550,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   };
   return (0, import_react16.createElement)(
     "div",
-    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0 },
+    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0, "data-answer": answer ? true : void 0, "data-paused": pause ? true : void 0 },
     (0, import_react16.createElement)(
       "button",
       {
@@ -16302,6 +16566,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       },
       (0, import_react16.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
       (0, import_react16.createElement)("span", { className: "bt-thread-title" }, name),
+      answer && !pause ? (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": answer.mode, title: answer.title, "aria-hidden": true }, answer.label) : null,
       reason ? (0, import_react16.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
       free ? (0, import_react16.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react16.createElement)(SparkIcon)) : null,
       dot ? (0, import_react16.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
@@ -16312,8 +16577,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       confirming ? null : (0, import_react16.createElement)("button", {
         type: "button",
         className: "ot-thread-more",
-        "aria-label": t("Asking first in {name}", { name }),
-        title: t("Asking first"),
+        "aria-label": menuLabel,
+        title: answer ? "Sending mode" : t("Asking first"),
         "aria-haspopup": "menu",
         "aria-expanded": menu,
         tabIndex: shown ? void 0 : -1,
@@ -16330,9 +16595,24 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         onBlur: () => setConfirming(false)
       }, confirming ? t("Remove") : (0, import_react16.createElement)(CloseIcon))
     ),
+    // Paused: its own line under the name, at every width, with the time left and Resume.
+    pause ? (0, import_react16.createElement)(
+      "div",
+      { className: "ot-paused", title: pause.title },
+      (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": "paused", "aria-hidden": true }, pause.label),
+      (0, import_react16.createElement)("span", { className: "ot-paused-left", "aria-hidden": true }, pause.left),
+      (0, import_react16.createElement)("button", {
+        type: "button",
+        className: "bt-soft bt-soft-sm ot-resume",
+        "aria-label": `Resume answering in ${name}`,
+        title: "Let it answer this chat again",
+        tabIndex: shown ? void 0 : -1,
+        onClick: resume
+      }, "Resume")
+    ) : null,
     menu ? (0, import_react16.createElement)(
       "div",
-      { className: "ot-thread-menu", role: "menu", "aria-label": t("Asking first in {name}", { name }), onKeyDown: onMenuKey },
+      { className: "ot-thread-menu", role: "menu", "aria-label": menuLabel, onKeyDown: onMenuKey },
       permissionMenuOf(thread).map((group) => (0, import_react16.createElement)(
         "div",
         { key: group.field, className: "ot-thread-menu-group", role: "group", "aria-label": group.label },
@@ -16347,7 +16627,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
           "data-value": choice.value ?? "default",
           onClick: () => choose(choice)
         }, choice.label))
-      ))
+      )),
+      answer?.progress ? (0, import_react16.createElement)("span", { className: "ot-thread-menu-note" }, answer.progress) : null
     ) : null,
     (thread.automations?.length ?? 0) > 0 ? (0, import_react16.createElement)(
       "ul",
@@ -16585,18 +16866,225 @@ function ChannelItem({ channel, state, roster, rowProps, actions, omni: omni2, p
     )
   );
 }
+function ChannelBotForm({ channels: channels2, roster, onClose }) {
+  const [name, setName] = (0, import_react16.useState)("");
+  const [selected, setSelected] = (0, import_react16.useState)([]);
+  const [local, setLocal] = (0, import_react16.useState)(null);
+  const [busy, setBusy] = (0, import_react16.useState)(false);
+  const [problem, setProblem] = (0, import_react16.useState)(null);
+  const pending = local ? [local] : roster.omniBotProposals ?? [];
+  const act = async (endpoint, body, after) => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const value = await call(endpoint, body);
+      after(value);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (0, import_react16.createElement)(
+    "div",
+    { className: "ot-picker", role: "group", "aria-label": "Dedicated channel bot" },
+    problem ? (0, import_react16.createElement)("p", { role: "alert" }, hostText(problem)) : null,
+    pending.map((proposal) => (0, import_react16.createElement)(
+      "div",
+      { key: proposal.proposalId },
+      (0, import_react16.createElement)("p", null, `Create ${proposal.name} and hand over: ${proposal.channelIds.map((id) => channels2.find((channel) => channel.id === id)?.name ?? id).join(", ")}? The default bot will only read these channels.`),
+      (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: () => act("confirm_answer_bot", { proposalId: proposal.proposalId }, () => {
+        setLocal(null);
+        onClose();
+      }) }, "Confirm hand-over"),
+      (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: () => act("cancel_answer_bot", { proposalId: proposal.proposalId }, () => {
+        setLocal(null);
+        onClose();
+      }) }, "Cancel proposal")
+    )),
+    (0, import_react16.createElement)("input", { "aria-label": "Bot name", value: name, maxLength: 40, onChange: (event) => setName(event.target.value) }),
+    channels2.map((channel) => (0, import_react16.createElement)(
+      "label",
+      { key: channel.id },
+      (0, import_react16.createElement)("input", { type: "checkbox", checked: selected.includes(channel.id), onChange: (event) => setSelected((before) => event.target.checked ? [...before, channel.id] : before.filter((id) => id !== channel.id)) }),
+      channel.name
+    )),
+    (0, import_react16.createElement)("button", { type: "button", disabled: busy || !name.trim() || !selected.length, onClick: () => act("propose_answer_bot", { name, channelIds: selected }, (value) => setLocal({ ...value, name, channelIds: selected })) }, "Review hand-over"),
+    (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: onClose }, "Close")
+  );
+}
+var VISIBILITY = {
+  isolated: ["Isolated", "Each child sees only its own chat."],
+  collective: ["Collective", "Each child also reads this bot’s other chats and the shared notes."]
+};
+var NEW_CHILD_MODES = {
+  training: ["Training", "A new child asks you before each send."],
+  sending: ["Sending", "A new child sends without asking."]
+};
+var RESUME_MINUTES_DEFAULT = 30;
+var RESUME_MINUTES_MAX = 24 * 60;
+var minutesOf = (ms2) => String(Number.isInteger(ms2) && ms2 >= 6e4 ? Math.round(ms2 / 6e4) : RESUME_MINUTES_DEFAULT);
+var ANSWER_TOOLS = [["read", "Read files"], ["read_image", "Read images"], ["glob", "Find files by name"], ["grep", "Search inside files"]];
+function SwitchRow({ label, title, on: on2, onChange }) {
+  return (0, import_react16.createElement)(
+    "div",
+    { className: "ot-answer-switch", title },
+    (0, import_react16.createElement)("span", null, label),
+    (0, import_react16.createElement)(
+      "button",
+      { type: "button", role: "switch", className: "bt-switch", "aria-checked": on2, "aria-label": label, onClick: () => onChange(!on2) },
+      (0, import_react16.createElement)("span", { className: "bt-switch-knob", "aria-hidden": true })
+    )
+  );
+}
+function Field({ label, note, children }) {
+  return (0, import_react16.createElement)(
+    "div",
+    { className: "bt-field ot-answer-field" },
+    (0, import_react16.createElement)("label", { className: "ot-answer-label" }, (0, import_react16.createElement)("span", { className: "bt-field-label" }, label), children),
+    note ? (0, import_react16.createElement)("span", { className: "bt-note" }, note) : null
+  );
+}
+function AnswerSettings({ bot, value = {} }) {
+  const [open, setOpen] = (0, import_react16.useState)(false);
+  const [enabled, setEnabled] = (0, import_react16.useState)(value.enabled === true);
+  const [visibility, setVisibility] = (0, import_react16.useState)(value.visibility ?? "isolated");
+  const [allowedTools, setAllowedTools] = (0, import_react16.useState)(value.allowedTools ?? []);
+  const [sharedNotes, setSharedNotes] = (0, import_react16.useState)(value.sharedNotes ?? "");
+  const [newChildMode, setNewChildMode] = (0, import_react16.useState)(value.newChildMode ?? "training");
+  const [graduates, setGraduates] = (0, import_react16.useState)(Number.isInteger(value.graduateAfter));
+  const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
+  const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
+  const [busy, setBusy] = (0, import_react16.useState)(false);
+  const [problem, setProblem] = (0, import_react16.useState)(null);
+  (0, import_react16.useEffect)(() => {
+    setEnabled(value.enabled === true);
+    setVisibility(value.visibility ?? "isolated");
+    setAllowedTools(value.allowedTools ?? []);
+    setSharedNotes(value.sharedNotes ?? "");
+    setNewChildMode(value.newChildMode ?? "training");
+    setGraduates(Number.isInteger(value.graduateAfter));
+    setGraduateAfter(String(value.graduateAfter ?? 5));
+    setResumeMinutes(minutesOf(value.resumeAfterMs));
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs]);
+  const count = Number(graduateAfter);
+  const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
+  const minutes = Number(resumeMinutes);
+  const minutesOk = Number.isInteger(minutes) && minutes >= 1 && minutes <= RESUME_MINUTES_MAX;
+  const save = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4 });
+      setOpen(false);
+    } catch (error) {
+      setProblem(error.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const tool = (name, on2) => setAllowedTools((before) => on2 ? [...before.filter((item) => item !== name), name] : before.filter((item) => item !== name));
+  return (0, import_react16.createElement)(
+    "div",
+    null,
+    (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", "aria-expanded": open, onClick: () => setOpen((before) => !before) }, "Answer mode"),
+    open ? (0, import_react16.createElement)(
+      "div",
+      { className: "ot-picker ot-answer", role: "group", "aria-label": "Answer mode settings" },
+      (0, import_react16.createElement)(SwitchRow, { label: "Answer new messages", on: enabled, onChange: setEnabled }),
+      (0, import_react16.createElement)("p", { className: "bt-note" }, "Each child replies only in its own chat. Switch a child between training and sending from its menu in the list below."),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Visibility", note: VISIBILITY[visibility]?.[1] },
+        (0, import_react16.createElement)(
+          "select",
+          { className: "bt-select", value: visibility, onChange: (event) => setVisibility(event.target.value) },
+          Object.entries(VISIBILITY).map(([value2, [label]]) => (0, import_react16.createElement)("option", { key: value2, value: value2 }, label))
+        )
+      ),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "New children start in", note: NEW_CHILD_MODES[newChildMode]?.[1] },
+        (0, import_react16.createElement)(
+          "select",
+          { className: "bt-select", value: newChildMode, onChange: (event) => setNewChildMode(event.target.value) },
+          Object.entries(NEW_CHILD_MODES).map(([value2, [label]]) => (0, import_react16.createElement)("option", { key: value2, value: value2 }, label))
+        )
+      ),
+      (0, import_react16.createElement)(SwitchRow, { label: "Switch a training child to sending by itself", on: graduates, onChange: setGraduates }),
+      graduates ? (0, import_react16.createElement)(
+        Field,
+        { label: "Approved drafts in a row", note: "Only drafts sent unchanged count. An edit or a rejection starts the count again." },
+        (0, import_react16.createElement)("input", {
+          className: "bt-input ot-answer-count",
+          type: "number",
+          min: 1,
+          max: 100,
+          step: 1,
+          inputMode: "numeric",
+          value: graduateAfter,
+          "aria-invalid": !countOk || void 0,
+          onChange: (event) => setGraduateAfter(event.target.value)
+        })
+      ) : null,
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Resume a paused child after", note: "A child pauses when staff write in its chat from their own phone. It answers again after this many minutes with no staff message there, or when you press Resume." },
+        (0, import_react16.createElement)(
+          "span",
+          { className: "ot-answer-minutes" },
+          (0, import_react16.createElement)("input", {
+            className: "bt-input ot-answer-count",
+            type: "number",
+            min: 1,
+            max: RESUME_MINUTES_MAX,
+            step: 1,
+            inputMode: "numeric",
+            value: resumeMinutes,
+            "aria-invalid": !minutesOk || void 0,
+            onChange: (event) => setResumeMinutes(event.target.value)
+          }),
+          (0, import_react16.createElement)("span", { "aria-hidden": true }, "minutes")
+        )
+      ),
+      (0, import_react16.createElement)(
+        "div",
+        { className: "ot-answer-tools", role: "group", "aria-label": "Children may also" },
+        (0, import_react16.createElement)("span", { className: "bt-field-label", "aria-hidden": true }, "Children may also"),
+        ANSWER_TOOLS.map(([name, label]) => (0, import_react16.createElement)(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: (on2) => tool(name, on2) }))
+      ),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Shared notes for collective children" },
+        (0, import_react16.createElement)("textarea", { className: "bt-input bt-input-area", maxLength: 8e3, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })
+      ),
+      problem ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
+      (0, import_react16.createElement)(
+        "div",
+        { className: "bt-actions" },
+        (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || graduates && !countOk || !minutesOk, onClick: save }, "Save answer settings")
+      )
+    ) : null
+  );
+}
 function OmniTree(props) {
   const { bot, actions, roster } = props;
   const state = useOmni();
   const omni2 = (0, import_react16.useMemo)(() => omniActions((id) => actions.selectPanel(id), call), [actions]);
   const [open, setOpen] = (0, import_react16.useState)(readOpen);
   const [picking, setPicking] = (0, import_react16.useState)(null);
+  const [creatingBot, setCreatingBot] = (0, import_react16.useState)(false);
   (0, import_react16.useEffect)(() => {
     startLive(call);
   }, []);
   if (!isOmniBot(bot)) return null;
   const rowProps = rowPropsOf(props, roster?.omniRowProps);
-  const threads = Array.isArray(roster?.omniThreads) ? roster.omniThreads : [];
+  const defaultBotId = roster?.omniOwnership?.defaultBotId ?? roster?.eventsBotId ?? bot.id;
+  const ownerOf = (id) => roster?.omniOwnership?.channels?.[id] ?? defaultBotId;
+  const threads = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter((thread) => (thread.ownerBotId ?? ownerOf(thread.channelId)) === bot.id);
+  const ownedChannels = state.channels.filter((channel) => ownerOf(channel.id) === bot.id);
+  const ownedState = { ...state, channels: ownedChannels };
+  const ownedView = { ...roster, omniThreads: threads };
   const others = (list) => list.length === 0 ? null : (0, import_react16.createElement)(
     "div",
     { className: "ot-others", role: "group", "aria-label": t("Other chats") },
@@ -16614,15 +17102,18 @@ function OmniTree(props) {
     return next;
   });
   const plus = plusOf(roster, state);
-  const listed = new Set(state.channels.map((channel) => channel.id));
+  const listed = new Set(ownedChannels.map((channel) => channel.id));
   return (0, import_react16.createElement)(
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
-    state.channels.map((channel) => (0, import_react16.createElement)(ChannelItem, {
+    bot.id !== defaultBotId ? (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }) : null,
+    bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
+    bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
+    ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {
       key: channel.id,
       channel,
-      state,
-      roster,
+      state: ownedState,
+      roster: ownedView,
       rowProps,
       actions,
       omni: omni2,
@@ -16658,8 +17149,19 @@ function ThreadDock({ sessionId, useRoster }) {
   }, [thread]);
   return null;
 }
+var stackedRow = (row) => `
+${row}{display:grid;grid-template-columns:minmax(0,1fr) auto}
+${row}>*{grid-column:1/-1}
+${row} .bt-thread{grid-row:1;flex-wrap:wrap;row-gap:1px}
+${row} .ot-thread-acts{grid-column:2;grid-row:1;align-self:end;z-index:1;margin-bottom:4px}
+${row} .bt-thread-title{flex-basis:calc(100% - 20px)}
+${row} .bt-thread .ot-mode{margin:2px 0 2px 20px}
+${row} .ot-thread-reason{flex:1 1 100%;max-width:none;box-sizing:border-box;padding-left:20px}
+${row}:is(:hover,:focus-within) .ot-thread-reason,${row}:has(.ot-thread-acts[data-on]) .ot-thread-reason{padding-right:48px}
+${row} .bt-thread::after{content:'';flex:none;width:0}
+${row}:is(:hover,:focus-within) .bt-thread::after,${row}:has(.ot-thread-acts[data-on]) .bt-thread::after{width:48px}`;
 var OMNI_TREE_CSS = `
-.ot-tree{display:grid;gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
+.ot-tree{container:ot-tree/inline-size;display:grid;grid-template-columns:minmax(0,1fr);gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
 .ot-channel-head{display:flex;align-items:center;gap:2px}
 .ot-channel-row{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:5px 8px 5px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
 .ot-channel-row:hover{background:var(--bt-hover)}
@@ -16707,9 +17209,36 @@ var OMNI_TREE_CSS = `
 .ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
+/* An answer child's sending mode, always shown by name: amber while it trains, green once it sends. The title gives way first. */
+.ot-mode{flex:none;padding:0 6px;border-radius:999px;font-size:10.5px;line-height:16px;font-weight:600;white-space:nowrap}
+.ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
+.ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
+.ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
+/* A paused answer child: under its name and aligned with it, at every width, the pause, its time left and the team's Resume button. The time left is never cut: where the line is too short, it wraps to the pill's left edge, and Resume drops under it. */
+.ot-mode[data-mode=paused]{color:color-mix(in srgb,var(--bt-accent, #22d3ee) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-accent, #22d3ee) 15%,transparent)}
+.ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
+.ot-paused-left{flex:1 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
+.ot-paused .ot-resume{height:24px;padding:0 10px}
+.ot-answer-minutes{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--bt-ink-2)}
+${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
+@container ot-tree (max-width:259px){${stackedRow(".ot-thread[data-answer]")}}
+/* Answer settings: the Bot team's own switches, fields, selects, inputs and button (bt-*). */
+.ot-answer{gap:12px;padding:10px}
+.ot-answer-switch{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-width:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
+.ot-answer-switch>span{min-width:0;overflow-wrap:anywhere}
+.ot-answer-label{display:grid;gap:6px;min-width:0}
+.ot-answer .bt-field{gap:6px;min-width:0}
+.ot-answer .bt-note{margin:0}
+.ot-answer-tools{display:grid;gap:8px}
+.ot-answer .ot-answer-count{width:88px}
+.ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
+.ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
-.ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+.ot-picker{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+/* A narrow sidebar: the settings' controls and words wrap inside the panel, never widen the tree. */
+.ot-picker label,.ot-picker p{min-width:0;overflow-wrap:anywhere}
+.ot-picker select,.ot-picker textarea{box-sizing:border-box;max-width:100%;min-width:0}
 .ot-picker-head{display:flex;align-items:center;gap:4px}
 .ot-picker-search{flex:1;min-width:0;height:26px;padding:0 8px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px}
 .ot-picker-search:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-1px}
@@ -16864,7 +17393,7 @@ function ConsentDock({ sessionId, useRoster, useCards }) {
   return (0, import_react17.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react17.createElement)(ConsentCard, { key: entry.id, bot, entry })));
 }
 var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
-function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
+function PermissionsCard({ bot, roster, run, Card, SwitchRow: SwitchRow2 }) {
   if (!roster.omniGrants) return null;
   const main = bot.kind === "omni" || (roster.mainBotIds ?? []).includes(bot.id);
   const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
@@ -16892,7 +17421,7 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
     )) : grants.map((grant) => (0, import_react17.createElement)(
       "div",
       { key: grant.id, className: "om-grant" },
-      (0, import_react17.createElement)(SwitchRow, {
+      (0, import_react17.createElement)(SwitchRow2, {
         label: `${grant.resource?.name ?? t("a chat")} · ${grant.actions.map((action) => t(ACTION_TEXT[action] ?? action)).join(", ")}`,
         hint: [kindText(grant.resource), typeof grant.expiresAt === "number" && grant.expiresAt <= now ? t("expired") : "", t("Ask each time")].filter(Boolean).join(" · "),
         on: grant.approval === "confirm",
@@ -17540,13 +18069,52 @@ var STRINGS = {
   "Access token": "访问令牌",
   "Phone number ID": "电话号码 ID",
   "WhatsApp Business Account ID": "WhatsApp 企业账户 ID",
+  "Through a provider such as Kapso (optional)": "通过 Kapso 等服务商连接（可选）",
+  "How to connect the number": "如何连接这个号码",
+  "Through Kapso": "通过 Kapso",
+  "Log in with Facebook on Kapso's page and pick your number. It keeps working in the WhatsApp Business app.": "在 Kapso 的页面上用 Facebook 登录并选择你的号码。它仍可在 WhatsApp Business 应用中使用。",
+  "With Meta's details": "使用 Meta 的信息",
+  "Paste the access token and IDs from Meta's WhatsApp Manager or another provider.": "粘贴来自 Meta WhatsApp Manager 或其他服务商的访问令牌和 ID。",
+  "Pick your number": "选择你的号码",
+  "Send a test": "发送测试",
+  "Could not reach Kapso through Omni. Try again.": "无法通过 Omni 连接 Kapso。请重试。",
+  "Asking Omni about Kapso…": "正在向 Omni 询问 Kapso…",
+  "Add your Kapso key": "添加你的 Kapso 密钥",
+  "Omni keeps one Kapso project key for all its numbers. Find it in {kapso} → API keys.": "Omni 为它的所有号码保存一个 Kapso 项目密钥。可在 {kapso} → API keys 中找到。",
+  "Kapso project API key": "Kapso 项目 API 密钥",
+  "Checking with Kapso…": "正在向 Kapso 核对…",
+  "Omni checks the key with Kapso and never shows it again.": "Omni 会向 Kapso 核对这个密钥，之后不再显示它。",
+  "Connect your number in Kapso": "在 Kapso 中连接你的号码",
+  "Kapso's page asks you to log in with Facebook and pick your number. Come back here when it says done.": "Kapso 的页面会请你用 Facebook 登录并选择你的号码。显示完成后回到这里。",
+  "Open the setup link again": "再次打开设置链接",
+  "Making the link…": "正在生成链接…",
+  "Create setup link": "生成设置链接",
+  "Your Kapso numbers": "你的 Kapso 号码",
+  "Refreshing…": "正在刷新…",
+  "Refresh": "刷新",
+  "No numbers yet. Finish the setup link, then refresh.": "还没有号码。完成设置链接后再刷新。",
+  "No name yet": "暂无名称",
+  "Omni has no public https address, so Kapso cannot send it messages. Set server.public_url (OMNI_PUBLIC_URL) on your Omni, then refresh.": "Omni 没有公开的 https 地址，所以 Kapso 无法向它发送消息。请在你的 Omni 上设置 server.public_url（OMNI_PUBLIC_URL），然后刷新。",
+  "Could not send the test message. Try again.": "无法发送测试消息。请重试。",
+  "Send a test message to": "发送测试消息到",
+  "Send a test message": "发送测试消息",
+  "Sent. Look at that phone.": "已发送。请查看那部手机。",
+  "WhatsApp delivers it only if that number wrote to yours in the last 24 hours.": "只有当该号码在过去 24 小时内给你的号码发过消息时，WhatsApp 才会送达。",
+  "Provider API address": "服务商 API 地址",
+  "Send the access token as": "访问令牌的发送方式",
+  "Provider key (X-API-Key)": "服务商密钥（X-API-Key）",
+  "Bearer token": "Bearer 令牌",
+  "Provider webhook secret": "服务商 Webhook 密钥",
+  "Webhook signature": "Webhook 签名",
+  "Provider (X-Webhook-Signature)": "服务商（X-Webhook-Signature）",
+  "Meta app secret (X-Hub-Signature-256)": "Meta 应用密钥（X-Hub-Signature-256）",
   "The token stays with your Omni. Omni only gets that number's messages.": "令牌只保存在你的 Omni 中。Omni 只会收到该号码的消息。",
   "{version} is available · you're on {current}": "{version} 已发布 · 你当前使用 {current}",
   "{version} is available. Its admin updates this Omni.": "{version} 已发布。由管理员更新这个 Omni。",
   "Hide until the next version": "在下个版本前隐藏",
   "Whoever runs this Omni updates it with:": "运行这个 Omni 的人可以用以下命令更新：",
   "Ask whoever runs your Omni to update it.": "请让运行你的 Omni 的人更新它。",
-  "Enter your Meta details": "填写你的 Meta 信息",
+  "Through Kapso or Meta": "通过 Kapso 或 Meta",
   "Scan a code": "扫码",
   "Create a bot": "创建机器人",
   "Add your bot": "添加你的机器人",
@@ -17642,12 +18210,12 @@ var { ClockIcon: ClockIcon2 } = icons;
 var inject = ["slots"];
 var channels = Object.freeze({ Badge, KeyValue, LiveChannel, LiveChat, LiveQr, Table });
 var boardRight = null;
-function toggleBoard(reportError) {
+function toggleBoard(reportError, botId) {
   const right = boardRight;
   if (!right) return;
   try {
     if (right.isExpanded() && right.active()?.kind === BOARD_KIND) right.toggleExpanded();
-    else right.openTab(BOARD_KIND);
+    else right.openTab(BOARD_KIND, { params: { botId } });
   } catch (error) {
     reportError?.(error, "board");
   }
@@ -17699,11 +18267,11 @@ function apply(ctx) {
   if (botSettings) ctx.effect(() => botSettings.register({ id: "omni-permissions", order: 0, Component: PermissionsCard }), "ds-bot: Omni permissions settings");
   for (const name of ["find_chats", "omni_endpoints"]) ctx.effect(() => toolCards.register(name, null, { phrase: PHRASES[name] }), `ds-bot: ${name} phrase`);
   ctx.effect(() => toolCards.register("save_automation", (props) => (0, import_react18.createElement)(SavedAutomationCard, props), { phrase: PHRASES.save_automation }), "ds-bot: save_automation card");
-  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => bot.id === roster.eventsBotId ? (0, import_react18.createElement)(EventsBadge, { roster, useWork }) : null }), "ds-bot: automations badge");
+  ctx.effect(() => badges.register({ id: "omni-events", Component: ({ bot, roster, useWork }) => isEventsBot(roster, bot.id) ? (0, import_react18.createElement)(EventsBadge, { roster, useWork, botId: bot.id }) : null }), "ds-bot: automations badge");
   if (botChildren) ctx.effect(() => botChildren.register({ id: "omni-channels", Component: OmniTree }), "ds-bot: Omni channels in the sidebar");
   ctx.effect(() => headerButtons.register({
     id: "omni-board",
-    Component: ({ bot, roster, actions, useWork }) => bot.id === roster.eventsBotId ? (0, import_react18.createElement)(SubscriptionsButton, { roster, useWork, onToggle: () => toggleBoard(actions.reportError) }) : null
+    Component: ({ bot, roster, actions, useWork }) => isEventsBot(roster, bot.id) ? (0, import_react18.createElement)(SubscriptionsButton, { roster, useWork, botId: bot.id, onToggle: () => toggleBoard(actions.reportError, bot.id) }) : null
   }), "ds-bot: automations button");
   if (chatSuggestions?.register) ctx.effect(() => chatSuggestions.register({ id: "omni-automations", order: -10, when: ({ bot, roster }) => Boolean(bot?.id) && bot.id === roster?.eventsBotId, items: automationExamples }), "ds-bot: automation suggestions");
   ctx.effect(() => nav.register({ id: "automations", label: () => t("Automations"), icon: ClockIcon2, run: (actions) => actions.selectPanel(AUTOMATIONS_PANEL) }), "ds-bot: automations nav");

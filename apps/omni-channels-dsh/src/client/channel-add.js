@@ -6,7 +6,7 @@
 // Labels are English; the pages pass them through t().
 export const ADD = {
   'whatsapp-baileys': { time: '1 min', how: 'Scan a code', steps: ['Name it', 'Scan', 'Done'] },
-  'whatsapp-business': { time: '3 min', how: 'Enter your Meta details', steps: ['Enter the details', 'Done'] },
+  'whatsapp-business': { time: '3 min', how: 'Through Kapso or Meta', steps: ['Enter the details', 'Done'] },
   slack: { time: '1 min', how: 'Connect with Slack', steps: ['Choose how it joins', 'Approve in Slack', 'Done'] },
   telegram: { time: '2 min', how: 'Create a bot', steps: ['Create the bot', 'Paste its token', 'Say hi'] },
   discord: { time: '2 min', how: 'Add your bot', steps: ['Paste the bot token', 'Invite it to a server', 'Done'] },
