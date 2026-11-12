@@ -1205,6 +1205,8 @@ test('#1689 through DSH\'s real tool executor an answer child reads inside its k
     ['read', { file_path: join(outside, 'secret.txt') }],
     ['read', { file_path: `${kb}/../outside/secret.txt` }],
     ['read', { file_path: `${kb}/dirlink/../outside/secret.txt` }],
+    // Not there, so its nearest existing parent is kb; the tool would still read the file outside.
+    ['read', { file_path: `${kb}/missing/../../outside/secret.txt` }],
     ['read', { file_path: join(kb, 'link.txt') }],
     ['read', { file_path: join(kb, 'dirlink', 'secret.txt') }],
     ['read', { file_path: join(sibling, 'private.md') }],
