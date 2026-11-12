@@ -184,6 +184,34 @@ test('person binding: no Session but A\'s own child may call A\'s mounted tools:
   for (const sessionId of callers) assert.equal(guarded(b.ctx, sessionId, 'mcp__orders-a__lookup'), undefined, sessionId)
 })
 
+test('person binding: when both persons\' rules name one capability, each child calls its own mount and no other Session does', async t => {
+  const b = await bench(t)
+  b.rules.a = { ...b.rules.a, metadata: { context: 'A-CONTEXT', capability: 'shared' } }
+  b.rules.b = { ...b.rules.b, metadata: { context: 'B-CONTEXT', capability: 'shared' } }
+  await b.deliver(row(1, CHAT, FROM_A))
+  await b.deliver(row(2, CHAT_B, FROM_B))
+  await signal(t, b)
+  await until(() => b.calls(CHAT) === 1 && b.calls(CHAT_B) === 1)
+  const a = b.childOf(CHAT), bee = b.childOf(CHAT_B)
+  assert.deepEqual([...new Set(b.fake.mounts().map(call => `${call[1]}:${call[2]}`))].sort(), [`${a.sessionId}:shared`, `${bee.sessionId}:shared`].sort())
+  for (const child of [a, bee]) {
+    assert.equal(guarded(b.ctx, child.sessionId, 'mcp__shared__lookup'), undefined, child.chatId)
+    assert.equal((await preExecute(b, 'mcp__shared__lookup', child.sessionId)).kind, 'allow', child.chatId)
+  }
+  const ordinary = await b.channels.threads.ensure(OTHER_INSTANCE, ELSEWHERE)
+  for (const sessionId of ['bot-own-session', ordinary.thread.sessionId]) {
+    assert.match(guarded(b.ctx, sessionId, 'mcp__shared__lookup'), FOREIGN, sessionId)
+    assert.equal((await preExecute(b, 'mcp__shared__lookup', sessionId)).kind, 'deny', sessionId)
+  }
+  // A's own mount leaving does not open B's to A's child: its guard still refuses the name.
+  b.rules.a = { ...b.rules.a, metadata: { context: 'A-CONTEXT' } }
+  t.mock.timers.tick(30_001)
+  await b.deliver(row(3, CHAT, FROM_A))
+  assert.deepEqual(b.fake.unmounts().map(call => call.slice(1)), [[a.sessionId, 'shared']])
+  assert.match(guarded(b.ctx, a.sessionId, 'mcp__shared__lookup'), FOREIGN)
+  assert.equal(guarded(b.ctx, bee.sessionId, 'mcp__shared__lookup'), undefined)
+})
+
 test('person binding: a message for A\'s chat admitted by B\'s rule is held, warned once, and never rebinds', async t => {
   const { b, a } = await twoPersons(t)
   const before = b.team.state.subscriptionRuns.length

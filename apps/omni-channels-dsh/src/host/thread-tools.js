@@ -187,9 +187,14 @@ export function install(rt) {
   const tried = new WeakMap()
   const warnedMount = new Set()
   const PERSON_TOOL_REFUSAL = 'Only the answer child of the person this tool was given to may use it.'
-  // A tool under a capability prefix mounted into another Session than this one.
-  const foreignPersonTool = (sessionId, name) => typeof name === 'string'
-    && [...mounts].some(([owner, mount]) => owner !== sessionId && name.startsWith(mount.toolPrefix))
+  // A tool under a capability prefix mounted into another Session and not into this one (two
+  // persons' rules may name one capability: each child keeps its own mount of it).
+  function foreignPersonTool(sessionId, name) {
+    if (typeof name !== 'string') return false
+    const own = mounts.get(sessionId)
+    if (own !== undefined && name.startsWith(own.toolPrefix)) return false
+    return [...mounts].some(([owner, mount]) => owner !== sessionId && name.startsWith(mount.toolPrefix))
+  }
   function personTool(thread, sessionId, name) {
     const mount = mounts.get(sessionId)
     return mount !== undefined && mount.threadId === thread.id && rt.personOf(thread)?.capability?.name === mount.name
