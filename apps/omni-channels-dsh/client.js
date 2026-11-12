@@ -17131,7 +17131,7 @@ function OmniTree(props) {
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
     (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
-    bot.id !== defaultBotId ? (0, import_react16.createElement)(RepairTools, { bot }) : null,
+    (0, import_react16.createElement)(RepairTools, { bot }),
     bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {

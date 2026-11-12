@@ -172,6 +172,8 @@ test('the channel bot\'s stuck Session starts a new series at its next step, and
   // A rejected step, another Bot's Session and the answer child's Session are never touched.
   assert.deepEqual(await preStep(run.ctx, stuck, { kind: 'reject' }), { kind: 'reject', newSeries: false })
   for (const id of ['someone-else', child.sessionId]) assert.deepEqual(await preStep(run.ctx, { id, session: liveSession(id) }), ENTER, id)
+  // The default bot is repaired the same way: it can be a channel bot on its own Session too.
+  assert.deepEqual(await run.call('repair_tool_series', { botId: run.channels.eventsBotId() }), { botId: run.channels.eventsBotId(), next: 'fresh-tools' })
   await assert.rejects(run.call('repair_tool_series', { botId: 'someone-else' }), /operates Omni/)
   await assert.rejects(run.call('repair_tool_series', { botId: ANSWER_MASTER, extra: true }), /nrecognized/)
   // Nothing was saved or moved: the bot keeps its id, its channel, its automation and its child.

@@ -1067,9 +1067,10 @@ test('answer settings start isolated and save one owner setting with read-only a
   assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
 })
 
-// A channel bot whose every turn fails on its tool list (#1699) is repaired from its own place
-// in the sidebar: one staff action, one host call; the default bot has no such row.
-test('a channel bot offers Repair tools, which asks the host once and says what follows or why not; the default bot has none', async t => {
+// An Omni bot whose every turn fails on its tool list (#1699) is repaired from its own place in
+// the sidebar: one staff action, one host call. The default bot has the row too: it can be a
+// channel bot Omni made on its own Session, with no new conversation to move to.
+test('every Omni bot offers Repair tools, the default one included, which asks the host once and says what follows or why not', async t => {
   linked()
   const roster = hooked({ omniOwnership: { defaultBotId: 'omni-bot', channels: {} } })
   const { view } = tree(t, { roster, bot: { id: 'dedicated', kind: 'omni', name: 'Service' } })
@@ -1086,7 +1087,13 @@ test('a channel bot offers Repair tools, which asks the host once and says what 
   assert.equal(said('status'), undefined)
   assert.match(text(said('alert')), /operates Omni/)
   const main = tree(t, { roster, bot: { id: 'omni-bot', kind: 'omni', name: 'Omni' } }).view
-  assert.equal(nodes(main.draw()).some(node => node.type === 'button' && text(node) === 'Repair tools'), false)
+  const mainRepair = nodes(main.draw()).find(node => node.type === 'button' && text(node) === 'Repair tools')
+  assert.ok(mainRepair, 'the default bot has the row')
+  calls.length = 0
+  answer = endpoint => (endpoint === 'repair_tool_series' ? { botId: 'omni-bot', next: 'fresh-tools' } : {})
+  mainRepair.props.onClick()
+  await settle()
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'repair_tool_series'), [['repair_tool_series', { botId: 'omni-bot' }]])
 })
 
 test('an answer child\'s row names its sending mode at a glance, and its menu switches it through the staff action', async () => {
