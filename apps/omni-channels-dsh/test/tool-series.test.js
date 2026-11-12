@@ -14,19 +14,21 @@ const tool = name => ({ name, description: `The ${name} tool.`, parameters: { ty
 const names = (from, count) => Array.from({ length: count }, (_, index) => `tool_${String(from + index).padStart(2, '0')}`)
 // The live Session's sequence: one tool from an old host policy plugin at its first request,
 // then 57 tools in its place in one change, then 14 more.
-const BASELINE = ['read_knowledge']
+const BASELINE = ['host_lookup']
 const FIRST = names(1, 57)
 const LATER = names(58, 14)
 
 // What DSH's agent loop logs for one request (dsh-agent-loop buildRequest): a header when the
 // tools change, with a tool-registry developer message naming what joined and what left; or,
-// on a request whose pre-step decision starts a new series, a header that says so.
-function request(session, tools, { reason = 'change', turn } = {}) {
+// on a request whose pre-step decision starts a new series, a header that says so: reason
+// series when the tools are unchanged, else resume (the first request after a restart) or
+// change, marked startsSeries.
+function request(session, tools, { reason = 'change', turn, startsSeries = reason === 'initial' } = {}) {
   const before = new Set(session.requestHeader()?.tools?.map(each => each.name))
   const header = { config: CONFIG, ...(tools.length > 0 ? { tools: tools.map(tool) } : {}) }
   session.append('turn/start', { turn })
   session.append('step/start', { turn, step: 1 })
-  const { seq } = session.append('request/header', { header, reason, ...(reason === 'initial' ? { startsSeries: true } : {}) })
+  const { seq } = session.append('request/header', { header, reason, ...(startsSeries ? { startsSeries: true } : {}) })
   const additions = tools.filter(name => !before.has(name)).map(toolName => ({ type: 'tool-addition', toolName }))
   const removals = [...before].filter(name => !tools.includes(name)).map(toolName => ({ type: 'tool-removal', toolName }))
   if (reason !== 'initial' && reason !== 'series' && additions.length + removals.length > 0) {
@@ -62,7 +64,7 @@ test('a Session whose one first-request tool was removed is refused, and a new s
   const before = sent(session)
   assert.deepEqual(before.tools.filter(each => each.deferLoading !== true).map(each => each.name), BASELINE)
   assert.equal(before.tools.filter(each => each.deferLoading === true).length, FIRST.length + LATER.length)
-  assert.deepEqual(callable(before), [], 'every tool is deferred once read_knowledge is removed: the provider refuses')
+  assert.deepEqual(callable(before), [], 'every tool is deferred once host_lookup is removed: the provider refuses')
   assert.equal(strandedSeries(session, [...FIRST, ...LATER]), true)
   // The pre-step decision starts a series: the next request declares today's tools in full.
   request(session, [...FIRST, ...LATER], { reason: 'series', turn: 5 })
@@ -72,6 +74,22 @@ test('a Session whose one first-request tool was removed is refused, and a new s
   assert.equal(after.messages.some(message => message.role === 'developer'), false)
   // It stays healthy: the next step does not start another series.
   assert.equal(strandedSeries(session, [...FIRST, ...LATER]), false)
+})
+
+// The fix reaches a live host after an update and a restart: the stuck Session's next request
+// is the first one its new agent logs (reason resume), or one whose tools changed too.
+test('the new series also holds when it starts on the first request after a restart, or on a request whose tools change', () => {
+  const ALL = [...FIRST, ...LATER]
+  const restarted = liveSession('restarted')
+  request(restarted, ALL, { reason: 'resume', startsSeries: true, turn: 5 })
+  assert.deepEqual(callable(sent(restarted)).sort(), [...ALL].sort())
+  assert.equal(strandedSeries(restarted, ALL), false)
+  const changed = liveSession('changed')
+  const next = [...ALL.slice(1), 'tool_99']
+  request(changed, next, { startsSeries: true, turn: 5 })
+  assert.equal(changed.deriveMessages().filter(message => message.role === 'developer').length, 3, 'the change still logs what joined and what left')
+  assert.deepEqual(callable(sent(changed, next)).sort(), [...next].sort())
+  assert.equal(strandedSeries(changed, next), false)
 })
 
 test('a Session whose first request declared no tool is refused, and a new series brings every tool back', () => {
@@ -93,6 +111,13 @@ test('a healthy Session keeps its series: a first-request tool is still offered,
   // The tool goes in this step: the check sees it before the request, not after a refusal.
   assert.equal(strandedSeries(session, FIRST), true)
   assert.equal(strandedSeries(Session.create('new'), FIRST), false)
+  // A request that declared no tool deferred nothing: no new series, so none at every step.
+  const bare = Session.create('bare')
+  request(bare, ['omni_call'], { reason: 'initial', turn: 1 })
+  request(bare, [], { reason: 'series', startsSeries: true, turn: 2 })
+  assert.equal(strandedSeries(bare, FIRST), false)
+  request(bare, [], { reason: 'series', turn: 3 })
+  assert.equal(strandedSeries(bare, FIRST), false)
   // Code mode declares only run_code, which no plugin registers: that is no reason to restart.
   const code = Session.create('code')
   request(code, ['run_code'], { reason: 'initial', turn: 1 })

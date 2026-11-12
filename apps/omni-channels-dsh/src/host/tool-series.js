@@ -21,20 +21,21 @@ const Repair = z.object({ botId: z.string().min(1).max(200) }).strict()
 
 /**
  * Whether no tool of the Session's current series baseline is still offered: neither among
- * the tools served to the agent now (what its next request declares) nor among those its last
- * request declared. False before the Session's first request, which starts the series anyway.
+ * the tools its last request declared nor among the tools served to the agent now (what its
+ * next request declares). False before the Session's first request, which starts the series
+ * anyway, and after a request that declared no tool: nothing was deferred there, and a new
+ * series would start again at every step.
  * @param session - the agent's DSH Session (requestHeader, toolHistory).
  * @param offered - names of the tools served to the agent now.
  * @returns whether the next request would offer the model no tool it can call directly.
  */
 export function strandedSeries(session, offered) {
-  const last = session?.requestHeader?.()
-  if (last === undefined) return false
+  const declared = (session?.requestHeader?.()?.tools ?? []).map(tool => tool.name)
+  if (declared.length === 0) return false
   const baseline = new Set((session.toolHistory?.()?.tools ?? []).map(tool => tool.name))
-  const declared = (last.tools ?? []).map(tool => tool.name)
   const next = [...offered, ...declared.filter(name => name === RUN_CODE)]
   const noneKept = names => names.length > 0 && names.every(name => !baseline.has(name))
-  return noneKept(next) || noneKept(declared)
+  return noneKept(declared) || noneKept(next)
 }
 
 export function install(rt) {
