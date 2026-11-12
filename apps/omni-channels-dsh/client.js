@@ -15462,7 +15462,7 @@ function useChatPoll(chatId, on2) {
   }, [chatId, on2]);
   return read.chatId === chatId ? read : { chatId, messages: null, error: null };
 }
-var sendsAllowed = (thread) => thread?.permissions?.sends === "allow";
+var sendsAllowed = (thread) => thread?.answerChild === true ? thread.sendingMode === "sending" : thread?.permissions?.sends === "allow";
 function SendSwitch({ thread }) {
   const on2 = sendsAllowed(thread);
   const [wanted, setWanted] = (0, import_react13.useState)(null);
@@ -15475,7 +15475,8 @@ function SendSwitch({ thread }) {
     const next = !shown;
     setWanted(next);
     setProblem(null);
-    call("omni-thread-permissions", { threadId: thread.id, sends: next ? "allow" : "ask" }).catch((error) => {
+    const [endpoint, body] = thread.answerChild === true ? ["set_child_sending", { threadId: thread.id, mode: next ? "sending" : "training" }] : ["omni-thread-permissions", { threadId: thread.id, sends: next ? "allow" : "ask" }];
+    call(endpoint, body).catch((error) => {
       console.warn("Could not change the chat settings:", error);
       setWanted(null);
       setProblem(t("Could not change this chat's settings. Try again."));
@@ -16346,7 +16347,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   };
   return (0, import_react16.createElement)(
     "div",
-    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0 },
+    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0, "data-answer": answer ? true : void 0 },
     (0, import_react16.createElement)(
       "button",
       {
@@ -16694,6 +16695,35 @@ function ChannelBotForm({ channels: channels2, roster, onClose }) {
     (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: onClose }, "Close")
   );
 }
+var VISIBILITY = {
+  isolated: ["Isolated", "Each child sees only its own chat."],
+  collective: ["Collective", "Each child also reads this bot’s other chats and the shared notes."]
+};
+var NEW_CHILD_MODES = {
+  training: ["Training", "A new child asks you before each send."],
+  sending: ["Sending", "A new child sends without asking."]
+};
+var ANSWER_TOOLS = [["read", "Read files"], ["read_image", "Read images"], ["glob", "Find files by name"], ["grep", "Search inside files"]];
+function SwitchRow({ label, title, on: on2, onChange }) {
+  return (0, import_react16.createElement)(
+    "div",
+    { className: "ot-answer-switch", title },
+    (0, import_react16.createElement)("span", null, label),
+    (0, import_react16.createElement)(
+      "button",
+      { type: "button", role: "switch", className: "bt-switch", "aria-checked": on2, "aria-label": label, onClick: () => onChange(!on2) },
+      (0, import_react16.createElement)("span", { className: "bt-switch-knob", "aria-hidden": true })
+    )
+  );
+}
+function Field({ label, note, children }) {
+  return (0, import_react16.createElement)(
+    "div",
+    { className: "bt-field ot-answer-field" },
+    (0, import_react16.createElement)("label", { className: "ot-answer-label" }, (0, import_react16.createElement)("span", { className: "bt-field-label" }, label), children),
+    note ? (0, import_react16.createElement)("span", { className: "bt-note" }, note) : null
+  );
+}
 function AnswerSettings({ bot, value = {} }) {
   const [open, setOpen] = (0, import_react16.useState)(false);
   const [enabled, setEnabled] = (0, import_react16.useState)(value.enabled === true);
@@ -16728,33 +16758,67 @@ function AnswerSettings({ bot, value = {} }) {
       setBusy(false);
     }
   };
+  const tool = (name, on2) => setAllowedTools((before) => on2 ? [...before.filter((item) => item !== name), name] : before.filter((item) => item !== name));
   return (0, import_react16.createElement)(
     "div",
     null,
-    (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setOpen((before) => !before) }, "Answer mode"),
+    (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", "aria-expanded": open, onClick: () => setOpen((before) => !before) }, "Answer mode"),
     open ? (0, import_react16.createElement)(
       "div",
-      { className: "ot-picker", role: "group", "aria-label": "Answer mode settings" },
-      (0, import_react16.createElement)("label", null, (0, import_react16.createElement)("input", { type: "checkbox", checked: enabled, onChange: (event) => setEnabled(event.target.checked) }), "Answer new messages"),
-      (0, import_react16.createElement)("label", null, "Visibility", (0, import_react16.createElement)("select", { value: visibility, onChange: (event) => setVisibility(event.target.value) }, (0, import_react16.createElement)("option", { value: "isolated" }, "Isolated: own chat only"), (0, import_react16.createElement)("option", { value: "collective" }, "Collective: read this bot’s chats and shared notes"))),
-      (0, import_react16.createElement)("p", null, "Children reply only in their own chat. In training they ask you before each send; switch a child from its menu in the list below."),
-      (0, import_react16.createElement)("label", { className: "ot-answer-field" }, "New children start in", (0, import_react16.createElement)(
-        "select",
-        { value: newChildMode, onChange: (event) => setNewChildMode(event.target.value) },
-        (0, import_react16.createElement)("option", { value: "training" }, "Training: ask before each send"),
-        (0, import_react16.createElement)("option", { value: "sending" }, "Sending: send without asking")
-      )),
-      (0, import_react16.createElement)("label", { className: "ot-answer-check" }, (0, import_react16.createElement)("input", { type: "checkbox", checked: graduates, onChange: (event) => setGraduates(event.target.checked) }), "Switch a training child to sending by itself"),
+      { className: "ot-picker ot-answer", role: "group", "aria-label": "Answer mode settings" },
+      (0, import_react16.createElement)(SwitchRow, { label: "Answer new messages", on: enabled, onChange: setEnabled }),
+      (0, import_react16.createElement)("p", { className: "bt-note" }, "Each child replies only in its own chat. Switch a child between training and sending from its menu in the list below."),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Visibility", note: VISIBILITY[visibility]?.[1] },
+        (0, import_react16.createElement)(
+          "select",
+          { className: "bt-select", value: visibility, onChange: (event) => setVisibility(event.target.value) },
+          Object.entries(VISIBILITY).map(([value2, [label]]) => (0, import_react16.createElement)("option", { key: value2, value: value2 }, label))
+        )
+      ),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "New children start in", note: NEW_CHILD_MODES[newChildMode]?.[1] },
+        (0, import_react16.createElement)(
+          "select",
+          { className: "bt-select", value: newChildMode, onChange: (event) => setNewChildMode(event.target.value) },
+          Object.entries(NEW_CHILD_MODES).map(([value2, [label]]) => (0, import_react16.createElement)("option", { key: value2, value: value2 }, label))
+        )
+      ),
+      (0, import_react16.createElement)(SwitchRow, { label: "Switch a training child to sending by itself", on: graduates, onChange: setGraduates }),
       graduates ? (0, import_react16.createElement)(
-        "label",
-        { className: "ot-answer-field ot-answer-count" },
-        "After this many approved drafts in a row, sent unchanged",
-        (0, import_react16.createElement)("input", { type: "number", min: 1, max: 100, step: 1, inputMode: "numeric", value: graduateAfter, "aria-invalid": !countOk || void 0, onChange: (event) => setGraduateAfter(event.target.value) })
+        Field,
+        { label: "Approved drafts in a row", note: "Only drafts sent unchanged count. An edit or a rejection starts the count again." },
+        (0, import_react16.createElement)("input", {
+          className: "bt-input ot-answer-count",
+          type: "number",
+          min: 1,
+          max: 100,
+          step: 1,
+          inputMode: "numeric",
+          value: graduateAfter,
+          "aria-invalid": !countOk || void 0,
+          onChange: (event) => setGraduateAfter(event.target.value)
+        })
       ) : null,
-      ["read", "read_image", "glob", "grep"].map((name) => (0, import_react16.createElement)("label", { key: name }, (0, import_react16.createElement)("input", { type: "checkbox", checked: allowedTools.includes(name), onChange: (event) => setAllowedTools((before) => event.target.checked ? [...before, name] : before.filter((item) => item !== name)) }), `Allow ${name}`)),
-      (0, import_react16.createElement)("label", null, "Shared notes for collective children", (0, import_react16.createElement)("textarea", { maxLength: 8e3, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })),
-      problem ? (0, import_react16.createElement)("p", { role: "alert" }, hostText(problem)) : null,
-      (0, import_react16.createElement)("button", { type: "button", disabled: busy || graduates && !countOk, onClick: save }, "Save answer settings")
+      (0, import_react16.createElement)(
+        "div",
+        { className: "ot-answer-tools", role: "group", "aria-label": "Children may also" },
+        (0, import_react16.createElement)("span", { className: "bt-field-label", "aria-hidden": true }, "Children may also"),
+        ANSWER_TOOLS.map(([name, label]) => (0, import_react16.createElement)(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: (on2) => tool(name, on2) }))
+      ),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Shared notes for collective children" },
+        (0, import_react16.createElement)("textarea", { className: "bt-input bt-input-area", maxLength: 8e3, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })
+      ),
+      problem ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
+      (0, import_react16.createElement)(
+        "div",
+        { className: "bt-actions" },
+        (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || graduates && !countOk, onClick: save }, "Save answer settings")
+      )
     ) : null
   );
 }
@@ -16840,8 +16904,18 @@ function ThreadDock({ sessionId, useRoster }) {
   }, [thread]);
   return null;
 }
+var stackedRow = (row) => `
+${row}{display:grid;grid-template-columns:minmax(0,1fr) auto}
+${row}>*{grid-column:1/-1}
+${row} .bt-thread{grid-row:1;flex-wrap:wrap;row-gap:1px}
+${row} .ot-thread-acts{grid-column:2;grid-row:1;align-self:end;z-index:1;margin-bottom:4px}
+${row} .bt-thread-title{flex-basis:calc(100% - 20px)}
+${row} .ot-mode{margin:2px 0 2px 20px}
+${row} .ot-thread-reason{flex:1 1 0;max-width:none}
+${row} .bt-thread::after{content:'';flex:none;width:0}
+${row}:is(:hover,:focus-within) .bt-thread::after,${row}:has(.ot-thread-acts[data-on]) .bt-thread::after{width:48px}`;
 var OMNI_TREE_CSS = `
-.ot-tree{display:grid;grid-template-columns:minmax(0,1fr);gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
+.ot-tree{container:ot-tree/inline-size;display:grid;grid-template-columns:minmax(0,1fr);gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
 .ot-channel-head{display:flex;align-items:center;gap:2px}
 .ot-channel-row{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:5px 8px 5px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
 .ot-channel-row:hover{background:var(--bt-hover)}
@@ -16894,11 +16968,19 @@ var OMNI_TREE_CSS = `
 .ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
 .ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
 .ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
-.ot-answer-field{display:grid;gap:3px;font-size:12px;color:var(--bt-ink-2)}
-.ot-answer-field select,.ot-answer-field input{box-sizing:border-box;width:100%;min-width:0;height:26px;padding:0 6px;border:1px solid var(--bt-line-2, rgba(127,127,127,.25));border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px}
-.ot-answer-count input{width:72px}
-.ot-answer-field input[aria-invalid]{border-color:var(--bt-danger, #dc2626)}
-.ot-answer-check{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--bt-ink-2)}
+${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
+@container ot-tree (max-width:259px){${stackedRow(".ot-thread[data-answer]")}}
+/* Answer settings: the Bot team's own switches, fields, selects, inputs and button (bt-*). */
+.ot-answer{gap:12px;padding:10px}
+.ot-answer-switch{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-width:0;font-size:13px;line-height:18px;color:var(--bt-ink)}
+.ot-answer-switch>span{min-width:0;overflow-wrap:anywhere}
+.ot-answer-label{display:grid;gap:6px;min-width:0}
+.ot-answer .bt-field{gap:6px;min-width:0}
+.ot-answer .bt-note{margin:0}
+.ot-answer-tools{display:grid;gap:8px}
+.ot-answer .ot-answer-count{width:88px}
+.ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
+.ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
@@ -17059,7 +17141,7 @@ function ConsentDock({ sessionId, useRoster, useCards }) {
   return (0, import_react17.createElement)("div", { className: "bt-q-dock om-perm-dock" }, waiting.map((entry) => (0, import_react17.createElement)(ConsentCard, { key: entry.id, bot, entry })));
 }
 var ACTION_TEXT = { read: "read", media: "files", send: "send", react: "react", delete: "delete" };
-function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
+function PermissionsCard({ bot, roster, run, Card, SwitchRow: SwitchRow2 }) {
   if (!roster.omniGrants) return null;
   const main = bot.kind === "omni" || (roster.mainBotIds ?? []).includes(bot.id);
   const grants = (roster.omniGrants ?? []).filter((grant) => grant.botId === bot.id);
@@ -17087,7 +17169,7 @@ function PermissionsCard({ bot, roster, run, Card, SwitchRow }) {
     )) : grants.map((grant) => (0, import_react17.createElement)(
       "div",
       { key: grant.id, className: "om-grant" },
-      (0, import_react17.createElement)(SwitchRow, {
+      (0, import_react17.createElement)(SwitchRow2, {
         label: `${grant.resource?.name ?? t("a chat")} · ${grant.actions.map((action) => t(ACTION_TEXT[action] ?? action)).join(", ")}`,
         hint: [kindText(grant.resource), typeof grant.expiresAt === "number" && grant.expiresAt <= now ? t("expired") : "", t("Ask each time")].filter(Boolean).join(" · "),
         on: grant.approval === "confirm",

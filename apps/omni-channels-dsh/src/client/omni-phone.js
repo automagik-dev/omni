@@ -169,13 +169,17 @@ function useChatPoll(chatId, on) {
   return read.chatId === chatId ? read : { chatId, messages: null, error: null }
 }
 
-/** Whether a thread's sends go without a card now, as its view says (host threads.js permissionsOf). */
-export const sendsAllowed = thread => thread?.permissions?.sends === 'allow'
+/**
+ * Whether a thread's sends go without a card now, as its view says (host threads.js
+ * permissionsOf); an answer child's, whether it is in sending mode (RFC-0001).
+ */
+export const sendsAllowed = thread => (thread?.answerChild === true ? thread.sendingMode === 'sending' : thread?.permissions?.sends === 'allow')
 
 /**
  * The thread's "Always allow send" switch: on, its sends into this chat go without a card;
- * off, each asks on DSH's card. It sets only this thread's own choice (omni-thread-permissions),
- * and shows the new state on the team's next roster pull; until then it shows the one asked for.
+ * off, each asks on DSH's card. It sets only this thread's own choice (omni-thread-permissions;
+ * an answer child's sending mode, set_child_sending), and shows the new state on the team's next
+ * roster pull; until then it shows the one asked for.
  */
 export function SendSwitch({ thread }) {
   const on = sendsAllowed(thread)
@@ -187,7 +191,11 @@ export function SendSwitch({ thread }) {
     const next = !shown
     setWanted(next)
     setProblem(null)
-    call('omni-thread-permissions', { threadId: thread.id, sends: next ? 'allow' : 'ask' }).catch((error) => {
+    // An answer child's switch is its sending mode, the same staff action as its sidebar menu.
+    const [endpoint, body] = thread.answerChild === true
+      ? ['set_child_sending', { threadId: thread.id, mode: next ? 'sending' : 'training' }]
+      : ['omni-thread-permissions', { threadId: thread.id, sends: next ? 'allow' : 'ask' }]
+    call(endpoint, body).catch((error) => {
       console.warn('Could not change the chat settings:', error)
       setWanted(null)
       setProblem(t('Could not change this chat\'s settings. Try again.'))
