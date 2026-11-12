@@ -236,7 +236,8 @@ export function install(rt) {
   // RFC-0001: staff may ask the owning master, in its own chat, to resume a paused child. selfOf
   // is the master itself (a child never passes as its master, as omniActorOf would let it), and
   // a turn there that handles an automation event or another bot's question carries other
-  // people's words, so it cannot resume.
+  // people's words, so it cannot resume. It resumes only in a turn that a staff prompt reached and
+  // no one else's words did, such as another bot's relayed request (standing-runs.js staffAsked).
   const ResumeArgs = z.object({ threadId: z.string().regex(ID).optional(), chatId: z.string().regex(ID).optional() }).strict()
     .refine(value => (value.threadId === undefined) !== (value.chatId === undefined))
   ctx.tools.register(defineTool({
@@ -254,7 +255,7 @@ export function install(rt) {
       const self = rt.selfOf(sessionId)
       if (!isAnswerChild(thread) || self === undefined || self !== thread.ownerBotId) return 'Only the owning answer bot resumes its children.'
       const handling = (state.subscriptionRuns ?? []).some(run => run.sessionId === sessionId && ['working', 'stopping'].includes(run.status))
-      if (rt.chatOf?.(self) !== sessionId || handling) return 'Resume a child only when staff ask you in your own chat, never while handling an event or another bot\'s question.'
+      if (rt.chatOf?.(self) !== sessionId || handling || rt.standingRuns?.staffAsked?.(sessionId) !== true) return 'Resume a child only when staff ask you in your own chat, never while handling an event or another bot\'s question.'
       if (thread.paused !== true) return 'That child is not paused.'
       await rt.resumeAnswer(thread.id, 'master')
       return 'Resumed: the child answers its chat again.'
