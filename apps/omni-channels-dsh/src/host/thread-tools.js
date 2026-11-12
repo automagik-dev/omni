@@ -158,6 +158,9 @@ export function install(rt) {
   const nativeAnswers = new WeakSet()
   const ANSWER_REFUSAL = 'Answer children use only their permitted read-only and chat tools.'
   rt.answerToolRefusal = exec => {
+    // #1704: a person's mounted tools belong to their own child's Session alone, whatever Session
+    // calls them (a bot's own, an ordinary thread, another child).
+    if (foreignPersonTool(exec?.agent?.id ?? exec?.agent?.session?.id, exec?.name)) return PERSON_TOOL_REFUSAL
     const thread = rt.threads?.bySession(exec?.agent?.id ?? exec?.agent?.session?.id)
     if (!isAnswerChild(thread)) return undefined
     if (!rt.answerCanSend(thread.id, thread.chatId)) return 'Answer mode or channel ownership changed.'
@@ -183,6 +186,10 @@ export function install(rt) {
   const mounts = new Map()
   const tried = new WeakMap()
   const warnedMount = new Set()
+  const PERSON_TOOL_REFUSAL = 'Only the answer child of the person this tool was given to may use it.'
+  // A tool under a capability prefix mounted into another Session than this one.
+  const foreignPersonTool = (sessionId, name) => typeof name === 'string'
+    && [...mounts].some(([owner, mount]) => owner !== sessionId && name.startsWith(mount.toolPrefix))
   function personTool(thread, sessionId, name) {
     const mount = mounts.get(sessionId)
     return mount !== undefined && mount.threadId === thread.id && rt.personOf(thread)?.capability?.name === mount.name
@@ -289,6 +296,8 @@ export function install(rt) {
       try { await containAnswer(exec.agent, thread) } catch (error) { return { kind: 'deny', reason: error.message } }
       const reason = rt.answerToolRefusal(exec)
       if (reason) return { kind: 'deny', reason }
+    } else if (foreignPersonTool(exec.agent?.id ?? exec.agent?.session?.id, exec.name)) {
+      return { kind: 'deny', reason: PERSON_TOOL_REFUSAL }
     }
     return next()
   }, { prepend: true })

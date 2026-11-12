@@ -6,9 +6,10 @@ import { test } from 'node:test'
 import { answerIntake } from '../src/host/answer-intake.js'
 import { install } from '../src/host/omni-events.js'
 import { PERSON_COLLECTIVE, PERSON_CONTEXT_MAX, PERSON_HELD, PERSON_NO_HOST, PERSON_UNLIMITED_READS, personOfRule } from '../src/host/person-binding.js'
-import { answerBench, ANSWER_CLOCK, ANSWER_MASTER, CHAT, CHATS, guarded, INSTANCE, preExecute, restart, saved, signal, until } from './thread-fixture.js'
+import { answerBench, ANSWER_CLOCK, ANSWER_MASTER, CHAT, CHATS, ELSEWHERE, guarded, INSTANCE, OTHER_INSTANCE, preExecute, restart, saved, signal, until } from './thread-fixture.js'
 
 const reply = data => ({ ok: true, json: async () => ({ data }) })
+const FOREIGN = /Only the answer child of the person this tool was given to/
 const CHAT_B = '6a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c06'
 const FROM_A = '5511988887777'
 const FROM_B = '5511966665555'
@@ -153,13 +154,34 @@ test('person binding: each capability mounts into its own child\'s Session only;
   // The guard admits each child's own mount by its exact prefix, and nothing of the other's.
   assert.equal(guarded(b.ctx, a.sessionId, 'mcp__orders-a__lookup'), undefined)
   assert.equal(guarded(b.ctx, bee.sessionId, 'mcp__orders-b__lookup'), undefined)
-  assert.match(guarded(b.ctx, bee.sessionId, 'mcp__orders-a__lookup'), /Answer children/, 'a forged call from B to A\'s tool')
-  assert.match(guarded(b.ctx, a.sessionId, 'mcp__orders-b__lookup'), /Answer children/)
+  assert.match(guarded(b.ctx, bee.sessionId, 'mcp__orders-a__lookup'), FOREIGN, 'a forged call from B to A\'s tool')
+  assert.match(guarded(b.ctx, a.sessionId, 'mcp__orders-b__lookup'), FOREIGN)
   for (const name of ['mcp__orders-a__', 'mcp__orders-ab__lookup', 'mcp__other__lookup']) assert.match(guarded(b.ctx, a.sessionId, name), /Answer children/, name)
   assert.equal((await preExecute(b, 'mcp__orders-a__lookup', bee.sessionId)).kind, 'deny')
   assert.equal((await preExecute(b, 'mcp__orders-a__lookup', a.sessionId)).kind, 'allow')
   // The pre-execute pass does not mount again for the same agent.
   assert.equal(b.fake.mounts().length, mounts)
+})
+
+test('person binding: no Session but A\'s own child may call A\'s mounted tools: not the bot\'s own, not an ordinary thread', async t => {
+  const { b, a } = await twoPersons(t)
+  const ordinary = await b.channels.threads.ensure(OTHER_INSTANCE, ELSEWHERE)
+  assert.equal(ordinary.ok, true)
+  assert.equal(ordinary.thread.answerChild, undefined)
+  // The bot's own chat, any other Session DSH runs, and an ordinary chat thread.
+  const callers = [b.channels.chatOf?.(ANSWER_MASTER), 'bot-own-session', ordinary.thread.sessionId].filter(id => typeof id === 'string' && id !== a.sessionId)
+  assert.ok(callers.length >= 2)
+  for (const sessionId of callers) {
+    assert.match(guarded(b.ctx, sessionId, 'mcp__orders-a__lookup'), FOREIGN, sessionId)
+    assert.match(guarded(b.ctx, sessionId, 'mcp__orders-b__lookup'), FOREIGN, sessionId)
+    assert.deepEqual(await preExecute(b, 'mcp__orders-a__lookup', sessionId), { kind: 'deny', reason: 'Only the answer child of the person this tool was given to may use it.' }, sessionId)
+    // A bot's own MCP tools, mounted for no person, are not this guard's business.
+    assert.equal(guarded(b.ctx, sessionId, 'mcp__crm__lookup'), undefined, sessionId)
+  }
+  assert.equal(guarded(b.ctx, a.sessionId, 'mcp__orders-a__lookup'), undefined)
+  // Once A's capability leaves, its name is nobody's.
+  await b.call('omni-answer-settings', { ...b.settings, personBinding: false })
+  for (const sessionId of callers) assert.equal(guarded(b.ctx, sessionId, 'mcp__orders-a__lookup'), undefined, sessionId)
 })
 
 test('person binding: a message for A\'s chat admitted by B\'s rule is held, warned once, and never rebinds', async t => {
