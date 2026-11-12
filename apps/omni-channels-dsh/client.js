@@ -12100,7 +12100,7 @@ function KapsoPath({ info, link, setLink, onConnected }) {
     (0, import_react4.createElement)(
       "div",
       { className: "oc-row" },
-      link ? (0, import_react4.createElement)("a", { className: "oc-secondary", href: link.url, target: "_blank", rel: "noreferrer" }, t("Open the setup link again")) : (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: busy !== null, onClick: makeLink }, busy === "link" ? t("Making the link…") : t("Create setup link"))
+      link ? (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", onClick: () => window.open(link.url, "_blank", "noopener,noreferrer") }, t("Open the setup link again")) : (0, import_react4.createElement)("button", { type: "button", className: "oc-secondary", disabled: busy !== null, onClick: makeLink }, busy === "link" ? t("Making the link…") : t("Create setup link"))
     ),
     (0, import_react4.createElement)(
       "div",

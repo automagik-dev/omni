@@ -474,7 +474,7 @@ function KapsoPath({ info, link, setLink, onConnected }) {
     h('h2', null, t('Connect your number in Kapso')),
     h('p', null, t('Kapso\'s page asks you to log in with Facebook and pick your number. Come back here when it says done.')),
     h('div', { className: 'oc-row' },
-      link ? h('a', { className: 'oc-secondary', href: link.url, target: '_blank', rel: 'noreferrer' }, t('Open the setup link again'))
+      link ? h('button', { type: 'button', className: 'oc-secondary', onClick: () => window.open(link.url, '_blank', 'noopener,noreferrer') }, t('Open the setup link again'))
         : h('button', { type: 'button', className: 'oc-secondary', disabled: busy !== null, onClick: makeLink }, busy === 'link' ? t('Making the link…') : t('Create setup link'))),
     h('div', { className: 'oc-row' },
       h('strong', null, t('Your Kapso numbers')),
