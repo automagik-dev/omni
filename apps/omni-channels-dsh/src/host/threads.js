@@ -23,6 +23,14 @@ import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
 export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
 // Explicitly vetted, read-only local tools. Unknown tools never acquire authority by name.
 export const ANSWER_EXTRA_TOOLS = Object.freeze(['read', 'read_image', 'glob', 'grep'])
+// The host's global registry is the served set accepted by tools.restrict(). A scoped view can
+// already be narrowed by an earlier restriction, so it must not be used for answer admission.
+export function servedToolNamesOf(ctx) {
+  if (typeof ctx?.tools?.schemas !== 'function') throw new Error('This host cannot verify which answer tools are served.')
+  const schemas = ctx.tools.schemas()
+  if (!Array.isArray(schemas)) throw new Error('This host cannot verify which answer tools are served.')
+  return new Set(schemas.map(schema => schema?.name).filter(name => typeof name === 'string'))
+}
 // RFC-0001 answer children train first: each send asks staff until staff, or an optional
 // graduation after N approved unchanged drafts in a row, switch the child to sending.
 export const SENDING_MODES = Object.freeze(['training', 'sending'])
@@ -795,6 +803,9 @@ export function install(rt) {
     if (rt.readOnly?.() !== undefined) throw refused(rt.readOnly())
     const bot = rt.botOf(input.botId)
     if (bot?.kind !== 'omni' || bot.id === rt.eventsBotId?.()) throw refused('Answer mode needs a dedicated channel bot.')
+    const served = servedToolNamesOf(ctx)
+    const unserved = [...new Set(input.allowedTools)].find(name => !served.has(name))
+    if (unserved !== undefined) throw refused(`Answer tool "${unserved}" is not served by this host.`)
     if (input.enabled && list().some(thread => thread.ownerBotId === bot.id && thread.chatIds.length !== 1)) throw refused('Split existing multi-chat threads before enabling answer mode.')
     const before = bot.answer
     const kept = answerSettingsOf(bot)
