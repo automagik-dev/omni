@@ -455,9 +455,9 @@ jobs:
       # not GITHUB_TOKEN; the job's permissions above stay as they are. The
       # commit sha is read from the tag fetched and checked against
       # inputs.expected_sha just above. A draft is not a published release.
-      - name: Dispatch omni-release to automagik-dev/automagik
+      - name: Dispatch omni-release to automagik-si/automagik
         if: >-
-          github.repository == 'automagik-dev/omni' &&
+          github.repository == 'automagik-si/omni' &&
           github.event_name != 'pull_request' &&
           github.event_name != 'pull_request_target'
         continue-on-error: true
@@ -490,7 +490,7 @@ jobs:
           payload=$(jq -n --arg version "${VERSION}" --arg tag "${TAG}" --arg sha "${SHA}" \
             '{event_type: "omni-release", client_payload: {version: $version, tag: $tag, sha: $sha}}')
           rc=0
-          response=$(timeout 60 gh api --include --method POST repos/automagik-dev/automagik/dispatches \
+          response=$(timeout 60 gh api --include --method POST repos/automagik-si/automagik/dispatches \
             --input - <<<"${payload}" 2>&1) || rc=$?
           if [[ "${rc}" -eq 0 ]]; then
             echo "Dispatched omni-release for ${TAG} (${SHA})"

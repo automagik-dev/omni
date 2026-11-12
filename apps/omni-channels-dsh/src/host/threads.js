@@ -23,6 +23,14 @@ import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
 export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
 // Explicitly vetted, read-only local tools. Unknown tools never acquire authority by name.
 export const ANSWER_EXTRA_TOOLS = Object.freeze(['read', 'read_image', 'glob', 'grep'])
+// The host's global registry is the served set accepted by tools.restrict(). A scoped view can
+// already be narrowed by an earlier restriction, so it must not be used for answer admission.
+export function servedToolNamesOf(ctx) {
+  if (typeof ctx?.tools?.schemas !== 'function') throw new Error('This host cannot verify which answer tools are served.')
+  const schemas = ctx.tools.schemas()
+  if (!Array.isArray(schemas)) throw new Error('This host cannot verify which answer tools are served.')
+  return new Set(schemas.map(schema => schema?.name).filter(name => typeof name === 'string'))
+}
 // RFC-0001 answer children train first: each send asks staff until staff, or an optional
 // graduation after N approved unchanged drafts in a row, switch the child to sending.
 export const SENDING_MODES = Object.freeze(['training', 'sending'])
@@ -275,6 +283,11 @@ export function archivedIds(ctx) {
 
 export function install(rt) {
   const { ctx, state } = rt
+  // Answer mode follows a channel's explicit owner only (omniOwnership.channels). The default
+  // bot also holds every unassigned channel as the catch-all; that never makes such a channel
+  // an answer source, nor lets its children read there (rt.channelOwner and rt.canChannel stay wider).
+  const explicitOwnerOf = channelId => state.omniOwnership?.channels?.[channelId]
+  const ownsExplicitly = (botId, channelId) => typeof botId === 'string' && explicitOwnerOf(channelId) === botId
   const threads = () => (state.omniThreads ??= {})
   const normalize = thread => {
     if (thread && typeof thread === 'object') {
@@ -487,7 +500,7 @@ export function install(rt) {
   }
   async function makeResolved(chats, byAutomation, title, notes = '') {
     const chat = chats[0]
-    const answer = answerSettingsOf(rt.botOf(rt.channelOwner?.(chat.instanceId)))
+    const answer = answerSettingsOf(rt.botOf(explicitOwnerOf(chat.instanceId)))
     const answerChild = answer.enabled
     if (answerChild && chats.length !== 1) return { ok: false, reason: 'An answer child belongs to exactly one chat.' }
     const channelId = chat.instanceId
@@ -565,7 +578,7 @@ export function install(rt) {
     await rt.load()
     return serial(async () => {
       const { ownerBotId, channelId, chatId } = target
-      if (!answerSettingsOf(rt.botOf(ownerBotId)).enabled || ownerBotId === rt.eventsBotId?.() || rt.channelOwner(channelId) !== ownerBotId || !rt.canChannel(ownerBotId, channelId, 'write')) throw refused('Answer mode is not enabled on this owning bot.')
+      if (!answerSettingsOf(rt.botOf(ownerBotId)).enabled || !ownsExplicitly(ownerBotId, channelId) || !rt.canChannel(ownerBotId, channelId, 'write')) throw refused('Answer mode is not enabled on this owning bot.')
       let thread = byChat(chatId)
       if (!thread) {
         if (!ready() || rt.readOnly?.() !== undefined) throw refused('Answer children are not available on this host.')
@@ -592,7 +605,7 @@ export function install(rt) {
 
   const chatChannels = new Map()
   const activeAnswer = thread => isAnswerChild(thread) && answerSettingsOf(rt.botOf(thread.ownerBotId)).enabled
-    && rt.channelOwner(thread.channelId) === thread.ownerBotId && rt.canChannel(thread.ownerBotId, thread.channelId, 'write')
+    && ownsExplicitly(thread.ownerBotId, thread.channelId) && rt.canChannel(thread.ownerBotId, thread.channelId, 'write')
   rt.answerCanSend = (threadId, chatId) => {
     const thread = byId(threadId)
     return !!thread && activeAnswer(thread) && thread.chatIds.length === 1 && thread.chatId === chatId
@@ -609,7 +622,7 @@ export function install(rt) {
     if (thread.chatId === chatId) return true
     const channelId = byChat(chatId)?.channelId ?? chatChannels.get(chatId)
     return answerSettingsOf(rt.botOf(thread.ownerBotId)).visibility === 'collective' && !!channelId
-      && rt.channelOwner(channelId) === thread.ownerBotId && rt.canChannel(thread.ownerBotId, channelId, 'read')
+      && ownsExplicitly(thread.ownerBotId, channelId) && rt.canChannel(thread.ownerBotId, channelId, 'read')
   }
   rt.answerReadChat = async (thread, chatId) => {
     if (!activeAnswer(thread) || (chatId !== thread.chatId && answerSettingsOf(rt.botOf(thread.ownerBotId)).visibility !== 'collective')) throw refused('This child cannot read that chat.')
@@ -794,8 +807,16 @@ export function install(rt) {
     await rt.load()
     if (rt.readOnly?.() !== undefined) throw refused(rt.readOnly())
     const bot = rt.botOf(input.botId)
-    if (bot?.kind !== 'omni' || bot.id === rt.eventsBotId?.()) throw refused('Answer mode needs a dedicated channel bot.')
-    if (input.enabled && list().some(thread => thread.ownerBotId === bot.id && thread.chatIds.length !== 1)) throw refused('Split existing multi-chat threads before enabling answer mode.')
+    if (bot?.kind !== 'omni') throw refused('Answer mode needs a channel bot.')
+    const served = servedToolNamesOf(ctx)
+    const unserved = [...new Set(input.allowedTools)].find(name => !served.has(name))
+    if (unserved !== undefined) throw refused(`Answer tool "${unserved}" is not served by this host.`)
+    // Only threads with a chat on a channel the bot owns explicitly become its children; the
+    // default bot's threads on channels it holds as the catch-all stay ordinary threads. Any
+    // member counts, so a multi-chat thread is refused whichever channel its first chat is on.
+    const answerable = () => list().filter(thread => thread.ownerBotId === bot.id
+      && (thread.members ?? [{ channelId: thread.channelId }]).some(member => ownsExplicitly(bot.id, member.channelId)))
+    if (input.enabled && answerable().some(thread => thread.chatIds.length !== 1)) throw refused('Split existing multi-chat threads before enabling answer mode.')
     const before = bot.answer
     const kept = answerSettingsOf(bot)
     bot.answer = {
@@ -804,7 +825,7 @@ export function install(rt) {
       resumeAfterMs: input.resumeAfterMs ?? kept.resumeAfterMs,
     }
     try {
-      if (input.enabled) for (const thread of list().filter(thread => thread.ownerBotId === bot.id)) {
+      if (input.enabled) for (const thread of answerable()) {
         Object.assign(thread, { answerChild: true, sendingMode: thread.sendingMode ?? 'training', approvedStreak: thread.approvedStreak ?? 0 })
         await rt.prepareAnswerThread(thread)
       }
@@ -815,7 +836,7 @@ export function install(rt) {
     await rt.syncOmniEvents?.()
     return { ...bot.answer }
   }), 'omni-channels: answer settings')
-  ctx.effect(() => rt.hooks.view(() => ({ omniAnswers: Object.fromEntries(Object.values(state.bots ?? {}).filter(bot => bot.kind === 'omni' && bot.id !== rt.eventsBotId?.()).map(bot => [bot.id, answerSettingsOf(bot)])) })), 'omni-channels: answer settings view')
+  ctx.effect(() => rt.hooks.view(() => ({ omniAnswers: Object.fromEntries(Object.values(state.bots ?? {}).filter(bot => bot.kind === 'omni').map(bot => [bot.id, answerSettingsOf(bot)])) })), 'omni-channels: answer settings view')
 
   // Removing a thread: its Session is archived with its work stopped, then its key is cut (or
   // marked pending, for a drain to cut), then the record goes. A Session that cannot be

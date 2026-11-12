@@ -32,7 +32,7 @@ import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { NOT_LINKED } from './thread-keys.js'
 import { automationAsk } from './standing-runs.js'
 import { setReadOnly } from './subscriptions.js'
-import { answerSettingsOf, answerToolsOf, isAnswerChild, permissionsOf, SHARED_NOTES_MAX, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
+import { ANSWER_CHAT_TOOLS, answerSettingsOf, isAnswerChild, permissionsOf, servedToolNamesOf, SHARED_NOTES_MAX, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
 
 export { permissionsOf }
 
@@ -152,13 +152,17 @@ export function install(rt) {
 
   const answerAgents = new Map()
   const restrictions = new WeakMap()
+  const allowedBySession = new Map()
+  const warnedUnserved = new Set()
   const nativeAnswers = new WeakSet()
   const ANSWER_REFUSAL = 'Answer children use only their permitted read-only and chat tools.'
   rt.answerToolRefusal = exec => {
     const thread = rt.threads?.bySession(exec?.agent?.id ?? exec?.agent?.session?.id)
     if (!isAnswerChild(thread)) return undefined
     if (!rt.answerCanSend(thread.id, thread.chatId)) return 'Answer mode or channel ownership changed.'
-    if (!answerToolsOf(thread, rt.botOf(thread.ownerBotId)).includes(exec.name)) return ANSWER_REFUSAL
+    const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id
+    const allowed = restrictions.get(exec?.agent)?.allow ?? allowedBySession.get(sessionId) ?? []
+    if (!allowed.includes(exec.name)) return ANSWER_REFUSAL
     if (!rt.answerPresetReady(thread)) return 'The answer child is not contained on read-only permissions.'
     return undefined
   }
@@ -176,15 +180,29 @@ export function install(rt) {
     if (typeof agent?.ctx?.tools?.restrict !== 'function') throw new Error('This Session has no scoped tool registry.')
     const presets = ctx.get?.('permissionPresets')
     if (typeof presets?.current !== 'function') throw new Error('This host cannot verify read-only permissions.')
-    const allow = answerToolsOf(thread, rt.botOf(thread.ownerBotId))
+    const served = servedToolNamesOf(ctx)
+    const missingChat = ANSWER_CHAT_TOOLS.find(name => !served.has(name))
+    if (missingChat !== undefined) throw new Error(`The host does not serve answer chat tool "${missingChat}".`)
+    const bot = rt.botOf(thread.ownerBotId)
+    const configuredExtras = answerSettingsOf(bot).allowedTools
+    const allow = [...ANSWER_CHAT_TOOLS, ...configuredExtras.filter(name => {
+      if (served.has(name)) return true
+      const warning = `${thread.ownerBotId}:${name}`
+      if (!warnedUnserved.has(warning)) {
+        warnedUnserved.add(warning)
+        rt.warn('omni-channels: answer bot %s allowed tool %s is not served; leaving it out', thread.ownerBotId, name)
+      }
+      return false
+    })]
     const signature = JSON.stringify(allow)
     const previous = restrictions.get(agent)
     if (previous?.signature !== signature) {
       const release = agent.ctx.tools.restrict({ allow })
       previous?.release?.()
-      restrictions.set(agent, { signature, release })
+      restrictions.set(agent, { signature, allow, release })
     }
     answerAgents.set(thread.sessionId, agent)
+    allowedBySession.set(thread.sessionId, allow)
     await setReadOnly(rt, thread.sessionId, agent)
     if (rt.threadKeys.keyFor(thread.id) === null) throw new Error('The answer child needs a key locked to its one chat.')
     if (!rt.answerPresetReady(thread)) throw new Error('The answer child is not on read-only permissions.')
