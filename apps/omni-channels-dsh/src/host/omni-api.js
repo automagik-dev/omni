@@ -11,6 +11,7 @@ import { isThreadSession, omniActorOf, operatesHere, operatesOmni } from './gran
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
 import { THREAD_TOOLS } from './threads.js'
+import * as toolSeries from './tool-series.js'
 
 const SPEC_TTL_MS = 10 * 60_000
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
@@ -220,6 +221,9 @@ export function install(rt) {
       rt.warn('ds-bot: trimming the Main Bot tools failed: %s', error)
     }
   })
+  // Each tool taken away here leaves that Session's tool series; once none of its first
+  // request is left, the next step starts a new series (tool-series.js).
+  toolSeries.install(rt)
   // A Session resolved before this plugin knew it was the Main Bot's still refuses them.
   // A refused call also trims the list, in case the tools were not up when the Session began.
   ctx.tools.guard((exec) => {

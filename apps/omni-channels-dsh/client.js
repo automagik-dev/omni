@@ -17067,6 +17067,28 @@ function AnswerSettings({ bot, value = {} }) {
     ) : null
   );
 }
+function RepairTools({ bot }) {
+  const [busy, setBusy] = (0, import_react16.useState)(false);
+  const [result, setResult] = (0, import_react16.useState)(null);
+  const repair = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      await call("repair_tool_series", { botId: bot.id });
+      setResult({ ok: true, text: "Done. Its next turn starts with all its tools: send it a message." });
+    } catch (error) {
+      setResult({ ok: false, text: hostText(error.message) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (0, import_react16.createElement)(
+    "div",
+    null,
+    (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", disabled: busy, title: "For a bot whose every turn fails with a tool error", onClick: repair }, busy ? "Repairing tools…" : "Repair tools"),
+    result ? (0, import_react16.createElement)("p", { className: result.ok ? "ot-picker-note" : "ot-picker-problem", role: result.ok ? "status" : "alert" }, result.text) : null
+  );
+}
 function OmniTree(props) {
   const { bot, actions, roster } = props;
   const state = useOmni();
@@ -17109,6 +17131,7 @@ function OmniTree(props) {
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
     (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
+    (0, import_react16.createElement)(RepairTools, { bot }),
     bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {

@@ -214,6 +214,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'on tools/pre-execute (prepend)',
     'on session/event',
     'on agent/created',
+    'on agent/pre-step',
+    'effect omni-channels: repair_tool_series',
     'tools guard',
     'tool omni_endpoints',
     'tool omni_call',

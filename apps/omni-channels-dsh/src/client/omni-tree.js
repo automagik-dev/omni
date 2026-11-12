@@ -626,6 +626,23 @@ export function AnswerSettings({ bot, value = {} }) {
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || (graduates && !countOk) || !minutesOk, onClick: save }, 'Save answer settings'))) : null)
 }
 
+// Staff only (host tool-series.js): an Omni bot whose every turn fails on its tool list takes
+// its next turn with all its tools again. Its chats, automations and settings stay. Every Omni
+// bot has it, the default one too: that can be a channel bot Omni made on its own Session,
+// which cannot start a new conversation either.
+export function RepairTools({ bot }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const repair = async () => {
+    setBusy(true); setResult(null)
+    try { await call('repair_tool_series', { botId: bot.id }); setResult({ ok: true, text: 'Done. Its next turn starts with all its tools: send it a message.' }) }
+    catch (error) { setResult({ ok: false, text: hostText(error.message) }) } finally { setBusy(false) }
+  }
+  return h('div', null,
+    h('button', { type: 'button', className: 'ot-channel-row', disabled: busy, title: 'For a bot whose every turn fails with a tool error', onClick: repair }, busy ? 'Repairing tools…' : 'Repair tools'),
+    result ? h('p', { className: result.ok ? 'ot-picker-note' : 'ot-picker-problem', role: result.ok ? 'status' : 'alert' }, result.text) : null)
+}
+
 export function OmniTree(props) {
   const { bot, actions, roster } = props
   const state = useOmni()
@@ -666,6 +683,7 @@ export function OmniTree(props) {
   const listed = new Set(ownedChannels.map(channel => channel.id))
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
     h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
+    h(RepairTools, { bot }),
     bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? h(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map(channel => h(ChannelItem, {
