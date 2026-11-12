@@ -797,9 +797,11 @@ export function install(rt) {
     if (rt.readOnly?.() !== undefined) throw refused(rt.readOnly())
     const bot = rt.botOf(input.botId)
     if (bot?.kind !== 'omni') throw refused('Answer mode needs a channel bot.')
-    // Only threads on channels the bot owns explicitly become its children; the default bot's
-    // threads on channels it holds as the catch-all stay ordinary threads.
-    const answerable = () => list().filter(thread => thread.ownerBotId === bot.id && ownsExplicitly(bot.id, thread.channelId))
+    // Only threads with a chat on a channel the bot owns explicitly become its children; the
+    // default bot's threads on channels it holds as the catch-all stay ordinary threads. Any
+    // member counts, so a multi-chat thread is refused whichever channel its first chat is on.
+    const answerable = () => list().filter(thread => thread.ownerBotId === bot.id
+      && (thread.members ?? [{ channelId: thread.channelId }]).some(member => ownsExplicitly(bot.id, member.channelId)))
     if (input.enabled && answerable().some(thread => thread.chatIds.length !== 1)) throw refused('Split existing multi-chat threads before enabling answer mode.')
     const before = bot.answer
     const kept = answerSettingsOf(bot)

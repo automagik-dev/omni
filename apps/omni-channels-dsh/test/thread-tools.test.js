@@ -1160,6 +1160,19 @@ test('#1694 enabling answer mode on the default bot converts only its threads on
   assert.equal(b.channels.threads.byId(plain.id).answerChild, undefined)
 })
 
+for (const order of ['catch-all chat first', 'explicit chat first']) test(`#1694 a default-bot thread spanning a catch-all and an explicit channel refuses enabling until it is split (${order})`, async t => {
+  const b = await answerBench(t, { state: defaultAnswerState(), enabled: false })
+  const members = [{ chatId: ELSEWHERE, channelId: OTHER_INSTANCE }, { chatId: GROUP, channelId: INSTANCE }]
+  const mixed = await b.channels.threads.create(order === 'catch-all chat first' ? members : [...members].reverse(), 'Mixed', '')
+  assert.equal(mixed.ok, true)
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, enabled: true }), /Split existing multi-chat threads/)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, false)
+  assert.equal(b.channels.threads.byId(mixed.thread.id).answerChild, undefined)
+  await b.channels.threads.remove(mixed.thread.id)
+  await b.call('omni-answer-settings', { ...b.settings, enabled: true })
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, true)
+})
+
 test('#1694 a default-bot answer child never reads a chat on a channel its bot holds only as the default, isolated or collective', async t => {
   const b = await answerBench(t, { state: defaultAnswerState() })
   const child = await b.child()
