@@ -1,8 +1,9 @@
 // A Session whose tool series lost every tool of its first request (#1699): the model provider
 // refuses each of its requests, compaction included, with "tools: at least one tool must have
 // defer_loading=false". The fixtures run DSH's own fold (dsh-session) and request projection
-// (dsh-llm) on the event sequence such a Session logged.
+// (dsh-llm) on the event sequence such a Session logged, on both of DeepSeek's tool-update routes.
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { createDeveloperMessage, projectToolUpdates } from '@deepseek-ai/dsh-llm'
 import { Session } from '@deepseek-ai/dsh-session'
@@ -17,6 +18,16 @@ const names = (from, count) => Array.from({ length: count }, (_, index) => `tool
 const BASELINE = ['host_lookup']
 const FIRST = names(1, 57)
 const LATER = names(58, 14)
+const ALL = [...FIRST, ...LATER]
+const sorted = list => [...list].sort()
+// The harness's DSH. On 0.2.2-rc.1 (the live host's, and the oldest this plugin admits) the
+// addition-only route of deepseek-flash drops each declaration no longer offered, the removed
+// first-request tool included, and keeps only deferred additions: the live refusal. From rc.2
+// that route rebuilds the baseline at that change by itself (dsh-llm rebaseAdditionOnlyHistory):
+// the 57 go in full, the 14 after them stay deferred. In-history never rebuilds.
+const DSH_LLM = JSON.parse(readFileSync(new URL('../package.json', import.meta.resolve('@deepseek-ai/dsh-llm')), 'utf8')).version
+const ADDITION_ONLY_REBUILDS = DSH_LLM !== '0.2.2-rc.1'
+const ROUTES = ['addition-only', 'in-history']
 
 // What DSH's agent loop logs for one request (dsh-agent-loop buildRequest): a header when the
 // tools change, with a tool-registry developer message naming what joined and what left; or,
@@ -47,11 +58,13 @@ function liveSession(id = 'stuck', baseline = BASELINE) {
   return session
 }
 
-// The request the provider receives on an in-history route (DeepSeek's native adapter with a
-// listed tool_update of in-history), and whether a tool it may call directly is left once the
-// history's removals apply, which is the check the provider made on the live Session.
-function sent(session, tools = [...FIRST, ...LATER]) {
-  return projectToolUpdates(session.deriveMessages(), tools.map(tool), 'in-history', session.toolHistory())
+// The request the provider receives on a route, and the tools the model may still call directly:
+// declared without defer_loading, and not removed by the history. On addition-only an empty list
+// means every declaration is deferred, which the provider refuses (the live case, rc.1). On
+// in-history the removed tool stays declared without defer_loading, so the model is left with
+// no tool to call even if the provider takes the request; the guard treats both alike.
+function sent(session, tools = ALL, route = 'in-history') {
+  return projectToolUpdates(session.deriveMessages(), tools.map(tool), route, session.toolHistory())
 }
 function callable(projected) {
   const direct = new Set(projected.tools.filter(each => each.deferLoading !== true).map(each => each.name))
@@ -64,14 +77,17 @@ test('a Session whose one first-request tool was removed is refused, and a new s
   const before = sent(session)
   assert.deepEqual(before.tools.filter(each => each.deferLoading !== true).map(each => each.name), BASELINE)
   assert.equal(before.tools.filter(each => each.deferLoading === true).length, FIRST.length + LATER.length)
-  assert.deepEqual(callable(before), [], 'every tool is deferred once host_lookup is removed: the provider refuses')
-  assert.equal(strandedSeries(session, [...FIRST, ...LATER]), true)
+  assert.deepEqual(callable(before), [], 'in-history: host_lookup stays declared but removed, and every other tool is deferred')
+  assert.deepEqual(sorted(callable(sent(session, ALL, 'addition-only'))), ADDITION_ONLY_REBUILDS ? sorted(FIRST) : [], `addition-only on dsh-llm ${DSH_LLM}`)
+  assert.equal(strandedSeries(session, ALL), true)
   // The pre-step decision starts a series: the next request declares today's tools in full.
-  request(session, [...FIRST, ...LATER], { reason: 'series', turn: 5 })
-  const after = sent(session)
-  assert.equal(after.tools.length, FIRST.length + LATER.length)
-  assert.deepEqual(callable(after).sort(), [...FIRST, ...LATER].sort())
-  assert.equal(after.messages.some(message => message.role === 'developer'), false)
+  request(session, ALL, { reason: 'series', turn: 5 })
+  for (const route of ROUTES) {
+    const after = sent(session, ALL, route)
+    assert.equal(after.tools.length, ALL.length, route)
+    assert.deepEqual(sorted(callable(after)), sorted(ALL), route)
+    assert.equal(after.messages.some(message => message.role === 'developer'), false, route)
+  }
   // It stays healthy: the next step does not start another series.
   assert.equal(strandedSeries(session, [...FIRST, ...LATER]), false)
 })
@@ -79,16 +95,15 @@ test('a Session whose one first-request tool was removed is refused, and a new s
 // The fix reaches a live host after an update and a restart: the stuck Session's next request
 // is the first one its new agent logs (reason resume), or one whose tools changed too.
 test('the new series also holds when it starts on the first request after a restart, or on a request whose tools change', () => {
-  const ALL = [...FIRST, ...LATER]
   const restarted = liveSession('restarted')
   request(restarted, ALL, { reason: 'resume', startsSeries: true, turn: 5 })
-  assert.deepEqual(callable(sent(restarted)).sort(), [...ALL].sort())
+  for (const route of ROUTES) assert.deepEqual(sorted(callable(sent(restarted, ALL, route))), sorted(ALL), route)
   assert.equal(strandedSeries(restarted, ALL), false)
   const changed = liveSession('changed')
   const next = [...ALL.slice(1), 'tool_99']
   request(changed, next, { startsSeries: true, turn: 5 })
   assert.equal(changed.deriveMessages().filter(message => message.role === 'developer').length, 3, 'the change still logs what joined and what left')
-  assert.deepEqual(callable(sent(changed, next)).sort(), [...next].sort())
+  for (const route of ROUTES) assert.deepEqual(sorted(callable(sent(changed, next, route))), sorted(next), route)
   assert.equal(strandedSeries(changed, next), false)
 })
 
@@ -96,10 +111,11 @@ test('a Session whose first request declared no tool is refused, and a new serie
   const session = liveSession('empty', [])
   assert.deepEqual(sent(session).tools.filter(each => each.deferLoading !== true), [])
   assert.deepEqual(callable(sent(session)), [])
-  assert.equal(strandedSeries(session, [...FIRST, ...LATER]), true)
-  request(session, [...FIRST, ...LATER], { reason: 'series', turn: 5 })
-  assert.equal(callable(sent(session)).length, FIRST.length + LATER.length)
-  assert.equal(strandedSeries(session, [...FIRST, ...LATER]), false)
+  assert.deepEqual(sorted(callable(sent(session, ALL, 'addition-only'))), ADDITION_ONLY_REBUILDS ? sorted(FIRST) : [], `addition-only on dsh-llm ${DSH_LLM}`)
+  assert.equal(strandedSeries(session, ALL), true)
+  request(session, ALL, { reason: 'series', turn: 5 })
+  for (const route of ROUTES) assert.deepEqual(sorted(callable(sent(session, ALL, route))), sorted(ALL), route)
+  assert.equal(strandedSeries(session, ALL), false)
 })
 
 test('a healthy Session keeps its series: a first-request tool is still offered, or no request was made yet', () => {
