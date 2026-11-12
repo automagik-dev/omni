@@ -32,7 +32,7 @@ import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { NOT_LINKED } from './thread-keys.js'
 import { automationAsk } from './standing-runs.js'
 import { setReadOnly } from './subscriptions.js'
-import { ANSWER_CHAT_TOOLS, answerSettingsOf, isAnswerChild, permissionsOf, servedToolNamesOf, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
+import { ANSWER_CHAT_TOOLS, answerSettingsOf, isAnswerChild, permissionsOf, servedToolNamesOf, SHARED_NOTES_MAX, THREAD_DEFAULTS, threadDefaultsOf, THREAD_TOOLS } from './threads.js'
 
 export { permissionsOf }
 
@@ -226,17 +226,17 @@ export function install(rt) {
   }, { prepend: true })
 
   const Notes = z.object({ threadId: z.string().regex(ID), notes: z.string().max(8000) }).strict()
-  const SharedNotes = z.object({ botId: z.string().min(1), notes: z.string().max(8000) }).strict()
-  for (const [name, schema, parameters] of [
-    ['set_child_notes', Notes, { threadId: { type: 'string', required: true }, notes: { type: 'string', required: true } }],
-    ['set_answer_shared_notes', SharedNotes, { botId: { type: 'string', required: true }, notes: { type: 'string', required: true } }],
+  const SharedNotes = z.object({ botId: z.string().min(1), notes: z.string().max(SHARED_NOTES_MAX) }).strict()
+  for (const [name, schema, parameters, max] of [
+    ['set_child_notes', Notes, { threadId: { type: 'string', required: true }, notes: { type: 'string', required: true } }, 8000],
+    ['set_answer_shared_notes', SharedNotes, { botId: { type: 'string', required: true }, notes: { type: 'string', required: true } }, SHARED_NOTES_MAX],
   ]) ctx.tools.register(defineTool({
     name, description: 'Only the owning master updates its answer child notes or its collective shared notes. Notes never grant tools or send permission.', parameters, output,
     async execute(raw, exec) {
       await rt.load()
       if (rt.readOnly?.() !== undefined) return rt.readOnly()
       const parsed = schema.safeParse(raw)
-      if (!parsed.success) return 'Give valid ids and notes of at most 8000 characters.'
+      if (!parsed.success) return `Give valid ids and notes of at most ${max} characters.`
       const input = parsed.data
       const thread = name === 'set_child_notes' ? rt.threads.byId(input.threadId) : undefined
       const bot = rt.botOf(thread?.ownerBotId ?? input.botId)

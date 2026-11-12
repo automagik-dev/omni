@@ -2,6 +2,8 @@
 
 Omni is a Bun and TypeScript monorepo built around Hono, Drizzle, and NATS.
 
+Brand: docs/brand/ is a byte copy of Automagik's (the skill's SOURCE.json names the commit). Never edit it; change it in automagik and copy again. Agents use the automagik-brand skill for colours, type and logos.
+
 - Validate every external boundary with Zod.
 - Represent state changes with events.
 - Never edit a deployed migration or use `drizzle push` against shared or production databases.
