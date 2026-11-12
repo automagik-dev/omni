@@ -21,6 +21,8 @@
 // downloads it, saves it through DSH's attachments and hands the model the image beside Omni's
 // description of it.
 import { createHash } from 'node:crypto'
+import { lstatSync, realpathSync } from 'node:fs'
+import { dirname, isAbsolute, sep } from 'node:path'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
@@ -49,6 +51,44 @@ const callBody = (body) => {
 }
 const confirmedCall = args => sensitiveCall(String(args?.method ?? 'GET').toUpperCase(), String(args?.path ?? '').trim().replace(/^\/api\/v2(?=\/)/, ''), callBody(args?.body)) !== null
 const writesOmni = exec => OMNI_ACTS.has(exec.name) || (exec.name === 'omni_call' && confirmedCall(exec.arguments))
+
+// #1689: a bot with a knowledge folder lets its answer children read only inside it. The one
+// path each of DSH's read tools takes (dsh-tool-fs read and read_image file_path, dsh-tool-fs-
+// search glob and grep path) must name a place there: absolute, as the tools resolve a relative
+// path, or no path, against the Session's working folder; with no ".." segment, which Node's
+// realpath drops as text while the kernel and ripgrep first follow any link before it; and real
+// (links followed, or the nearest existing parent for a path not there yet) inside the folder
+// past a separator, so /kb holds nothing of /kb-private. ripgrep follows no link it meets while
+// walking the folder. glob's pattern and grep's include filter that walk; they may not be
+// absolute or climb either.
+const KNOWLEDGE_PATH = { read: 'file_path', read_image: 'file_path', glob: 'path', grep: 'path' }
+const KNOWLEDGE_PATTERN = { glob: 'pattern', grep: 'include' }
+const UP_PATH = /(^|[\\/])\.\.([\\/]|$)/
+const UP_PATTERN = /(^|[\\/{,])\.\.([\\/},]|$)/
+// The real path of `path`, else of its nearest existing parent; none for a link that leads nowhere.
+function realOrParent(path) {
+  for (let probe = path; ;) {
+    try { return realpathSync.native(probe) } catch {
+      try { lstatSync(probe); return undefined } catch { /* not there: try its parent */ }
+      const parent = dirname(probe)
+      if (parent === probe) return undefined
+      probe = parent
+    }
+  }
+}
+export const knowledgeRefusalOf = folder => `This child reads only inside the knowledge folder ${JSON.stringify(folder)}: give each call an absolute path there, with no "..".`
+/** Why a read tool's call leaves the knowledge folder, or undefined when it stays inside (or is not a read tool). */
+export function knowledgeRefusal(folder, name, args) {
+  if (!Object.hasOwn(KNOWLEDGE_PATH, name)) return undefined
+  const refusal = knowledgeRefusalOf(folder)
+  if (args === null || typeof args !== 'object' || Array.isArray(args)) return refusal
+  const pattern = Object.hasOwn(KNOWLEDGE_PATTERN, name) ? args[KNOWLEDGE_PATTERN[name]] : undefined
+  if (pattern !== undefined && (typeof pattern !== 'string' || isAbsolute(pattern) || UP_PATTERN.test(pattern))) return refusal
+  const path = args[KNOWLEDGE_PATH[name]]
+  if (typeof path !== 'string' || !isAbsolute(path) || UP_PATH.test(path)) return refusal
+  const real = realOrParent(path)
+  return real !== undefined && (real === folder || real.startsWith(folder.endsWith(sep) ? folder : `${folder}${sep}`)) ? undefined : refusal
+}
 
 // RFC-0001 staff take-over: what a paused answer child is told when it tries to send or react.
 export const STAFF_PAUSED = 'Paused: staff are answering this chat themselves. Read along; nothing goes out until staff resume you or the quiet interval with no staff message passes.'
@@ -158,9 +198,11 @@ export function install(rt) {
     const thread = rt.threads?.bySession(exec?.agent?.id ?? exec?.agent?.session?.id)
     if (!isAnswerChild(thread)) return undefined
     if (!rt.answerCanSend(thread.id, thread.chatId)) return 'Answer mode or channel ownership changed.'
-    if (!answerToolsOf(thread, rt.botOf(thread.ownerBotId)).includes(exec.name)) return ANSWER_REFUSAL
+    const bot = rt.botOf(thread.ownerBotId)
+    if (!answerToolsOf(thread, bot).includes(exec.name)) return ANSWER_REFUSAL
     if (!rt.answerPresetReady(thread)) return 'The answer child is not contained on read-only permissions.'
-    return undefined
+    const folder = answerSettingsOf(bot).knowledgeFolder
+    return folder ? knowledgeRefusal(folder, exec.name, exec.arguments) : undefined
   }
   rt.answerPresetReady = thread => {
     const agent = answerAgents.get(thread.sessionId)
@@ -176,7 +218,9 @@ export function install(rt) {
     if (typeof agent?.ctx?.tools?.restrict !== 'function') throw new Error('This Session has no scoped tool registry.')
     const presets = ctx.get?.('permissionPresets')
     if (typeof presets?.current !== 'function') throw new Error('This host cannot verify read-only permissions.')
-    const allow = answerToolsOf(thread, rt.botOf(thread.ownerBotId))
+    // A knowledge folder's tools are allowed only as the host serves them (its global list:
+    // the agent's own list hides what an earlier restriction left out).
+    const allow = answerToolsOf(thread, rt.botOf(thread.ownerBotId), new Set((ctx.tools.schemas?.() ?? []).map(schema => schema.name)))
     const signature = JSON.stringify(allow)
     const previous = restrictions.get(agent)
     if (previous?.signature !== signature) {

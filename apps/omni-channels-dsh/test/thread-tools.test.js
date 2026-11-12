@@ -6,24 +6,28 @@
 // DSH's tool pipeline is played here in its order: the tools/pre-execute waterfall, the
 // approval card when it asks (DSH's answerer is the last link), the guards, then the tool.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
+import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
+import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import { createScope } from '@deepseek-ai/dsh-scope'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { PtcExecutor } from '@deepseek-ai/dsh-tool-executor-ptc'
+import * as toolFs from '@deepseek-ai/dsh-tool-fs'
+import * as toolFsSearch from '@deepseek-ai/dsh-tool-fs-search'
 import { defineTool, ToolRuntime, validateJsonSchemaValue } from '@deepseek-ai/dsh-tools'
 import { START_TASK_REFUSAL } from '../src/host/grants.js'
 import { MEDIA_FILE_BYTES } from '../src/host/omni.js'
 import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
-import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
-import { THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
+import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, knowledgeRefusalOf, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
+import { ANSWER_CHAT_TOOLS, KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED, THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
 import { answerBench, ANSWER_MASTER, askedOf, boot, CHAT, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
@@ -1118,6 +1122,178 @@ test('SC5 isolated and collective visibility never widen send keys and narrow li
   assert.doesNotMatch(prompt(), /SHARED:/)
   assert.match(await use(b, 'thread_history', id, { chatId: GROUP }), /cannot read/)
   assert.match((await use(b, 'thread_picture', id, { messageId: MESSAGE_IDS.elsewhere })).text, /cannot read/)
+})
+
+// #1689: a knowledge folder (kb), a sibling whose name starts the same, a folder outside it, a
+// link inside kb to a file outside and one to the outside folder, and a Session working folder.
+function knowledgeFiles(t) {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'omni-knowledge-')))
+  t.after(() => rmSync(base, { recursive: true, force: true, maxRetries: 5 }))
+  const files = { base, kb: join(base, 'kb'), sibling: join(base, 'kb-private'), outside: join(base, 'outside'), work: join(base, 'work') }
+  for (const dir of [files.kb, files.sibling, files.outside, files.work]) mkdirSync(dir)
+  writeFileSync(join(files.kb, 'faq.md'), 'INSIDE: returns within 30 days.\n')
+  writeFileSync(join(files.sibling, 'private.md'), 'SECRET sibling\n')
+  writeFileSync(join(files.outside, 'secret.txt'), 'SECRET outside\n')
+  writeFileSync(join(files.work, 'faq.md'), 'SECRET workspace\n')
+  symlinkSync(join(files.outside, 'secret.txt'), join(files.kb, 'link.txt'))
+  symlinkSync(files.outside, join(files.kb, 'dirlink'))
+  return files
+}
+// The read tools a DSH host serves (ctx.tools.schemas), as the host lists them.
+const served = (b, names = ['read', 'read_image', 'glob', 'grep']) => { b.ctx.tools.schemas = () => names.map(name => ({ name })) }
+async function knowledgeBench(t, { allowedTools = [] } = {}) {
+  const b = await answerBench(t, { allowedTools })
+  served(b)
+  const files = knowledgeFiles(t)
+  await b.call('omni-answer-settings', { ...b.settings, knowledgeFolder: files.kb })
+  const child = await b.child()
+  const id = child.sessionId
+  // A call that reaches the guards with no registry or pre-execute in front of it.
+  const forged = (name, args) => b.ctx.guards.map(guard => guard({ name, arguments: args, agent: { id } })).find(answer => answer !== undefined)
+  const allowed = () => b.restricts.filter(entry => entry.sessionId === id).at(-1)?.filter.allow
+  const prompt = () => b.ctx.sections.get('omni-thread').text({ agent: { id } })
+  return { b, files, child, id, forged, allowed, prompt }
+}
+
+// DSH's own read, glob and grep (dsh-tool-fs, dsh-tool-fs-search) on its local filesystem and
+// subprocess runtime, in its real tool registry with its native executor; the Session's working
+// folder is `work`.
+async function realReadTools(work) {
+  const root = new Context()
+  root.plugin(SystemPrompt, {})
+  root.plugin(ToolRuntime, {})
+  root.plugin(LocalFileSystem, { cwd: work })
+  root.plugin(LocalSubprocessRuntime, {})
+  class WorkingDirectory extends Service {
+    constructor(ctx) { super(ctx, 'workingDirectory') }
+    async ensure() { return work }
+  }
+  root.plugin(WorkingDirectory)
+  const ctx = await new Promise((resolve) => { root.plugin({ inject: ['tools', 'systemPrompt', 'fs', 'subprocess', 'workingDirectory'], apply: resolve }) })
+  await ctx.plugin(toolFs, {})
+  await ctx.plugin(toolFsSearch, { sampleOverCapGlobResults: false })
+  ctx.tools.setExecutor(new NativeToolExecutor(ctx))
+  let calls = 0
+  const call = async (sessionId, name, args) => {
+    const agent = { id: sessionId, session: { id: sessionId } }
+    const { results } = await ctx.tools.selectExecutor(agent).execute({ calls: [{ type: 'tool-call', id: `call-${++calls}`, name, arguments: JSON.stringify(args) }], signal: new AbortController().signal, agent })
+    return { isError: results[0].result.isError === true, text: results[0].result.content.map(block => block.text ?? '').join('') }
+  }
+  return { ctx, call }
+}
+
+test('#1689 through DSH\'s real tool executor an answer child reads inside its knowledge folder and is refused everywhere else', async t => {
+  const { b, files: { base, kb, sibling, outside, work }, id } = await knowledgeBench(t)
+  const real = await realReadTools(work)
+  assert.deepEqual(['glob', 'grep', 'read'].map(name => real.ctx.tools.get(name)?.name), ['glob', 'grep', 'read'])
+  // The plugin's own guards, as DSH runs them after every pre-execute listener.
+  for (const guard of b.ctx.guards) real.ctx.tools.guard(guard)
+  const call = (name, args) => real.call(id, name, args)
+  const inside = await call('read', { file_path: join(kb, 'faq.md') })
+  assert.deepEqual([inside.isError, /INSIDE: returns within 30 days/.test(inside.text)], [false, true])
+  // ripgrep walks the folder without following its links out (link.txt, dirlink).
+  const grep = await call('grep', { pattern: 'INSIDE|SECRET', path: kb })
+  assert.deepEqual([grep.isError, /faq\.md/.test(grep.text), /SECRET/.test(grep.text)], [false, true, false])
+  const glob = await call('glob', { pattern: '**/*', path: kb })
+  assert.deepEqual([glob.isError, /faq\.md/.test(glob.text), /secret/.test(glob.text)], [false, true, false])
+  // A file not there yet is judged by its nearest existing folder: the tool itself answers.
+  const later = await call('read', { file_path: join(kb, 'later', 'notes.md') })
+  assert.deepEqual([later.isError, later.text.includes('knowledge folder'), /not found/.test(later.text)], [true, false, true])
+  const refusal = `Error: ${knowledgeRefusalOf(kb)}`
+  assert.ok(refusal.includes(JSON.stringify(kb)))
+  for (const [name, args] of [
+    ['read', { file_path: join(outside, 'secret.txt') }],
+    ['read', { file_path: `${kb}/../outside/secret.txt` }],
+    ['read', { file_path: `${kb}/dirlink/../outside/secret.txt` }],
+    ['read', { file_path: join(kb, 'link.txt') }],
+    ['read', { file_path: join(kb, 'dirlink', 'secret.txt') }],
+    ['read', { file_path: join(sibling, 'private.md') }],
+    ['read', { file_path: 'faq.md' }],
+    ['read', { file_path: '~/faq.md' }],
+    ['glob', { pattern: '*' }],
+    ['glob', { pattern: join(outside, '*'), path: kb }],
+    ['glob', { pattern: '../outside/*', path: kb }],
+    ['glob', { pattern: '*', path: sibling }],
+    ['grep', { pattern: 'SECRET' }],
+    ['grep', { pattern: 'SECRET', path: base }],
+    ['grep', { pattern: 'SECRET', path: `${kb}/dirlink/../outside` }],
+    ['grep', { pattern: 'SECRET', path: kb, include: '../outside/*' }],
+    ['grep', { pattern: 'SECRET', path: join(kb, 'link.txt') }],
+  ]) assert.deepEqual(await call(name, args), { isError: true, text: refusal }, `${name} ${JSON.stringify(args)}`)
+})
+
+test('#1689 a knowledge folder adds the read tools the host serves, scopes every call even a forged one, tells the child, and clearing it takes them away', async t => {
+  const { b, files: { kb, outside }, id, forged, allowed, prompt } = await knowledgeBench(t)
+  assert.equal((await preExecute(b, 'read', id, { file_path: join(kb, 'faq.md') })).kind, 'allow')
+  assert.deepEqual(allowed(), [...ANSWER_CHAT_TOOLS, 'read', 'glob', 'grep'])
+  // Staff's own tool choice is kept as it was.
+  assert.deepEqual(saved(b.home).bots[ANSWER_MASTER].answer.allowedTools, [])
+  assert.ok(prompt().includes(`## Knowledge folder\nThe files in ${JSON.stringify(kb)} are the business's reference`))
+  assert.deepEqual((await preExecute(b, 'grep', id, { pattern: 'x' })), { kind: 'deny', reason: knowledgeRefusalOf(kb) })
+  assert.equal(forged('read', { file_path: join(kb, 'faq.md') }), undefined)
+  for (const [name, args] of [['read', { file_path: join(outside, 'secret.txt') }], ['read', undefined], ['read', 'faq.md'], ['glob', { pattern: '**/*', path: [kb] }], ['grep', { pattern: 'x', path: kb, include: 7 }]]) {
+    assert.equal(forged(name, args), knowledgeRefusalOf(kb), `${name} ${JSON.stringify(args)}`)
+  }
+  // read_image was not switched on by staff, and the folder does not add it.
+  assert.match(forged('read_image', { file_path: join(kb, 'faq.md') }), /Answer children/)
+  // A host that does not serve glob: the child is contained with what it serves.
+  served(b, ['read', 'grep'])
+  await preExecute(b, 'read', id, { file_path: join(kb, 'faq.md') })
+  assert.deepEqual(allowed(), [...ANSWER_CHAT_TOOLS, 'read', 'grep'])
+  served(b)
+  await b.call('omni-answer-settings', { ...b.settings, knowledgeFolder: null })
+  assert.deepEqual((await preExecute(b, 'read', id, { file_path: join(kb, 'faq.md') })).kind, 'deny')
+  assert.deepEqual(allowed(), [...ANSWER_CHAT_TOOLS])
+  for (const name of ['read', 'glob', 'grep']) assert.match(forged(name, { file_path: join(kb, 'faq.md'), pattern: '*', path: kb }), /Answer children/, name)
+  assert.doesNotMatch(prompt(), /Knowledge folder/)
+})
+
+test('#1689 with read and read_image switched on by staff, a folder scopes them too; cleared, they stay on and unscoped as before, and a bot with no folder is unchanged', async t => {
+  const { b, files: { kb, outside }, id, forged, allowed } = await knowledgeBench(t, { allowedTools: ['read_image', 'read'] })
+  await preExecute(b, 'read', id, { file_path: join(kb, 'faq.md') })
+  assert.deepEqual(allowed(), [...ANSWER_CHAT_TOOLS, 'read_image', 'read', 'glob', 'grep'])
+  for (const name of ['read', 'read_image']) assert.equal(forged(name, { file_path: join(outside, 'secret.txt') }), knowledgeRefusalOf(kb), name)
+  await b.call('omni-answer-settings', { ...b.settings, knowledgeFolder: '' })
+  await preExecute(b, 'read', id, { file_path: join(outside, 'secret.txt') })
+  assert.deepEqual(allowed(), [...ANSWER_CHAT_TOOLS, 'read_image', 'read'])
+  for (const name of ['read', 'read_image']) assert.equal(forged(name, { file_path: join(outside, 'secret.txt') }), undefined, name)
+  assert.equal(forged('read'), undefined)
+  assert.match(forged('glob', { pattern: '*', path: kb }), /Answer children/)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, null)
+  assert.equal('knowledgeFolder' in saved(b.home).bots[ANSWER_MASTER].answer, false)
+})
+
+test('#1689 the knowledge folder is set only by staff settings, as the real path of an existing folder on a host that serves read, and persists', async t => {
+  const b = await answerBench(t)
+  served(b)
+  const { base, kb } = knowledgeFiles(t)
+  symlinkSync(kb, join(base, 'kb-link'))
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, null)
+  for (const knowledgeFolder of ['kb', './kb', join(base, 'missing'), join(kb, 'faq.md')]) {
+    await assert.rejects(b.call('omni-answer-settings', { ...b.settings, knowledgeFolder }), { message: KNOWLEDGE_FOLDER_REFUSAL }, knowledgeFolder)
+  }
+  for (const knowledgeFolder of [42, ['/'], 'x'.repeat(4097)]) await assert.rejects(b.call('omni-answer-settings', { ...b.settings, knowledgeFolder }), undefined, String(knowledgeFolder).slice(0, 9))
+  assert.equal('knowledgeFolder' in saved(b.home).bots[ANSWER_MASTER].answer, false)
+  assert.equal((await b.call('omni-answer-settings', { ...b.settings, knowledgeFolder: join(base, 'kb-link') })).knowledgeFolder, kb)
+  assert.equal(saved(b.home).bots[ANSWER_MASTER].answer.knowledgeFolder, kb)
+  // An earlier client's save, which has no knowledgeFolder, keeps it.
+  await b.call('omni-answer-settings', b.settings)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, kb)
+  // The model-callable shared-notes tool takes no folder.
+  assert.match(await use(b, 'set_answer_shared_notes', ANSWER_MASTER, { botId: ANSWER_MASTER, notes: 'SHARED', knowledgeFolder: '/' }), /Give valid ids/)
+  assert.equal(saved(b.home).bots[ANSWER_MASTER].answer.knowledgeFolder, kb)
+  // A host that does not serve read refuses a folder, and still lets staff clear it.
+  served(b, ['glob', 'grep'])
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, knowledgeFolder: kb }), { message: KNOWLEDGE_NOT_SERVED })
+  assert.equal(saved(b.home).bots[ANSWER_MASTER].answer.knowledgeFolder, kb)
+  served(b)
+  await b.channels.save()
+  await b.stop()
+  const next = await boot(t, b.home, { services: { permissionPresets: b.presets } })
+  assert.equal(next.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, kb)
+  served(next, ['glob'])
+  await next.call('omni-answer-settings', { ...b.settings, knowledgeFolder: null })
+  assert.equal(next.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, null)
 })
 
 test('a thread Session\'s agent/created listener warns and sets nothing up when the state cannot load', async (t) => {

@@ -16954,6 +16954,7 @@ function AnswerSettings({ bot, value = {} }) {
   const [graduates, setGraduates] = (0, import_react16.useState)(Number.isInteger(value.graduateAfter));
   const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
   const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
+  const [knowledgeFolder, setKnowledgeFolder] = (0, import_react16.useState)(value.knowledgeFolder ?? "");
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   (0, import_react16.useEffect)(() => {
@@ -16965,7 +16966,8 @@ function AnswerSettings({ bot, value = {} }) {
     setGraduates(Number.isInteger(value.graduateAfter));
     setGraduateAfter(String(value.graduateAfter ?? 5));
     setResumeMinutes(minutesOf(value.resumeAfterMs));
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs]);
+    setKnowledgeFolder(value.knowledgeFolder ?? "");
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder]);
   const count = Number(graduateAfter);
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
   const minutes = Number(resumeMinutes);
@@ -16974,7 +16976,7 @@ function AnswerSettings({ bot, value = {} }) {
     setBusy(true);
     setProblem(null);
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4 });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -17051,6 +17053,12 @@ function AnswerSettings({ bot, value = {} }) {
         { className: "ot-answer-tools", role: "group", "aria-label": "Children may also" },
         (0, import_react16.createElement)("span", { className: "bt-field-label", "aria-hidden": true }, "Children may also"),
         ANSWER_TOOLS.map(([name, label]) => (0, import_react16.createElement)(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: (on2) => tool(name, on2) }))
+      ),
+      // #1689: the host checks the folder and keeps its real path; no model tool can set it.
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Knowledge folder", note: "The business's own files, such as instructions and FAQ. While a folder is set, children read, find and search files there, and nowhere else. Full path; empty for none." },
+        (0, import_react16.createElement)("input", { className: "bt-input ot-answer-folder", type: "text", value: knowledgeFolder, title: knowledgeFolder || void 0, placeholder: "/path/to/folder", spellCheck: false, autoComplete: "off", onChange: (event) => setKnowledgeFolder(event.target.value) })
       ),
       (0, import_react16.createElement)(
         Field,
@@ -17230,6 +17238,7 @@ ${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
 .ot-answer .bt-note{margin:0}
 .ot-answer-tools{display:grid;gap:8px}
 .ot-answer .ot-answer-count{width:88px}
+.ot-answer .ot-answer-folder{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}

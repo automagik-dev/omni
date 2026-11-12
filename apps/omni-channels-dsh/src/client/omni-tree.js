@@ -570,14 +570,15 @@ export function AnswerSettings({ bot, value = {} }) {
   const [graduates, setGraduates] = useState(Number.isInteger(value.graduateAfter))
   const [graduateAfter, setGraduateAfter] = useState(String(value.graduateAfter ?? 5))
   const [resumeMinutes, setResumeMinutes] = useState(minutesOf(value.resumeAfterMs))
+  const [knowledgeFolder, setKnowledgeFolder] = useState(value.knowledgeFolder ?? '')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
     setEnabled(value.enabled === true); setVisibility(value.visibility ?? 'isolated')
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
-    setResumeMinutes(minutesOf(value.resumeAfterMs))
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs])
+    setResumeMinutes(minutesOf(value.resumeAfterMs)); setKnowledgeFolder(value.knowledgeFolder ?? '')
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder])
   // Graduation is off unless staff turn it on with a whole number of drafts (host GRADUATE_MAX).
   const count = Number(graduateAfter)
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100
@@ -586,7 +587,7 @@ export function AnswerSettings({ bot, value = {} }) {
   const minutesOk = Number.isInteger(minutes) && minutes >= 1 && minutes <= RESUME_MINUTES_MAX
   const save = async () => {
     setBusy(true); setProblem(null)
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000 }); setOpen(false) }
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -617,6 +618,9 @@ export function AnswerSettings({ bot, value = {} }) {
       h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
         h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
         ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
+      // #1689: the host checks the folder and keeps its real path; no model tool can set it.
+      h(Field, { label: 'Knowledge folder', note: 'The business\'s own files, such as instructions and FAQ. While a folder is set, children read, find and search files there, and nowhere else. Full path; empty for none.' },
+        h('input', { className: 'bt-input ot-answer-folder', type: 'text', value: knowledgeFolder, title: knowledgeFolder || undefined, placeholder: '/path/to/folder', spellCheck: false, autoComplete: 'off', onChange: event => setKnowledgeFolder(event.target.value) })),
       h(Field, { label: 'Shared notes for collective children' },
         h('textarea', { className: 'bt-input bt-input-area', maxLength: 8000, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
       problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
@@ -790,6 +794,7 @@ ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 .ot-answer .bt-note{margin:0}
 .ot-answer-tools{display:grid;gap:8px}
 .ot-answer .ot-answer-count{width:88px}
+.ot-answer .ot-answer-folder{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}

@@ -1031,7 +1031,7 @@ test('answer settings start isolated and save one owner setting with read-only a
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
   await settle()
   // New children train and graduation stays off unless staff change them (RFC-0001).
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000 }])
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000, knowledgeFolder: null }])
   assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
 })
 
@@ -1112,7 +1112,7 @@ test('answer settings choose the new-child default and optional graduation, off 
   assert.deepEqual([classOf(save()), classOf(nodes(field('Shared notes')).find(node => node.type === 'textarea'))], [['bt-soft', 'bt-soft-sm'], ['bt-input', 'bt-input-area']])
   save().props.onClick()
   await settle()
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000 }])
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000, knowledgeFolder: null }])
 })
 
 // RFC-0001 SC7 in the sidebar: a paused child shows the pause, its time left and Resume.
@@ -1193,4 +1193,35 @@ test('answer settings set the quiet interval in whole minutes, 30 by default, on
   await settle()
   assert.equal(nodes(nodes(custom.draw()).find(node => node.type === 'label' && text(node).startsWith('Resume a paused child after'))).find(node => node.type === 'input').props.value, '5')
   custom.unmount()
+})
+
+test('#1689 answer settings name a knowledge folder in a text field with its note; empty saves none, and the allowed tools stay as staff set them', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: ['read_image'], sharedNotes: '', knowledgeFolder: '/srv/answers' } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = () => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith('Knowledge folder'))
+  const input = () => nodes(field()).find(node => node.type === 'input')
+  const note = nodes(view.draw()).find(node => node.type === 'span' && classOf(node).includes('bt-note') && /knowledge|folder/i.test(text(node)) && /nowhere else/.test(text(node)))
+  assert.deepEqual([input().props.type, input().props.value, classOf(input())], ['text', '/srv/answers', ['bt-input', 'ot-answer-folder']])
+  assert.match(text(note), /children read, find and search files there, and nowhere else/)
+  const save = async () => {
+    nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
+    await settle()
+    return calls.at(-1)
+  }
+  assert.deepEqual((await save())[1], { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['read_image'], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000, knowledgeFolder: '/srv/answers' })
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  input().props.onChange({ target: { value: '  /srv/other answers  ' } })
+  await settle()
+  assert.equal((await save())[1].knowledgeFolder, '/srv/other answers')
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  input().props.onChange({ target: { value: '   ' } })
+  await settle()
+  const cleared = (await save())[1]
+  assert.deepEqual([cleared.knowledgeFolder, cleared.allowedTools], [null, ['read_image']])
 })
