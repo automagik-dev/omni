@@ -9,7 +9,7 @@ import { CONDITION_OPERATORS, NotFoundError } from '@omni/core';
 import type { Automation, Database, OmniEvent } from '@omni/db';
 import { Hono } from 'hono';
 import { errorHandler } from '../../../middleware/error';
-import { AutomationService } from '../../../services/automations';
+import { AutomationService, type AutomationTestResult } from '../../../services/automations';
 import type { AppVariables } from '../../../types';
 import { automationsRoutes } from '../automations';
 
@@ -130,14 +130,14 @@ describe('POST /automations/:id/test with eventId (#1073)', () => {
     });
     const res = await post(app, `/automations/${AUTOMATION_ID}/test`, { eventId: EVENT_ID });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as AutomationTestResult;
     expect(body).toMatchObject({ matched: true, eventId: EVENT_ID, dryRun: true });
     expect(
       body.conditions.every(
         (condition: { resolved: boolean; matched: boolean }) => condition.resolved && condition.matched,
       ),
     ).toBe(true);
-    expect(body.actions[0].config.message).toBe(`${INSTANCE_ID} corr-message`);
+    expect(body.actions[0]?.config.message).toBe(`${INSTANCE_ID} corr-message`);
   });
 
   test('message eventId dry run does not match another instance', async () => {
@@ -157,7 +157,7 @@ describe('POST /automations/:id/test with eventId (#1073)', () => {
     });
     const res = await post(app, `/automations/${AUTOMATION_ID}/test`, { eventId: EVENT_ID });
     expect(res.status).toBe(200);
-    const body = await res.json();
+    const body = (await res.json()) as AutomationTestResult;
     expect(body).toMatchObject({ matched: false, eventId: EVENT_ID, dryRun: true });
     expect(body.conditions[0]).toMatchObject({ actual: INSTANCE_ID, resolved: true, matched: false });
   });
