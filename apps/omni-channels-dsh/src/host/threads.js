@@ -18,6 +18,7 @@ import { chatOf } from './omni.js'
 import { OPERATOR_RULES } from './omni-rules.js'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from './resume-hook.js'
 import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
+import { PERSON_HELD, personBindingRefusal } from './person-binding.js'
 
 // A thread's own chat tools, on top of DSH's and Omni's; no other Session lists them.
 export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
@@ -50,6 +51,7 @@ export const answerSettingsOf = bot => ({
   allowedTools: (Array.isArray(bot?.answer?.allowedTools) ? bot.answer.allowedTools : []).filter(name => ANSWER_EXTRA_TOOLS.includes(name)), sharedNotes: String(bot?.answer?.sharedNotes ?? ''),
   newChildMode: bot?.answer?.newChildMode === 'sending' ? 'sending' : 'training', graduateAfter: graduateOf(bot?.answer?.graduateAfter),
   resumeAfterMs: resumeAfterOf(bot?.answer?.resumeAfterMs),
+  personBinding: bot?.answer?.personBinding === true,
 })
 export const isAnswerChild = thread => thread?.answerChild === true
 /** When a paused child answers again by itself: its last staff message plus its bot's interval; null when not paused. */
@@ -236,7 +238,8 @@ export function threadInstructions(thread) {
   ].filter(Boolean).join('\n')
 }
 
-export function answerInstructions(thread, bot) {
+// `person`: the person this child is bound to (person-binding.js), as their own rule last said.
+export function answerInstructions(thread, bot, person) {
   const answer = answerSettingsOf(bot)
   return [
     bot?.instructions ?? '',
@@ -248,6 +251,7 @@ export function answerInstructions(thread, bot) {
     'When staff write in your chat from their own phone, you are paused: read what arrives, but send, react and draft nothing until staff resume you or a quiet interval passes with no staff message.',
     answer.visibility === 'collective' ? 'You may use answer_chats and thread_history to read the other chats owned by your bot. You may still reply and react only in your own chat.' : 'You may read only your own chat. Other chats and shared notes are private.',
     ...(answer.visibility === 'collective' && answer.sharedNotes ? [`## Shared notes (read only)\n${answer.sharedNotes}`] : []),
+    ...(person?.context ? [`## About this person (staff notes from their access rule)\n${person.context}`] : []),
     ...(thread.notes ? [`## Child notes\n${thread.notes}`] : []),
   ].filter(Boolean).join('\n\n')
 }
@@ -390,7 +394,7 @@ export function install(rt) {
     interpolate: false,
     text: (context) => {
       const thread = bySession(context?.agent?.id)
-      return thread === undefined ? '' : isAnswerChild(thread) ? answerInstructions(thread, rt.botOf(thread.ownerBotId)) : [OPERATOR_RULES, threadInstructions(thread)].join('\n\n')
+      return thread === undefined ? '' : isAnswerChild(thread) ? answerInstructions(thread, rt.botOf(thread.ownerBotId), rt.personOf(thread)) : [OPERATOR_RULES, threadInstructions(thread)].join('\n\n')
     },
   }), 'omni-channels: thread instructions')
 
@@ -567,13 +571,14 @@ export function install(rt) {
     return making
   }
 
-  const AnswerTarget = z.object({ ownerBotId: z.string().min(1), channelId: id, chatId: id }).strict()
+  const AnswerTarget = z.object({ ownerBotId: z.string().min(1), channelId: id, chatId: id, personRuleId: z.string().min(1).optional() }).strict()
   async function answerFor(input) {
     const target = AnswerTarget.parse(input)
     await rt.load()
     return serial(async () => {
-      const { ownerBotId, channelId, chatId } = target
-      if (!answerSettingsOf(rt.botOf(ownerBotId)).enabled || ownerBotId === rt.eventsBotId?.() || rt.channelOwner(channelId) !== ownerBotId || !rt.canChannel(ownerBotId, channelId, 'write')) throw refused('Answer mode is not enabled on this owning bot.')
+      const { ownerBotId, channelId, chatId, personRuleId } = target
+      const answer = answerSettingsOf(rt.botOf(ownerBotId))
+      if (!answer.enabled || ownerBotId === rt.eventsBotId?.() || rt.channelOwner(channelId) !== ownerBotId || !rt.canChannel(ownerBotId, channelId, 'write')) throw refused('Answer mode is not enabled on this owning bot.')
       let thread = byChat(chatId)
       if (!thread) {
         if (!ready() || rt.readOnly?.() !== undefined) throw refused('Answer children are not available on this host.')
@@ -582,8 +587,12 @@ export function install(rt) {
         thread = made.thread
       }
       if (thread.ownerBotId !== ownerBotId || thread.channelId !== channelId || thread.chatIds.length !== 1) throw refused('An answer child must belong to this owner and one chat.')
+      // #1704: the first message a one-person rule admits binds the child to that rule, once.
+      const bind = answer.personBinding && personRuleId !== undefined && thread.personRuleId === undefined
+      if (answer.personBinding && thread.personRuleId !== undefined && thread.personRuleId !== personRuleId) throw refused(PERSON_HELD)
+      if (bind && personBindingRefusal(answer) !== undefined) throw refused(personBindingRefusal(answer))
       const before = { ...thread }
-      Object.assign(thread, { answerChild: true, sendingMode: thread.sendingMode ?? 'training', approvedStreak: thread.approvedStreak ?? 0 })
+      Object.assign(thread, { answerChild: true, sendingMode: thread.sendingMode ?? 'training', approvedStreak: thread.approvedStreak ?? 0, ...(bind ? { personRuleId } : {}) })
       try {
         await rt.prepareAnswerThread(thread)
         await selectOmniModel(rt, thread.sessionId, ownerBotId)
@@ -596,6 +605,40 @@ export function install(rt) {
       }
       return thread
     })
+  }
+
+  // #1704: each person's own rule as the intake last read it, by rule id, in memory only (the
+  // rule is the record; after a restart it returns with the person's next admitted message).
+  const persons = new Map()
+  const PERSONS_MAX = 1000
+  const warnedHeld = new Set()
+  /** The person a child is bound to, while its bot binds persons: null for none, undefined while not read yet. */
+  rt.personOf = thread => {
+    if (!isAnswerChild(thread) || thread.personRuleId === undefined || !answerSettingsOf(rt.botOf(thread.ownerBotId)).personBinding) return null
+    return persons.get(thread.personRuleId)
+  }
+  /**
+   * For a message the intake admitted (`person` named by its rule, else null), on a bot that binds
+   * persons: the rule id its child binds to or must already hold, and whether it is held, warned
+   * once per child and rule. Undefined while the bot does not bind persons.
+   */
+  rt.answerPerson = (row, person) => {
+    const ownerBotId = rt.channelOwner?.(row?.instanceId)
+    if (!answerSettingsOf(rt.botOf(ownerBotId)).personBinding) return undefined
+    if (person !== null) {
+      persons.delete(person.ruleId)
+      persons.set(person.ruleId, person)
+      if (persons.size > PERSONS_MAX) persons.delete(persons.keys().next().value)
+    }
+    const thread = byChat(row.chatUuid)
+    const bound = isAnswerChild(thread) && thread.ownerBotId === ownerBotId ? thread.personRuleId : undefined
+    if (bound === undefined || bound === person?.ruleId) return { personRuleId: person?.ruleId, held: false }
+    const warning = JSON.stringify([thread.id, person?.ruleId ?? null])
+    if (!warnedHeld.has(warning)) {
+      warnedHeld.add(warning)
+      rt.warn('omni-channels: answer child %s is bound to one person; a message another rule (or none) admitted is held', thread.id)
+    }
+    return { held: true }
   }
 
   const chatChannels = new Map()
@@ -796,6 +839,7 @@ export function install(rt) {
     // Optional so an earlier client's save keeps them.
     newChildMode: z.enum(SENDING_MODES).optional(), graduateAfter: z.number().int().min(1).max(GRADUATE_MAX).nullable().optional(),
     resumeAfterMs: z.number().int().min(RESUME_AFTER_MIN_MS).max(RESUME_AFTER_MAX_MS).optional(),
+    personBinding: z.boolean().optional(),
   }).strict()
   ctx.effect(() => rt.hooks.endpoint('omni-answer-settings', async body => {
     const input = AnswerSettings.parse(body)
@@ -809,16 +853,23 @@ export function install(rt) {
     if (input.enabled && list().some(thread => thread.ownerBotId === bot.id && thread.chatIds.length !== 1)) throw refused('Split existing multi-chat threads before enabling answer mode.')
     const before = bot.answer
     const kept = answerSettingsOf(bot)
-    bot.answer = {
+    const next = {
       enabled: input.enabled, visibility: input.visibility, allowedTools: [...new Set(input.allowedTools)], sharedNotes: input.sharedNotes,
       newChildMode: input.newChildMode ?? kept.newChildMode, graduateAfter: input.graduateAfter === undefined ? kept.graduateAfter : input.graduateAfter,
       resumeAfterMs: input.resumeAfterMs ?? kept.resumeAfterMs,
+      ...(input.personBinding ?? kept.personBinding ? { personBinding: true } : {}),
     }
+    // #1704: never bind persons where a child could read past its own chat and folder.
+    const personRefusal = next.personBinding ? personBindingRefusal(answerSettingsOf({ answer: next })) : undefined
+    if (personRefusal !== undefined) throw refused(personRefusal)
+    bot.answer = next
     try {
       if (input.enabled) for (const thread of list().filter(thread => thread.ownerBotId === bot.id)) {
         Object.assign(thread, { answerChild: true, sendingMode: thread.sendingMode ?? 'training', approvedStreak: thread.approvedStreak ?? 0 })
         await rt.prepareAnswerThread(thread)
       }
+      // Switched off, a child keeps its binding but loses its person's capability.
+      if (!bot.answer.personBinding) for (const thread of list().filter(thread => thread.ownerBotId === bot.id)) await rt.personUnmount?.(thread)
       await rt.syncAnswerSubscriptions(); await rt.save()
     } catch (error) { bot.answer = before; await rt.syncAnswerSubscriptions(); throw error }
     // A changed interval moves every paused child's deadline at once.
@@ -853,6 +904,8 @@ export function install(rt) {
         await rt.subscriptionEndpoint(automationChoice === 'delete' ? 'automation-delete' : 'automation-set-on', { id: automation.id, on: false })
       }
     }
+    // #1704: the person's capability leaves with the child, and its secrets' Session scope ends.
+    await rt.personUnmount?.(thread, { save: false })
     delete threads()[thread.id]
     await rt.save()
     await tell(removed, thread, 'removed')

@@ -31,6 +31,41 @@ and needs it; the canvas plugin (`@automagik/omni-canvas-dsh`) sits on this one.
   plugin's welcome (−300) and Connect AI (−200). A skip is kept by `@automagik/welcome-dsh`
   when it is installed, else in this browser.
 
+## Bind each answer child to its person
+
+An answer bot's settings have **Bind each child to its person** (`personBinding`, off by
+default; set in the settings panel only, never by a model tool). It needs isolated visibility,
+and the file tools off or limited to a knowledge folder.
+
+While it is on, the first message for a chat that an Omni access rule naming one person admits
+(an allow rule with a `platformUserId`, or a `phonePattern` with no `*`) binds that chat's child
+to the rule, once. A later message for that chat admitted by another rule, or by none, is held:
+it reaches no child, and the host warns once. A message that access control lets in without such
+a rule (access off, a wildcard) binds nothing.
+
+The rule is the person's only record. Staff write its `metadata` (`POST`/`PATCH
+/access/rules`, a JSON object of at most 16 KB):
+
+```json
+{
+  "context": "Text about this person, for their child only.",
+  "capability": { "name": "orders-for-this-person", "secrets": ["ORDERS_TOKEN_FOR_THIS_PERSON"] }
+}
+```
+
+- `context`: text (up to 8000 characters) that only this person's child reads, in its own
+  section of its instructions. A change is read again within 30 seconds.
+- `capability`: an MCP capability saved in the team's Settings > Capabilities, as its name or as
+  `{ name, secrets }` with exactly the secrets it uses (each saved for no Bot). The Bot team
+  mounts it into this child's Session only, and the child's guard admits its tools by their
+  `mcp__<name>__` prefix in that Session alone. Its calls run without a staff card. On a Bot team
+  that cannot mount one, or when the mount needs approval or fails, the child answers without it
+  and the host warns once. It leaves the Session when the rule stops naming it, when binding is
+  switched off, or when the child is removed.
+
+Context and capability are kept in memory only: after a restart they return with the person's
+next admitted message.
+
 ## Existing channel settings
 
 Open an existing channel to read its configuration groups, derived provider and assigned

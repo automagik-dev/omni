@@ -572,14 +572,15 @@ export function AnswerSettings({ bot, value = {} }) {
   const [graduates, setGraduates] = useState(Number.isInteger(value.graduateAfter))
   const [graduateAfter, setGraduateAfter] = useState(String(value.graduateAfter ?? 5))
   const [resumeMinutes, setResumeMinutes] = useState(minutesOf(value.resumeAfterMs))
+  const [personBinding, setPersonBinding] = useState(value.personBinding === true)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
     setEnabled(value.enabled === true); setVisibility(value.visibility ?? 'isolated')
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
-    setResumeMinutes(minutesOf(value.resumeAfterMs))
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs])
+    setResumeMinutes(minutesOf(value.resumeAfterMs)); setPersonBinding(value.personBinding === true)
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.personBinding])
   // Graduation is off unless staff turn it on with a whole number of drafts (host GRADUATE_MAX).
   const count = Number(graduateAfter)
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100
@@ -588,7 +589,9 @@ export function AnswerSettings({ bot, value = {} }) {
   const minutesOk = Number.isInteger(minutes) && minutes >= 1 && minutes <= RESUME_MINUTES_MAX
   const save = async () => {
     setBusy(true); setProblem(null)
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000 }); setOpen(false) }
+    // #1704: sent while it is on or being switched off; a bot that never used it saves as before.
+    const person = personBinding || value.personBinding === true ? { personBinding } : {}
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, ...person }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -619,6 +622,8 @@ export function AnswerSettings({ bot, value = {} }) {
       h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
         h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
         ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
+      h(SwitchRow, { label: 'Bind each child to its person', on: personBinding, onChange: setPersonBinding }),
+      h('p', { className: 'bt-note' }, 'A child then takes the notes and the capability in its person\'s access rule, and answers only messages that rule lets in. Needs isolated visibility, and the file tools off or limited to a knowledge folder.'),
       h(Field, { label: 'Shared notes for collective children' },
         h('textarea', { className: 'bt-input bt-input-area', maxLength: SHARED_NOTES_MAX, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
       problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,

@@ -28,6 +28,7 @@ import { omniActorOf, operatesOmni } from './grants.js'
 import { fitted, sensitiveCall } from './omni-api.js'
 import { MEDIA_FILE_BYTES, messageOf, readBounded } from './omni.js'
 import { output } from './output.js'
+import { capabilityHost } from './person-binding.js'
 import { NEEDS_NEWER_TEAM } from './resume-hook.js'
 import { NOT_LINKED } from './thread-keys.js'
 import { automationAsk } from './standing-runs.js'
@@ -162,7 +163,7 @@ export function install(rt) {
     if (!rt.answerCanSend(thread.id, thread.chatId)) return 'Answer mode or channel ownership changed.'
     const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id
     const allowed = restrictions.get(exec?.agent)?.allow ?? allowedBySession.get(sessionId) ?? []
-    if (!allowed.includes(exec.name)) return ANSWER_REFUSAL
+    if (!allowed.includes(exec.name) && !personTool(thread, sessionId, exec.name)) return ANSWER_REFUSAL
     if (!rt.answerPresetReady(thread)) return 'The answer child is not contained on read-only permissions.'
     return undefined
   }
@@ -174,7 +175,73 @@ export function install(rt) {
         && presets.catalog().options.some(option => option.value === 'read-only')
     } catch { return false }
   }
-  async function containAnswer(agent, thread) {
+  // #1704: the capability of the person a child is bound to (person-binding.js), mounted by the
+  // Bot team into that child's Session only. Its tools live in that Session's own agent scope,
+  // which tools.restrict() cannot name and does not narrow, so the guard admits them by the
+  // mount's exact prefix in that Session alone, while its person's rule still names it.
+  const capabilities = capabilityHost(rt)
+  const mounts = new Map()
+  const tried = new WeakMap()
+  const warnedMount = new Set()
+  function personTool(thread, sessionId, name) {
+    const mount = mounts.get(sessionId)
+    return mount !== undefined && mount.threadId === thread.id && rt.personOf(thread)?.capability?.name === mount.name
+      && typeof name === 'string' && name.length > mount.toolPrefix.length && name.startsWith(mount.toolPrefix)
+  }
+  const saveThread = () => void Promise.resolve(rt.save()).catch(error => rt.warn('omni-channels: saving a thread failed: %s', error?.message ?? error))
+  // The record keeps the mounted name, so a later start can still take it away: unmounting
+  // always ends the Session scope of the capability's secrets (bots-dsh contract v1.1). A host
+  // that refuses (one that only reads the team) keeps the name for the next try; a removal goes on.
+  async function personUnmount(thread, { save = true } = {}) {
+    const name = mounts.get(thread.sessionId)?.name ?? thread.personMounted
+    mounts.delete(thread.sessionId)
+    if (name === undefined) return
+    try {
+      await capabilities.unmount(thread.sessionId, name)
+    } catch (error) {
+      const warning = JSON.stringify(['unmount', thread.id, name])
+      if (!warnedMount.has(warning)) {
+        warnedMount.add(warning)
+        rt.warn('omni-channels: capability %s did not leave answer child %s: %s', name, thread.id, error?.message ?? error)
+      }
+      return
+    }
+    if (thread.personMounted !== undefined) {
+      delete thread.personMounted
+      if (save) saveThread()
+    }
+  }
+  // Never throws: a removal or a switch-off goes on (threads.js).
+  rt.personUnmount = personUnmount
+  // Once per agent (a new one after a clear, compaction or restart) and before each event.
+  async function personMount(agent, thread, remount) {
+    const person = rt.personOf(thread)
+    // Not read since this start: the person's next admitted message mounts it.
+    if (person === undefined) return
+    const wanted = person?.capability ?? null
+    const signature = JSON.stringify(wanted && [wanted.name, wanted.secrets])
+    if (!remount && tried.get(agent) === signature) return
+    tried.set(agent, signature)
+    const mountedName = mounts.get(thread.sessionId)?.name ?? thread.personMounted
+    if (mountedName !== undefined && mountedName !== wanted?.name) await personUnmount(thread)
+    if (wanted === null) return
+    const result = await capabilities.mount(thread.sessionId, wanted)
+    if (!result.ok) {
+      mounts.delete(thread.sessionId)
+      const warning = JSON.stringify([thread.id, wanted.name])
+      if (!warnedMount.has(warning)) {
+        warnedMount.add(warning)
+        rt.warn('omni-channels: answer child %s answers without capability %s: %s', thread.id, wanted.name, result.reason)
+      }
+      return
+    }
+    mounts.set(thread.sessionId, { threadId: thread.id, name: wanted.name, toolPrefix: result.toolPrefix })
+    if (thread.personMounted !== wanted.name) {
+      thread.personMounted = wanted.name
+      saveThread()
+    }
+  }
+  async function containAnswer(agent, thread, { remount = false } = {}) {
     // The actual Session and its live registry are verified at every event admission,
     // recreation and call. A failed restriction/preset never falls back to Auto review.
     if (typeof agent?.ctx?.tools?.restrict !== 'function') throw new Error('This Session has no scoped tool registry.')
@@ -210,8 +277,9 @@ export function install(rt) {
       agent.ctx.tools.setExecutor(new NativeToolExecutor(agent.ctx))
       nativeAnswers.add(agent)
     }
+    await personMount(agent, thread, remount)
   }
-  rt.prepareAnswerThread = async thread => containAnswer(await rt.resolveAgent(thread.sessionId), thread)
+  rt.prepareAnswerThread = async thread => containAnswer(await rt.resolveAgent(thread.sessionId), thread, { remount: true })
   // Direct calls and forged names are refused independently of registry filtering.
   ctx.tools.guard(exec => rt.answerToolRefusal(exec))
   ctx.on('tools/pre-execute', async (exec, next) => {

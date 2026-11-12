@@ -16955,6 +16955,7 @@ function AnswerSettings({ bot, value = {} }) {
   const [graduates, setGraduates] = (0, import_react16.useState)(Number.isInteger(value.graduateAfter));
   const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
   const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
+  const [personBinding, setPersonBinding] = (0, import_react16.useState)(value.personBinding === true);
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   (0, import_react16.useEffect)(() => {
@@ -16966,7 +16967,8 @@ function AnswerSettings({ bot, value = {} }) {
     setGraduates(Number.isInteger(value.graduateAfter));
     setGraduateAfter(String(value.graduateAfter ?? 5));
     setResumeMinutes(minutesOf(value.resumeAfterMs));
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs]);
+    setPersonBinding(value.personBinding === true);
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.personBinding]);
   const count = Number(graduateAfter);
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
   const minutes = Number(resumeMinutes);
@@ -16974,8 +16976,9 @@ function AnswerSettings({ bot, value = {} }) {
   const save = async () => {
     setBusy(true);
     setProblem(null);
+    const person = personBinding || value.personBinding === true ? { personBinding } : {};
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4 });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, ...person });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -17053,6 +17056,8 @@ function AnswerSettings({ bot, value = {} }) {
         (0, import_react16.createElement)("span", { className: "bt-field-label", "aria-hidden": true }, "Children may also"),
         ANSWER_TOOLS.map(([name, label]) => (0, import_react16.createElement)(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: (on2) => tool(name, on2) }))
       ),
+      (0, import_react16.createElement)(SwitchRow, { label: "Bind each child to its person", on: personBinding, onChange: setPersonBinding }),
+      (0, import_react16.createElement)("p", { className: "bt-note" }, "A child then takes the notes and the capability in its person's access rule, and answers only messages that rule lets in. Needs isolated visibility, and the file tools off or limited to a knowledge folder."),
       (0, import_react16.createElement)(
         Field,
         { label: "Shared notes for collective children" },

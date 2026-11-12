@@ -246,7 +246,8 @@ export function install(rt) {
     rt.syncAnswerSubscriptions?.()
     const answerRelevant = Object.values(state.subscriptions ?? {}).some(sub => typeof sub.answerBotId === 'string' && matches(sub, row))
       || (ownerReceipt(row.rawPayload, row.externalId) && rt.answerStaffThread?.(row) !== undefined)
-    const answerAllowed = answerRelevant ? await admitAnswer(row) : false
+    const admission = answerRelevant ? await admitAnswer(row, { detail: true }) : false
+    const answerAllowed = admission !== false
     // Staff take-over comes before any dispatch, and its pause is saved before this row is
     // acked. The staff message itself is nobody's to answer.
     const staff = answerAllowed ? await staffOf(row) : undefined
@@ -257,7 +258,11 @@ export function install(rt) {
     }
     // A message that claims the number's own side never reaches an answer child as the person's.
     const ownSide = row.rawPayload?.isFromMe === true
-    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !((ownSide || !answerAllowed) && typeof sub.answerBotId === 'string')
+    // #1704: on a bot with person binding, the person whose rule admitted it, and whether their
+    // chat's child takes it (a person-bound chat takes only its own person's).
+    const binding = answerAllowed && !ownSide ? rt.answerPerson?.(row, admission.person ?? null) : undefined
+    const held = binding?.held === true
+    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !((ownSide || !answerAllowed || held) && typeof sub.answerBotId === 'string')
       && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
     if (due().length === 0) return 'unmatched'
     // Before any child creation or wake-up. Keep ordinary subscriptions running;
@@ -276,7 +281,7 @@ export function install(rt) {
       if (skipAnswer && typeof sub.answerBotId === 'string') continue
       if (rt.automationOwned?.(sub, event) === false) continue
       try {
-        await rt.fireSubscription(sub, { ...event, ref: row.id })
+        await rt.fireSubscription(sub, { ...event, ref: row.id, ...(binding?.personRuleId !== undefined && typeof sub.answerBotId === 'string' ? { personRuleId: binding.personRuleId } : {}) })
       } catch (error) {
         rt.warn('ds-bot: subscription %s did not start: %s', sub.name, error?.message ?? error)
       }

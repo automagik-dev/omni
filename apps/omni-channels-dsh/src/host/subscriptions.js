@@ -636,7 +636,8 @@ export function install(rt) {
     let summary = NO_CHAT
     if (where.success) {
       const getThread = internalAnswer(sub)
-        ? rt.threads.answerFor({ ownerBotId: ownerOf(sub), channelId: where.data.instanceId, chatId: where.data.chatId }).then(thread => ({ ok: true, thread }))
+        // #1704: the person's rule that admitted the message (omni-events.js), which binds the child.
+        ? rt.threads.answerFor({ ownerBotId: ownerOf(sub), channelId: where.data.instanceId, chatId: where.data.chatId, ...(typeof event.personRuleId === 'string' ? { personRuleId: event.personRuleId } : {}) }).then(thread => ({ ok: true, thread }))
         : rt.threads.ensure(where.data.instanceId, where.data.chatId)
       const made = await getThread.catch(error => ({ ok: false, reason: error?.message ?? String(error) }))
       if (made.ok) {
