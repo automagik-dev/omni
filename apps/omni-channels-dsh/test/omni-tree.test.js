@@ -37,7 +37,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, pauseOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, RepairTools, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, pauseOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
@@ -1034,6 +1034,28 @@ test('answer settings start isolated and save one owner setting with read-only a
   // New children train and graduation stays off unless staff change them (RFC-0001).
   assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000 }])
   assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
+})
+
+// A channel bot whose every turn fails on its tool list (#1699) is repaired from its own place
+// in the sidebar: one staff action, one host call; the default bot has no such row.
+test('a channel bot offers Repair tools, which asks the host once and says what follows or why not; the default bot has none', async t => {
+  linked()
+  const roster = hooked({ omniOwnership: { defaultBotId: 'omni-bot', channels: {} } })
+  const { view } = tree(t, { roster, bot: { id: 'dedicated', kind: 'omni', name: 'Service' } })
+  const repair = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Repair tools')
+  answer = endpoint => (endpoint === 'repair_tool_series' ? { botId: 'dedicated', next: 'fresh-tools' } : {})
+  repair().props.onClick()
+  await settle()
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'repair_tool_series'), [['repair_tool_series', { botId: 'dedicated' }]])
+  const said = role => nodes(view.draw()).find(node => node.props?.role === role)
+  assert.equal(text(said('status')), 'Done. Its next turn starts with all its tools: send it a message.')
+  answer = endpoint => (endpoint === 'repair_tool_series' ? Object.assign(new Error('Only a Bot that operates Omni has its tools repaired here.'), { code: 'bot/refused' }) : {})
+  repair().props.onClick()
+  await settle()
+  assert.equal(said('status'), undefined)
+  assert.match(text(said('alert')), /operates Omni/)
+  const main = tree(t, { roster, bot: { id: 'omni-bot', kind: 'omni', name: 'Omni' } }).view
+  assert.equal(nodes(main.draw()).some(node => node.type === 'button' && text(node) === 'Repair tools'), false)
 })
 
 test('an answer child\'s row names its sending mode at a glance, and its menu switches it through the staff action', async () => {
