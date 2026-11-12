@@ -36,6 +36,9 @@ const knowledgeFolderOf = value => (typeof value === 'string' && isAbsolute(valu
 // graduation after N approved unchanged drafts in a row, switch the child to sending.
 export const SENDING_MODES = Object.freeze(['training', 'sending'])
 export const GRADUATE_MAX = 100
+// How many characters an answer bot's shared notes may hold; a child's own notes keep 8000. The
+// settings page's textarea holds the same number (src/client/omni-tree.js; a test keeps them equal).
+export const SHARED_NOTES_MAX = 32000
 const graduateOf = value => (Number.isInteger(value) && value >= 1 && value <= GRADUATE_MAX ? value : null)
 // RFC-0001 staff take-over: a proven staff message pauses its chat's child until staff resume it
 // or this long passes with no newer staff message there; each answer bot sets its own.
@@ -794,7 +797,7 @@ export function install(rt) {
   }, 'omni-channels: paused answer children')
 
   const AnswerSettings = z.object({
-    botId: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['isolated', 'collective']), allowedTools: z.array(z.enum(ANSWER_EXTRA_TOOLS)).max(ANSWER_EXTRA_TOOLS.length), sharedNotes: z.string().max(8000),
+    botId: z.string().min(1), enabled: z.boolean(), visibility: z.enum(['isolated', 'collective']), allowedTools: z.array(z.enum(ANSWER_EXTRA_TOOLS)).max(ANSWER_EXTRA_TOOLS.length), sharedNotes: z.string().max(SHARED_NOTES_MAX),
     // Optional so an earlier client's save keeps them.
     newChildMode: z.enum(SENDING_MODES).optional(), graduateAfter: z.number().int().min(1).max(GRADUATE_MAX).nullable().optional(),
     resumeAfterMs: z.number().int().min(RESUME_AFTER_MIN_MS).max(RESUME_AFTER_MAX_MS).optional(),

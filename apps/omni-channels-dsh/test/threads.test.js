@@ -998,6 +998,37 @@ test('SC3 answer child identity, notes, visibility and locked key survive restar
   assert.match(next.ctx.sections.get('omni-thread').text({ agent: { id: found.sessionId } }), /SHARED:|Persist these notes/)
 })
 
+// Issue #1690: shared notes hold up to 32000 characters, saved from the settings page or by the
+// master's tool, and a collective child reads them whole; a child's own notes stay at 8000.
+test('12000 characters of shared notes save through the settings and the tool and reach a collective child whole; 32001 are refused, and child notes stay at 8000', async t => {
+  const b = await answerBench(t, { visibility: 'collective' })
+  const child = await b.child()
+  const prompt = () => b.ctx.sections.get('omni-thread').text({ agent: { id: child.sessionId } })
+  const sized = (mark, size) => `${mark} ${'n'.repeat(size - mark.length * 2 - 2)} ${mark}`
+  const page = sized('PAGE-NOTES', 12000)
+  assert.equal(page.length, 12000)
+  assert.equal((await b.call('omni-answer-settings', { ...b.settings, sharedNotes: page })).sharedNotes, page)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].sharedNotes, page)
+  assert.ok(prompt().includes(`## Shared notes (read only)\n${page}`))
+  const tool = sized('TOOL-NOTES', 12000)
+  assert.equal(await use(b, 'set_answer_shared_notes', ANSWER_MASTER, { botId: ANSWER_MASTER, notes: tool }), 'Notes saved.')
+  assert.ok(prompt().includes(`## Shared notes (read only)\n${tool}`))
+  assert.doesNotMatch(prompt(), /PAGE-NOTES/)
+  // The limit itself saves; one character more is refused both ways and changes nothing.
+  const full = sized('FULL-NOTES', 32000)
+  assert.equal(await use(b, 'set_answer_shared_notes', ANSWER_MASTER, { botId: ANSWER_MASTER, notes: full }), 'Notes saved.')
+  const over = sized('OVER-NOTES', 32001)
+  assert.equal(await use(b, 'set_answer_shared_notes', ANSWER_MASTER, { botId: ANSWER_MASTER, notes: over }), 'Give valid ids and notes of at most 32000 characters.')
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, sharedNotes: over }), /32000/)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].sharedNotes, full)
+  assert.ok(prompt().includes(`## Shared notes (read only)\n${full}`))
+  assert.doesNotMatch(prompt(), /OVER-NOTES/)
+  // A child's own notes keep their 8000, and the refusal names that limit.
+  assert.equal(await use(b, 'set_child_notes', ANSWER_MASTER, { threadId: child.id, notes: 'c'.repeat(8000) }), 'Notes saved.')
+  assert.equal(await use(b, 'set_child_notes', ANSWER_MASTER, { threadId: child.id, notes: 'c'.repeat(8001) }), 'Give valid ids and notes of at most 8000 characters.')
+  assert.equal(b.channels.threads.byId(child.id).notes, 'c'.repeat(8000))
+})
+
 test('SC4 a host that silently refuses read-only never admits a child', async t => {
   const presets = { catalog: () => ({ options: [{ value: 'read-only' }], defaultPreset: 'workspace-write' }), current: () => 'workspace-write', set() {} }
   const b = await answerBench(t, { presets })

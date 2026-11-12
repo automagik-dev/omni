@@ -11,6 +11,7 @@ import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
 import { KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED } from '../src/host/threads.js'
 import { BEING_CUT, NOT_LINKED, OTHER_OMNI, WAITING } from '../src/host/thread-keys.js'
 import { WORKER_MOVED } from '../src/host/subscriptions.js'
+import { SHARED_NOTES_MAX } from '../src/host/threads.js'
 import { all, bundleClient, byLabel, classOf, mount, nodes, one, plain, react, settle, text } from './client-stand-in.js'
 import { omni } from './omni-client.js'
 
@@ -1114,6 +1115,25 @@ test('answer settings choose the new-child default and optional graduation, off 
   save().props.onClick()
   await settle()
   assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000, knowledgeFolder: null }])
+})
+
+// Issue #1690: the shared notes field takes what the host takes; a thread's own notes stay at 8000.
+test('the shared notes field holds the host\'s 32000 characters and a new thread\'s notes stay at 8000', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const settings = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null } }))
+  t.after(() => settings.unmount())
+  nodes(settings.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const shared = nodes(nodes(settings.draw()).find(node => node.type === 'label' && text(node).startsWith('Shared notes'))).find(node => node.type === 'textarea')
+  assert.deepEqual([shared.props.maxLength, SHARED_NOTES_MAX], [32000, 32000])
+  linked()
+  const { view } = tree(t, { roster: hooked() })
+  answer = endpoint => endpoint === 'omni-thread-chats' ? { chats: [] } : {}
+  byLabel(channelOf(view.draw(), CHANNEL_A), 'Add a chat').props.onClick()
+  view.draw()
+  await settle()
+  assert.equal(byLabel(view.draw(), 'Thread notes').props.maxLength, 8000)
 })
 
 // RFC-0001 SC7 in the sidebar: a paused child shows the pause, its time left and Resume.

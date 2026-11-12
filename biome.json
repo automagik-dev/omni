@@ -64,7 +64,10 @@
       "brain/.obsidian",
       ".dev",
       ".hermes",
-      "repos"
+      "repos",
+      "docs/brand",
+      ".claude/skills/automagik-brand",
+      "scripts/brand-sync.mjs"
     ]
   },
   "overrides": [

@@ -542,6 +542,8 @@ const RESUME_MINUTES_MAX = 24 * 60
 const minutesOf = ms => String(Number.isInteger(ms) && ms >= 60_000 ? Math.round(ms / 60_000) : RESUME_MINUTES_DEFAULT)
 // The read-only tools staff may add, in plain words. The tool's own name is the row's tooltip.
 const ANSWER_TOOLS = [['read', 'Read files'], ['read_image', 'Read images'], ['glob', 'Find files by name'], ['grep', 'Search inside files']]
+// The host's SHARED_NOTES_MAX (src/host/threads.js, which the browser cannot load); a test keeps them equal.
+const SHARED_NOTES_MAX = 32000
 
 // The Bot team's switch (bt-switch) in a row that is not a label, as the team draws its own: a
 // click on the words must not flip it twice. The switch is named by the words.
@@ -622,7 +624,7 @@ export function AnswerSettings({ bot, value = {} }) {
       h(Field, { label: 'Knowledge folder', note: 'The business\'s own files, such as instructions and FAQ. While a folder is set, children read, find and search files there, and nowhere else. Full path; empty for none.' },
         h('input', { className: 'bt-input ot-answer-folder', type: 'text', value: knowledgeFolder, title: knowledgeFolder || undefined, placeholder: '/path/to/folder', spellCheck: false, autoComplete: 'off', onChange: event => setKnowledgeFolder(event.target.value) })),
       h(Field, { label: 'Shared notes for collective children' },
-        h('textarea', { className: 'bt-input bt-input-area', maxLength: 8000, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
+        h('textarea', { className: 'bt-input bt-input-area', maxLength: SHARED_NOTES_MAX, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
       problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
       h('div', { className: 'bt-actions' },
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || (graduates && !countOk) || !minutesOk, onClick: save }, 'Save answer settings'))) : null)

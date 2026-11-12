@@ -16924,6 +16924,7 @@ var RESUME_MINUTES_DEFAULT = 30;
 var RESUME_MINUTES_MAX = 24 * 60;
 var minutesOf = (ms2) => String(Number.isInteger(ms2) && ms2 >= 6e4 ? Math.round(ms2 / 6e4) : RESUME_MINUTES_DEFAULT);
 var ANSWER_TOOLS = [["read", "Read files"], ["read_image", "Read images"], ["glob", "Find files by name"], ["grep", "Search inside files"]];
+var SHARED_NOTES_MAX = 32e3;
 function SwitchRow({ label, title, on: on2, onChange }) {
   return (0, import_react16.createElement)(
     "div",
@@ -17063,7 +17064,7 @@ function AnswerSettings({ bot, value = {} }) {
       (0, import_react16.createElement)(
         Field,
         { label: "Shared notes for collective children" },
-        (0, import_react16.createElement)("textarea", { className: "bt-input bt-input-area", maxLength: 8e3, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })
+        (0, import_react16.createElement)("textarea", { className: "bt-input bt-input-area", maxLength: SHARED_NOTES_MAX, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })
       ),
       problem ? (0, import_react16.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : null,
       (0, import_react16.createElement)(
