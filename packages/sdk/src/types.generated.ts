@@ -3031,8 +3031,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Mint a chat key
-         * @description Mint a `cs` key locked to one chat (its UUID and JID), its instance and its recipient, with the caller's expiry. The caller must be a root key: no parent, no chat, instance or recipient lock, no tenant credential, holding chats:keys, chats:read and messages:send. A second mint for the same chat revokes the caller's previous key for it. A caller may hold 500 live chat keys.
+         * Mint a key for an explicit chat set
+         * @description Mint a `cs` key locked to one chat or an explicit set, retaining each instance/recipient pair, with the caller's expiry. The caller must be a root key: no parent, no chat, instance or recipient lock, no tenant credential, holding chats:keys, chats:read and messages:send. A second mint for the overlapping chat revokes the caller's previous key for it. A caller may hold 500 live chat keys.
          */
         post: operations["mintChildKey"];
         delete?: never;
@@ -4852,6 +4852,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/instances/{id}/whatsapp-business/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a WhatsApp Business number
+         * @description Stores the Meta details on the instance, probes the number and starts the channel. Optional provider fields connect through a Meta-compatible provider such as Kapso instead of Meta's Graph API.
+         */
+        post: operations["connectWhatsAppBusiness"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-business/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read the WhatsApp Business connection
+         * @description The stored Meta and provider settings. Never returns the access token or the webhook secret.
+         */
+        get: operations["getWhatsAppBusinessConnection"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/channels/harness/{instanceId}/say": {
         parameters: {
             query?: never;
@@ -5924,6 +5964,18 @@ export interface components {
             profileName: string | null;
             /** @description Profile picture URL */
             profilePicUrl: string | null;
+            /** @description WhatsApp Business: Meta-compatible provider API base; null for Meta direct */
+            metaApiBaseUrl?: string | null;
+            /**
+             * @description WhatsApp Business: how the access token is sent (null = bearer)
+             * @enum {string|null}
+             */
+            metaAuthMode?: "bearer" | "x-api-key" | null;
+            /**
+             * @description WhatsApp Business: webhook signature check (null = x-hub-signature-256)
+             * @enum {string|null}
+             */
+            metaSignatureMode?: "x-hub-signature-256" | "x-webhook-signature" | null;
             /** @description Owner identifier */
             ownerIdentifier: string | null;
             /**
@@ -7943,11 +7995,10 @@ export interface components {
             reason: string | null;
         };
         MintChildKeyRequest: {
-            /**
-             * Format: uuid
-             * @description The chat row's UUID (not its JID)
-             */
+            /** Format: uuid */
             chatId: string;
+        } | {
+            chatIds: string[];
         };
         ChildKey: {
             /**
@@ -7964,16 +8015,23 @@ export interface components {
             parentKeyId: string;
             /**
              * Format: uuid
-             * @description The chat row's UUID
+             * @description The legacy single chat row UUID
              */
-            chatId: string;
+            chatId?: string;
             /** @description The chat's id on its channel (a WhatsApp JID) */
-            chatExternalId: string;
+            chatExternalId?: string;
             /**
              * Format: uuid
              * @description The chat's instance
              */
-            instanceId: string;
+            instanceId?: string;
+            chats?: {
+                /** Format: uuid */
+                id: string;
+                externalId: string;
+                /** Format: uuid */
+                instanceId: string;
+            }[];
             /** @description The cs scopes the caller holds: messages:send and chats:read, plus context:write and turns:close when held */
             scopes: string[];
             /**
@@ -8905,6 +8963,8 @@ export interface components {
             actions: {
                 key: string;
                 label: string;
+                /** @enum {string} */
+                access?: "read" | "write";
             }[];
         };
         ProviderDetail: {
@@ -8929,6 +8989,8 @@ export interface components {
                 key: string;
                 label: string;
                 description?: string;
+                /** @enum {string} */
+                access?: "read" | "write";
                 inputSchema: {
                     [key: string]: unknown;
                 };
@@ -19193,11 +19255,10 @@ export interface operations {
         requestBody?: {
             content: {
                 "application/json": {
-                    /**
-                     * Format: uuid
-                     * @description The chat row's UUID (not its JID)
-                     */
+                    /** Format: uuid */
                     chatId: string;
+                } | {
+                    chatIds: string[];
                 };
             };
         };
@@ -19224,16 +19285,23 @@ export interface operations {
                             parentKeyId: string;
                             /**
                              * Format: uuid
-                             * @description The chat row's UUID
+                             * @description The legacy single chat row UUID
                              */
-                            chatId: string;
+                            chatId?: string;
                             /** @description The chat's id on its channel (a WhatsApp JID) */
-                            chatExternalId: string;
+                            chatExternalId?: string;
                             /**
                              * Format: uuid
                              * @description The chat's instance
                              */
-                            instanceId: string;
+                            instanceId?: string;
+                            chats?: {
+                                /** Format: uuid */
+                                id: string;
+                                externalId: string;
+                                /** Format: uuid */
+                                instanceId: string;
+                            }[];
                             /** @description The cs scopes the caller holds: messages:send and chats:read, plus context:write and turns:close when held */
                             scopes: string[];
                             /**
@@ -19250,7 +19318,7 @@ export interface operations {
                     };
                 };
             };
-            /** @description Invalid body (any field besides chatId) */
+            /** @description Invalid body (exactly chatId or a nonempty unique chatIds set) */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -30109,6 +30177,180 @@ export interface operations {
                 };
             };
             /** @description Channel guard failed */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    connectWhatsAppBusiness: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Meta access token, or the provider key. Exactly one of accessToken or exchangeHandle. */
+                    accessToken?: string;
+                    /** @description Single-use handle from oauth/exchange */
+                    exchangeHandle?: string;
+                    /** @description Meta phone_number_id */
+                    phoneNumberId: string;
+                    /** @description WhatsApp Business Account id */
+                    wabaId: string;
+                    appId?: string;
+                    businessId?: string;
+                    /**
+                     * Format: uri
+                     * @description Meta-compatible provider API base with its version (https), e.g. Kapso's https://api.kapso.ai/meta/whatsapp/v24.0. Omitted keeps the stored value; null returns to Meta's Graph API.
+                     */
+                    apiBaseUrl?: string | null;
+                    /**
+                     * @description How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs a non-Meta apiBaseUrl). On connect, omitted keeps the stored value and null resets to bearer.
+                     * @enum {string|null}
+                     */
+                    authMode?: "bearer" | "x-api-key" | null;
+                    /** @description This instance's webhook signing secret: the provider's secret, or with x-hub-signature-256 the instance's own Meta app secret. Omitted keeps the stored value; null clears it. */
+                    webhookSecret?: string | null;
+                    /**
+                     * @description Webhook signature: 'x-hub-signature-256' (the instance's webhookSecret when set, else META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret). On connect, omitted keeps the stored value and null resets to x-hub-signature-256.
+                     * @enum {string|null}
+                     */
+                    signatureMode?: "x-hub-signature-256" | "x-webhook-signature" | null;
+                };
+            };
+        };
+        responses: {
+            /** @description Connected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            instanceId: string;
+                            /** @enum {string} */
+                            status: "connected";
+                            displayPhoneNumber: string | null;
+                            qualityRating: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description Not a whatsapp-business instance, invalid body or provider settings, or expired exchange handle */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description The channel failed to start */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    getWhatsAppBusinessConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stored connection */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            phoneNumberId: string | null;
+                            wabaId: string | null;
+                            appId: string | null;
+                            businessId: string | null;
+                            apiVersion: string | null;
+                            displayPhoneNumber: string | null;
+                            connectionMethod: string | null;
+                            connectedAt: string | null;
+                            connected: boolean;
+                            /** @description Provider API base; null for Meta direct */
+                            apiBaseUrl: string | null;
+                            /**
+                             * @description How the access token is sent: 'bearer' (Meta) or 'x-api-key' (provider key; needs a non-Meta apiBaseUrl). On connect, omitted keeps the stored value and null resets to bearer.
+                             * @enum {string}
+                             */
+                            authMode: "bearer" | "x-api-key";
+                            /**
+                             * @description Webhook signature: 'x-hub-signature-256' (the instance's webhookSecret when set, else META_APP_SECRET) or 'x-webhook-signature' (provider; needs webhookSecret). On connect, omitted keeps the stored value and null resets to x-hub-signature-256.
+                             * @enum {string}
+                             */
+                            signatureMode: "x-hub-signature-256" | "x-webhook-signature";
+                            /** @description Whether a provider webhook secret is stored; never returned */
+                            hasWebhookSecret: boolean;
+                        };
+                    };
+                };
+            };
+            /** @description Not a whatsapp-business instance */
             400: {
                 headers: {
                     [name: string]: unknown;

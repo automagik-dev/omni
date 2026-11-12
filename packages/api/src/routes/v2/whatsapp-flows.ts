@@ -22,6 +22,7 @@ import { whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { metaClientTransport } from '../../lib/whatsapp-business-connection';
 import { requireInstanceAccess } from '../../middleware/auth';
 import { sealCredentialField } from '../../tenancy/sealed-credentials';
 import type { AppVariables } from '../../types';
@@ -101,6 +102,8 @@ interface InstanceMetaConfig {
   phoneNumberId: string;
   wabaId: string;
   apiVersion: string;
+  /** Provider transport (base URL + auth mode); empty for Meta direct. */
+  transport: ReturnType<typeof metaClientTransport>;
 }
 
 function jsonError(message: string, code = 'BAD_REQUEST') {
@@ -116,6 +119,8 @@ function readMetaConfig(instance: {
   metaPhoneNumberId?: string | null;
   metaWabaId?: string | null;
   metaApiVersion?: string | null;
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
 }): InstanceMetaConfig | null {
   const accessToken = instance.metaAccessToken ?? null;
   const phoneNumberId = instance.metaPhoneNumberId ?? null;
@@ -126,6 +131,7 @@ function readMetaConfig(instance: {
     phoneNumberId,
     wabaId,
     apiVersion: instance.metaApiVersion ?? 'v25.0',
+    transport: metaClientTransport(instance),
   };
 }
 
@@ -150,7 +156,7 @@ async function resolveFlowsClient(
     return { ok: false, payload: jsonError('Instance has no Meta credentials — connect first', 'NOT_CONFIGURED') };
   }
   const client = new MetaWhatsAppClient(
-    { accessToken: cfg.accessToken, phoneNumberId: cfg.phoneNumberId, apiVersion: cfg.apiVersion },
+    { accessToken: cfg.accessToken, phoneNumberId: cfg.phoneNumberId, apiVersion: cfg.apiVersion, ...cfg.transport },
     cfg.wabaId,
   );
   return { ok: true, client, instance: { id: instance.id, tenantId: instance.tenantId ?? null } };

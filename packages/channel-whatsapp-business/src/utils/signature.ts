@@ -14,6 +14,10 @@
  * so the implementation has zero external dependencies. The comparison is
  * timing-safe (byte-by-byte XOR over a fixed-length buffer) to mitigate
  * timing side-channels.
+ *
+ * A Meta-compatible provider (e.g. Kapso) forwarding Meta's webhooks signs
+ * them with a per-instance secret instead, as a bare hex digest in
+ * `X-Webhook-Signature` (no `sha256=` prefix): `verifyProviderSignature`.
  */
 
 const SIGNATURE_PREFIX = 'sha256=';
@@ -39,13 +43,26 @@ export async function verifyMetaSignature(
 ): Promise<boolean> {
   if (!signatureHeader || !appSecret) return false;
   if (!signatureHeader.startsWith(SIGNATURE_PREFIX)) return false;
+  return verifyHexDigest(body, signatureHeader.slice(SIGNATURE_PREFIX.length), appSecret);
+}
 
-  const providedHex = signatureHeader.slice(SIGNATURE_PREFIX.length).trim();
+/** Verify a provider `X-Webhook-Signature` (bare hex HMAC-SHA256 of the raw body). */
+export async function verifyProviderSignature(
+  body: string,
+  signatureHeader: string | null,
+  secret: string,
+): Promise<boolean> {
+  if (!signatureHeader || !secret) return false;
+  return verifyHexDigest(body, signatureHeader, secret);
+}
+
+async function verifyHexDigest(body: string, hexDigest: string, secret: string): Promise<boolean> {
+  const providedHex = hexDigest.trim();
   // sha256 digest is 32 bytes -> 64 hex chars
   if (providedHex.length !== 64 || !/^[0-9a-f]+$/i.test(providedHex)) return false;
 
   const encoder = new TextEncoder();
-  const keyData = encoder.encode(appSecret);
+  const keyData = encoder.encode(secret);
   const bodyData = encoder.encode(body);
 
   let cryptoKey: CryptoKey;

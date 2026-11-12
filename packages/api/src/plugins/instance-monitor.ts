@@ -225,6 +225,10 @@ export function buildInstanceConnectOptions(instance: {
   metaApiVersion?: string | null;
   metaDisplayPhoneNumber?: string | null;
   metaConnectionMethod?: string | null;
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
+  metaWebhookSecret?: string | null;
+  metaSignatureMode?: string | null;
   hermesBaseUrl?: string | null;
   hermesUsername?: string | null;
   hermesPassword?: string | null;

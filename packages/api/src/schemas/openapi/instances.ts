@@ -338,6 +338,22 @@ export const InstanceSchema = z
         "WhatsApp (Baileys) pairing identity: 'desktop' (macOS Desktop + group history) or 'web' (Ubuntu/Chrome)",
     }),
     syncFullHistory: z.boolean().openapi({ description: 'WhatsApp (Baileys): request full history on connect' }),
+    // Read-only: set through POST /instances/{id}/whatsapp-business/connect, never through PATCH.
+    metaApiBaseUrl: z
+      .string()
+      .nullable()
+      .optional()
+      .openapi({ description: 'WhatsApp Business: Meta-compatible provider API base; null for Meta direct' }),
+    metaAuthMode: z
+      .enum(['bearer', 'x-api-key'])
+      .nullable()
+      .optional()
+      .openapi({ description: 'WhatsApp Business: how the access token is sent (null = bearer)' }),
+    metaSignatureMode: z
+      .enum(['x-hub-signature-256', 'x-webhook-signature'])
+      .nullable()
+      .optional()
+      .openapi({ description: 'WhatsApp Business: webhook signature check (null = x-hub-signature-256)' }),
     outboundPacing: z.enum(['humanized', 'immediate']).optional().openapi({ description: OUTBOUND_PACING_DESCRIPTION }),
     outboundPacingOverride: z.boolean().optional().openapi({ description: OUTBOUND_PACING_OVERRIDE_DESCRIPTION }),
     audioTranscription: z.enum(['auto', 'off']).openapi({

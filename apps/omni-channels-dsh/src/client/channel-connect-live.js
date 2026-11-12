@@ -381,20 +381,34 @@ function SlackFlow({ type, omni, Tile, PreviewChip }) {
 // -------------------------------------------------------------------------
 // WhatsApp Business: the details from Meta's WhatsApp Manager.
 
+const BUSINESS_FIELDS = { accessToken: '', phoneNumberId: '', wabaId: '', apiBaseUrl: '', authMode: 'x-api-key', webhookSecret: '', signatureMode: 'x-webhook-signature' }
+
+// The connect body: Meta's details, plus a provider's only when its address or secret is filled in.
+function businessDetails(fields) {
+  const apiBaseUrl = fields.apiBaseUrl.trim()
+  const webhookSecret = fields.webhookSecret.trim()
+  return {
+    accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim(),
+    ...(apiBaseUrl ? { apiBaseUrl, authMode: fields.authMode } : {}),
+    ...(webhookSecret ? { webhookSecret, signatureMode: fields.signatureMode } : {}),
+  }
+}
+
 function BusinessFlow({ type, omni, Tile, PreviewChip }) {
   const info = CHANNEL_TYPES[type]
-  const [fields, setFields] = useState({ accessToken: '', phoneNumberId: '', wabaId: '' })
+  const [fields, setFields] = useState(BUSINESS_FIELDS)
   const [channel, setChannel] = useState(null)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const set = key => event => setFields(value => ({ ...value, [key]: event.target.value }))
-  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim())
+  const providerReady = !fields.apiBaseUrl.trim() || /^https:\/\/\S+$/.test(fields.apiBaseUrl.trim())
+  const ready = fields.accessToken.trim().length >= 8 && /^\d{5,25}$/.test(fields.phoneNumberId.trim()) && /^\d{5,25}$/.test(fields.wabaId.trim()) && providerReady
   const connect = async () => {
     setBusy(true)
     setProblem(null)
     try {
-      const made = await call('omni-wab-connect', { name: info.label, accessToken: fields.accessToken.trim(), phoneNumberId: fields.phoneNumberId.trim(), wabaId: fields.wabaId.trim() })
-      setFields({ accessToken: '', phoneNumberId: '', wabaId: '' })
+      const made = await call('omni-wab-connect', { name: info.label, ...businessDetails(fields) })
+      setFields(BUSINESS_FIELDS)
       setChannel(made)
     } catch (error) {
       console.warn('Could not connect the Business number:', error)
@@ -404,6 +418,8 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
     }
   }
   const field = (key, label, extra) => h('label', { className: 'oc-field' }, h('span', null, label), h('input', { value: fields[key], onChange: set(key), autoComplete: 'off', ...extra }))
+  const choice = (key, label, options) => h('label', { className: 'oc-field' }, h('span', null, label),
+    h('select', { value: fields[key], onChange: set(key) }, options.map(([value, text]) => h('option', { key: value, value }, text))))
   return h(FlowShell, { type, at: channel ? 1 : 0, Tile, PreviewChip, onBack: () => omni.showPage({ type: null, step: 0 }) },
     channel ? h(Connected, { type, channel, omni }, h(MetaWebhookSetup, { initiallyOpen: true }))
       : h(Fragment, null,
@@ -412,6 +428,11 @@ function BusinessFlow({ type, omni, Tile, PreviewChip }) {
         field('accessToken', t('Access token'), { type: 'password', placeholder: 'EAAG…', autoFocus: true }),
         field('phoneNumberId', t('Phone number ID'), { inputMode: 'numeric', placeholder: '123456789012345' }),
         field('wabaId', t('WhatsApp Business Account ID'), { inputMode: 'numeric', placeholder: '987654321098765' }),
+        h('details', { className: 'oc-field' }, h('summary', null, t('Through a provider such as Kapso (optional)')),
+          field('apiBaseUrl', t('Provider API address'), { inputMode: 'url', placeholder: 'https://api.kapso.ai/meta/whatsapp/v24.0' }),
+          choice('authMode', t('Send the access token as'), [['x-api-key', t('Provider key (X-API-Key)')], ['bearer', t('Bearer token')]]),
+          field('webhookSecret', t('Provider webhook secret'), { type: 'password' }),
+          choice('signatureMode', t('Webhook signature'), [['x-webhook-signature', t('Provider (X-Webhook-Signature)')], ['x-hub-signature-256', t('Meta app secret (X-Hub-Signature-256)')]])),
         h('div', { className: 'oc-row' }, h('button', { type: 'button', className: 'oc-primary', disabled: !ready || busy, onClick: connect }, busy ? t('Connecting…') : t('Connect'))),
         h('p', { className: 'oc-fine' }, t('The token stays with your Omni. Omni only gets that number\'s messages.'))),
     h(Problem, { text: problem }))

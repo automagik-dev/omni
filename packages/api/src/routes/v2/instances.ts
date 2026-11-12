@@ -616,6 +616,7 @@ const SENSITIVE_INSTANCE_FIELDS = [
   'webhookVerifyToken',
   'twilioAuthToken',
   'metaAccessToken',
+  'metaWebhookSecret',
   'hermesPassword',
   'ascToken',
   'ascFlowChave',
@@ -788,6 +789,10 @@ type InstanceConnectionOptionsInput = {
   metaApiVersion?: string | null;
   metaDisplayPhoneNumber?: string | null;
   metaConnectionMethod?: string | null;
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
+  metaWebhookSecret?: string | null;
+  metaSignatureMode?: string | null;
   ascFlowBaseUrl?: string | null;
   ascFlowLogin?: string | null;
   ascFlowChave?: string | null;
@@ -2044,6 +2049,10 @@ function buildConnectConnectionOptions(
     metaApiVersion: instance.metaApiVersion,
     metaDisplayPhoneNumber: instance.metaDisplayPhoneNumber,
     metaConnectionMethod: instance.metaConnectionMethod,
+    metaApiBaseUrl: instance.metaApiBaseUrl,
+    metaAuthMode: instance.metaAuthMode,
+    metaWebhookSecret: instance.metaWebhookSecret,
+    metaSignatureMode: instance.metaSignatureMode,
     ...mergeAscFlowFields(instance, body),
   });
 }

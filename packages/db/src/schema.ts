@@ -963,6 +963,16 @@ export const instances = pgTable(
     metaConnectionMethod: varchar('meta_connection_method', { length: 32 }).default('manual'),
     metaDisplayPhoneNumber: varchar('meta_display_phone_number', { length: 32 }),
     metaConnectedAt: timestamp('meta_connected_at', { withTimezone: true }),
+    // Meta-compatible provider (e.g. Kapso mirrors the Cloud API and forwards
+    // Meta's webhooks). All NULL = Meta direct, exactly as before.
+    /** Provider API base URL, version included. NULL = Graph API. */
+    metaApiBaseUrl: text('meta_api_base_url'),
+    /** 'bearer' (Meta) | 'x-api-key' (provider key header). NULL = 'bearer'. */
+    metaAuthMode: varchar('meta_auth_mode', { length: 16 }),
+    /** Secret a provider signs forwarded webhooks with; stored like metaAccessToken. */
+    metaWebhookSecret: text('meta_webhook_secret'),
+    /** 'x-hub-signature-256' (Meta) | 'x-webhook-signature' (provider). NULL = Meta. */
+    metaSignatureMode: varchar('meta_signature_mode', { length: 32 }),
 
     // ---- Hermes (Mutant WhatsApp gateway) Configuration ----
     // Per-instance credentials for the H3rmes API (Brazilian BSP-style gateway).

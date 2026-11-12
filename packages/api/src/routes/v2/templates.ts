@@ -33,6 +33,7 @@ import { whatsappTemplates } from '@omni/db';
 import { and, eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { metaClientTransport, metaOnlyRouteError } from '../../lib/whatsapp-business-connection';
 import { requireInstanceAccess } from '../../middleware/auth';
 import type { AppVariables } from '../../types';
 
@@ -108,6 +109,8 @@ interface InstanceMetaConfig {
   wabaId: string;
   appId?: string;
   apiVersion: string;
+  /** Provider transport (base URL + auth mode); empty for Meta direct. */
+  transport: ReturnType<typeof metaClientTransport>;
 }
 
 function jsonError(message: string, code = 'BAD_REQUEST', _status = 400) {
@@ -124,6 +127,8 @@ function readMetaConfig(instance: {
   metaWabaId?: string | null;
   metaAppId?: string | null;
   metaApiVersion?: string | null;
+  metaApiBaseUrl?: string | null;
+  metaAuthMode?: string | null;
 }): InstanceMetaConfig | null {
   const accessToken = instance.metaAccessToken ?? null;
   const phoneNumberId = instance.metaPhoneNumberId ?? null;
@@ -135,12 +140,13 @@ function readMetaConfig(instance: {
     wabaId,
     appId: instance.metaAppId ?? undefined,
     apiVersion: instance.metaApiVersion ?? 'v25.0',
+    transport: metaClientTransport(instance),
   };
 }
 
 function makeClient(cfg: InstanceMetaConfig): MetaWhatsAppClient {
   return new MetaWhatsAppClient(
-    { accessToken: cfg.accessToken, phoneNumberId: cfg.phoneNumberId, apiVersion: cfg.apiVersion },
+    { accessToken: cfg.accessToken, phoneNumberId: cfg.phoneNumberId, apiVersion: cfg.apiVersion, ...cfg.transport },
     cfg.wabaId,
   );
 }
@@ -401,6 +407,8 @@ templatesRoutes.post(
     if (!cfg) {
       return c.json(jsonError('Instance has no Meta credentials — connect first', 'NOT_CONFIGURED'), 400);
     }
+    // The Resumable Upload API is Meta's own (graph.facebook.com, app-scoped).
+    if (cfg.transport.baseUrl) return c.json(metaOnlyRouteError('Header media upload'), 400);
     if (!cfg.appId) {
       return c.json(
         jsonError(

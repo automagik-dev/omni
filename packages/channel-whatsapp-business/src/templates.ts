@@ -499,22 +499,23 @@ function mapMetaEventToStatus(event: MetaTemplateStatusUpdate['event']): MetaTem
   }
 }
 
+/** A Graph API base at any version, e.g. `https://graph.facebook.com/v25.0`. */
+const GRAPH_BASE = /^https:\/\/graph\.facebook\.com\/v\d+\.\d+(?=\/)/;
+
 /**
- * GET against an absolute URL (used to follow `paging.next`). Falls back on the
- * same bearer auth + timeout as the client, but bypasses the base-url prefix.
+ * GET a `paging.next` URL through `client.get()`, which keeps the client's auth and timeout.
+ * The URL is reduced to a path under the client's own base. A Meta-compatible provider may
+ * hand back a raw Graph URL; that path is sent to the provider base too, so the provider key
+ * never reaches graph.facebook.com.
  */
 async function getAbsolute<T>(client: MetaWhatsAppClient, absoluteUrl: string): Promise<T> {
-  // The Graph API base looks like `https://graph.facebook.com/v25.0`; pagination
-  // URLs are full, e.g. `https://graph.facebook.com/v25.0/{waba}/message_templates?after=...`.
-  // We strip the prefix to reuse client.get(), which preserves auth/timeout.
-  const base = `https://graph.facebook.com/${client.apiVersion}`;
-  if (absoluteUrl.startsWith(base)) {
-    return client.get<T>(absoluteUrl.slice(base.length));
+  if (absoluteUrl.startsWith(`${client.baseUrl}/`)) {
+    return client.get<T>(absoluteUrl.slice(client.baseUrl.length));
   }
-  // Defensive fallback: in tests the base url may differ; do a direct fetch
-  // using the headers we know the client uses. We can't reach the private
-  // headers helper from outside, so just bail on this edge case with a clear
-  // error rather than silently mis-pointing.
+  const graphBase = GRAPH_BASE.exec(absoluteUrl)?.[0];
+  if (graphBase) {
+    return client.get<T>(absoluteUrl.slice(graphBase.length));
+  }
   throw new MetaApiError(MetaErrorCode.UNKNOWN, `paging.next URL not on expected Graph API base (got ${absoluteUrl})`, {
     operation: 'listTemplatesFromMeta:paginate',
   });

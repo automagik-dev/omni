@@ -69,6 +69,11 @@ const WabPayload = z.object({
   accessToken: token,
   phoneNumberId: metaId,
   wabaId: metaId,
+  // A Meta-compatible provider such as Kapso; all absent means Meta direct.
+  apiBaseUrl: z.string().trim().max(500).regex(/^https:\/\/\S+$/).optional(),
+  authMode: z.enum(['bearer', 'x-api-key']).optional(),
+  webhookSecret: token.optional(),
+  signatureMode: z.enum(['x-hub-signature-256', 'x-webhook-signature']).optional(),
 })
 
 const Deleted = z.object({ success: z.literal(true) })
@@ -202,11 +207,11 @@ export function install(rt) {
   // WhatsApp Business with the details from Meta's WhatsApp Manager: the channel is created
   // and connected here in one go, and removed again when Meta refuses the details.
   async function wabConnect(body) {
-    const payload = parse(WabPayload, body, 'Fill in the access token, the phone number ID and the WhatsApp Business Account ID')
-    const created = parse(Instance, await must('POST', '/instances', { name: payload.name, channel: 'whatsapp-business' }), 'Omni did not return the new channel')
+    const { name, ...connect } = parse(WabPayload, body, 'Fill in the access token, the phone number ID and the WhatsApp Business Account ID')
+    const created = parse(Instance, await must('POST', '/instances', { name, channel: 'whatsapp-business' }), 'Omni did not return the new channel')
     const channelId = created.data.id
     try {
-      await must('POST', `/instances/${channelId}/whatsapp-business/connect`, { accessToken: payload.accessToken, phoneNumberId: payload.phoneNumberId, wabaId: payload.wabaId })
+      await must('POST', `/instances/${channelId}/whatsapp-business/connect`, connect)
     } catch (error) {
       await request('DELETE', `/instances/${channelId}`).catch(() => {})
       throw error
