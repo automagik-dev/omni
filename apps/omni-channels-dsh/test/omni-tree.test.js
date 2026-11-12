@@ -36,7 +36,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
@@ -1027,6 +1027,71 @@ test('answer settings start isolated and save one owner setting with read-only a
   await settle()
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
   await settle()
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '' }])
-  assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })), [])
+  // New children train and graduation stays off unless staff change them (RFC-0001).
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null }])
+  assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
+})
+
+test('an answer child\'s row names its sending mode at a glance, and its menu switches it through the staff action', async () => {
+  calls.length = 0
+  answer = () => ({})
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const child = extra => THREAD(1, CHANNEL_A, { answerChild: true, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, defaultPermissions: { sends: 'allow', reactions: 'any' }, ...extra })
+  const training = mount(() => react.createElement(ui.ThreadRow, { thread: child({ sendingMode: 'training', approvedStreak: 2, graduateAfter: 5 }), actions: {}, rowProps }))
+  let root = training.draw()
+  assert.equal(text(one(root, 'ot-mode')), 'Training')
+  assert.equal(one(root, 'ot-mode').props['data-mode'], 'training')
+  assert.match(one(root, 'bt-thread').props['aria-label'], /^Chat 1, Training: Asks you before each send$/)
+  assert.equal(one(root, 'ot-thread-free'), undefined)
+  const more = () => one(training.draw(), 'ot-thread-more')
+  assert.equal(more().props['aria-label'], 'Sending mode in Chat 1')
+  more().props.onClick()
+  root = training.draw()
+  const items = all(one(root, 'ot-thread-menu'), 'ot-thread-menu-item')
+  assert.deepEqual(items.map(item => [item.props['data-value'], item.props['aria-checked'], text(item)]), [['training', true, 'Training: ask before each send'], ['sending', false, 'Sending: send without asking']])
+  assert.equal(text(one(root, 'ot-thread-menu-note')), '2 of 5 approved drafts in a row. At 5 it switches to sending.')
+  items[1].props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['set_child_sending', { threadId: 't1', mode: 'sending' }]])
+  training.unmount()
+  // Sending: named so, and no progress line; with graduation off a training child shows none either.
+  const sending = mount(() => react.createElement(ui.ThreadRow, { thread: child({ sendingMode: 'sending', approvedStreak: 5, graduateAfter: 5, permissions: { sends: 'allow', reactions: 'list' } }), actions: {}, rowProps }))
+  assert.equal(text(one(sending.draw(), 'ot-mode')), 'Sending')
+  assert.equal(ui.freeMarkOf(child({ sendingMode: 'sending', permissions: { sends: 'allow' } })), null)
+  one(sending.draw(), 'ot-thread-more').props.onClick()
+  assert.equal(one(sending.draw(), 'ot-thread-menu-note'), undefined)
+  sending.unmount()
+  assert.equal(ui.answerModeOf(child({ sendingMode: 'training', graduateAfter: null })).progress, null)
+  assert.equal(ui.answerModeOf(THREAD(2)), null)
+  // An ordinary thread keeps its own row: no mode, its own menu.
+  assert.deepEqual(plain(ui.permissionMenuOf(THREAD(2)).map(group => group.field)), ['sends', 'reactions'])
+})
+
+test('answer settings choose the new-child default and optional graduation, off until staff turn it on', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = label => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith(label))
+  assert.equal(field('After this many'), undefined, 'no count while graduation is off')
+  const mode = nodes(field('New children start in')).find(node => node.type === 'select')
+  assert.deepEqual([mode.props.value, ...nodes(mode).filter(node => node.type === 'option').map(text)], ['training', 'Training: ask before each send', 'Sending: send without asking'])
+  mode.props.onChange({ target: { value: 'sending' } })
+  nodes(field('Switch a training child')).find(node => node.type === 'input').props.onChange({ target: { checked: true } })
+  await settle()
+  const count = () => nodes(field('After this many')).find(node => node.type === 'input')
+  assert.deepEqual([count().props.value, count().props.min, count().props.max], ['5', 1, 100])
+  const save = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings')
+  count().props.onChange({ target: { value: '0' } })
+  await settle()
+  assert.equal(save().props.disabled, true)
+  assert.equal(count().props['aria-invalid'], true)
+  count().props.onChange({ target: { value: '4' } })
+  await settle()
+  save().props.onClick()
+  await settle()
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4 }])
 })

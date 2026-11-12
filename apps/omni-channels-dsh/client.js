@@ -16224,6 +16224,7 @@ function threadState(thread, { running = false, asking = false } = {}) {
   return "idle";
 }
 function freeMarkOf(thread) {
+  if (thread?.answerChild === true) return null;
   const sends = thread?.permissions?.sends === "allow";
   const any = thread?.permissions?.reactions === "any";
   if (sends && any) return t("Sends messages and any reaction without asking you");
@@ -16231,8 +16232,24 @@ function freeMarkOf(thread) {
   if (any) return t("Reacts with any emoji without asking you");
   return null;
 }
+function answerModeOf(thread) {
+  if (thread?.answerChild !== true) return null;
+  const mode = thread.sendingMode === "sending" ? "sending" : "training";
+  const after = Number.isInteger(thread.graduateAfter) && thread.graduateAfter > 0 ? thread.graduateAfter : null;
+  const streak = Math.max(0, Math.min(Number(thread.approvedStreak) || 0, after ?? Infinity));
+  return {
+    mode,
+    label: mode === "sending" ? "Sending" : "Training",
+    title: mode === "sending" ? "Sends in its chat without asking you" : "Asks you before each send",
+    progress: mode === "training" && after !== null ? `${streak} of ${after} approved drafts in a row. At ${after} it switches to sending.` : null
+  };
+}
 function permissionMenuOf(thread) {
-  if (thread?.answerChild === true) return [];
+  if (thread?.answerChild === true) {
+    const mode = answerModeOf(thread).mode;
+    const item2 = (value, label) => ({ field: "sendingMode", value, label, checked: mode === value });
+    return [{ field: "sendingMode", label: "Sending", items: [item2("training", "Training: ask before each send"), item2("sending", "Sending: send without asking")] }];
+  }
   const own = thread?.ownPermissions ?? {};
   const item = (field, value, label) => ({ field, value, label, checked: (own[field] ?? null) === value });
   const sends = { ask: t("Ask me each time"), allow: t("Send without asking") };
@@ -16284,10 +16301,12 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     };
   });
   const free = freeMarkOf(thread);
+  const answer = answerModeOf(thread);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: "needs_newer_team" }) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", answer ? `${answer.label}: ${answer.title}` : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const menuLabel = answer ? `Sending mode in ${name}` : t("Asking first in {name}", { name });
   const onClick = () => {
     if (opens) {
       openThread(thread, actions, setProblem);
@@ -16314,7 +16333,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const choose = (choice) => {
     setMenu(false);
     setProblem(null);
-    call("omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }).catch((error) => {
+    const [endpoint, body] = choice.field === "sendingMode" ? ["set_child_sending", { threadId: thread.id, mode: choice.value }] : ["omni-thread-permissions", { threadId: thread.id, [choice.field]: choice.value }];
+    call(endpoint, body).catch((error) => {
       console.warn("Could not change the chat settings:", error);
       setProblem(t("Could not change this chat's settings. Try again."));
     });
@@ -16342,6 +16362,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       },
       (0, import_react16.createElement)("span", { className: state === "waiting" ? "bt-thread-wait" : state === "working" ? "bt-thread-spin" : "ot-thread-idle", "aria-hidden": true }),
       (0, import_react16.createElement)("span", { className: "bt-thread-title" }, name),
+      answer ? (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": answer.mode, title: answer.title, "aria-hidden": true }, answer.label) : null,
       reason ? (0, import_react16.createElement)("span", { className: "ot-thread-reason" }, reason) : null,
       free ? (0, import_react16.createElement)("span", { className: "ot-thread-free", title: free, "aria-hidden": true }, (0, import_react16.createElement)(SparkIcon)) : null,
       dot ? (0, import_react16.createElement)("span", { className: "bt-unread", "aria-hidden": true }) : null
@@ -16352,8 +16373,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       confirming ? null : (0, import_react16.createElement)("button", {
         type: "button",
         className: "ot-thread-more",
-        "aria-label": t("Asking first in {name}", { name }),
-        title: t("Asking first"),
+        "aria-label": menuLabel,
+        title: answer ? "Sending mode" : t("Asking first"),
         "aria-haspopup": "menu",
         "aria-expanded": menu,
         tabIndex: shown ? void 0 : -1,
@@ -16372,7 +16393,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
     ),
     menu ? (0, import_react16.createElement)(
       "div",
-      { className: "ot-thread-menu", role: "menu", "aria-label": t("Asking first in {name}", { name }), onKeyDown: onMenuKey },
+      { className: "ot-thread-menu", role: "menu", "aria-label": menuLabel, onKeyDown: onMenuKey },
       permissionMenuOf(thread).map((group) => (0, import_react16.createElement)(
         "div",
         { key: group.field, className: "ot-thread-menu-group", role: "group", "aria-label": group.label },
@@ -16387,7 +16408,8 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
           "data-value": choice.value ?? "default",
           onClick: () => choose(choice)
         }, choice.label))
-      ))
+      )),
+      answer?.progress ? (0, import_react16.createElement)("span", { className: "ot-thread-menu-note" }, answer.progress) : null
     ) : null,
     (thread.automations?.length ?? 0) > 0 ? (0, import_react16.createElement)(
       "ul",
@@ -16678,6 +16700,9 @@ function AnswerSettings({ bot, value = {} }) {
   const [visibility, setVisibility] = (0, import_react16.useState)(value.visibility ?? "isolated");
   const [allowedTools, setAllowedTools] = (0, import_react16.useState)(value.allowedTools ?? []);
   const [sharedNotes, setSharedNotes] = (0, import_react16.useState)(value.sharedNotes ?? "");
+  const [newChildMode, setNewChildMode] = (0, import_react16.useState)(value.newChildMode ?? "training");
+  const [graduates, setGraduates] = (0, import_react16.useState)(Number.isInteger(value.graduateAfter));
+  const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   (0, import_react16.useEffect)(() => {
@@ -16685,12 +16710,17 @@ function AnswerSettings({ bot, value = {} }) {
     setVisibility(value.visibility ?? "isolated");
     setAllowedTools(value.allowedTools ?? []);
     setSharedNotes(value.sharedNotes ?? "");
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes]);
+    setNewChildMode(value.newChildMode ?? "training");
+    setGraduates(Number.isInteger(value.graduateAfter));
+    setGraduateAfter(String(value.graduateAfter ?? 5));
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter]);
+  const count = Number(graduateAfter);
+  const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
   const save = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -16707,11 +16737,24 @@ function AnswerSettings({ bot, value = {} }) {
       { className: "ot-picker", role: "group", "aria-label": "Answer mode settings" },
       (0, import_react16.createElement)("label", null, (0, import_react16.createElement)("input", { type: "checkbox", checked: enabled, onChange: (event) => setEnabled(event.target.checked) }), "Answer new messages"),
       (0, import_react16.createElement)("label", null, "Visibility", (0, import_react16.createElement)("select", { value: visibility, onChange: (event) => setVisibility(event.target.value) }, (0, import_react16.createElement)("option", { value: "isolated" }, "Isolated: own chat only"), (0, import_react16.createElement)("option", { value: "collective" }, "Collective: read this bot’s chats and shared notes"))),
-      (0, import_react16.createElement)("p", null, "Children always ask before sending and reply only in their own chat."),
+      (0, import_react16.createElement)("p", null, "Children reply only in their own chat. In training they ask you before each send; switch a child from its menu in the list below."),
+      (0, import_react16.createElement)("label", { className: "ot-answer-field" }, "New children start in", (0, import_react16.createElement)(
+        "select",
+        { value: newChildMode, onChange: (event) => setNewChildMode(event.target.value) },
+        (0, import_react16.createElement)("option", { value: "training" }, "Training: ask before each send"),
+        (0, import_react16.createElement)("option", { value: "sending" }, "Sending: send without asking")
+      )),
+      (0, import_react16.createElement)("label", { className: "ot-answer-check" }, (0, import_react16.createElement)("input", { type: "checkbox", checked: graduates, onChange: (event) => setGraduates(event.target.checked) }), "Switch a training child to sending by itself"),
+      graduates ? (0, import_react16.createElement)(
+        "label",
+        { className: "ot-answer-field ot-answer-count" },
+        "After this many approved drafts in a row, sent unchanged",
+        (0, import_react16.createElement)("input", { type: "number", min: 1, max: 100, step: 1, inputMode: "numeric", value: graduateAfter, "aria-invalid": !countOk || void 0, onChange: (event) => setGraduateAfter(event.target.value) })
+      ) : null,
       ["read", "read_image", "glob", "grep"].map((name) => (0, import_react16.createElement)("label", { key: name }, (0, import_react16.createElement)("input", { type: "checkbox", checked: allowedTools.includes(name), onChange: (event) => setAllowedTools((before) => event.target.checked ? [...before, name] : before.filter((item) => item !== name)) }), `Allow ${name}`)),
       (0, import_react16.createElement)("label", null, "Shared notes for collective children", (0, import_react16.createElement)("textarea", { maxLength: 8e3, value: sharedNotes, onChange: (event) => setSharedNotes(event.target.value) })),
       problem ? (0, import_react16.createElement)("p", { role: "alert" }, hostText(problem)) : null,
-      (0, import_react16.createElement)("button", { type: "button", disabled: busy, onClick: save }, "Save answer settings")
+      (0, import_react16.createElement)("button", { type: "button", disabled: busy || graduates && !countOk, onClick: save }, "Save answer settings")
     ) : null
   );
 }
@@ -16798,7 +16841,7 @@ function ThreadDock({ sessionId, useRoster }) {
   return null;
 }
 var OMNI_TREE_CSS = `
-.ot-tree{display:grid;gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
+.ot-tree{display:grid;grid-template-columns:minmax(0,1fr);gap:1px;margin:0 0 4px 26px;padding-left:10px;border-left:1px solid var(--bt-line, rgba(127,127,127,.2))}
 .ot-channel-head{display:flex;align-items:center;gap:2px}
 .ot-channel-row{display:flex;align-items:center;gap:7px;width:100%;min-width:0;padding:5px 8px 5px 4px;border:0;border-radius:8px;background:none;color:var(--bt-ink);font:inherit;font-size:13px;line-height:20px;text-align:left;cursor:pointer}
 .ot-channel-row:hover{background:var(--bt-hover)}
@@ -16846,9 +16889,22 @@ var OMNI_TREE_CSS = `
 .ot-thread-menu-item:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]{color:var(--bt-ink)}
 .ot-thread-menu-item[aria-checked=true]::before{content:'';position:absolute;left:8px;top:50%;width:6px;height:6px;margin-top:-3px;border-radius:50%;background:var(--bt-accent, #22d3ee)}
+/* An answer child's sending mode, always shown by name: amber while it trains, green once it sends. The title gives way first. */
+.ot-mode{flex:none;padding:0 6px;border-radius:999px;font-size:10.5px;line-height:16px;font-weight:600;white-space:nowrap}
+.ot-mode[data-mode=training]{color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent)}
+.ot-mode[data-mode=sending]{color:color-mix(in srgb,var(--bt-green, #00c972) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-green, #00c972) 15%,transparent)}
+.ot-thread-menu-note{padding:2px 6px 0;font-size:11px;line-height:15px;color:var(--bt-ink-3)}
+.ot-answer-field{display:grid;gap:3px;font-size:12px;color:var(--bt-ink-2)}
+.ot-answer-field select,.ot-answer-field input{box-sizing:border-box;width:100%;min-width:0;height:26px;padding:0 6px;border:1px solid var(--bt-line-2, rgba(127,127,127,.25));border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px}
+.ot-answer-count input{width:72px}
+.ot-answer-field input[aria-invalid]{border-color:var(--bt-danger, #dc2626)}
+.ot-answer-check{display:flex;align-items:flex-start;gap:6px;font-size:12px;color:var(--bt-ink-2)}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
-.ot-picker{display:grid;gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+.ot-picker{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}
+/* A narrow sidebar: the settings' controls and words wrap inside the panel, never widen the tree. */
+.ot-picker label,.ot-picker p{min-width:0;overflow-wrap:anywhere}
+.ot-picker select,.ot-picker textarea{box-sizing:border-box;max-width:100%;min-width:0}
 .ot-picker-head{display:flex;align-items:center;gap:4px}
 .ot-picker-search{flex:1;min-width:0;height:26px;padding:0 8px;border:1px solid var(--bt-line, rgba(127,127,127,.25));border-radius:7px;background:none;color:var(--bt-ink);font:inherit;font-size:12.5px}
 .ot-picker-search:focus-visible{outline:2px solid var(--bt-accent);outline-offset:-1px}
