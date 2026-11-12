@@ -995,6 +995,37 @@ test('SC1 sidebar rows and threads follow each channel owner; unassigned channel
   assert.deepEqual(all(dedicated, 'bt-thread').map(node => node.props['data-thread-id']), ['t3'])
 })
 
+// #1694: the default bot shows the same Answer mode row as a dedicated bot, beside its own rows.
+const answerRow = root => nodes(root).find(node => node.type === 'button' && text(node) === 'Answer mode')
+const addBotRow = root => nodes(root).find(node => node.type === 'button' && text(node) === 'Add channel bot')
+
+test('#1694 the default bot\'s sidebar shows the Answer mode row with its saved settings, and still offers Add channel bot', async t => {
+  linked()
+  const roster = hooked({ omniOwnership: { defaultBotId: BOT.id, channels: { [CHANNEL_B.id]: BOT.id } }, omniAnswers: { [BOT.id]: { enabled: true, visibility: 'collective' } } })
+  const { view } = tree(t, { roster })
+  const root = view.draw()
+  assert.ok(addBotRow(root))
+  assert.ok(channelOf(root, CHANNEL_A))
+  assert.ok(channelOf(root, CHANNEL_B))
+  answerRow(root).props.onClick()
+  await settle()
+  assert.equal(nodes(view.draw()).find(node => node.type === 'select').props.value, 'collective')
+})
+
+test('#1694 a saved default bot that was removed is ignored in the sidebar: the default falls back as when unset', t => {
+  linked()
+  const dedicated = { id: 'dedicated', name: 'Service', kind: 'omni' }
+  const roster = hooked({ eventsBotId: BOT.id, byId: { [BOT.id]: BOT, dedicated }, omniOwnership: { defaultBotId: 'removed-bot', channels: { [CHANNEL_B.id]: 'dedicated' } } })
+  const main = tree(t, { roster }).view.draw()
+  assert.ok(channelOf(main, CHANNEL_A), 'the unassigned channel is the fallback default\'s')
+  assert.equal(channelOf(main, CHANNEL_B), undefined)
+  assert.ok(addBotRow(main))
+  const other = tree(t, { roster, bot: dedicated }).view.draw()
+  assert.equal(channelOf(other, CHANNEL_A), undefined)
+  assert.ok(channelOf(other, CHANNEL_B))
+  assert.equal(addBotRow(other), undefined)
+})
+
 test('SC2 sidebar creation proposes first; only the separate confirmation button commits', async t => {
   calls.length = 0
   const view = mount(() => react.createElement(ui.ChannelBotForm, { channels: [CHANNEL_A], roster: {}, onClose: () => {} }))
