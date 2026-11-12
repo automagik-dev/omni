@@ -686,7 +686,7 @@ const staffRecord = (event, change = {}) => ({
 // platform's message id), the same own-device evidence as a phone message (isFromMe,
 // key.fromMe, key.id, upsertType notify), its own markers, no remoteJid and no history flag.
 // Persistence keeps that rawPayload and isFromMe, with no agent attribution.
-const echoRow = journalSeq => staffRow(journalSeq, { coexistence: 'smb_message_echoes', noAgentDispatch: true, messageTimestamp: 1794484800 })
+const echoRow = journalSeq => staffRow(journalSeq, { coexistence: 'smb_message_echoes', noAgentDispatch: true, messageTimestamp: Math.floor(Date.now() / 1000) })
 const answerSub = () => ({ ...sub('answer'), answerBotId: 'answer-bot', sources: [{ kind: 'channel', id: 'instance-1' }] })
 for (const [label, changes] of [
   ['group', { chatId: '12000@g.us' }],

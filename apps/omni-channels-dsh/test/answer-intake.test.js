@@ -9,7 +9,7 @@ const person = (journalSeq = 1, changes = {}) => ({
   id: `intake-${journalSeq}`, journalSeq, externalId: `WA-intake-${journalSeq}`, eventType: 'message.received',
   direction: 'inbound', instanceId: INSTANCE, chatUuid: CHAT, chatId: '5511988887777@s.whatsapp.net',
   metadata: { from: '5511988887777' }, textContent: 'Where is my order?',
-  rawPayload: { upsertType: 'notify', messageTimestamp: ANSWER_CLOCK / 1000 }, ...changes,
+  rawPayload: { upsertType: 'notify', messageTimestamp: Math.floor(Date.now() / 1000) }, ...changes,
 })
 
 // Real team + channels + standing queue, fed through the durable SSE ingress. No
@@ -53,7 +53,7 @@ for (const [label, changes, options] of [
   ['initial QR history without upsertType', { rawPayload: { messageTimestamp: ANSWER_CLOCK / 1000 } }],
   ['append echo', { rawPayload: { upsertType: 'append' } }],
   ['stale platform timestamp', { rawPayload: { upsertType: 'notify', messageTimestamp: (ANSWER_CLOCK - 600_001) / 1000 } }],
-  ['Cloud API history marker', { metadata: { from: '5511988887777', ingestMode: 'history-sync' } }, { channel: 'whatsapp-business' }],
+  ['Cloud API history marker', { rawPayload: { isHistorySync: true, coexistence: 'history', messageTimestamp: ANSWER_CLOCK / 1000 } }, { channel: 'whatsapp-business' }],
 ]) test(`answer intake: ${label} creates no child and cannot wake or pause an existing child`, async t => {
   let allow = false
   const b = await bench(t, options?.access ? { access: id => allow ? true : options.access(id) } : options)
