@@ -60,7 +60,7 @@ for (const [label, changes, options] of [
   await b.deliver(person(1, changes))
   assert.deepEqual([b.made.length, b.omni.children().length, b.channels.threads.byChat(CHAT)], [0, 0, undefined])
   allow = true
-  // Expire the denied sender cache before sending the allowed DM.
+  // Refresh the intake lookups before sending the allowed DM.
   t.mock.timers.tick(30_001)
   await b.deliver(person(2, { rawPayload: { upsertType: 'notify' } }))
   await signal(t, b)
@@ -111,17 +111,58 @@ for (const failure of ['transport', 'http', 'malformed']) test(`answer intake: $
   assert.equal(p.warnings[0][1], INSTANCE)
 })
 
-test('answer intake: instance, chat and sender decisions refresh after 30 seconds, including deny to allow', async t => {
+for (const failure of ['transport', 'http', 'malformed']) test(`answer intake: ${failure} access errors are not cached for the same sender`, async () => {
+  let failing = true
+  const p = policy({ check: () => {
+    if (!failing) return reply({ allowed: true })
+    if (failure === 'transport') throw Error('offline')
+    return failure === 'http' ? { ok: false, status: 503 } : reply({ allowed: 'yes' })
+  } })
+  assert.equal(await p.admit(person()), false)
+  assert.equal(await p.admit(person(2)), false)
+  assert.equal(p.checks().length, 2)
+  assert.equal(p.warnings.length, 1)
+  failing = false
+  assert.equal(await p.admit(person(3)), true)
+  assert.equal(p.checks().length, 3)
+})
+
+test('answer intake: a person admitted by an access rule is allowed on their next message within 30 seconds', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: ANSWER_CLOCK })
+  let allowed = false
+  const p = policy({ check: () => reply({ allowed }) })
+  assert.equal(await p.admit(person()), false)
+  allowed = true
+  t.mock.timers.tick(1_000)
+  assert.equal(await p.admit(person(2)), true)
+  assert.equal(p.checks().length, 2)
+  assert.equal(p.calls.filter(call => call[1].startsWith('/instances/')).length, 1)
+  assert.equal(p.calls.filter(call => call[1].startsWith('/chats/')).length, 1)
+})
+
+test('answer intake: allowed senders are cached within 30 seconds and rechecked at expiry', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: ANSWER_CLOCK })
+  const p = policy()
+  assert.equal(await p.admit(person()), true)
+  t.mock.timers.tick(29_999)
+  assert.equal(await p.admit(person(2)), true)
+  assert.equal(p.checks().length, 1)
+  t.mock.timers.tick(1)
+  assert.equal(await p.admit(person(3)), true)
+  assert.equal(p.checks().length, 2)
+})
+
+test('answer intake: instance, chat and allowed sender decisions refresh after 30 seconds', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: ANSWER_CLOCK })
   let allowed = false, minutes = 10
   const p = policy({ check: () => reply({ allowed }), instance: () => reply({ channel: 'whatsapp-baileys', inboundMaxAgeMinutes: minutes }) })
   assert.equal(await p.admit(person()), false)
   allowed = true
-  assert.equal(await p.admit(person()), false)
-  assert.equal(p.checks().length, 1)
-  t.mock.timers.tick(30_000)
   assert.equal(await p.admit(person()), true)
   assert.equal(p.checks().length, 2)
+  t.mock.timers.tick(30_000)
+  assert.equal(await p.admit(person()), true)
+  assert.equal(p.checks().length, 3)
   assert.equal(p.calls.filter(call => call[1].startsWith('/instances/')).length, 2)
   assert.equal(p.calls.filter(call => call[1].startsWith('/chats/')).length, 2)
   allowed = false
