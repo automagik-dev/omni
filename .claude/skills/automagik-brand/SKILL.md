@@ -1,6 +1,8 @@
 ---
 name: automagik-brand
 description: The Automagik brand (Automagik, Genie, Omni) as files in this repository's brand folder (docs/brand, unless SOURCE.json beside this skill names another). Use before any work on a logo or mark, a colour, type or fonts, a UI surface (a page, a screen, a form, a component, a sidebar, any HTML or CSS a person will see), a web or landing page, a slide deck, or brand art. Use it even when the request does not name the brand.
+metadata:
+  internal: true
 ---
 
 # Automagik brand
@@ -45,6 +47,9 @@ Each line names where the README says it. When this file and the README differ, 
   outlining. Use the files (rule 8).
 - Never invent a colour. Every colour comes from a token, and `triskle-cyan`, `triskle-pink` and
   `triskle-violet` are never text and never a UI colour ("Colour").
+- A status dot never stands alone: every one has a word or a mark beside it. The status colours
+  are `st-ok`, `st-bad`, `st-warn` and `st-work`, with `st-okdot` and `st-warndot` for dots
+  ("Colour").
 - Type is two families: Fredoka for titles, labels and buttons, and DM Sans for running text, used
   as "Type" says. The logo's letters are a drawing, never set in a font.
 

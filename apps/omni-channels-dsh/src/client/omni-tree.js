@@ -640,7 +640,10 @@ export function OmniTree(props) {
   useEffect(() => { startLive(call) }, [])
   if (!isOmniBot(bot)) return null
   const rowProps = rowPropsOf(props, roster?.omniRowProps)
-  const defaultBotId = roster?.omniOwnership?.defaultBotId ?? roster?.eventsBotId ?? bot.id
+  // A saved default whose Bot was removed counts as none set (host subscriptions.js eventsBotId).
+  const saved = roster?.omniOwnership?.defaultBotId
+  const removed = saved != null && roster?.byId !== undefined && roster.byId[saved] === undefined
+  const defaultBotId = (removed ? undefined : saved) ?? roster?.eventsBotId ?? bot.id
   const ownerOf = id => roster?.omniOwnership?.channels?.[id] ?? defaultBotId
   const threads = (Array.isArray(roster?.omniThreads) ? roster.omniThreads : []).filter(thread => (thread.ownerBotId ?? ownerOf(thread.channelId)) === bot.id)
   const ownedChannels = state.channels.filter(channel => ownerOf(channel.id) === bot.id)
@@ -666,7 +669,7 @@ export function OmniTree(props) {
   const plus = plusOf(roster, state)
   const listed = new Set(ownedChannels.map(channel => channel.id))
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
-    bot.id !== defaultBotId ? h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }) : null,
+    h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
     bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? h(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map(channel => h(ChannelItem, {

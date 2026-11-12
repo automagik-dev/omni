@@ -446,12 +446,18 @@ export const answerState = () => teamState({
   bots: { ...teamState().bots, [ANSWER_MASTER]: { id: ANSWER_MASTER, kind: 'omni', name: 'Service', instructions: 'MASTER: help customers with orders.', model: 'deepseek/pro', createdAt: 2 } },
   omniOwnership: { defaultBotId: 'm1', channels: { [INSTANCE]: ANSWER_MASTER } },
 })
+// The answer bot is the team's one Omni Bot and its default bot: it owns INSTANCE explicitly and
+// holds OTHER_INSTANCE only as the catch-all. `defaultBotId` may name a removed Bot.
+export const defaultAnswerState = (defaultBotId = ANSWER_MASTER) => teamState({
+  bots: { ...teamState().bots, [ANSWER_MASTER]: answerState().bots[ANSWER_MASTER] },
+  omniOwnership: { defaultBotId, channels: { [INSTANCE]: ANSWER_MASTER } },
+})
 // `clock`: a start time for a fake clock that also moves Date (staff take-over deadlines).
 export const ANSWER_CLOCK = Date.parse('2026-11-12T12:00:00.000Z')
-export async function answerBench(t, { visibility = 'isolated', allowedTools = [], presets: supplied, enabled = true, clock } = {}) {
+export async function answerBench(t, { visibility = 'isolated', allowedTools = [], presets: supplied, enabled = true, clock, state = answerState() } = {}) {
   t.mock.timers.enable(clock === undefined ? { apis: ['setTimeout'] } : { apis: ['setTimeout', 'Date'], now: clock })
   const omni = watchedOmni(t, { instanceIds: [INSTANCE, OTHER_INSTANCE] })
-  const home = homeFor(t, omni, answerState())
+  const home = homeFor(t, omni, state)
   const selected = new Map()
   const presets = supplied ?? {
     available: true,

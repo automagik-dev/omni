@@ -28,7 +28,8 @@ import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
 import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, knowledgeRefusalOf, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
 import { ANSWER_CHAT_TOOLS, ANSWER_EXTRA_TOOLS, KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED, THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
-import { answerBench, ANSWER_MASTER, askedOf, boot, CHAT, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
+import { matches } from '../src/host/omni-events.js'
+import { answerBench, ANSWER_MASTER, askedOf, boot, CHAT, defaultAnswerState, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, OTHER_INSTANCE, PNG, preExecute, record, resetFetch, saved, signal, teamState, fakeOmni, until, use, watchedOmni } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -1345,6 +1346,97 @@ test('#1689 the knowledge folder is set only by staff settings, as the real path
   served(next, ['glob'])
   await next.call('omni-answer-settings', { ...b.settings, knowledgeFolder: null })
   assert.equal(next.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, null)
+})
+
+// #1694: answer mode on the default bot. ANSWER_MASTER is the team's one Omni Bot and its default
+// bot: it owns INSTANCE explicitly and holds OTHER_INSTANCE (ELSEWHERE's channel) only as the catch-all.
+const inbound = (instanceId, chatUuid) => ({ eventType: 'message.received', direction: 'inbound', instanceId, chatUuid, textContent: 'Where is my order?' })
+
+test('#1694 the default bot answers on the channel it owns explicitly, never on one it holds only as the default', async t => {
+  const b = await answerBench(t, { state: defaultAnswerState() })
+  assert.equal(b.channels.eventsBotId(), ANSWER_MASTER)
+  assert.equal(b.channels.channelOwner(OTHER_INSTANCE), ANSWER_MASTER, 'it still holds the catch-all')
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, true)
+  const sub = b.team.state.subscriptions[`answer:${ANSWER_MASTER}`]
+  assert.equal(sub.on, true)
+  assert.deepEqual(sub.sources.map(source => source.id), [INSTANCE])
+  assert.equal(matches(sub, inbound(INSTANCE, CHAT)), true)
+  assert.equal(matches(sub, inbound(OTHER_INSTANCE, ELSEWHERE)), false)
+  await b.channels.fireSubscription(sub, b.incoming())
+  await signal(t, b)
+  const child = b.channels.threads.byChat(CHAT)
+  assert.equal(child.answerChild, true)
+  await until(() => b.agentOf(child.sessionId).calls.length === 1)
+  assert.match(JSON.stringify(b.agentOf(child.sessionId).calls[0]), /Answer the person in your own chat/)
+  assert.equal(b.channels.answerCanSend(child.id, CHAT), true)
+  await assert.rejects(b.channels.threads.answerFor({ ownerBotId: ANSWER_MASTER, channelId: OTHER_INSTANCE, chatId: ELSEWHERE }), /not enabled on this owning bot/)
+  // The owner's + on a catch-all channel makes an ordinary thread, not a contained child.
+  const plain = await b.channels.threads.add(OTHER_INSTANCE, ELSEWHERE)
+  assert.equal(plain.ok, true)
+  assert.equal(plain.thread.ownerBotId, ANSWER_MASTER)
+  assert.equal(plain.thread.answerChild, undefined)
+  assert.equal(b.channels.answerCanSend(plain.thread.id, ELSEWHERE), false)
+})
+
+test('#1694 enabling answer mode on the default bot converts only its threads on channels it owns explicitly', async t => {
+  const b = await answerBench(t, { state: defaultAnswerState(), enabled: false })
+  const own = (await b.channels.threads.add(INSTANCE, CHAT)).thread
+  const plain = (await b.channels.threads.add(OTHER_INSTANCE, ELSEWHERE)).thread
+  await b.call('omni-answer-settings', { ...b.settings, enabled: true })
+  assert.equal(b.channels.threads.byId(own.id).answerChild, true)
+  assert.equal(b.channels.threads.byId(plain.id).answerChild, undefined)
+})
+
+for (const order of ['catch-all chat first', 'explicit chat first']) test(`#1694 a default-bot thread spanning a catch-all and an explicit channel refuses enabling until it is split (${order})`, async t => {
+  const b = await answerBench(t, { state: defaultAnswerState(), enabled: false })
+  const members = [{ chatId: ELSEWHERE, channelId: OTHER_INSTANCE }, { chatId: GROUP, channelId: INSTANCE }]
+  const mixed = await b.channels.threads.create(order === 'catch-all chat first' ? members : [...members].reverse(), 'Mixed', '')
+  assert.equal(mixed.ok, true)
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, enabled: true }), /Split existing multi-chat threads/)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, false)
+  assert.equal(b.channels.threads.byId(mixed.thread.id).answerChild, undefined)
+  await b.channels.threads.remove(mixed.thread.id)
+  await b.call('omni-answer-settings', { ...b.settings, enabled: true })
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, true)
+})
+
+test('#1694 a default-bot answer child never reads a chat on a channel its bot holds only as the default, isolated or collective', async t => {
+  const b = await answerBench(t, { state: defaultAnswerState() })
+  const child = await b.child()
+  const id = child.sessionId
+  // The bot itself reads every channel; its child does not inherit that.
+  assert.equal(b.channels.canChannel(ANSWER_MASTER, OTHER_INSTANCE, 'read'), true)
+  for (const visibility of ['isolated', 'collective']) {
+    await b.call('omni-answer-settings', { ...b.settings, visibility })
+    assert.equal(b.channels.answerCanRead(child.id, ELSEWHERE), false, visibility)
+    assert.match(await use(b, 'thread_history', id, { chatId: ELSEWHERE }), /cannot read/, visibility)
+    assert.match((await use(b, 'thread_picture', id, { messageId: MESSAGE_IDS.elsewhere })).text, /cannot read/, visibility)
+    for (const name of ['omni_call', 'omni_chats', 'thread_ask_omni']) assert.match(guarded(b.ctx, id, name) ?? '', /only their permitted/, `${visibility} ${name}`)
+  }
+  // Collective still lists and reads the chats on the channel its bot owns explicitly, only those.
+  assert.deepEqual(JSON.parse(await use(b, 'answer_chats', id)).chats.map(row => row.chatId).sort(), [CHAT, GROUP].sort())
+  assert.equal(b.channels.answerCanRead(child.id, GROUP), true)
+  assert.match(await use(b, 'thread_history', id, { chatId: GROUP }), /messages/)
+  assert.equal(b.channels.answerCanRead(child.id, ELSEWHERE), false)
+})
+
+test('#1694 a saved default bot that was removed is ignored: a lone Omni Bot takes the catch-all and keeps answering', async t => {
+  const b = await answerBench(t, { state: defaultAnswerState('removed-bot') })
+  assert.equal(b.channels.eventsBotId(), ANSWER_MASTER)
+  assert.equal(b.view().eventsBotId, ANSWER_MASTER)
+  assert.equal(b.channels.channelOwner(OTHER_INSTANCE), ANSWER_MASTER)
+  const child = await b.child()
+  assert.equal(child.answerChild, true)
+  assert.equal(b.team.state.subscriptions[`answer:${ANSWER_MASTER}`].on, true)
+  assert.equal(b.channels.answerCanRead(child.id, ELSEWHERE), false)
+})
+
+test('#1694 a saved default bot that was removed falls back to the Main Bot when no Omni Bot is left, as when unset', async t => {
+  const run = await boot(t, homeFor(t, watchedOmni(t), teamState({ omniOwnership: { defaultBotId: 'removed-bot', channels: {} } })))
+  assert.equal(run.channels.eventsBotId(), 'm1')
+  assert.equal(run.channels.channelOwner(INSTANCE), 'm1')
+  assert.equal(run.channels.canChannel('m1', INSTANCE, 'write'), true)
+  assert.equal(run.view().eventsBotId, 'm1')
 })
 
 test('a thread Session\'s agent/created listener warns and sets nothing up when the state cannot load', async (t) => {
