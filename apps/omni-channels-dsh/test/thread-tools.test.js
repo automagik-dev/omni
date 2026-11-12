@@ -27,7 +27,7 @@ import { NEEDS_NEWER_TEAM } from '../src/host/resume-hook.js'
 import { NOT_LINKED } from '../src/host/thread-keys.js'
 import { RUNS_KEPT, isAskRun } from '../src/host/subscriptions.js'
 import { AUTO_PRESET, FREE_REACTIONS_DEFAULT, isFreeReaction, knowledgeRefusalOf, NOT_A_THREAD, permissionsOf, withoutThreadTools } from '../src/host/thread-tools.js'
-import { ANSWER_CHAT_TOOLS, KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED, THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
+import { ANSWER_CHAT_TOOLS, ANSWER_EXTRA_TOOLS, KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED, THREAD_DEFAULTS, threadDefaultsOf, threadInstructions, THREAD_TOOLS } from '../src/host/threads.js'
 import { answerBench, ANSWER_MASTER, askedOf, boot, CHAT, ELSEWHERE, CHATS, dsh, flush, GROUP, guarded, homeFor, INSTANCE, keysOf, MESSAGE_IDS, PNG, preExecute, record, resetFetch, saved, teamState, fakeOmni, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
@@ -1096,6 +1096,47 @@ test('SC4 answer children refuse forged tools, raw API and wrong-chat writes whi
   assert.match(await use(b, 'set_answer_shared_notes', id, { botId: ANSWER_MASTER, notes: 'escalate' }), /Only the owning/)
 })
 
+test('an answer child omits an extra the global host no longer serves and warns once per bot and tool', async t => {
+  const b = await answerBench(t, { allowedTools: ['read'] })
+  const globallyServed = b.ctx.tools.schemas()
+  b.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'read')
+  const warned = []
+  b.channels.warn = (...args) => { warned.push(args) }
+  const child = await b.child()
+  assert.deepEqual(b.restricts.at(-1).filter.allow, ANSWER_CHAT_TOOLS)
+  assert.deepEqual(warned, [['omni-channels: answer bot %s allowed tool %s is not served; leaving it out', ANSWER_MASTER, 'read']])
+  await b.child()
+  assert.equal(warned.length, 1)
+  assert.equal((await preExecute(b, 'read', child.sessionId)).kind, 'deny')
+  assert.notEqual((await preExecute(b, 'thread_say', child.sessionId, { text: 'hello' })).kind, 'deny')
+})
+
+test('an answer child fails closed when a chat tool is not globally served', async t => {
+  const b = await answerBench(t)
+  const globallyServed = b.ctx.tools.schemas()
+  b.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'thread_say')
+  await assert.rejects(b.child(), /does not serve answer chat tool "thread_say"/)
+  assert.equal(b.channels.threads.list().length, 0)
+})
+
+test('answer save refuses an extra that is not globally served', async t => {
+  const b = await answerBench(t)
+  const globallyServed = b.ctx.tools.schemas()
+  b.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'read')
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, allowedTools: ['read'] }), /Answer tool "read" is not served/)
+  assert.deepEqual(b.view().omniAnswers[ANSWER_MASTER].allowedTools, [])
+})
+
+test('answer admission uses the global served set when an agent scope is already narrowed', async t => {
+  const b = await answerBench(t, { allowedTools: ['read'] })
+  const child = await b.child()
+  const globallyServed = b.ctx.tools.schemas()
+  const fresh = b.freshAgent(child.sessionId)
+  fresh.ctx.tools.schemas = () => globallyServed.filter(schema => schema.name !== 'read')
+  await Promise.all((b.ctx.listeners.get('agent/created') ?? []).map(listener => listener({ agent: fresh })))
+  assert.deepEqual(b.restricts.filter(entry => entry.agent === fresh).at(-1).filter.allow, [...ANSWER_CHAT_TOOLS, 'read'])
+})
+
 test('SC5 isolated and collective visibility never widen send keys and narrow live children immediately', async t => {
   const b = await answerBench(t)
   const child = await b.child()
@@ -1137,10 +1178,16 @@ function knowledgeFiles(t) {
   writeFileSync(join(files.work, 'faq.md'), 'SECRET workspace\n')
   symlinkSync(join(files.outside, 'secret.txt'), join(files.kb, 'link.txt'))
   symlinkSync(files.outside, join(files.kb, 'dirlink'))
+  // A link that leads nowhere yet: what it names could appear outside the folder later.
+  symlinkSync(join(files.outside, 'not-yet.txt'), join(files.kb, 'dangling.txt'))
   return files
 }
-// The read tools a DSH host serves (ctx.tools.schemas), as the host lists them.
-const served = (b, names = ['read', 'read_image', 'glob', 'grep']) => { b.ctx.tools.schemas = () => names.map(name => ({ name })) }
+// The host's global list (ctx.tools.schemas): every tool the plugin registered, chat tools
+// included, and of DSH's read tools only `names`.
+const served = (b, names = ANSWER_EXTRA_TOOLS) => {
+  const others = [...b.ctx.registeredTools.keys()].filter(name => !ANSWER_EXTRA_TOOLS.includes(name))
+  b.ctx.tools.schemas = () => [...others, ...names].map(name => ({ name }))
+}
 async function knowledgeBench(t, { allowedTools = [] } = {}) {
   const b = await answerBench(t, { allowedTools })
   served(b)
@@ -1209,6 +1256,7 @@ test('#1689 through DSH\'s real tool executor an answer child reads inside its k
     ['read', { file_path: `${kb}/missing/../../outside/secret.txt` }],
     ['read', { file_path: join(kb, 'link.txt') }],
     ['read', { file_path: join(kb, 'dirlink', 'secret.txt') }],
+    ['read', { file_path: join(kb, 'dangling.txt') }],
     ['read', { file_path: join(sibling, 'private.md') }],
     ['read', { file_path: 'faq.md' }],
     ['read', { file_path: '~/faq.md' }],
@@ -1221,6 +1269,7 @@ test('#1689 through DSH\'s real tool executor an answer child reads inside its k
     ['grep', { pattern: 'SECRET', path: `${kb}/dirlink/../outside` }],
     ['grep', { pattern: 'SECRET', path: kb, include: '../outside/*' }],
     ['grep', { pattern: 'SECRET', path: join(kb, 'link.txt') }],
+    ['grep', { pattern: 'SECRET', path: join(kb, 'dangling.txt') }],
   ]) assert.deepEqual(await call(name, args), { isError: true, text: refusal }, `${name} ${JSON.stringify(args)}`)
 })
 
