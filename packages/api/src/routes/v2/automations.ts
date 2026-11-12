@@ -297,7 +297,23 @@ async function resolveTestEvent(
               rawPayload: row.rawPayload,
             }).filter(([, v]) => v != null),
           ),
-    metadata: row.metadata ?? undefined,
+    // The journal lifts envelope fields out of metadata into columns. Restore
+    // those values for the same condition context and templates as the live bus.
+    metadata: {
+      ...row.metadata,
+      ...Object.fromEntries(
+        Object.entries({
+          instanceId: row.instanceId,
+          channelType: row.channel,
+          personId: row.personId,
+          platformIdentityId: row.platformIdentityId,
+          agentId: row.agentId,
+          producingKeyId: row.producingKeyId,
+          causationId: row.causationId,
+          tenantId: row.tenantId,
+        }).filter(([, value]) => value != null),
+      ),
+    },
     timestamp: row.receivedAt.getTime(),
   };
 }
