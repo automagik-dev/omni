@@ -4852,6 +4852,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/channels/whatsapp-business/kapso/key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save this Omni's Kapso project key
+         * @description Checks the key against Kapso, then stores it as the sealed install-wide setting kapso.api_key. Write-only: no route returns it. Refused while multitenancy is on.
+         */
+        put: operations["saveKapsoKey"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/whatsapp-business/kapso/setup-link": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create a Kapso setup link
+         * @description A Kapso-hosted page where the person connects their WhatsApp Business number (coexistence: the Business app keeps working; no number is provisioned). Made for this Omni's Kapso customer, created and remembered on first use. Kapso revokes the previous link.
+         */
+        post: operations["createKapsoSetupLink"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/channels/whatsapp-business/kapso/numbers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List the Kapso project's WhatsApp numbers
+         * @description Numbers with a WhatsApp Business Account, most recent first, and the webhook address Omni would give Kapso (null when Omni has no public https address, so a connect would be refused).
+         */
+        get: operations["listKapsoNumbers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/instances/{id}/whatsapp-business/kapso/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a WhatsApp Business number through Kapso
+         * @description Points the number's Kapso Meta-forwarding webhook at this Omni with a secret Omni generates (updating the number's existing one), then connects the instance through Kapso's Meta-compatible API with the project key (authMode x-api-key, signatureMode x-webhook-signature).
+         */
+        post: operations["connectWhatsAppBusinessKapso"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/instances/{id}/whatsapp-business/connect": {
         parameters: {
             query?: never;
@@ -30178,6 +30258,390 @@ export interface operations {
             };
             /** @description Channel guard failed */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    saveKapsoKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description Kapso project API key. Write-only: never returned. */
+                    apiKey: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Saved */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** @enum {boolean} */
+                            saved: true;
+                        };
+                    };
+                };
+            };
+            /** @description Invalid body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description KAPSO_NOT_AVAILABLE (multitenancy is on: the key is install-wide), KAPSO_NOT_CONFIGURED (no Kapso key saved), or PUBLIC_URL_MISSING (connect only: Omni has no public https address; nothing was created) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Kapso refused or could not be reached: KAPSO_KEY_REFUSED (Kapso's 401) or KAPSO_ERROR, with Kapso's words */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    createKapsoSetupLink: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uri */
+                            url: string;
+                            expiresAt: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description KAPSO_NOT_AVAILABLE (multitenancy is on: the key is install-wide), KAPSO_NOT_CONFIGURED (no Kapso key saved), or PUBLIC_URL_MISSING (connect only: Omni has no public https address; nothing was created) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Kapso refused or could not be reached: KAPSO_KEY_REFUSED (Kapso's 401) or KAPSO_ERROR, with Kapso's words */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    listKapsoNumbers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Numbers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            items: {
+                                /** @description Meta phone_number_id */
+                                phoneNumberId: string;
+                                /** @description WhatsApp Business Account id */
+                                wabaId: string;
+                                displayPhoneNumber: string | null;
+                                /** @description Verified or display name */
+                                name: string | null;
+                            }[];
+                            /** Format: uri */
+                            webhookUrl: string | null;
+                        };
+                    };
+                };
+            };
+            /** @description KAPSO_NOT_AVAILABLE (multitenancy is on: the key is install-wide), KAPSO_NOT_CONFIGURED (no Kapso key saved), or PUBLIC_URL_MISSING (connect only: Omni has no public https address; nothing was created) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Kapso refused or could not be reached: KAPSO_KEY_REFUSED (Kapso's 401) or KAPSO_ERROR, with Kapso's words */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+        };
+    };
+    connectWhatsAppBusinessKapso: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** @description A phone_number_id from the list */
+                    phoneNumberId: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Connected */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            instanceId: string;
+                            /** @enum {string} */
+                            status: "connected";
+                            displayPhoneNumber: string | null;
+                            qualityRating: string | null;
+                            /** Format: uri */
+                            webhookUrl: string;
+                        };
+                    };
+                };
+            };
+            /** @description Not a whatsapp-business instance, or invalid body */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description KAPSO_NUMBER_NOT_FOUND: the number is not in the Kapso project */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description KAPSO_NOT_AVAILABLE (multitenancy is on: the key is install-wide), KAPSO_NOT_CONFIGURED (no Kapso key saved), or PUBLIC_URL_MISSING (connect only: Omni has no public https address; nothing was created) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description The channel failed to start */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        error: {
+                            /**
+                             * @description Error code
+                             * @example NOT_FOUND
+                             */
+                            code: string;
+                            /** @description Human-readable error message */
+                            message: string;
+                            /** @description Additional error details */
+                            details?: unknown;
+                        };
+                    };
+                };
+            };
+            /** @description Kapso refused or could not be reached: KAPSO_KEY_REFUSED (Kapso's 401) or KAPSO_ERROR, with Kapso's words */
+            502: {
                 headers: {
                     [name: string]: unknown;
                 };

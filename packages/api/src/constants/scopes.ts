@@ -239,6 +239,10 @@ export const SCOPE_MAP: Record<string, string> = {
   'GET /instances/supported-channels': 'instances:read',
   'GET /channels/capabilities': 'instances:read',
   'GET /channels/whatsapp-business/webhook-setup': 'settings:write',
+  // Kapso (#1676): a channel credential and its numbers, like a connect; refused with multitenancy.
+  'PUT /channels/whatsapp-business/kapso/key': 'instances:write',
+  'POST /channels/whatsapp-business/kapso/setup-link': 'instances:write',
+  'GET /channels/whatsapp-business/kapso/numbers': 'instances:read',
   'GET /instances/:id': 'instances:read',
   'POST /instances': 'instances:write',
   'PATCH /instances/:id': 'instances:write',
@@ -458,6 +462,7 @@ export const SCOPE_MAP: Record<string, string> = {
   // --- whatsapp-business (Meta Cloud API): mounted at /instances/:id/whatsapp-business/* ---
   'POST /instances/:id/whatsapp-business/oauth/exchange': 'instances:write',
   'POST /instances/:id/whatsapp-business/connect': 'instances:write',
+  'POST /instances/:id/whatsapp-business/kapso/connect': 'instances:write',
   'POST /instances/:id/whatsapp-business/register': 'instances:write',
   'POST /instances/:id/whatsapp-business/subscribe-app': 'instances:write',
   'GET /instances/:id/whatsapp-business/connection': 'instances:read',

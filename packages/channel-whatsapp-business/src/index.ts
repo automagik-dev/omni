@@ -81,6 +81,20 @@ export {
 } from './oauth';
 export type { ExchangeCodeResult, WabaDetails, WabaPhoneNumber } from './oauth';
 
+// Kapso Platform API — setup link, the project's numbers and the number's Meta-forwarding
+// webhook, consumed by `packages/api/src/routes/v2/whatsapp-business-kapso.ts` (#1676).
+export {
+  DEFAULT_KAPSO_API_BASE_URL,
+  KAPSO_META_API_VERSION,
+  KapsoApiError,
+  createKapsoCustomer,
+  createKapsoSetupLink,
+  kapsoMetaApiBaseUrl,
+  listKapsoPhoneNumbers,
+  upsertKapsoMetaWebhook,
+} from './kapso';
+export type { KapsoOptions, KapsoPhoneNumber, KapsoSetupLink } from './kapso';
+
 // Errors
 export { MetaApiError, MetaErrorCode, mapHttpStatusToMetaError, isRetryable } from './utils/errors';
 export type { MetaErrorCodeType, MetaApiErrorContext } from './utils/errors';
