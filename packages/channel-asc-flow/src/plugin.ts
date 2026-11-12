@@ -1149,6 +1149,10 @@ export class AscFlowPlugin extends BaseChannelPlugin {
    * Best-effort: a push refused by the platform must not cost the beneficiary
    * the answer, which the flow will render from `resposta` anyway. Stop at the
    * first failure — the remaining bubbles would arrive out of order.
+   *
+   * Only a failed BUBBLE stops the loop. The typing indicator between bubbles
+   * is cosmetic: when the platform refuses it (HTTP 429 at peak hours), the
+   * next bubble still goes out — the loop is sequential, so order holds.
    */
   private async pushBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<number> {
     let enviadas = 0;
@@ -1160,11 +1164,6 @@ export class AscFlowPlugin extends BaseChannelPlugin {
           msg_usuario: bubble,
           entrante: 0,
         });
-        enviadas++;
-        // Typing between bubbles, for rhythm — never after the last one.
-        if (enviadas < bubbles.length) {
-          await state.client.call('/sendIndicador', { cod, tipo: 1 });
-        }
       } catch (err) {
         this.logger.warn('[asc-flow] bubble push failed — stopping so the rest do not arrive out of order', {
           cod,
@@ -1174,8 +1173,23 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         });
         return enviadas;
       }
+      enviadas++;
+      // Typing between bubbles, for rhythm — never after the last one.
+      if (enviadas < bubbles.length) await this.typingBetweenBubbles(state, cod);
     }
     return enviadas;
+  }
+
+  /** `POST /sendIndicador` between two bubbles. Never throws: a refused indicator must not cost a bubble. */
+  private async typingBetweenBubbles(state: AscFlowInstanceState, cod: number): Promise<void> {
+    try {
+      await state.client.call('/sendIndicador', { cod, tipo: 1 });
+    } catch (err) {
+      this.logger.warn('[asc-flow] typing between bubbles failed — sending the next bubble anyway', {
+        cod,
+        err: String(err),
+      });
+    }
   }
 
   // ─────────────────────────────────────────────────────────────

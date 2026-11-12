@@ -2,7 +2,7 @@
  * Inbound parsing, the outbound turn sequence, and handoff.
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { parseInboundTurn } from '../handlers/webhook';
 import { AscFlowPlugin, normalizeBaseUrl } from '../plugin';
@@ -11,6 +11,8 @@ import {
   BASE_URL,
   HANDOFF_SERVICO,
   MockEventBus,
+  MockLogger,
+  OK_BODY,
   type RecordedCall,
   TURN_TEXT,
   connectPlugin,
@@ -817,5 +819,59 @@ describe('emoji codec', () => {
   it('matches the marker the client production flow writes', () => {
     // flow #215 (NDS PPO) ships `Olá! ##1f44b## Seja bem-vindo(a)`.
     expect(encodeAscEmoji('Olá! 👋 Seja bem-vindo(a)')).toBe('Olá! ##1f44b## Seja bem-vindo(a)');
+  });
+});
+
+// Em produção a plataforma passou a responder HTTP 429 no `/sendIndicador` nos
+// picos. O indicador estava no MESMO try da bolha: a falha dele (cosmética)
+// parava o laço depois de a bolha já ter saído, e as seguintes se perdiam.
+describe('typing between bubbles', () => {
+  const send = (text: string) => plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text } as never });
+  const tooMany = () => jsonResponse({ cod_error: 1, msg: 'Too Many Requests' }, 429);
+
+  it('keeps pushing the bubbles when /sendIndicador answers 429', async () => {
+    const warn = spyOn(MockLogger.prototype, 'warn');
+    try {
+      await boot({ '/sendIndicador': tooMany });
+      const result = await send('um\n\ndois\n\ntres');
+
+      expect(result.success).toBe(true);
+      // Todas as bolhas saem, na ordem, com a tentativa de indicador entre elas.
+      expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois', 'tres']);
+      expect(sequence()).toEqual([
+        '/callbackFlowMsg',
+        '/sendIndicador',
+        '/callbackFlowMsg',
+        '/sendIndicador',
+        '/callbackFlowMsg',
+      ]);
+      expect(ready('42')).toMatchObject({ pronto: 1, resposta: '', bolhas: ['um', 'dois', 'tres'] });
+
+      // `MockLogger.warn` declara zero parâmetros; o plugin chama com (mensagem, contexto).
+      const warns = warn.mock.calls as unknown as Array<[string, Record<string, unknown>]>;
+      const indicatorWarns = warns.filter(([msg]) => msg.includes('typing between bubbles failed'));
+      expect(indicatorWarns).toHaveLength(2);
+      expect(indicatorWarns[0]?.[1]).toMatchObject({ cod: 42 });
+      expect(String(indicatorWarns[0]?.[1].err)).toContain('HTTP 429');
+      expect(warns.some(([msg]) => msg.includes('bubble push failed'))).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('still stops at the first refused bubble, so the rest never arrive out of order', async () => {
+    let pushes = 0;
+    await boot({
+      '/callbackFlowMsg': () =>
+        ++pushes === 2
+          ? jsonResponse({ cod_error: 10, msg: 'Atendimento já finalizado!' }, 401)
+          : jsonResponse(OK_BODY),
+    });
+    const result = await send('um\n\ndois\n\ntres');
+
+    expect(result.success).toBe(true);
+    // A primeira saiu, a segunda foi recusada e a terceira nem foi tentada.
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois']);
+    expect(sequence()).toEqual(['/callbackFlowMsg', '/sendIndicador', '/callbackFlowMsg']);
   });
 });
