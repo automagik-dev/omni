@@ -15,8 +15,7 @@ export const PLATFORM = {
 }
 
 function run(dir, modules) {
-  // The bundle's own registration comes first; the Bot team's client also registers under
-  // its former name (@automagik/omni-dsh), which hands over the same module.
+  // Take the Bot team's own bundle registration.
   let registration
   runInNewContext(readFileSync(join(dir, 'client.js'), 'utf8'), { window: { __ModuleLoader__: { load: (entry) => { registration ??= entry } } } })
   return registration.factory((name) => {

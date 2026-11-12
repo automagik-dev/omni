@@ -47,7 +47,7 @@ const anchor = pathToFileURL(existsSync(base) ? base : resolve(harness, 'package
 const owners = [plugin, core].map(dir => `${pathToFileURL(dir).href}/`)
 const coreUrl = `${pathToFileURL(core).href}/`
 const clientShim = pathToFileURL(join(plugin, 'test', 'omni-client.js')).href
-const TEAM_NAMES = ['@automagik/bots-dsh', '@automagik/omni-dsh']
+const TEAM_NAME = '@automagik/bots-dsh'
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -55,12 +55,9 @@ registerHooks({
     if (specifier.startsWith('@deepseek-ai/') && fromOurs) return nextResolve(specifier, { ...context, parentURL: anchor })
     // The team's entry, or any file of it (its test helpers), by path rather than exports;
     // its client bundle as DSH hands it over (omni-client.js).
-    // Under its name and its former one.
-    for (const name of TEAM_NAMES) {
-      if (specifier === name) return nextResolve(`${coreUrl}index.js`, context)
-      if (specifier === `${name}/client`) return nextResolve(clientShim, context)
-      if (specifier.startsWith(`${name}/`)) return nextResolve(`${coreUrl}${specifier.slice(name.length + 1)}`, context)
-    }
+    if (specifier === TEAM_NAME) return nextResolve(`${coreUrl}index.js`, context)
+    if (specifier === `${TEAM_NAME}/client`) return nextResolve(clientShim, context)
+    if (specifier.startsWith(`${TEAM_NAME}/`)) return nextResolve(`${coreUrl}${specifier.slice(TEAM_NAME.length + 1)}`, context)
     return nextResolve(specifier, context)
   },
 })

@@ -26,11 +26,6 @@ const OUTPUT = join(PLUGIN, 'client.js')
 export const PLATFORM_MODULES = ['react', 'react-dom']
 // The other plugins' bundles this one requires, as dsh.client.external names them.
 export const EXTERNAL_BUNDLES = MANIFEST.dsh.client.external
-// The Bot team's client (automagik-dev/automagik), and the name it had before it moved there:
-// a DSH that still runs @automagik/omni-dsh hands the team's client over under that name.
-// dsh.client.external names both, so whichever is installed loads first.
-export const TEAM_CLIENT = '@automagik/bots-dsh/client'
-export const FORMER_TEAM_CLIENT = '@automagik/omni-dsh/client'
 
 export async function bundleClient() {
   const result = await build({
@@ -53,10 +48,7 @@ export async function bundleClient() {
     '// Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.',
     'window.__ModuleLoader__.load({',
     `  id: '${PACKAGE_NAME}',`,
-    '  factory: (dshRequire) => {',
-    // The Bot team's client, else the same bundle under its former name: a DSH that still
-    // runs @automagik/omni-dsh has no @automagik/bots-dsh, and a miss would stop the whole UI.
-    `const require = (spec) => { if (spec !== '${TEAM_CLIENT}') return dshRequire(spec); try { return dshRequire(spec) } catch (error) { try { return dshRequire('${FORMER_TEAM_CLIENT}') } catch { throw error } } }`,
+    '  factory: (require) => {',
     'const module = { exports: {} }',
     result.outputFiles[0].text.trimEnd(),
     // The loader gets a plain exports object tagged as a module, as DSH's own bundles are.

@@ -1,8 +1,7 @@
 // Generated from src/client by `npm run build` (scripts/build-client.mjs). Do not edit by hand.
 window.__ModuleLoader__.load({
   id: '@automagik/omni-channels-dsh',
-  factory: (dshRequire) => {
-const require = (spec) => { if (spec !== '@automagik/bots-dsh/client') return dshRequire(spec); try { return dshRequire(spec) } catch (error) { try { return dshRequire('@automagik/omni-dsh/client') } catch { throw error } } }
+  factory: (require) => {
 const module = { exports: {} }
 "use strict";
 var __create = Object.create;
