@@ -16955,6 +16955,7 @@ function AnswerSettings({ bot, value = {} }) {
   const [graduates, setGraduates] = (0, import_react16.useState)(Number.isInteger(value.graduateAfter));
   const [graduateAfter, setGraduateAfter] = (0, import_react16.useState)(String(value.graduateAfter ?? 5));
   const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
+  const [knowledgeFolder, setKnowledgeFolder] = (0, import_react16.useState)(value.knowledgeFolder ?? "");
   const [personBinding, setPersonBinding] = (0, import_react16.useState)(value.personBinding === true);
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
@@ -16967,8 +16968,9 @@ function AnswerSettings({ bot, value = {} }) {
     setGraduates(Number.isInteger(value.graduateAfter));
     setGraduateAfter(String(value.graduateAfter ?? 5));
     setResumeMinutes(minutesOf(value.resumeAfterMs));
+    setKnowledgeFolder(value.knowledgeFolder ?? "");
     setPersonBinding(value.personBinding === true);
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.personBinding]);
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding]);
   const count = Number(graduateAfter);
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
   const minutes = Number(resumeMinutes);
@@ -16978,7 +16980,7 @@ function AnswerSettings({ bot, value = {} }) {
     setProblem(null);
     const person = personBinding || value.personBinding === true ? { personBinding } : {};
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, ...person });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null, ...person });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -17056,6 +17058,12 @@ function AnswerSettings({ bot, value = {} }) {
         (0, import_react16.createElement)("span", { className: "bt-field-label", "aria-hidden": true }, "Children may also"),
         ANSWER_TOOLS.map(([name, label]) => (0, import_react16.createElement)(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: (on2) => tool(name, on2) }))
       ),
+      // #1689: the host checks the folder and keeps its real path; no model tool can set it.
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Knowledge folder", note: "The business's own files, such as instructions and FAQ. While a folder is set, children read, find and search files there, and nowhere else. Full path; empty for none." },
+        (0, import_react16.createElement)("input", { className: "bt-input ot-answer-folder", type: "text", value: knowledgeFolder, title: knowledgeFolder || void 0, placeholder: "/path/to/folder", spellCheck: false, autoComplete: "off", onChange: (event) => setKnowledgeFolder(event.target.value) })
+      ),
       (0, import_react16.createElement)(SwitchRow, { label: "Bind each child to its person", on: personBinding, onChange: setPersonBinding }),
       (0, import_react16.createElement)("p", { className: "bt-note" }, "A child then takes the notes and the capability in its person's access rule, and answers only messages that rule lets in. Needs isolated visibility, and the file tools off or limited to a knowledge folder."),
       (0, import_react16.createElement)(
@@ -17070,6 +17078,28 @@ function AnswerSettings({ bot, value = {} }) {
         (0, import_react16.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", disabled: busy || graduates && !countOk || !minutesOk, onClick: save }, "Save answer settings")
       )
     ) : null
+  );
+}
+function RepairTools({ bot }) {
+  const [busy, setBusy] = (0, import_react16.useState)(false);
+  const [result, setResult] = (0, import_react16.useState)(null);
+  const repair = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      await call("repair_tool_series", { botId: bot.id });
+      setResult({ ok: true, text: "Done. Its next turn starts with all its tools: send it a message." });
+    } catch (error) {
+      setResult({ ok: false, text: hostText(error.message) });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (0, import_react16.createElement)(
+    "div",
+    null,
+    (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", disabled: busy, title: "For a bot whose every turn fails with a tool error", onClick: repair }, busy ? "Repairing tools…" : "Repair tools"),
+    result ? (0, import_react16.createElement)("p", { className: result.ok ? "ot-picker-note" : "ot-picker-problem", role: result.ok ? "status" : "alert" }, result.text) : null
   );
 }
 function OmniTree(props) {
@@ -17114,6 +17144,7 @@ function OmniTree(props) {
     "div",
     { className: "ot-tree", role: "group", "aria-label": t("{name}'s channels", { name: bot.name }) },
     (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
+    (0, import_react16.createElement)(RepairTools, { bot }),
     bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map((channel) => (0, import_react16.createElement)(ChannelItem, {
@@ -17238,6 +17269,7 @@ ${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
 .ot-answer .bt-note{margin:0}
 .ot-answer-tools{display:grid;gap:8px}
 .ot-answer .ot-answer-count{width:88px}
+.ot-answer .ot-answer-folder{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}

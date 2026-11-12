@@ -2,6 +2,9 @@
 // rule. Each child binds to its person's rule, carries that person's context and capability, and
 // never reaches the other's. Fed through the durable SSE ingress, as answer-intake.test.js is.
 import assert from 'node:assert/strict'
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import { answerIntake } from '../src/host/answer-intake.js'
 import { install } from '../src/host/omni-events.js'
@@ -400,6 +403,28 @@ test('person binding: staff enable it only with isolated visibility and no unlim
   assert.equal(b.view().omniAnswers[ANSWER_MASTER].visibility, 'isolated')
   // No model tool sets it.
   assert.ok(![...b.ctx.registeredTools.keys()].some(name => /person|binding/i.test(name)))
+})
+
+test('person binding: read tools limited by a knowledge folder let persons bind; without the folder they do not', async t => {
+  const folder = mkdtempSync(join(tmpdir(), 'person-knowledge-'))
+  t.after(() => rmSync(folder, { recursive: true, force: true }))
+  const b = await bench(t, { personBinding: false })
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, allowedTools: ['read', 'grep'], personBinding: true }), { message: PERSON_UNLIMITED_READS })
+  const kept = await b.call('omni-answer-settings', { ...b.settings, allowedTools: ['read', 'grep'], knowledgeFolder: folder, personBinding: true })
+  assert.deepEqual([kept.personBinding, kept.knowledgeFolder], [true, realpathSync(folder)])
+  await b.deliver(row(1, CHAT, FROM_A))
+  await signal(t, b)
+  await until(() => b.calls(CHAT) === 1)
+  const child = b.childOf(CHAT)
+  assert.equal(child.personRuleId, 'rule-a')
+  assert.match(b.prompt(child.sessionId), /## Knowledge folder[\s\S]*A-CONTEXT/)
+  // While read tools and binding are on, the folder cannot go; the bot keeps it.
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, allowedTools: ['read', 'grep'], knowledgeFolder: null }), { message: PERSON_UNLIMITED_READS })
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].knowledgeFolder, realpathSync(folder))
+  assert.deepEqual(b.view().omniAnswers[ANSWER_MASTER].allowedTools, ['read', 'grep'])
+  // With no read tool left, the folder may go: binding stays on.
+  const cleared = await b.call('omni-answer-settings', { ...b.settings, knowledgeFolder: null })
+  assert.deepEqual([cleared.personBinding, cleared.knowledgeFolder, cleared.allowedTools], [true, undefined, []])
 })
 
 test('person binding: binding refuses while a read tool could leave the chat, even when the settings were saved earlier', async t => {

@@ -572,6 +572,7 @@ export function AnswerSettings({ bot, value = {} }) {
   const [graduates, setGraduates] = useState(Number.isInteger(value.graduateAfter))
   const [graduateAfter, setGraduateAfter] = useState(String(value.graduateAfter ?? 5))
   const [resumeMinutes, setResumeMinutes] = useState(minutesOf(value.resumeAfterMs))
+  const [knowledgeFolder, setKnowledgeFolder] = useState(value.knowledgeFolder ?? '')
   const [personBinding, setPersonBinding] = useState(value.personBinding === true)
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
@@ -579,8 +580,8 @@ export function AnswerSettings({ bot, value = {} }) {
     setEnabled(value.enabled === true); setVisibility(value.visibility ?? 'isolated')
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
-    setResumeMinutes(minutesOf(value.resumeAfterMs)); setPersonBinding(value.personBinding === true)
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.personBinding])
+    setResumeMinutes(minutesOf(value.resumeAfterMs)); setKnowledgeFolder(value.knowledgeFolder ?? ''); setPersonBinding(value.personBinding === true)
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding])
   // Graduation is off unless staff turn it on with a whole number of drafts (host GRADUATE_MAX).
   const count = Number(graduateAfter)
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100
@@ -591,7 +592,7 @@ export function AnswerSettings({ bot, value = {} }) {
     setBusy(true); setProblem(null)
     // #1704: sent while it is on or being switched off; a bot that never used it saves as before.
     const person = personBinding || value.personBinding === true ? { personBinding } : {}
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, ...person }); setOpen(false) }
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -622,6 +623,9 @@ export function AnswerSettings({ bot, value = {} }) {
       h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
         h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
         ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
+      // #1689: the host checks the folder and keeps its real path; no model tool can set it.
+      h(Field, { label: 'Knowledge folder', note: 'The business\'s own files, such as instructions and FAQ. While a folder is set, children read, find and search files there, and nowhere else. Full path; empty for none.' },
+        h('input', { className: 'bt-input ot-answer-folder', type: 'text', value: knowledgeFolder, title: knowledgeFolder || undefined, placeholder: '/path/to/folder', spellCheck: false, autoComplete: 'off', onChange: event => setKnowledgeFolder(event.target.value) })),
       h(SwitchRow, { label: 'Bind each child to its person', on: personBinding, onChange: setPersonBinding }),
       h('p', { className: 'bt-note' }, 'A child then takes the notes and the capability in its person\'s access rule, and answers only messages that rule lets in. Needs isolated visibility, and the file tools off or limited to a knowledge folder.'),
       h(Field, { label: 'Shared notes for collective children' },
@@ -629,6 +633,23 @@ export function AnswerSettings({ bot, value = {} }) {
       problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
       h('div', { className: 'bt-actions' },
         h('button', { type: 'button', className: 'bt-soft bt-soft-sm', disabled: busy || (graduates && !countOk) || !minutesOk, onClick: save }, 'Save answer settings'))) : null)
+}
+
+// Staff only (host tool-series.js): an Omni bot whose every turn fails on its tool list takes
+// its next turn with all its tools again. Its chats, automations and settings stay. Every Omni
+// bot has it, the default one too: that can be a channel bot Omni made on its own Session,
+// which cannot start a new conversation either.
+export function RepairTools({ bot }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState(null)
+  const repair = async () => {
+    setBusy(true); setResult(null)
+    try { await call('repair_tool_series', { botId: bot.id }); setResult({ ok: true, text: 'Done. Its next turn starts with all its tools: send it a message.' }) }
+    catch (error) { setResult({ ok: false, text: hostText(error.message) }) } finally { setBusy(false) }
+  }
+  return h('div', null,
+    h('button', { type: 'button', className: 'ot-channel-row', disabled: busy, title: 'For a bot whose every turn fails with a tool error', onClick: repair }, busy ? 'Repairing tools…' : 'Repair tools'),
+    result ? h('p', { className: result.ok ? 'ot-picker-note' : 'ot-picker-problem', role: result.ok ? 'status' : 'alert' }, result.text) : null)
 }
 
 export function OmniTree(props) {
@@ -671,6 +692,7 @@ export function OmniTree(props) {
   const listed = new Set(ownedChannels.map(channel => channel.id))
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
     h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
+    h(RepairTools, { bot }),
     bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? h(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
     ownedChannels.map(channel => h(ChannelItem, {
@@ -800,6 +822,7 @@ ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 .ot-answer .bt-note{margin:0}
 .ot-answer-tools{display:grid;gap:8px}
 .ot-answer .ot-answer-count{width:88px}
+.ot-answer .ot-answer-folder{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}

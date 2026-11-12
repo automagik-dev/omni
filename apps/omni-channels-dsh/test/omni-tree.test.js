@@ -8,9 +8,9 @@ import { build } from 'esbuild'
 import { isOmniBot } from '../src/client/omni-store.js'
 import { STRINGS } from '../src/client/strings.js'
 import { NEEDS_NEWER_TEAM, TEAM_CONTRACT } from '../src/host/resume-hook.js'
+import { KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED, SHARED_NOTES_MAX } from '../src/host/threads.js'
 import { BEING_CUT, NOT_LINKED, OTHER_OMNI, WAITING } from '../src/host/thread-keys.js'
 import { WORKER_MOVED } from '../src/host/subscriptions.js'
-import { SHARED_NOTES_MAX } from '../src/host/threads.js'
 import { all, bundleClient, byLabel, classOf, mount, nodes, one, plain, react, settle, text } from './client-stand-in.js'
 import { omni } from './omni-client.js'
 
@@ -37,7 +37,7 @@ const storage = new Map()
 const localStorage = { getItem: key => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, String(value)) }
 
 const loadTree = () => bundleClient([
-  'export { OmniTree, AnswerSettings, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, pauseOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
+  'export { OmniTree, AnswerSettings, RepairTools, ChannelBotForm, ThreadRow, ThreadPicker, ThreadDock, plusOf, teamReady, threadsOf, rowPropsOf, isThreadSession, freeMarkOf, permissionMenuOf, answerModeOf, pauseOf, OMNI_OUTDATED, OFFER_UNKNOWN, OMNI_TREE_CSS } from \'./omni-tree.js\'',
   'export { openConnectWizard } from \'./wizard.js\'',
   'export { omniStore, startLive, loadLink, refreshLive } from \'./omni-store.js\'',
   'export { relativeShort } from \'./core.js\'',
@@ -1063,8 +1063,37 @@ test('answer settings start isolated and save one owner setting with read-only a
   nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
   await settle()
   // New children train and graduation stays off unless staff change them (RFC-0001).
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000 }])
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'collective', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000, knowledgeFolder: null }])
   assert.deepEqual(plain(ui.permissionMenuOf({ answerChild: true })).map(group => group.items.map(item => [item.value, item.checked])), [[['training', true], ['sending', false]]])
+})
+
+// An Omni bot whose every turn fails on its tool list (#1699) is repaired from its own place in
+// the sidebar: one staff action, one host call. The default bot has the row too: it can be a
+// channel bot Omni made on its own Session, with no new conversation to move to.
+test('every Omni bot offers Repair tools, the default one included, which asks the host once and says what follows or why not', async t => {
+  linked()
+  const roster = hooked({ omniOwnership: { defaultBotId: 'omni-bot', channels: {} } })
+  const { view } = tree(t, { roster, bot: { id: 'dedicated', kind: 'omni', name: 'Service' } })
+  const repair = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Repair tools')
+  answer = endpoint => (endpoint === 'repair_tool_series' ? { botId: 'dedicated', next: 'fresh-tools' } : {})
+  repair().props.onClick()
+  await settle()
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'repair_tool_series'), [['repair_tool_series', { botId: 'dedicated' }]])
+  const said = role => nodes(view.draw()).find(node => node.props?.role === role)
+  assert.equal(text(said('status')), 'Done. Its next turn starts with all its tools: send it a message.')
+  answer = endpoint => (endpoint === 'repair_tool_series' ? Object.assign(new Error('Only a Bot that operates Omni has its tools repaired here.'), { code: 'bot/refused' }) : {})
+  repair().props.onClick()
+  await settle()
+  assert.equal(said('status'), undefined)
+  assert.match(text(said('alert')), /operates Omni/)
+  const main = tree(t, { roster, bot: { id: 'omni-bot', kind: 'omni', name: 'Omni' } }).view
+  const mainRepair = nodes(main.draw()).find(node => node.type === 'button' && text(node) === 'Repair tools')
+  assert.ok(mainRepair, 'the default bot has the row')
+  calls.length = 0
+  answer = endpoint => (endpoint === 'repair_tool_series' ? { botId: 'omni-bot', next: 'fresh-tools' } : {})
+  mainRepair.props.onClick()
+  await settle()
+  assert.deepEqual(calls.filter(([endpoint]) => endpoint === 'repair_tool_series'), [['repair_tool_series', { botId: 'omni-bot' }]])
 })
 
 test('an answer child\'s row names its sending mode at a glance, and its menu switches it through the staff action', async () => {
@@ -1144,7 +1173,7 @@ test('answer settings choose the new-child default and optional graduation, off 
   assert.deepEqual([classOf(save()), classOf(nodes(field('Shared notes')).find(node => node.type === 'textarea'))], [['bt-soft', 'bt-soft-sm'], ['bt-input', 'bt-input-area']])
   save().props.onClick()
   await settle()
-  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000 }])
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['grep'], sharedNotes: '', newChildMode: 'sending', graduateAfter: 4, resumeAfterMs: 1_800_000, knowledgeFolder: null }])
 })
 
 // Issue #1690: the shared notes field takes what the host takes; a thread's own notes stay at 8000.
@@ -1276,4 +1305,48 @@ test('answer settings set the quiet interval in whole minutes, 30 by default, on
   await settle()
   assert.equal(nodes(nodes(custom.draw()).find(node => node.type === 'label' && text(node).startsWith('Resume a paused child after'))).find(node => node.type === 'input').props.value, '5')
   custom.unmount()
+})
+
+test('#1689 answer settings name a knowledge folder in a text field with its note; empty saves none, and the allowed tools stay as staff set them', async t => {
+  calls.length = 0
+  answer = () => ({})
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value: { enabled: true, visibility: 'isolated', allowedTools: ['read_image'], sharedNotes: '', knowledgeFolder: '/srv/answers' } }))
+  t.after(() => view.unmount())
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  const field = () => nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith('Knowledge folder'))
+  const input = () => nodes(field()).find(node => node.type === 'input')
+  const note = nodes(view.draw()).find(node => node.type === 'span' && classOf(node).includes('bt-note') && /knowledge|folder/i.test(text(node)) && /nowhere else/.test(text(node)))
+  assert.deepEqual([input().props.type, input().props.value, classOf(input())], ['text', '/srv/answers', ['bt-input', 'ot-answer-folder']])
+  assert.match(text(note), /children read, find and search files there, and nowhere else/)
+  const save = async () => {
+    nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
+    await settle()
+    return calls.at(-1)
+  }
+  assert.deepEqual((await save())[1], { botId: 'dedicated', enabled: true, visibility: 'isolated', allowedTools: ['read_image'], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000, knowledgeFolder: '/srv/answers' })
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  input().props.onChange({ target: { value: '  /srv/other answers  ' } })
+  await settle()
+  assert.equal((await save())[1].knowledgeFolder, '/srv/other answers')
+  nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+  await settle()
+  input().props.onChange({ target: { value: '   ' } })
+  await settle()
+  const cleared = (await save())[1]
+  assert.deepEqual([cleared.knowledgeFolder, cleared.allowedTools], [null, ['read_image']])
+  // The host's refusal reaches staff as it words it, and the settings stay open.
+  for (const refusal of [KNOWLEDGE_FOLDER_REFUSAL, KNOWLEDGE_NOT_SERVED]) {
+    answer = () => { throw new Error(refusal) }
+    nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+    await settle()
+    input().props.onChange({ target: { value: 'answers' } })
+    await settle()
+    await save()
+    assert.deepEqual([text(one(view.draw(), 'ot-picker-problem')), input().props.value], [refusal, 'answers'])
+    nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+    await settle()
+  }
+  answer = () => ({})
 })
