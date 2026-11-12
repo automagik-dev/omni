@@ -643,3 +643,14 @@ test('SC1 an ownership change while journal enrichment waits prevents the stale 
   assert.deepEqual(f.fired, [])
   assert.deepEqual(f.acks, [1])
 })
+
+
+test('answer admission keeps the message stream alive without a user automation', async t => {
+  const f = fixture(t)
+  f.rt.state.subscriptions = {}
+  f.rt.syncAnswerSubscriptions = () => { f.rt.state.subscriptions.answer = { ...sub('answer child'), answerBotId: 'owner' } }
+  await f.streamEntered.promise
+  for (let i = 0; i < 20 && f.acks.length === 0; i += 1) await turn()
+  assert.deepEqual(f.fired, [['answer child', 'event-1']])
+  assert.deepEqual(f.acks, [1])
+})

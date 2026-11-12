@@ -242,6 +242,8 @@ export function install(rt) {
   // thread's automation turns ask first instead (standing-runs.js).
   async function allowed(exec, method) {
     await rt.load()
+    const answerRefusal = rt.answerToolRefusal?.(exec)
+    if (answerRefusal) return answerRefusal
     const id = exec.agent?.id
     const self = omniActorOf(rt, id)
     if (!operatesOmni(rt, self)) return 'Only an Omni Bot or a Main Bot operates omni. Ask one in its chat.'
@@ -344,6 +346,8 @@ export function install(rt) {
     },
     output,
     async execute(args, exec) {
+      const answerRefusal = rt.answerToolRefusal?.({ ...exec, name: 'omni_call' })
+      if (answerRefusal) return answerRefusal
       const method = String(args.method ?? '').toUpperCase()
       const refusal = await allowed(exec, method)
       if (refusal) return refusal
@@ -606,6 +610,8 @@ export function install(rt) {
       async execute(raw, exec) {
         try {
           await rt.load()
+          const answerRefusal = rt.answerToolRefusal?.({ ...exec, name: definition.name })
+          if (answerRefusal) return answerRefusal
           const args = { ...await spec.prepare(raw ?? {}), bot: omniActorOf(rt, exec.agent?.id) }
           const { chat, resource } = await chatResource(args.chat)
           const message = args.message ? await messageIn(chat, args.message) : undefined
@@ -631,6 +637,8 @@ export function install(rt) {
     output,
     async execute(args, exec) {
       await rt.load()
+      const answerRefusal = rt.answerToolRefusal?.({ ...exec, name: 'omni_chats' })
+      if (answerRefusal) return answerRefusal
       const self = omniActorOf(rt, exec.agent?.id)
       if (rt.botOf(self) === undefined) return 'Only Bots on the team use Omni.'
       try {

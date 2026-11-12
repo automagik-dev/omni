@@ -115,7 +115,7 @@ const TEAM_BROWSER_TOOLS = ['browser_back', 'browser_click', 'browser_handoff', 
 test('with this plugin, the team registers the tools TEAM_TOOLS names but show_canvas, plus the plugin\'s own', async (t) => {
   const { ctx, stop } = start(undefined, { config: { browser: true } })
   t.after(stop)
-  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS, 'create_thread', 'propose_answer_bot'].sort())
+  assert.deepEqual([...ctx.registeredTools.keys()].sort(), [...TEAM_TOOLS.filter(name => name !== 'show_canvas'), ...TEAM_BROWSER_TOOLS, ...THREAD_TOOLS, 'create_thread', 'propose_answer_bot', 'set_child_notes', 'set_answer_shared_notes', 'answer_chats'].sort())
   assert.equal(ctx.registeredTools.has('omni_handoff'), false)
 })
 
@@ -145,7 +145,7 @@ test('a Main Bot\'s prompt with an Omni named is the text it was before the spli
   const rules = rulesIn(before)
   assert.equal(prompt(named), before.replace(canvases, '').replace(rules, OPERATOR_RULES))
   const changed = rules.split('\n').filter(line => !OPERATOR_RULES.split('\n').includes(line))
-  assert.equal(changed.length, 12)
+  assert.equal(changed.length, 10)
   assert.equal(changed.filter(line => /\btasks?\b/i.test(line)).length, 6)
   assert.equal(changed.filter(line => /\bTasks\b/.test(line)).length, 3)
   assert.ok(OPERATOR_RULES.includes('- Create a Bot only when the user asks for a lasting specialist.\n'))
@@ -258,6 +258,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'on approval/request (prepend)',
     'effect omni-channels: thread instructions',
     'prompt omni-thread 650',
+    'effect omni-channels: answer settings',
+    'effect omni-channels: answer settings view',
     'effect omni-channels: threads view',
     'effect omni-channels: threads offer',
     'effect omni-channels: omni-thread-chats',
@@ -265,17 +267,23 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: omni-thread-remove',
     'effect omni-channels: omni-thread-permissions',
     'effect omni-channels: thread names',
+    'tools guard',
+    'on tools/pre-execute (prepend)',
+    'tool set_child_notes',
+    'tool set_answer_shared_notes',
     'tool create_thread',
     'tool thread_say',
     'tool thread_react',
     'tool thread_history',
     'tool thread_picture',
+    'tool answer_chats',
     'tool thread_ask_omni',
     'effect omni-channels: asks of removed threads',
     'on tools/pre-execute (prepend)',
     'on tools/pre-execute (prepend)',
     'effect omni-channels: thread Sessions',
     'on agent/created',
+    'effect omni-channels: restore answer ceilings',
     'on agent/created (prepend)',
     'effect omni-channels: omni-free-reactions',
     'effect omni-channels: omni-free-reactions-save',

@@ -16,7 +16,7 @@ import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { NO_CHAT, RETIRED_QUEUED, ROW_RETIRED, UNKNOWN_WORKER, WORKER_MOVED } from '../src/host/subscriptions.js'
 import { AUTOMATION_THREADS_MAX, THREADS_FULL } from '../src/host/threads.js'
 import { applyBoth, fakeContext } from './team.js'
-import { scopedChats, keysOf, OTHER_INSTANCE, boot, CHAT, ELSEWHERE, eventFor, flush, GROUP, homeFor, INSTANCE, MESSAGE_IDS, saved, teamState, until, watchedOmni } from './thread-fixture.js'
+import { answerBench, ANSWER_MASTER, signal, scopedChats, keysOf, OTHER_INSTANCE, boot, CHAT, ELSEWHERE, eventFor, flush, GROUP, homeFor, INSTANCE, MESSAGE_IDS, saved, teamState, until, watchedOmni } from './thread-fixture.js'
 
 const OMNI = 'https://omni.test'
 const omniAnswers = {
@@ -2566,4 +2566,26 @@ test('RFC-0001 TEXT1: registered automation help distinguishes explicit-list sav
   assert.equal(b.run.channels.threads.list().length, 0)
   assert.match(await b.tool('save_automation', { name: 'Explicit', sources: `chat:${CHAT},chat:${GROUP}`, trigger: 'message', worker: 'thread' }), /^Saved /)
   assert.deepEqual(b.run.channels.threads.list()[0].chatIds, [CHAT, GROUP])
+})
+
+test('SC3 answer messages use the durable thread queue once, with no user automation required', async t => {
+  const b = await answerBench(t)
+  assert.deepEqual(b.view().subscriptions, [])
+  const sub = b.team.state.subscriptions[`answer:${ANSWER_MASTER}`]
+  assert.equal(sub.on, true)
+  const event = b.incoming()
+  const [first, again] = await Promise.all([b.channels.fireSubscription(sub, event), b.channels.fireSubscription(sub, event)])
+  assert.equal(first.id, again.id)
+  assert.equal(b.made.length, 1)
+  assert.equal(b.team.state.subscriptionRuns.length, 1)
+  await signal(t, b)
+  const child = b.channels.threads.byChat(CHAT)
+  await until(() => b.agentOf(child.sessionId).calls.length === 1)
+  const message = b.agentOf(child.sessionId).calls[0]
+  assert.match(JSON.stringify(message), /Answer the person in your own chat/)
+  assert.equal(b.presets.current(b.agentOf(child.sessionId).session), 'read-only')
+  assert.equal((await b.channels.fireSubscription(sub, event)).id, first.id)
+  assert.equal(b.agentOf(child.sessionId).calls.length, 1)
+  await b.call('omni-answer-settings', { ...b.settings, enabled: false })
+  await assert.rejects(b.channels.fireSubscription(sub, b.incoming(CHAT, 'next-message')), /ownership changed/i)
 })
