@@ -5,6 +5,7 @@
 // A consumer is streamed only while an active subscription needs its kind.
 import { hostname } from 'node:os'
 import { z } from 'zod'
+import { answerIntake } from './answer-intake.js'
 import { answerAutomationMatcher } from './answer-automations.js'
 
 const BACKOFF_MS = [2_000, 5_000, 15_000, 60_000]
@@ -104,6 +105,7 @@ export async function* frames(body) {
 
 export function install(rt) {
   const { ctx, state } = rt
+  const admitAnswer = answerIntake(rt)
   const handledByAutomation = answerAutomationMatcher(rt)
   const consumerName = suffix => `omni-ui-dsh.${hostname().toLowerCase().replace(/[^a-z0-9.-]/g, '-')}.${suffix}`
   const cursors = () => (state.omniEventCursors ??= {})
@@ -242,9 +244,12 @@ export function install(rt) {
     if (cancelled(controller)) return 'cancelled'
     await rt.waitChannelOwnership?.(row.instanceId)
     rt.syncAnswerSubscriptions?.()
+    const answerRelevant = Object.values(state.subscriptions ?? {}).some(sub => typeof sub.answerBotId === 'string' && matches(sub, row))
+      || (ownerReceipt(row.rawPayload, row.externalId) && rt.answerStaffThread?.(row) !== undefined)
+    const answerAllowed = answerRelevant ? await admitAnswer(row) : false
     // Staff take-over comes before any dispatch, and its pause is saved before this row is
     // acked. The staff message itself is nobody's to answer.
-    const staff = await staffOf(row)
+    const staff = answerAllowed ? await staffOf(row) : undefined
     if (staff?.threadId !== undefined) {
       if (cancelled(controller)) return 'cancelled'
       const now = Date.now()
@@ -252,7 +257,7 @@ export function install(rt) {
     }
     // A message that claims the number's own side never reaches an answer child as the person's.
     const ownSide = row.rawPayload?.isFromMe === true
-    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !(ownSide && typeof sub.answerBotId === 'string')
+    const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !((ownSide || !answerAllowed) && typeof sub.answerBotId === 'string')
       && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
     if (due().length === 0) return 'unmatched'
     // Before any child creation or wake-up. Keep ordinary subscriptions running;

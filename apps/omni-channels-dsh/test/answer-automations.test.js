@@ -5,7 +5,7 @@ import { install } from '../src/host/omni-events.js'
 import { answerBench, ANSWER_CLOCK, ANSWER_MASTER, CHAT, INSTANCE, MESSAGES, signal, until, use } from './thread-fixture.js'
 
 const automation = (id = 'code', extra = {}) => ({ id, enabled: true, triggerEventType: 'message.received', triggerConditions: [{ field: 'instanceId', operator: 'eq', value: INSTANCE }], ...extra })
-const row = (journalSeq = 1) => ({ id: `00000000-0000-4000-8000-${String(journalSeq).padStart(12, '0')}`, journalSeq, eventType: 'message.received', direction: 'inbound', instanceId: INSTANCE, chatUuid: CHAT, textContent: 'Sign-in code: 123456' })
+const row = (journalSeq = 1) => ({ id: `00000000-0000-4000-8000-${String(journalSeq).padStart(12, '0')}`, journalSeq, eventType: 'message.received', direction: 'inbound', instanceId: INSTANCE, chatUuid: CHAT, textContent: 'Sign-in code: 123456', metadata: { from: '5511988887777' }, rawPayload: { upsertType: 'notify' } })
 const response = value => ({ ok: true, json: async () => value })
 const result = (eventId, matched = true) => response({ eventId, matched, dryRun: true })
 
@@ -79,7 +79,7 @@ test('list cache coalesces messages, refreshes after 30 seconds, and retries a f
 // Real answer subscription -> threads -> standing runs, fed through journal ingress.
 // The plugin's normal consumers are unconfigured in the fake API; this isolated
 // stream uses the same runtime without starting a service or touching live Omni.
-async function ingress(t, b, { items = [automation()], test: dryRun = (_id, eventId) => result(eventId) } = {}) {
+async function ingress(t, b, { items = [automation()], test: dryRun = (_id, eventId) => result(eventId), allowed = true } = {}) {
   await b.channels.quiesceOmniEvents()
   const disposers = [], calls = [], warnings = [], acks = []
   let push
@@ -90,6 +90,8 @@ async function ingress(t, b, { items = [automation()], test: dryRun = (_id, even
     warn: (...args) => warnings.push(args),
     omniRequest: async (method, path, args) => {
       calls.push([method, path, args])
+      if (path === `/instances/${INSTANCE}`) return response({ data: { channel: 'whatsapp-baileys', inboundMaxAgeMinutes: 10 } })
+      if (path === '/access/check') return response({ data: { allowed } })
       if (path.startsWith('/automations?')) return response({ items })
       if (path.startsWith('/automations/')) return dryRun(path.split('/')[2], args.body.eventId)
       if (path.endsWith('/ack')) { acks.push(args.body.cursor); return response({}) }
@@ -109,6 +111,16 @@ async function ingress(t, b, { items = [automation()], test: dryRun = (_id, even
   if (!push) await new Promise(resolve => waiters.push(resolve))
   return { rt, calls, warnings, async send(event) { push([event]); await until(() => acks.includes(event.journalSeq)) } }
 }
+
+test('an intake-refused sender never reaches automation matching, a child or staff pause', async t => {
+  const b = await answerBench(t)
+  const f = await ingress(t, b, { allowed: false, test: () => assert.fail('refused message reached automation matching') })
+  b.channels.pauseAnswer = () => assert.fail('refused message paused staff')
+  await f.send(row())
+  assert.equal(b.made.length, 0)
+  assert.equal(b.channels.threads.byChat(CHAT), undefined)
+  assert.equal(f.calls.some(([, path]) => path.startsWith('/automations')), false)
+})
 
 test('matched first message creates no child or draft; unmatched message wakes one, matched later message stays in history', async t => {
   const b = await answerBench(t)
