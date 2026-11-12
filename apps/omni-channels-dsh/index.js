@@ -5,9 +5,9 @@
 // The team's runtime arrives as the omniTeam service. This plugin's modules install on a
 // runtime of their own whose prototype is the team's: they call the team's functions
 // (load, save, botOf, deliver…) as before, while their tools, listeners and effects sit on
-// this plugin's fiber, and they add to the team only through its hooks (rt.hooks), so
-// turning this plugin off takes all of it away. Its own runtime is provided as
-// omniChannels for the canvas plugin, which reads omni through it.
+// this plugin's fiber. They add to the team only through rt.hooks and, on a team that has
+// it, rt.noteStop; the team keeps those notes in memory for a while. Its own runtime is
+// provided as omniChannels for the canvas plugin, which reads omni through it.
 import * as resumeHook from './src/host/resume-hook.js'
 import * as grants from './src/host/grants.js'
 import * as subscriptions from './src/host/subscriptions.js'

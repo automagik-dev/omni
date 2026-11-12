@@ -68,7 +68,7 @@ function presetsFake({ auto = true } = {}) {
 // pictures or not; `store` is DSH's attachment service, or none; `presets` DSH's permission
 // presets, or none.
 const mocked = new WeakSet()
-async function bench(t, { chat = CHAT, sees = true, store = pictureStore(), mask = false, state, presets } = {}) {
+async function bench(t, { chat = CHAT, sees = true, store = pictureStore(), mask = false, state, presets, stops } = {}) {
   // One test may make several benches; its timers are mocked once.
   if (!mocked.has(t)) t.mock.timers.enable({ apis: ['setTimeout'] })
   mocked.add(t)
@@ -76,7 +76,7 @@ async function bench(t, { chat = CHAT, sees = true, store = pictureStore(), mask
   const home = homeFor(t, omni, state)
   const llm = { resolveModelInfo: async (provider, model) => ({ id: `${provider}/${model}`, inputModalities: sees ? ['text', 'image'] : ['text'] }) }
   const services = { llm, ...(store ? { attachments: store } : {}), ...(presets ? { permissionPresets: presets } : {}) }
-  const run = await boot(t, home, { services })
+  const run = await boot(t, home, { services, stops })
   const added = await run.channels.threads.add(INSTANCE, chat)
   assert.equal(added.ok, true, added.reason)
   await flush()
@@ -496,6 +496,123 @@ async function answer(run, sessionId, words, { reason = { kind: 'completed' }, p
   await until(() => archivings(run, sessionId) > before && (!settles || askOf(run, sessionId) === undefined) && (postsTo === undefined || run.agentOf(postsTo).calls.length > posted))
 }
 const textOf = message => message.content.map(block => block.text).join('')
+
+// agent/created as DSH runs it: cordis runs prepended listeners first, the latest prepended
+// first, then the others in the order they were added (the cordis test below checks it). The
+// fake context keeps every listener in the order it was added and marks a prepended one only in
+// ctx.calls.
+async function agentCreated(run, agent) {
+  const all = run.ctx.listeners.get('agent/created') ?? []
+  const prepended = run.ctx.calls.filter(call => call === 'on agent/created' || call === 'on agent/created (prepend)').map(call => call.endsWith('(prepend)'))
+  assert.equal(prepended.length, all.length)
+  for (const listener of [...all.filter((_, at) => prepended[at]).reverse(), ...all.filter((_, at) => !prepended[at])]) await listener({ agent })
+}
+
+test("an ask run's own deny is noted once as Omni's rule; a read, another gate's deny and start_task's deny add no note of the ask's", async (t) => {
+  const { run, thread } = await bench(t, { stops: 'record' })
+  const { sessionId } = await askFrom(run, thread, 'x')
+  const notesOf = id => run.stops.notes.filter(note => note.sessionId === id)
+  const reason = "This Session answers a chat thread's question and only reads: omni_send is not allowed here. Answer with what you found, and say what you would do instead."
+  assert.deepEqual(await preExecute(run, 'omni_send', sessionId, {}, undefined, { callId: 'call-1' }), { kind: 'deny', reason })
+  assert.deepEqual(notesOf(sessionId), [{ sessionId, detail: { why: 'rule', tool: 'omni_send', callId: 'call-1', text: reason }, agent: run.agentOf(sessionId) }])
+  assert.deepEqual(await preExecute(run, 'read', sessionId), { kind: 'allow' })
+  assert.deepEqual(await preExecute(run, 'omni_call', sessionId, { method: 'GET' }), { kind: 'allow' })
+  assert.deepEqual(await preExecute(run, 'bash', sessionId, {}, { kind: 'deny', reason: 'no' }), { kind: 'deny', reason: 'no' })
+  assert.equal(notesOf(sessionId).length, 1)
+  assert.deepEqual(await preExecute(run, 'start_task', sessionId, {}, undefined, { callId: 'call-2' }), { kind: 'deny', reason: START_TASK_REFUSAL })
+  assert.equal(notesOf(sessionId).length, 2)
+  assert.deepEqual(notesOf(sessionId)[1], { sessionId, detail: { why: 'rule', tool: 'start_task', callId: 'call-2', text: START_TASK_REFUSAL }, agent: run.agentOf(sessionId) })
+  take(run, sessionId)
+  await answer(run, sessionId, 'x', { postsTo: thread.sessionId })
+  assert.deepEqual(await preExecute(run, 'bash', sessionId), { kind: 'allow' })
+  assert.equal(notesOf(sessionId).length, 2)
+})
+
+test("an ask run's Session is named as the Omni Bot's, labelled with its thread's chat, while its record is open", async (t) => {
+  const { run, thread } = await bench(t, { stops: 'record' })
+  const { sessionId } = await askFrom(run, thread, 'x')
+  assert.deepEqual(run.stops.ownerOf(sessionId), { botId: 'm1', label: thread.chatName })
+  take(run, sessionId)
+  await answer(run, sessionId, 'x', { postsTo: thread.sessionId })
+  assert.equal(run.stops.ownerOf(sessionId), undefined)
+})
+
+test("a thread kept on DSH's default permissions notes no stop, whether Auto review is off, missing or could not be set, or the thread left it: none of its steps was refused", async (t) => {
+  const presets = presetsFake({ auto: false })
+  const { run, thread } = await bench(t, { presets, stops: 'record' })
+  const restore = () => agentCreated(run, run.freshAgent(thread.sessionId))
+  // The thread's agent was set up: its tools run natively, and it stayed on DSH's default.
+  assert.ok(run.executors.some(entry => entry.sessionId === thread.sessionId))
+  assert.deepEqual(presets.sets, [])
+  await restore()
+  presets.auto = true
+  await restore()
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, true)
+  // Auto review gone: the thread goes back on DSH's default, which refuses nothing.
+  presets.auto = false
+  await restore()
+  assert.equal(run.channels.threads.byId(thread.id).autoReview, undefined)
+  assert.deepEqual(presets.sets, [[thread.sessionId, AUTO_PRESET], [thread.sessionId, 'workspace-write']])
+  await restore()
+  assert.deepEqual(run.stops.notes, [])
+
+  const missing = await bench(t, { stops: 'record' })
+  const broken = presetsFake()
+  broken.set = () => { throw new Error('x') }
+  const failed = await bench(t, { presets: broken, stops: 'record' })
+  const on = await bench(t, { presets: presetsFake(), stops: 'record' })
+  for (const other of [missing, failed, on]) {
+    assert.ok(other.run.executors.some(entry => entry.sessionId === other.thread.sessionId))
+    assert.deepEqual(other.run.stops.notes, [])
+  }
+  assert.equal(failed.run.channels.threads.byId(failed.thread.id).autoReview, undefined)
+  assert.equal(on.run.channels.threads.byId(on.thread.id).autoReview, true)
+})
+
+test('a thread whose Session cannot leave Auto review once it is gone is noted once as a level stop, and again only after Auto review held on it', async (t) => {
+  const presets = presetsFake()
+  const { run, thread } = await bench(t, { presets, stops: 'record' })
+  const details = () => run.stops.notes.filter(note => note.sessionId === thread.sessionId).map(note => note.detail)
+  const restore = () => agentCreated(run, run.freshAgent(thread.sessionId))
+  const marked = () => run.channels.threads.byId(thread.id).autoReview
+  const set = presets.set
+  // Auto review gone, and the Session cannot be put back on DSH's default.
+  const stuck = () => {
+    presets.set = () => { throw new Error('x') }
+    presets.auto = false
+  }
+  const detail = { why: 'level', text: 'The thread could not leave Auto review: x' }
+  assert.deepEqual(details(), [])
+  stuck()
+  await restore()
+  assert.deepEqual(details(), [detail])
+  assert.equal(marked(), true)
+  await restore()
+  assert.deepEqual(details(), [detail])
+  // Auto review back: DSH restores the Session on it, so Auto review holds on the thread again.
+  presets.set = set
+  presets.auto = true
+  await restore()
+  assert.deepEqual(details(), [detail])
+  stuck()
+  await restore()
+  assert.deepEqual(details(), [detail, detail])
+  // The fallback works again: the thread leaves Auto review for DSH's default, which refuses nothing.
+  presets.set = set
+  await restore()
+  assert.equal(marked(), undefined)
+  assert.deepEqual(presets.sets.at(-1), [thread.sessionId, 'workspace-write'])
+  assert.deepEqual(details(), [detail, detail])
+  // Auto review back: the thread's next agent puts it on Auto review again.
+  presets.auto = true
+  await restore()
+  assert.equal(marked(), true)
+  assert.deepEqual(details(), [detail, detail])
+  stuck()
+  await restore()
+  assert.deepEqual(details(), [detail, detail, detail])
+})
+
 // What each Session was flushed for, in order.
 const flushes = (run) => {
   const flushed = []

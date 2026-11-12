@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { askText, covers, decide, sensitive } from '../src/host/grants.js'
+import { askText, covers, decide, EVENT_RUN_REFUSAL, sensitive, START_TASK_REFUSAL } from '../src/host/grants.js'
 import { sensitiveCall } from '../src/host/omni-api.js'
 import { SOURCE_ROUTES } from '../src/host/omni-routes.js'
 import { applyBoth, fakeContext } from './team.js'
@@ -109,6 +109,45 @@ function setup(t, extra = {}, omniOptions = {}) {
   }
   return { ctx, team, home, omni, notes, as, call, view, pending, answer }
 }
+
+test("an automation run's Main Bot write refused by Omni's rule is noted once; a card another Bot's run raises, a read and the Bot's own chat note nothing; a failing note changes no answer", async (t) => {
+  const { ctx, team, as, pending } = setup(t, {
+    subscriptionRuns: [{ sessionId: 'run-1', botId: 'm1', task: 'x' }, { sessionId: 'run-2', botId: 'digest', task: 'x' }, { sessionId: 'digest', botId: 'digest', task: 'x' }],
+    omniGrants: [{ id: 'g1', botId: 'digest', resource: { type: 'group', id: GROUP, name: 'x', channelId: 'wa-1' }, actions: ['read', 'send'], approval: 'auto', grantedBy: 'user', createdAt: 1 }],
+  })
+  const stops = []
+  team.noteStop = (sessionId, detail) => stops.push({ sessionId, detail })
+  const send = () => ctx.registeredTools.get('omni_send').execute({ chat: GROUP, text: 'x' }, { agent: { id: 'run-1' }, callId: 'call-1', concludeTurn() {} })
+  assert.equal(await send(), EVENT_RUN_REFUSAL)
+  assert.deepEqual(stops, [{ sessionId: 'run-1', detail: { why: 'rule', tool: 'omni_send', callId: 'call-1', text: EVENT_RUN_REFUSAL } }])
+  assert.match((await as('run-2')('omni_send', { chat: GROUP, text: 'x' })).text, /^confirmation_required:/)
+  assert.equal((await pending('digest')).length, 1)
+  assert.match((await as('run-1')('omni_messages', { chat: GROUP })).text, /hello from/)
+  assert.equal((await as('digest')('omni_send', { chat: GROUP, text: 'x' })).concluded, false)
+  assert.equal(stops.length, 1)
+  team.noteStop = () => { throw new Error('x') }
+  assert.equal(await send(), EVENT_RUN_REFUSAL)
+})
+
+test("start_task for a Bot that operates the named Omni is denied before any card and noted once as Omni's rule; its guard carries the same call; another Bot notes nothing", async (t) => {
+  const { ctx, team } = setup(t)
+  await team.load()
+  const stops = []
+  team.noteStop = (sessionId, detail) => stops.push({ sessionId, detail })
+  const gate = (name, sessionId, callId) => {
+    const chain = [...(ctx.listeners.get('tools/pre-execute') ?? [])]
+    const exec = { name, arguments: {}, callId, agent: { id: sessionId, session: { id: sessionId } } }
+    const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve({ kind: 'allow' }))
+    return step(0)
+  }
+  assert.deepEqual(await gate('start_task', 'm1', 'call-1'), { kind: 'deny', reason: START_TASK_REFUSAL })
+  const stop = { sessionId: 'm1', detail: { why: 'rule', tool: 'start_task', callId: 'call-1', text: START_TASK_REFUSAL } }
+  assert.deepEqual(stops, [stop])
+  assert.equal(ctx.guards.map(guard => guard({ name: 'start_task', callId: 'call-1', agent: { id: 'm1' } })).find(Boolean), START_TASK_REFUSAL)
+  assert.deepEqual(stops, [stop, stop])
+  assert.deepEqual(await gate('start_task', 'digest', 'call-2'), { kind: 'allow' })
+  assert.equal(stops.length, 2)
+})
 
 test('grants cover their Bot, action and chat; a channel grant covers its chats; expired ones nothing', () => {
   const group = { type: 'group', id: GROUP, name: 'g', channelId: 'wa-1' }

@@ -192,7 +192,7 @@ export const record = (id, sessionId, extra = {}) => ({
 // the pass's (one a pass cannot be made to give on demand: `{ failed }`, `{ readOnly }`, a
 // `resent` Session). `archiveError`: every archive throws it from the start, before the
 // plugin's own start pass runs (`fake.archiveError` sets it later).
-export async function boot(t, home, { mask = false, services = {}, resumesDone, archiveError = null, renameError = null } = {}) {
+export async function boot(t, home, { mask = false, services = {}, resumesDone, archiveError = null, renameError = null, stops } = {}) {
   const ctx = fakeContext({ services })
   const agents = new Map()
   const made = []
@@ -294,6 +294,15 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   }
   const hidden = mask ? { resumable: { value: undefined }, resumesDone: { value: undefined } } : resumesDone === undefined ? {} : { resumesDone: { value: team.resumesDone.then(() => resumesDone) } }
   const base = Object.keys(hidden).length === 0 ? team : Object.create(team, hidden)
+  const owners = []
+  const notes = []
+  if (stops === 'record') {
+    team.hooks.sessionOwner = fn => { owners.push(fn); return () => { const at = owners.indexOf(fn); if (at !== -1) owners.splice(at, 1) } }
+    team.noteStop = (sessionId, detail, agent) => notes.push({ sessionId, detail, agent })
+  } else if (stops === 'none') {
+    delete team.noteStop
+    delete team.hooks.sessionOwner
+  }
   const channels = createRuntime(ctx, base)
   await channels.load()
   const call = (endpoint, body) => team.extended.endpointOf(endpoint).fn(body)
@@ -308,7 +317,7 @@ export async function boot(t, home, { mask = false, services = {}, resumesDone, 
   // Stopped before its home goes (homeFor).
   if (stopsOf.has(home)) stopsOf.get(home).push(stop)
   else t.after(stop)
-  return { ctx, team, channels, call, view, emit, cut, agentOf, freshAgent, made, resolved, selected, archived, archiving, restricts, executors, registered, titled, fake, stop }
+  return { ctx, team, channels, call, view, emit, cut, agentOf, freshAgent, made, resolved, selected, archived, archiving, restricts, executors, registered, titled, fake, stop, stops: { owners, notes, ownerOf: id => owners.map(fn => fn(id)).find(Boolean) } }
 }
 
 // A fresh home linked to `omni`, with the team in it; removed once every start on it stopped.
@@ -396,9 +405,9 @@ export const guarded = (ctx, sessionId, name) => ctx.guards.map(guard => guard({
 // One tool's body in a Session, as DSH calls it once every gate let it through.
 export const use = (run, name, sessionId, args = {}) => run.ctx.registeredTools.get(name).execute(args, { agent: run.agentOf(sessionId) })
 // The tools/pre-execute waterfall for one call: every listener in order, then `last`.
-export const preExecute = (run, name, sessionId, args = {}, last = { kind: 'allow' }) => {
+export const preExecute = (run, name, sessionId, args = {}, last = { kind: 'allow' }, extra = {}) => {
   const chain = [...(run.ctx.listeners.get('tools/pre-execute') ?? [])]
-  const exec = { name, arguments: args, agent: run.agentOf(sessionId) }
+  const exec = { name, arguments: args, agent: run.agentOf(sessionId), ...extra }
   const step = index => (index < chain.length ? chain[index](exec, () => step(index + 1)) : Promise.resolve(last))
   return step(0)
 }

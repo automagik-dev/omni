@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { z } from 'zod'
-import { omniActorOf, operatesOmni } from './grants.js'
+import { noteOmniStop, omniActorOf, operatesOmni } from './grants.js'
 import { fitted, sensitiveCall } from './omni-api.js'
 import { MEDIA_FILE_BYTES, messageOf, readBounded } from './omni.js'
 import { output } from './output.js'
@@ -687,6 +687,15 @@ export function install(rt) {
   // record keeps `autoReview`, so a preset the owner picks for it later stays); a DSH without
   // Auto review keeps its default preset, and the next agent tries again.
   const held = new WeakSet()
+  // A thread Session that could not leave Auto review once it was gone (DSH then refuses it)
+  // is noted for the person once, until Auto review holds on the thread again. A thread that
+  // keeps DSH's default preset is not noted: none of its steps was refused.
+  const stuckOnAuto = new Set()
+  function noteStuckOnAuto(agent, thread, error) {
+    if (stuckOnAuto.has(thread.sessionId)) return
+    stuckOnAuto.add(thread.sessionId)
+    noteOmniStop(rt, thread.sessionId, { why: 'level', text: `The thread could not leave Auto review: ${error?.message ?? error}` }, agent)
+  }
   const autoLive = presets => presets.catalog().options.some(option => option.value === AUTO_PRESET)
   function autoReview(agent, thread) {
     if (thread.autoReview === true) return
@@ -704,6 +713,7 @@ export function install(rt) {
       return
     }
     thread.autoReview = true
+    stuckOnAuto.delete(thread.sessionId)
     void Promise.resolve(rt.save()).catch(error => rt.warn('omni-channels: saving a thread failed: %s', error?.message ?? error))
   }
   function hold(agent) {
@@ -746,13 +756,16 @@ export function install(rt) {
   // its own agent/created listener. This one runs before it (both are prepended, this one
   // later, and DSH awaits them one at a time): the Session goes back on DSH's default preset and
   // the record's mark is cleared, so the thread opens, and goes on Auto again once Auto review
-  // is back. A failure here is only logged; DSH then refuses the Session as before.
+  // is back. A failure here is logged and noted for the person (once, as above); DSH then
+  // refuses the Session as before.
   ctx.on('agent/created', async ({ agent } = {}) => {
+    let thread
     try {
       await rt.load()
-      const thread = rt.threads?.bySession(agent?.id ?? agent?.session?.id)
+      thread = rt.threads?.bySession(agent?.id ?? agent?.session?.id)
       const presets = ctx.get?.('permissionPresets')
-      if (isAnswerChild(thread) || thread?.autoReview !== true || presets === undefined || agent?.session === undefined || autoLive(presets)) return
+      if (isAnswerChild(thread) || thread?.autoReview !== true || presets === undefined || agent?.session === undefined) return
+      if (autoLive(presets)) { stuckOnAuto.delete(thread.sessionId); return }
       const fallback = presets.catalog().defaultPreset
       presets.set(agent.session, fallback)
       delete thread.autoReview
@@ -760,6 +773,7 @@ export function install(rt) {
       await rt.save()
     } catch (error) {
       rt.warn('omni-channels: the thread Session %s could not leave Auto review: %s', agent?.id, error?.message ?? error)
+      if (thread?.autoReview === true) noteStuckOnAuto(agent, thread, error)
     }
   }, { prepend: true })
 
