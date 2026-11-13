@@ -1013,6 +1013,23 @@ test('#1694 the default bot\'s sidebar shows the Answer mode row with its saved 
   assert.equal(nodes(view.draw()).find(node => node.type === 'select').props.value, 'collective')
 })
 
+// #1706: a message kept because its sender is known only by a lid Omni has no phone for yet.
+test('#1706 the bot with kept messages shows how many wait, as a status line; other bots and none show nothing', t => {
+  linked()
+  const dedicated = { id: 'dedicated', name: 'Service', kind: 'omni' }
+  const marker = root => all(root, 'ot-waiting')[0]
+  const roster = hooked({ eventsBotId: BOT.id, byId: { [BOT.id]: BOT, dedicated }, omniOwnership: { defaultBotId: BOT.id, channels: { [CHANNEL_B.id]: 'dedicated' } }, omniAnswerWaiting: { dedicated: 1 } })
+  const one = marker(tree(t, { roster, bot: dedicated }).view.draw())
+  assert.equal(one.props.role, 'status')
+  assert.equal(one.props['aria-label'], '1 message waiting: sender not matched yet')
+  assert.equal(text(one), '1message waiting: sender not matched yet')
+  assert.match(one.props.title, /does not know this sender's phone yet/)
+  assert.equal(marker(tree(t, { roster }).view.draw()), undefined, 'the default bot has none waiting')
+  const two = hooked({ ...roster, omniAnswerWaiting: { dedicated: 2 } })
+  assert.equal(marker(tree(t, { roster: two, bot: dedicated }).view.draw()).props['aria-label'], '2 messages waiting: sender not matched yet')
+  for (const count of [0, -1, 1.5, '3', null]) assert.equal(marker(tree(t, { roster: hooked({ ...roster, omniAnswerWaiting: { dedicated: count } }), bot: dedicated }).view.draw()), undefined, String(count))
+})
+
 test('#1694 a saved default bot that was removed is ignored in the sidebar: the default falls back as when unset', t => {
   linked()
   const dedicated = { id: 'dedicated', name: 'Service', kind: 'omni' }
