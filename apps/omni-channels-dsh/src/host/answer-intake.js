@@ -57,10 +57,12 @@ export function answerIntake(rt) {
   // only by their lid whom no rule matched (their phone may resolve later); `denied`, any other
   // sender no rule matched; `failed`, a check that could not be made; `stale`, older than the
   // instance's inboundMaxAgeMinutes; `filtered`, any other gate. The answer stays false.
+  // #1713: `blocked` beside `unmatched` or `denied`: a rule of its own (block or silent_block)
+  // refused one of the sender's ids, not the allowlist's default.
   return async (row, { detail = false, refused } = {}) => {
-    let why = 'filtered', minutes
-    const admitted = await admit(row, (reason, value) => { why = reason; minutes = value })
-    if (admitted === false) refused?.(why, { minutes })
+    let why = 'filtered', minutes, blocked = false
+    const admitted = await admit(row, (reason, value, ruled = false) => { why = reason; minutes = value; blocked = ruled })
+    if (admitted === false) refused?.(why, { minutes, blocked })
     return detail || admitted === false ? admitted : true
   }
   async function admit(row, refusal) {
@@ -89,14 +91,16 @@ export function answerIntake(rt) {
       if (typeof primary !== 'string' || !primary) return false
       const phone = value => typeof value === 'string' && /^\d{7,15}$/.test(value) ? value : undefined
       const ids = [...new Set([primary, phone(raw.key?.participantAlt?.replace(/@.*$/, '')), phone(raw.resolvedSenderPhone)].filter(Boolean))]
+      let ruled = false
       const admitted = await cached(JSON.stringify(['access', row.instanceId, instance.channel, ids]), async () => {
         for (const platformUserId of ids) {
           const result = await read('POST', '/access/check', accessReply, { instanceId: row.instanceId, platformUserId, channel: instance.channel })
           if (result.allowed) return { person: personOfRule(result.rule) }
+          if (result.rule != null) ruled = true
         }
         return false
       }, value => value !== false)
-      if (admitted === false) refusal(ids.length === 1 && lidAddressed(row, raw, primary) ? 'unmatched' : 'denied', instance.inboundMaxAgeMinutes)
+      if (admitted === false) refusal(ids.length === 1 && lidAddressed(row, raw, primary) ? 'unmatched' : 'denied', instance.inboundMaxAgeMinutes, ruled)
       return admitted
     } catch {
       refusal('failed')

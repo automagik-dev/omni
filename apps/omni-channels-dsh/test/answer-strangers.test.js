@@ -33,7 +33,7 @@ const lidOnly = (journalSeq = 1) => ({
 // The answer bench's Omni, as answer-kept.test.js has it, with the chat's address, Omni's
 // answer for a send, and the sends made.
 function omniOf({ externalId = `${STRANGER}@s.whatsapp.net`, rules = [{ ruleType: 'allow', phonePattern: `+${PHONE}`, enabled: true }] } = {}) {
-  return { externalId, canonical: null, rules, chatReads: 0, rulesReads: 0, acks: [], sends: [], sendStatus: 201, accessStatus: 200 }
+  return { externalId, canonical: null, rules, deny: {}, chatReads: 0, rulesReads: 0, acks: [], sends: [], sendStatus: 201, accessStatus: 200 }
 }
 async function attach(t, run, omni) {
   await run.channels.quiesceOmniEvents()
@@ -50,6 +50,10 @@ async function attach(t, run, omni) {
     if (path === `/chats/${GROUP}` && method === 'GET') return reply(CHATS[GROUP])
     if (path === '/access/check') {
       if (omni.accessStatus !== 200) return { ok: false, status: omni.accessStatus, json: async () => ({}) }
+      // An id with a rule of its own that refuses it (block or silent_block), as Omni's
+      // evaluateMode answers it; any other id without a rule is the allowlist's default deny.
+      const action = omni.deny[args.body.platformUserId]
+      if (action) return reply({ allowed: false, rule: { id: `deny-${action}`, ruleType: 'deny', action, instanceId: INSTANCE } })
       return reply({ allowed: args.body.platformUserId === PHONE })
     }
     if (path === `/access/rules?instanceId=${INSTANCE}&type=allow`) { omni.rulesReads += 1; return { ok: true, json: async () => ({ items: omni.rules }) } }
@@ -221,23 +225,59 @@ test('stranger reply: a rule that matches at a re-check admits the person as bef
   assert.deepEqual([b.omniState.sends, requests(b)], [[], []])
 })
 
-test('stranger reply: a failed send is warned once and not tried again; the kept message still leaves', async t => {
+test('stranger reply: a failed send takes the day\'s mark back: no timer tries again, the person\'s next message does, and it is warned once', async t => {
   const b = await bench(t, { externalId: `${LID}@lid` })
   b.omniState.sendStatus = 500
   await b.deliver(lidOnly(1))
   await recheck(t, b, 2_000)
   await recheck(t, b, 8_000)
   await recheck(t, b, 20_000)
-  assert.equal(b.omniState.sends.length, 1)
-  assert.equal(kept(b).length, 0)
+  // Tried once; the kept message leaves anyway, and the chat has no mark.
+  assert.deepEqual([b.omniState.sends.length, kept(b).length, b.team.state.omniStrangerReplies], [1, 0, {}])
+  await until(() => Object.keys(saved(b.home).omniStrangerReplies ?? {}).length === 0)
   t.mock.timers.tick(180_000)
+  assert.equal(b.omniState.sends.length, 1)
+  // Their next message tries again, and fails again: still one warning.
+  await b.deliver(stranger(2))
+  assert.equal(b.omniState.sends.length, 2)
+  // Omni takes the next one; from then on the day's mark holds.
+  b.omniState.sendStatus = 201
+  await b.deliver(stranger(3))
+  await b.deliver(stranger(4))
+  assert.equal(b.omniState.sends.length, 3)
+  assert.equal(b.warned.filter(args => /was not sent/.test(args[0])).length, 1)
+  assert.deepEqual([kept(b), staffWarnings(b), requests(b).map(row => row.count)], [[], [], [4]])
+})
+
+for (const action of ['block', 'silent_block']) test(`stranger reply: a sender a ${action} rule refuses gets nothing, and no request row`, async t => {
+  const b = await bench(t)
+  b.omniState.deny[STRANGER] = action
+  await b.deliver(stranger(1))
+  assert.deepEqual([b.omniState.sends, requests(b), b.team.state.omniStrangerReplies ?? {}], [[], [], {}])
+  assert.equal(b.channels.threads.byChat(CHAT), undefined)
+})
+
+test('stranger reply: a deny rule on one of the sender\'s ids and none on the other gets nothing, live or kept', async t => {
+  const b = await bench(t, { externalId: `${LID}@lid` })
+  b.omniState.deny[LID] = 'block'
+  // Live: the lid with a phone beside it.
+  await b.deliver({ ...lidOnly(1), rawPayload: { ...lidOnly(1).rawPayload, resolvedSenderPhone: STRANGER } })
+  assert.deepEqual([b.omniState.sends, requests(b), kept(b)], [[], [], []])
+  // Kept: a lid-only message is kept as before, and the phone its re-check finds has no rule.
   await b.deliver(lidOnly(2))
+  assert.equal(kept(b).length, 1)
+  await recheck(t, b, 2_000)
+  await recheck(t, b, 8_000)
+  b.omniState.canonical = `${STRANGER}@s.whatsapp.net`
+  await recheck(t, b, 20_000)
+  assert.deepEqual([b.omniState.sends, requests(b), kept(b)], [[], [], []])
+  // Kept with the lid alone to the end of the window: no reply either, and #1706 marks it.
+  b.omniState.canonical = null
+  await b.deliver(lidOnly(3))
   await recheck(t, b, 2_000)
   await recheck(t, b, 8_000)
   await recheck(t, b, 20_000)
-  assert.equal(b.omniState.sends.length, 1)
-  assert.equal(b.warned.filter(args => /was not sent/.test(args[0])).length, 1)
-  assert.deepEqual([kept(b), staffWarnings(b), requests(b).map(row => row.count)], [[], [], [2]])
+  assert.deepEqual([b.omniState.sends, requests(b), kept(b).map(entry => entry.waiting)], [[], [], [true]])
 })
 
 test('stranger reply: with answer mode switched off, a kept lid-only message gets no reply and stays kept as before', async t => {

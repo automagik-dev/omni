@@ -3,14 +3,17 @@
 // sender stays refused in silence, as before. Who gets it: a sender the answer intake refuses as
 // `denied` (answer-intake.js), and a sender known only by their lid that the kept message's
 // re-checks still do not match once their window ends, or that a re-check finds by a phone no
-// rule allows (answer-kept.js). Never on a check that failed, a message too old, any other
-// gate, a group, a broadcast, history or the number's own side: those are never `denied`.
+// rule allows (answer-kept.js). Never to a sender a rule of its own refuses (block or
+// silent_block, on any of their ids): only the allowlist's default refusal gets it. Never on a
+// check that failed, a message too old, any other gate, a group, a broadcast, history or the
+// number's own side: those are never `denied`.
 //
 // The reply goes once a day per chat, in the chat the person wrote from, through Omni's send
 // for that chat (its externalId, as needs-staff.js sends), only after their own message. The
 // day's mark is in the team's saved state before the send, so a restart or a second message in
-// between sends nothing more; a failed send is warned once and not tried again that day. No
-// answer child is made or woken for them: their message stays refused.
+// between sends nothing more. A failed send takes the mark back, so the person's next message
+// tries again; nothing tries on a timer, and the failure is warned once per chat until a send
+// there works. No answer child is made or woken for them: their message stays refused.
 //
 // Each person who gets it is an access request: one row per chat for the bot, with the ids they
 // wrote from, their first text, and when and how often they wrote. Staff read the rows in the
@@ -47,6 +50,7 @@ function bound(map, max, at) {
 }
 
 export function install(rt) {
+  const failing = new Set()
   const replied = () => (rt.state.omniStrangerReplies ??= {})
   const requestsOf = botId => ((rt.state.omniAnswerRequests ??= {})[botId] ??= {})
 
@@ -59,6 +63,7 @@ export function install(rt) {
     bound(rows, REQUESTS_MAX, entry => entry.lastAt)
   }
 
+  // True when Omni took the reply.
   async function send(row, botId, text) {
     let why
     try {
@@ -73,15 +78,22 @@ export function install(rt) {
         }
       }
     } catch (error) { why = error?.message ?? String(error) }
-    if (why !== undefined) rt.warn('omni-channels: the reply to a person no rule lets in was not sent in chat %s (not tried again today): %s', row.chatUuid, why)
+    const key = `${row.instanceId}:${row.chatUuid}`
+    if (why === undefined) { failing.delete(key); return true }
+    if (!failing.has(key)) {
+      failing.add(key)
+      rt.warn('omni-channels: the reply to a person no rule lets in was not sent in chat %s (tried again on their next message): %s', row.chatUuid, why)
+    }
+    return false
   }
 
-  // A message of a sender no rule lets in, on a bot's answer channel. True when the bot answers
-  // and has a reply text: the message is taken (a request noted, and the reply sent unless the
-  // chat had it within a day); false otherwise, and nothing changed.
-  rt.answerStranger = async (row, botId) => {
+  // A message of a sender no rule lets in, on a bot's answer channel; `blocked`, the intake's word
+  // that a rule of its own refused one of their ids. True when the bot answers, has a reply text
+  // and the sender is not blocked: the message is taken (a request noted, and the reply sent
+  // unless the chat had it within a day); false otherwise, and nothing changed.
+  rt.answerStranger = async (row, botId, { blocked = false } = {}) => {
     const { enabled, strangerReply: text } = answerSettingsOf(rt.botOf(botId))
-    if (!enabled || text === null || !row?.instanceId || !row.chatUuid || row.rawPayload?.isFromMe === true) return false
+    if (blocked || !enabled || text === null || !row?.instanceId || !row.chatUuid || row.rawPayload?.isFromMe === true) return false
     const now = Date.now()
     note(row, botId, now)
     // Checked and marked with no wait between: a live message and a re-check at once send once.
@@ -97,7 +109,10 @@ export function install(rt) {
       if (due && replied()[key] === now) delete replied()[key]
       throw error
     }
-    if (due) await send(row, botId, text)
+    if (due && !await send(row, botId, text) && replied()[key] === now) {
+      delete replied()[key]
+      await rt.save().catch(error => rt.warn('omni-channels: saving the reply marks failed: %s', error?.message ?? error))
+    }
     return true
   }
 

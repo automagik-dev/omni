@@ -149,8 +149,8 @@ export function answerKept(rt, { admit, dispatch }) {
   async function recheck(entry) {
     const phone = await chatPhone(entry.row)
     const row = phone ? { ...entry.row, rawPayload: { ...entry.row.rawPayload, resolvedSenderPhone: phone } } : entry.row
-    let why
-    const admission = await admit(row, { detail: true, refused: reason => { why = reason } })
+    let why, blocked
+    const admission = await admit(row, { detail: true, refused: (reason, info) => { why = reason; blocked = info?.blocked } })
     if (admission !== false) {
       // Releasing hands over the chat's older kept messages too, oldest first.
       for (const earlier of entries(entry.row.chatUuid)) await hand(earlier, admission)
@@ -160,7 +160,7 @@ export function answerKept(rt, { admit, dispatch }) {
     // refused as before. Unmatched, or a check that failed: kept for the next check.
     // #1713: with the bot's reply set (answer-strangers.js), a phone no rule allows, or a sender
     // still unmatched once the window ends, gets it and leaves at once, with no warning or marker.
-    const replied = async () => { if (!await rt.answerStranger?.(row, entry.botId)) return false; delete kept()[entry.row.id]; return true }
+    const replied = async () => { if (!await rt.answerStranger?.(row, entry.botId, { blocked })) return false; delete kept()[entry.row.id]; return true }
     if (why === 'denied' && await replied()) return
     if (!['unmatched', 'failed'].includes(why)) { drop(entry, `refused (${why})`); return }
     entry.checks += 1
