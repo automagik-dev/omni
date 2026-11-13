@@ -1448,3 +1448,54 @@ test('answer settings name a staff chat from the bot\'s channels, never a chat a
   await settle()
   assert.equal(calls.at(-1)[1].needsStaffChatId, null)
 })
+
+// #1713: staff write the one reply a person no rule lets in gets, and read who asked.
+test('answer settings take the reply to people who are not let in, send it only while set or cleared, and list the requests when shown', async t => {
+  calls.length = 0
+  const requests = [
+    { instanceId: CHANNEL_A.id, chatUuid: 'c7', senders: ['5500000000042'], text: 'Can I join?', firstAt: 2_000, lastAt: 3_000, count: 2 },
+    { instanceId: CHANNEL_A.id, chatUuid: 'c8', senders: ['100000000000042', '5500000000043'], text: 'Hello', firstAt: 1_000, lastAt: 1_000, count: 1 },
+  ]
+  answer = endpoint => (endpoint === 'omni-answer-requests' ? { count: requests.length, requests } : {})
+  let value = {}
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value }))
+  t.after(() => { view.unmount(); answer = () => ({}) })
+  const open = async () => {
+    nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+    view.draw()
+    await settle()
+  }
+  await open()
+  // Nothing is read until staff show the requests.
+  assert.deepEqual(calls, [])
+  const field = () => one(view.draw(), 'ot-answer-stranger')
+  const label = nodes(view.draw()).find(node => node.type === 'label' && text(node).startsWith('Reply to people who are not let in'))
+  assert.ok(label)
+  assert.ok(nodes(view.draw()).some(node => node.props?.className === 'bt-note' && text(node) === 'Sent once a day to each person no rule lets in. Empty: no reply.'))
+  assert.deepEqual([field().props.value, field().props.maxLength], ['', 1000])
+  const save = async () => { nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick(); await settle() }
+  // A save closes the settings.
+  await save()
+  assert.equal('strangerReply' in calls.at(-1)[1], false)
+  await open()
+  field().props.onChange({ target: { value: '  Ask for an invite.  ' } })
+  await save()
+  assert.equal(calls.at(-1)[1].strangerReply, 'Ask for an invite.')
+  value = { strangerReply: 'Ask for an invite.' }
+  await open()
+  field().props.onChange({ target: { value: '' } })
+  await save()
+  assert.equal(calls.at(-1)[1].strangerReply, null)
+  // Shown: the count, then each request newest first as the host sends them.
+  await open()
+  const group = () => nodes(view.draw()).find(node => node.props?.['aria-label'] === 'Requests')
+  assert.equal(text(nodes(group()).find(node => node.props?.className === 'bt-field-label')), 'Requests')
+  nodes(group()).find(node => node.type === 'button' && text(node) === 'Show').props.onClick()
+  view.draw()
+  await settle()
+  assert.deepEqual(calls.at(-1), ['omni-answer-requests', { botId: 'dedicated' }])
+  assert.equal(text(nodes(group()).find(node => node.props?.className === 'bt-field-label')), 'Requests (2)')
+  const rows = nodes(group()).filter(node => node.type === 'li')
+  assert.deepEqual(rows.map(row => [text(one(row, 'ot-request-who')), text(one(row, 'ot-request-text')), /2 messages|1 message/.exec(text(row))?.[0]]),
+    [['5500000000042', 'Can I join?', '2 messages'], ['100000000000042 · 5500000000043', 'Hello', '1 message']])
+})
