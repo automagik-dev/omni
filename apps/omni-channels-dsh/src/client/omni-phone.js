@@ -1,14 +1,14 @@
 import { threadReason } from './problem-words.js'
-import { createElement as h, useEffect, useMemo, useState } from 'react'
+import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
 import { ChatMessages, useStayAtEnd } from './channels.js'
 import { POLL_MS } from './omni-store.js'
 import { PHONE_FRAME_CSS, PhoneFrame } from './phone-frame.js'
-import { call, hostText, t } from './core.js'
+import { call, hostText, icons, t } from './core.js'
 
 // The phone pane: a tab of DSH's right column that shows one thread's chat in a drawn iPhone
 // (phone-frame.js), files and Omni's text for them included. It is the owner's own view: it
-// reads on the host's link key, polling as the chat view does, and has no composer. Its
-// header holds the thread's "Always allow send" switch (SendSwitch).
+// reads on the host's link key, polling as the chat view does. Its header holds the thread's
+// "Always allow send" switch (SendSwitch); its foot, staff's own composer (PhoneComposer, #1715).
 //
 // It opens only from the thread, never by itself: a click on the thread's row or a pick in
 // the picker, which opens it beside the thread's own Session. On a Bot team without the
@@ -211,6 +211,73 @@ export function SendSwitch({ thread }) {
     problem ? h('span', { className: 'op-send-problem', role: 'alert' }, hostText(problem)) : null)
 }
 
+/**
+ * #1715: the pane's composer, as a chat app's. Staff's own text goes from the thread's channel
+ * straight to its chat (host omni-phone-send): never through the thread's model, a tool or a
+ * card, and it shows above on the next poll. Enter sends, Shift+Enter adds a line, and the box
+ * waits while one is being sent; a failed one says why and keeps the text, and nothing is sent
+ * again until staff send it. An answer child's draft waiting on its card shows above the box
+ * with Edit, which puts its text in the box: sent from here it goes out as typed and counts as
+ * edited. DSH lets no plugin answer that card, so the pane then asks staff to reject it there.
+ */
+// The longest message the host sends (omni-phone-send).
+export const PHONE_TEXT_MAX = 4096
+export function PhoneComposer({ thread }) {
+  const [text, setText] = useState('')
+  const [editing, setEditing] = useState(null)
+  const [sending, setSending] = useState(false)
+  const [problem, setProblem] = useState(null)
+  // Two Enters before the box re-renders as waiting still send once.
+  const busy = useRef(false)
+  const box = useRef(null)
+  const draft = thread.waitingDraft ?? null
+  const send = async () => {
+    const message = text.trim()
+    if (busy.current || message === '') return
+    busy.current = true
+    setSending(true)
+    setProblem(null)
+    try {
+      await call('omni-phone-send', { threadId: thread.id, text: message, ...(editing === null ? {} : { draftId: editing }) })
+      setText('')
+      setEditing(null)
+    } catch (error) {
+      console.warn('Could not send the message:', error)
+      setProblem(typeof error?.message === 'string' && error.message !== '' ? error.message : 'Could not send this message. Check your connection and access, then try again.')
+    } finally {
+      busy.current = false
+      setSending(false)
+    }
+  }
+  const edit = () => {
+    setText(draft.text)
+    setEditing(draft.id)
+    setProblem(null)
+    box.current?.focus?.()
+  }
+  return h('footer', { className: 'op-compose' },
+    draft && draft.replaced !== true && editing !== draft.id ? h('div', { className: 'op-draft', 'data-draft-id': draft.id },
+      h('div', { className: 'op-draft-head' },
+        h('span', null, t('The bot\'s draft, waiting on its card')),
+        h('button', { type: 'button', className: 'op-draft-edit', disabled: sending, onClick: edit }, t('Edit'))),
+      h('p', { className: 'op-draft-text' }, draft.text)) : null,
+    draft?.replaced === true ? h('p', { className: 'op-compose-note', role: 'status' }, t('Reject the bot\'s draft on its card')) : null,
+    problem ? h('p', { className: 'op-compose-note op-compose-fail', role: 'alert' }, t('Not sent: {reason}', { reason: hostText(problem) })) : null,
+    h('div', { className: 'oc-compose', 'data-off': sending ? true : undefined },
+      h('textarea', {
+        ref: box, rows: 1, value: text, disabled: sending, maxLength: PHONE_TEXT_MAX, placeholder: t('Write your own message'), 'aria-label': t('Your message'),
+        // An emptied box lets the draft go back to waiting on its card.
+        onChange: (event) => {
+          setText(event.target.value)
+          if (event.target.value === '') setEditing(null)
+        },
+        onKeyDown: (event) => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing) { event.preventDefault(); void send() }
+        },
+      }),
+      h('button', { type: 'button', className: 'oc-send', disabled: sending || text.trim() === '', 'aria-label': t('Send'), onClick: () => { void send() } }, h(icons.ArrowUpIcon))))
+}
+
 /** One thread's chat in the drawn frame. `visible` false (the tab hidden): it does not poll. */
 export function PhonePane({ params, sessionId, useRoster, visible = true }) {
   const thread = useRoster(roster => phoneThreadOf(roster, params, sessionId))
@@ -234,7 +301,8 @@ export function PhonePane({ params, sessionId, useRoster, visible = true }) {
           loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
           read.error ? h('p', { className: 'op-note', role: 'alert' }, hostText(read.error)) : null,
           read.messages?.length === 0 ? h('p', { className: 'op-note' }, t('No messages yet')) : null,
-          h(ChatMessages, { messages, onSized })))))
+          h(ChatMessages, { messages, onSized }))),
+      h(PhoneComposer, { thread })))
 }
 
 // Each tab's last params on this page, by Session and tab, the newest KEPT_TABS of them.
@@ -337,4 +405,18 @@ export const OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
 .op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
 .op-dock-problem{margin:0 8px 4px;font-size:11.5px;color:var(--bt-danger, #dc2626)}
+.op-log{flex:1;min-height:0}
+.op-compose{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px;border-top:1px solid var(--bt-line, rgba(127,127,127,.2))}
+.op-compose .oc-compose{width:100%;max-width:none;margin:0;padding:3px 3px 3px 12px;border-radius:20px;gap:6px}
+.op-compose .oc-compose textarea{height:30px;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
+.op-compose .oc-send{width:30px;height:30px}
+.op-compose .oc-send svg{width:16px;height:16px}
+.op-draft{display:flex;flex-direction:column;gap:3px;padding:7px 10px;border-radius:12px;border:1px dashed var(--bt-line-2, rgba(127,127,127,.35));background:var(--bt-card, transparent)}
+.op-draft-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--bt-ink-3)}
+.op-draft-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-draft-edit{flex:none;padding:2px 9px;border:1px solid var(--bt-line-2, rgba(127,127,127,.35));border-radius:999px;background:none;color:var(--bt-ink);font:inherit;font-size:11.5px;cursor:pointer}
+.op-draft-edit:disabled{opacity:.5;cursor:default}
+.op-draft-text{margin:0;max-height:72px;overflow-y:auto;font-size:12.5px;line-height:17px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink-2, var(--bt-ink))}
+.op-compose-note{margin:0;padding:5px 9px;border-radius:10px;background:var(--bt-hover, rgba(127,127,127,.1));font-size:11.5px;line-height:16px;color:var(--bt-ink-2, var(--bt-ink-3));overflow-wrap:anywhere}
+.op-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
 `

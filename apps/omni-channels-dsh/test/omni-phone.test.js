@@ -167,8 +167,8 @@ test('the pane shows the thread\'s chat in the drawn frame: a picture, a voice n
   const after = await drawn(view)
   assert.equal(ofType(all(after, 'oc-bubble')[2], 'video').length, 1)
   assert.equal(mediaAsked('m3'), 1)
-  // It reads; it never writes: no composer, nothing sent.
-  assert.equal(ofType(after, 'textarea').length + ofType(after, 'input').length, 0)
+  // It reads; nothing is sent until staff send from its composer (#1715): one box, empty.
+  assert.deepEqual([ofType(after, 'textarea').length, ofType(after, 'textarea')[0].props.value, ofType(after, 'input').length], [1, '', 0])
   assert.deepEqual([...new Set(calls.map(([endpoint]) => endpoint))].sort(), ['omni-media', 'omni-messages'])
 })
 
@@ -731,4 +731,120 @@ test('an answer child\'s "Always allow send" switch is its sending mode: on asks
   root = await drawn(view)
   assert.deepEqual(asked('set_child_sending').at(-1), ['set_child_sending', { threadId: 't1', mode: 'training' }])
   assert.equal(toggle().props['aria-checked'], false)
+})
+
+// -------------------------------------------------------------------------
+// #1715: staff's own composer at the pane's foot (PhoneComposer), on the host's omni-phone-send.
+
+const composerOf = root => one(root, 'op-compose')
+const boxOf = root => ofType(composerOf(root), 'textarea')[0]
+const sendOf = root => one(composerOf(root), 'oc-send')
+const typed = (root, value) => boxOf(root).props.onChange({ target: { value } })
+const key = (root, init = {}) => {
+  const event = { key: 'Enter', shiftKey: false, nativeEvent: { isComposing: false }, prevented: false, preventDefault() { event.prevented = true }, ...init }
+  boxOf(root).props.onKeyDown(event)
+  return event
+}
+// The host holds omni-phone-send until the test lets it answer (or fail).
+function heldSend() {
+  const held = []
+  answer = endpoint => (endpoint === 'omni-phone-send' ? new Promise((resolve) => { held.push(resolve) }) : host()(endpoint))
+  return held
+}
+
+test('the pane\'s composer: Enter sends the trimmed text to omni-phone-send, Shift+Enter adds a line, and the box waits while it is being sent', async (t) => {
+  reset()
+  const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's1', useRoster: useRosterOf(hooked([THREAD(1)])) }, t)
+  let root = await drawn(view)
+  assert.equal(boxOf(root).props.placeholder, 'Write your own message')
+  assert.equal(boxOf(root).props.maxLength, 4096)
+  assert.equal(sendOf(root).props.disabled, true, 'nothing to send yet')
+  typed(root, '  Hello,\nit ships today. ')
+  root = await drawn(view)
+  assert.equal(sendOf(root).props.disabled, false)
+  // Shift+Enter is a new line, and Enter while an input method composes is not a send.
+  assert.equal(key(root, { shiftKey: true }).prevented, false)
+  key(root, { nativeEvent: { isComposing: true } })
+  assert.deepEqual(asked('omni-phone-send'), [])
+  const held = heldSend()
+  // Two Enters before the box draws again send once.
+  assert.equal(key(root).prevented, true)
+  key(root)
+  root = await drawn(view)
+  assert.deepEqual(asked('omni-phone-send'), [['omni-phone-send', { threadId: 't1', text: 'Hello,\nit ships today.' }]])
+  assert.deepEqual([boxOf(root).props.disabled, sendOf(root).props.disabled], [true, true])
+  held[0]({ sent: true, messageId: 'x', paused: false, draft: null })
+  root = await drawn(view)
+  assert.deepEqual([boxOf(root).props.value, boxOf(root).props.disabled], ['', false])
+  assert.equal(all(root, 'op-compose-fail').length, 0)
+})
+
+test('a failed send says why in the pane, keeps the text, and sends nothing again until staff send it', async (t) => {
+  reset()
+  const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's1', useRoster: useRosterOf(hooked([THREAD(1)])) }, t)
+  let root = await drawn(view)
+  const failure = new Error('Omni answered 503: instance not connected. Nothing was sent.')
+  answer = endpoint => (endpoint === 'omni-phone-send' ? failure : host()(endpoint))
+  typed(root, 'On my way')
+  root = await drawn(view)
+  sendOf(root).props.onClick()
+  root = await drawn(view)
+  const problem = one(root, 'op-compose-fail')
+  assert.equal(problem.props.role, 'alert')
+  assert.equal(text(problem), 'Not sent: Omni answered 503: instance not connected. Nothing was sent.')
+  assert.deepEqual([boxOf(root).props.value, boxOf(root).props.disabled], ['On my way', false])
+  assert.deepEqual(logged.at(-1), ['Could not send the message:', failure])
+  await nextPoll()
+  root = await drawn(view)
+  assert.equal(asked('omni-phone-send').length, 1, 'never sent again by itself')
+  // Staff send it again: it goes, and the problem clears.
+  answer = host()
+  key(root)
+  root = await drawn(view)
+  assert.equal(asked('omni-phone-send').length, 2)
+  assert.equal(all(root, 'op-compose-fail').length, 0)
+  assert.equal(boxOf(root).props.value, '')
+})
+
+test('an answer child\'s draft waiting on its card shows with Edit; edited in the composer it goes out as typed with the draft\'s id, and the pane then asks staff to reject the card', async (t) => {
+  reset()
+  const DRAFT = 'Your order left today and arrives in 3 to 5 business days.'
+  const EDITED = 'Your order left today.\nIt arrives on Friday.'
+  const child = extra => THREAD(1, CHAT_1, { answerChild: true, sendingMode: 'training', status: 'waiting', permissions: { sends: 'ask', reactions: 'list' }, ...extra })
+  let roster = hooked([child({ waitingDraft: { id: 'd1', text: DRAFT } })])
+  const view = pane({ params: { threadId: 't1', chatId: CHAT_1 }, sessionId: 's1', useRoster: select => select(roster) }, t)
+  let root = await drawn(view)
+  const draft = one(composerOf(root), 'op-draft')
+  assert.equal(text(one(draft, 'op-draft-text')), DRAFT)
+  assert.equal(text(one(draft, 'op-draft-head')), 'The bot\'s draft, waiting on its card' + 'Edit')
+  assert.equal(boxOf(root).props.value, '')
+  // Edit puts the draft in the box; emptied again, the draft waits on its card as before.
+  one(draft, 'op-draft-edit').props.onClick()
+  root = await drawn(view)
+  assert.equal(boxOf(root).props.value, DRAFT)
+  assert.equal(all(root, 'op-draft').length, 0)
+  typed(root, '')
+  root = await drawn(view)
+  assert.equal(all(root, 'op-draft').length, 1)
+  one(root, 'op-draft-edit').props.onClick()
+  root = await drawn(view)
+  typed(root, EDITED)
+  root = await drawn(view)
+  sendOf(root).props.onClick()
+  root = await drawn(view)
+  assert.deepEqual(asked('omni-phone-send'), [['omni-phone-send', { threadId: 't1', text: EDITED, draftId: 'd1' }]])
+  // The host's view says staff replaced it: no Edit, one line asking staff to reject its card.
+  roster = hooked([child({ waitingDraft: { id: 'd1', text: DRAFT, replaced: true }, paused: true })])
+  root = await drawn(view)
+  assert.equal(all(root, 'op-draft').length, 0)
+  assert.equal(text(one(root, 'op-compose-note')), 'Reject the bot\'s draft on its card')
+  // The card answered, the line goes; the next message carries no draft.
+  roster = hooked([child({ status: 'idle', paused: true })])
+  root = await drawn(view)
+  assert.equal(all(root, 'op-compose-note').length, 0)
+  typed(root, 'One more thing.')
+  root = await drawn(view)
+  key(root)
+  root = await drawn(view)
+  assert.deepEqual(asked('omni-phone-send').at(-1), ['omni-phone-send', { threadId: 't1', text: 'One more thing.' }])
 })

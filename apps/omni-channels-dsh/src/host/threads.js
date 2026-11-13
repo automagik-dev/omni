@@ -397,6 +397,8 @@ export function install(rt) {
   ctx.on('approval/request', (request, next) => {
     const thread = bySession(request?.agent?.session?.id ?? request?.agent?.id)
     if (thread === undefined) return next()
+    // #1715: an answer child's draft on this card shows in the phone pane while it waits.
+    rt.answerApprovalWaiting?.(thread, request)
     thread.status = 'waiting'
     persist()
     // An answer child's training card also counts toward its streak (thread-tools.js).
@@ -1064,7 +1066,10 @@ export function install(rt) {
         const reason = reasons === null ? rt.teamResume?.reason ?? NEEDS_NEWER_TEAM : reasons.get(thread.id) ?? null
         const reasonCode = reasonCodes === null ? 'needs_newer_team' : reasonCodes.get(thread.id)
         const status = live && rt.teamResume?.running?.(thread.sessionId) !== true ? 'idle' : thread.status ?? 'idle'
+        // #1715: the child's draft waiting on its card now (thread-tools.js), for the phone pane.
+        const waitingDraft = isAnswerChild(thread) && thread.status === 'waiting' ? rt.answerWaitingDraft?.(thread.id) : undefined
         return {
+          ...(waitingDraft ? { waitingDraft } : {}),
           ...(isAnswerChild(thread) ? { answerChild: true, sendingMode: sendingModeOf(thread), approvedStreak: thread.approvedStreak ?? 0, graduateAfter: answerSettingsOf(rt.botOf(thread.ownerBotId)).graduateAfter } : {}),
           ...(isAnswerChild(thread) && thread.paused === true ? { paused: true, pausedUntil: Number.isFinite(pausedUntilOf(thread, rt.botOf(thread.ownerBotId))) ? pausedUntilOf(thread, rt.botOf(thread.ownerBotId)) : null } : {}),
           // #1707: the child asked for someone from the team (needs-staff.js); staff dismiss it.
