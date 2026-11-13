@@ -713,6 +713,15 @@ export function RepairTools({ bot }) {
     result ? h('p', { className: result.ok ? 'ot-picker-note' : 'ot-picker-problem', role: result.ok ? 'status' : 'alert' }, result.text) : null)
 }
 
+// #1706: messages this bot keeps because their sender is known only by a lid Omni has no phone
+// for yet (host answer-kept.js). Staff see how many wait; the bot answers each once Omni knows
+// the phone or the person writes again, and drops it after the channel's age limit.
+function waitingOf(roster, botId) {
+  const count = roster?.omniAnswerWaiting?.[botId]
+  if (!Number.isInteger(count) || count < 1) return null
+  return { count, label: `${count === 1 ? 'message' : 'messages'} waiting: sender not matched yet`, title: 'Omni does not know this sender\'s phone yet, so their phone access rule cannot match them. The bot answers once Omni learns the phone or the person writes again; after the channel\'s age limit the message is dropped.' }
+}
+
 export function OmniTree(props) {
   const { bot, actions, roster } = props
   const state = useOmni()
@@ -751,7 +760,10 @@ export function OmniTree(props) {
   })
   const plus = plusOf(roster, state)
   const listed = new Set(ownedChannels.map(channel => channel.id))
+  const waiting = waitingOf(roster, bot.id)
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
+    waiting ? h('div', { className: 'ot-channel-row ot-waiting', role: 'status', title: waiting.title, 'aria-label': `${waiting.count} ${waiting.label}` },
+      h('span', { className: 'ot-count', 'aria-hidden': true }, String(waiting.count)), h('span', { className: 'ot-waiting-text', 'aria-hidden': true }, waiting.label)) : null,
     h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id], channels: ownedChannels, threads }),
     h(RepairTools, { bot }),
     bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
@@ -823,6 +835,10 @@ export const OMNI_TREE_CSS = `
 .ot-chevron svg{width:12px;height:12px}
 .ot-channel-row[aria-expanded=true] .ot-chevron{transform:rotate(90deg)}
 .ot-channel-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ot-waiting{box-sizing:border-box;align-items:flex-start;cursor:default;color:var(--bt-ink-2);font-size:12.5px;line-height:18px}
+.ot-waiting:hover{background:none}
+.ot-waiting .ot-count{background:color-mix(in srgb,var(--bt-star, #ff9800) 15%,transparent);color:color-mix(in srgb,var(--bt-star, #ff9800) 72%,var(--bt-ink))}
+.ot-waiting-text{flex:1;min-width:0;overflow-wrap:anywhere}
 .ot-count{flex:none;min-width:18px;padding:0 5px;border-radius:9px;background:var(--bt-accent, #22d3ee);color:#fff;font-size:11px;line-height:18px;text-align:center;font-weight:600}
 .ot-plus{display:grid;place-items:center;flex:none;width:24px;height:24px;padding:0;border:0;border-radius:7px;background:none;color:var(--bt-ink-2);cursor:pointer;opacity:.55;transition:opacity .12s}
 /* The + is always there, faint, so it can be found; it is full on a channel's hover or focus and while its picker is open. */

@@ -66,6 +66,20 @@ The rule is the person's only record. Staff write its `metadata` (`POST`/`PATCH
 Context and capability are kept in memory only: after a restart they return with the person's
 next admitted message.
 
+## A first message before Omni knows the phone
+
+A WhatsApp sender can first arrive by their lid alone, before Omni has looked up their phone, so
+an access rule by phone cannot match them yet. Answer mode keeps such a message (in the plugin's
+saved state, so a restart keeps it) and checks it again about 2, 10 and 30 seconds later, then
+each minute, with the phone Omni has learned for the chat by then (the chat's `canonicalId`).
+When a rule admits the person, or a later message of theirs in that chat is admitted, the kept
+messages reach the child once, oldest first, bound by that rule. A kept message is dropped once
+it is older than the channel's `inboundMaxAgeMinutes`, by its platform time.
+
+If the sender is still not matched after 30 seconds and the channel has an allow rule by phone,
+the host warns once and the bot's sidebar shows "1 message waiting: sender not matched yet". A
+sender whose phone is known and matches no rule is refused as before, without a marker.
+
 ## When a person needs someone from the team
 
 An answer child that cannot help its person calls `thread_needs_staff` with a one-line reason

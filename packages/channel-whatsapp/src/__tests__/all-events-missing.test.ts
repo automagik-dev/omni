@@ -36,6 +36,7 @@ function createMockPlugin() {
     handleSettingsUpdate: mock(() => undefined),
     handleChatLockUpdate: mock(() => undefined),
     handleGroupMemberTagUpdate: mock(() => undefined),
+    publishLidMappings: mock(() => undefined),
   };
 }
 
@@ -115,10 +116,35 @@ describe('setupAllEventHandlers missing Baileys events', () => {
     expect(plugin.handleGroupMemberTagUpdate).toHaveBeenCalledTimes(1);
     expect(plugin.handleGroupMemberTagUpdate).toHaveBeenCalledWith(instanceId, payload);
   });
+
+  test('publishes mappings after lid-mapping.update', () => {
+    const sock = createMockSocket();
+    const plugin = createMockPlugin();
+    setupAllEventHandlers(sock as WASocket, plugin as never, instanceId);
+
+    sock.ev.emit('lid-mapping.update', { lid: 'fixture-lid', pn: 'fixture-phone' });
+
+    expect(plugin.storeLidMapping).toHaveBeenCalledWith(instanceId, 'fixture-lid@lid', 'fixture-phone@s.whatsapp.net');
+    expect(plugin.publishLidMappings).toHaveBeenCalledWith(instanceId);
+  });
 });
 
 describe('WhatsAppPlugin read-only Baileys event publishing', () => {
   const instanceId = 'test-instance';
+
+  test('publishes the pair from Baileys lid-mapping.update { lid, pn } payloads', () => {
+    const sock = createMockSocket();
+    const { plugin, publishGeneric } = createPluginWithEventBus();
+    setupAllEventHandlers(sock as WASocket, plugin, instanceId);
+
+    sock.ev.emit('lid-mapping.update', { lid: 'fixture-lid', pn: 'fixture-phone' });
+
+    expect(publishGeneric).toHaveBeenCalledWith(
+      'custom.lid-mapping.batch',
+      { mappings: [{ lidJid: 'fixture-lid@lid', phoneJid: 'fixture-phone@s.whatsapp.net' }] },
+      expect.objectContaining({ instanceId, channelType: plugin.id, source: `channel:${plugin.id}` }),
+    );
+  });
 
   test('publishes messaging-history.status as custom event', () => {
     const { plugin, publishGeneric } = createPluginWithEventBus();
