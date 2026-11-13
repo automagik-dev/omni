@@ -516,33 +516,44 @@ export const WhatsAppBusinessConnectRequestSchema = z
  * Exactly one of `flowId` / `flowName` identifies the flow. `draft: true`
  * sends an unpublished flow (Meta's mode=draft) for testing.
  */
-export const WhatsAppFlowSendSchema = z
-  .object({
-    flowId: z.string().trim().min(1).optional(),
-    flowName: z.string().min(1).optional(),
-    /** Button label that opens the flow. */
-    cta: z.string().trim().min(1).max(30),
-    bodyText: z.string().min(1).max(1024),
-    headerText: z.string().max(60).optional(),
-    footerText: z.string().max(60).optional(),
-    /** First screen id (defaults to the flow's entry screen when omitted). */
-    screen: z.string().optional(),
-    /** Input data for the first screen — must be non-empty when present. */
-    data: z.record(z.string(), z.unknown()).optional(),
-    /** Correlates the nfm_reply back to this send; generated when omitted. */
-    flowToken: z.string().optional(),
-    draft: z.boolean().optional(),
-    /**
-     * 'navigate' (default): static flow, screens resolved client-side.
-     * 'data_exchange': endpoint-backed flow — opening it calls the data
-     * endpoint with INIT; requires the flow to have a registered endpoint_uri.
-     */
-    flowAction: z.enum(['navigate', 'data_exchange']).optional(),
-  })
-  .refine((v) => Boolean(v.flowId) !== Boolean(v.flowName), {
-    message: 'Provide exactly one of flowId or flowName',
-    path: ['flowId'],
-  });
+const WhatsAppFlowFieldsSchema = z.object({
+  flowId: z.string().trim().min(1).optional().describe('Flow id (exactly one of flowId/flowName)'),
+  flowName: z.string().min(1).optional().describe('Flow name (exactly one of flowId/flowName)'),
+  /** Button label that opens the flow. */
+  cta: z.string().trim().min(1).max(30).describe('Button label that opens the flow'),
+  bodyText: z.string().min(1).max(1024).describe('Message body shown above the button'),
+  headerText: z.string().max(60).optional().describe('Header line'),
+  footerText: z.string().max(60).optional().describe('Footer line'),
+  /** First screen id (defaults to the flow's entry screen when omitted). */
+  screen: z.string().optional().describe("First screen id (defaults to the flow's entry screen)"),
+  /** Input data for the first screen — must be non-empty when present. */
+  data: z.record(z.string(), z.unknown()).optional().describe('Input data for the first screen'),
+  /** Correlates the nfm_reply back to this send; generated when omitted. */
+  flowToken: z.string().optional().describe('Correlates the nfm_reply back to this send; generated when omitted'),
+  draft: z.boolean().optional().describe('Send the unpublished draft (testing)'),
+  /**
+   * 'navigate' (default): static flow, screens resolved client-side.
+   * 'data_exchange': endpoint-backed flow — opening it calls the data
+   * endpoint with INIT; requires the flow to have a registered endpoint_uri.
+   */
+  flowAction: z
+    .enum(['navigate', 'data_exchange'])
+    .optional()
+    .describe("'navigate' (default, static flow) or 'data_exchange' (endpoint-backed flow)"),
+});
+
+const hasOneFlowRef = (v: { flowId?: string; flowName?: string }) => Boolean(v.flowId) !== Boolean(v.flowName);
+const FLOW_REF_ISSUE = { message: 'Provide exactly one of flowId or flowName', path: ['flowId'] };
+
+export const WhatsAppFlowSendSchema = WhatsAppFlowFieldsSchema.refine(hasOneFlowRef, FLOW_REF_ISSUE);
+
+/**
+ * The `flow` field of `POST /messages/send`: the same descriptor, with
+ * `bodyText` optional because the message `text` fills it when missing.
+ */
+export const WhatsAppFlowInMessageSchema = WhatsAppFlowFieldsSchema.extend({
+  bodyText: WhatsAppFlowFieldsSchema.shape.bodyText.optional().describe('Message body; defaults to the message text'),
+}).refine(hasOneFlowRef, FLOW_REF_ISSUE);
 
 export const WhatsAppBusinessRegisterRequestSchema = z.object({
   /** 6-digit PIN required by Meta for new number registration. */

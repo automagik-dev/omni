@@ -2127,7 +2127,7 @@ export interface paths {
         put?: never;
         /**
          * Send a text message
-         * @description Plain text only; media goes to POST /messages/send/media (a media payload here answers 422 WRONG_ENDPOINT).
+         * @description Text, optionally with buttons, a list, a location request or a WhatsApp Flow (`flow`, on whatsapp-business and asc-flow); media goes to POST /messages/send/media (a media payload here answers 422 WRONG_ENDPOINT).
          */
         post: {
             parameters: {
@@ -2188,6 +2188,36 @@ export interface paths {
                         };
                         /** @description Ask the user to share their location (WhatsApp Cloud: native "Send location" button under the text) */
                         requestLocation?: boolean;
+                        /** @description Send a WhatsApp Flow (whatsapp-business and asc-flow only; asc-flow needs flowId). bodyText defaults to text. Not combinable with buttons, list or requestLocation */
+                        flow?: {
+                            /** @description Flow id (exactly one of flowId/flowName) */
+                            flowId?: string;
+                            /** @description Flow name (exactly one of flowId/flowName) */
+                            flowName?: string;
+                            /** @description Button label that opens the flow */
+                            cta: string;
+                            /** @description Message body; defaults to the message text */
+                            bodyText?: string;
+                            /** @description Header line */
+                            headerText?: string;
+                            /** @description Footer line */
+                            footerText?: string;
+                            /** @description First screen id (defaults to the flow's entry screen) */
+                            screen?: string;
+                            /** @description Input data for the first screen */
+                            data?: {
+                                [key: string]: unknown;
+                            };
+                            /** @description Correlates the nfm_reply back to this send; generated when omitted */
+                            flowToken?: string;
+                            /** @description Send the unpublished draft (testing) */
+                            draft?: boolean;
+                            /**
+                             * @description 'navigate' (default, static flow) or 'data_exchange' (endpoint-backed flow)
+                             * @enum {string}
+                             */
+                            flowAction?: "navigate" | "data_exchange";
+                        };
                         /**
                          * @description Authorship of this send. 'agent' attributes the message to the instance's configured agent (persists sender_agent_id), so agent replay and follow-up scheduling treat the turn as agent-answered (#912). The response echoes the resolved senderAgentId (null when the instance has no configured agent). Default: unattributed.
                          * @enum {string}
@@ -2261,11 +2291,13 @@ export interface paths {
                                 senderAgentId?: string | null;
                                 /** @description Platform send time (ms since epoch), when the channel reports one */
                                 timestamp?: number;
+                                /** @description Present on a flow send: the caller's flowToken, or the one generated; the nfm_reply echoes it */
+                                flowToken?: string;
                             };
                         };
                     };
                 };
-                /** @description Invalid JSON or body */
+                /** @description Invalid JSON or body, or a flow on another channel */
                 400: {
                     headers: {
                         [name: string]: unknown;
@@ -2273,7 +2305,7 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: {
-                                /** @description INVALID_JSON or VALIDATION_ERROR */
+                                /** @description INVALID_JSON, VALIDATION_ERROR, or WRONG_CHANNEL (a flow on a channel without a flow sender) */
                                 code: string;
                                 message?: string;
                                 /** @description Validation issues, for VALIDATION_ERROR */

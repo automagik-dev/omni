@@ -365,6 +365,64 @@ describe('outputRedactorMiddleware (HTTP)', () => {
     }
   });
 
+  describe('a WhatsApp Flow body (flow.data carries option ids and labels)', () => {
+    // The shape of the profile Flow: two option groups, each a list of {id, title}.
+    // Ids and labels are illustrative; the client project owns the real ones.
+    const flowBody = {
+      instanceId: 'i-1',
+      to: 'j@s',
+      text: 'Qual é o seu curso?',
+      flow: {
+        flowId: '1234567890',
+        screen: 'PROFILE',
+        cta: 'Escolher',
+        flowToken: 'offer-0a1b2c3d4e5f',
+        data: {
+          levels: [
+            { id: 'undergraduate', title: 'Graduação' },
+            { id: 'graduate', title: 'Pós-graduação' },
+          ],
+          modalities: [
+            { id: 'on_campus', title: 'Presencial' },
+            { id: 'online', title: 'EAD ou semipresencial' },
+          ],
+        },
+      },
+    };
+
+    async function send(apiKey: ApiKeyData) {
+      const { calls, bus } = mkEventBusMock();
+      const res = await mkApp(apiKey, bus).request('/api/v2/messages/send', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(flowBody),
+      });
+      return { received: ((await res.json()) as { received: unknown }).received, calls };
+    }
+
+    const profiles: Array<[string, Partial<ApiKeyData>]> = [
+      ['a send-only key without a profile', { scopes: ['messages:send'] }],
+      ['a scout key', { profile: 'scout', scopes: ['messages:send'] }],
+      ['a coworker key on its default preset', { profile: 'coworker' }],
+    ];
+    for (const [name, overrides] of profiles) {
+      test(`${name}: flow.data reaches the route untouched`, async () => {
+        const { received, calls } = await send(mkKey(overrides));
+        expect(received).toEqual(flowBody);
+        expect(calls.length).toBe(0);
+      });
+    }
+
+    test('the redactor does walk flow.data: a denylisted label is replaced and reported', async () => {
+      const { received, calls } = await send(
+        mkKey({ profile: 'coworker', profileOverrides: { denylistExtras: ['semipresencial'] } }),
+      );
+      const modalities = (received as typeof flowBody).flow.data.modalities;
+      expect(modalities[1]).toEqual({ id: 'online', title: `EAD ou ${REDACTION_MARKER}` });
+      expect(calls.map((c) => c.payload.field)).toEqual(['flow.data.modalities.1.title']);
+    });
+  });
+
   test('non-JSON body: middleware passes through unchanged', async () => {
     const { bus } = mkEventBusMock();
     const apiKey = mkKey({ profile: 'coworker' });

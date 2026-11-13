@@ -641,6 +641,51 @@ describe('chat key — the recipient lock binds what it delivers, not what it re
   });
 });
 
+describe('a WhatsApp Flow on POST /messages/send keeps the recipient lock', () => {
+  const flow = { flowId: '1234567890', screen: 'PROFILE', cta: 'Escolher', flowToken: 'offer-0a1b2c3d4e5f' };
+  const sendKey = () => mkKey({ scopes: ['messages:send'], outboundRecipientAllowlist: [OWN_JID] });
+
+  test('the body to stays the recipient when the body carries a flow', () => {
+    const targets = extractLockTargets('POST', '/api/v2/messages/send', {
+      instanceId: OWN_INSTANCE,
+      to: OTHER_JID,
+      text: 'hi',
+      flow,
+    });
+    expect(targets.recipient).toBe(OTHER_JID);
+  });
+
+  test('a send-only key with a recipient list sends a flow to its recipient', async () => {
+    const { app } = mountLock(sendKey());
+    const res = await call(app, 'POST', '/messages/send', { instanceId: OWN_INSTANCE, to: OWN_JID, text: 'hi', flow });
+    expect(res.status).toBe(200);
+  });
+
+  test('a send-only key with a recipient list cannot send a flow to anyone else', async () => {
+    const { app } = mountLock(sendKey());
+    const res = await call(app, 'POST', '/messages/send', {
+      instanceId: OWN_INSTANCE,
+      to: OTHER_JID,
+      text: 'hi',
+      flow,
+    });
+    expect(res.status).toBe(403);
+    expect(await errorOf(res)).toMatchObject({ lock: 'outboundRecipientAllowlist', attempted: OTHER_JID });
+  });
+
+  test('a chat key cannot send a flow to another chat', async () => {
+    const { app } = mountLock(chatKey());
+    const res = await call(app, 'POST', '/messages/send', {
+      instanceId: OWN_INSTANCE,
+      to: OTHER_JID,
+      text: 'hi',
+      flow,
+    });
+    expect(res.status).toBe(403);
+    expect(await errorOf(res)).toMatchObject({ lock: 'chatAllowlist', attempted: OTHER_JID });
+  });
+});
+
 describe('chat key — POST /keys/children/self/revoke is the one route past the locks', () => {
   test('a cs child with its locks set reaches the self-revoke route', async () => {
     const { app } = mountLock(chatKey());
