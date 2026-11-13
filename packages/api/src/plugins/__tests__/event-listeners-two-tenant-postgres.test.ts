@@ -59,12 +59,14 @@ const TENANT_A = '11111111-1111-4111-8111-1111111111ea';
 const TENANT_B = '22222222-2222-4222-8222-2222222222eb';
 const INSTANCE_A = '55555555-5555-4555-8555-5555555555ea';
 const INSTANCE_B = '55555555-5555-4555-8555-5555555555eb';
+const INSTANCE_CONFLICT_A = '55555555-5555-4555-8555-5555555555ec';
 const CHAT_A = '66666666-6666-4666-8666-6666666666ea';
 const CHAT_B = '66666666-6666-4666-8666-6666666666eb';
 const CHAT_LID_A = '66666666-6666-4666-8666-6666666666ec';
 const CHAT_CANONICAL_A = '66666666-6666-4666-8666-6666666666ed';
 const CHAT_GROUP_A = '66666666-6666-4666-8666-6666666666ee';
-const CHAT_CONFLICT_A = '66666666-6666-4666-8666-6666666666ef';
+const CHAT_CONFLICT_OWNER_A = '66666666-6666-4666-8666-6666666666f0';
+const CHAT_CONFLICT_A = '66666666-6666-4666-8666-6666666666f1';
 
 const JID = '5511999990000@s.whatsapp.net';
 const LID = '123456789@lid';
@@ -185,7 +187,9 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
 
       INSERT INTO instances (id, name, channel, tenant_id, is_active, created_at) VALUES
         ('${INSTANCE_A}', 'inst-a', 'whatsapp-baileys', '${TENANT_A}', false, '${SHARED_TIMESTAMP}'),
-        ('${INSTANCE_B}', 'inst-b', 'whatsapp-baileys', '${TENANT_B}', false, '${SHARED_TIMESTAMP}');
+        ('${INSTANCE_B}', 'inst-b', 'whatsapp-baileys', '${TENANT_B}', false, '${SHARED_TIMESTAMP}'),
+        ('${INSTANCE_CONFLICT_A}', 'inst-conflict-a', 'whatsapp-baileys', '${TENANT_A}', false,
+         '${SHARED_TIMESTAMP}');
 
       INSERT INTO chats (id, instance_id, external_id, canonical_id, chat_type, channel, name, tenant_id, created_at)
       VALUES
@@ -199,8 +203,10 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
          'whatsapp-baileys', NULL, '${TENANT_A}', '${SHARED_TIMESTAMP}'),
         ('${CHAT_GROUP_A}', '${INSTANCE_A}', '${GROUP_JID}', NULL, 'group', 'whatsapp-baileys', NULL,
          '${TENANT_A}', '${SHARED_TIMESTAMP}'),
-        ('${CHAT_CONFLICT_A}', '${INSTANCE_A}', '${LID_WITH_CANONICAL_CONFLICT}', NULL, 'direct', 'whatsapp-baileys',
-         NULL, '${TENANT_A}', '${SHARED_TIMESTAMP}');
+        ('${CHAT_CONFLICT_OWNER_A}', '${INSTANCE_CONFLICT_A}', '${JID}', '${JID}', 'direct', 'whatsapp-baileys',
+         NULL, '${TENANT_A}', '${SHARED_TIMESTAMP}'),
+        ('${CHAT_CONFLICT_A}', '${INSTANCE_CONFLICT_A}', '${LID_WITH_CANONICAL_CONFLICT}', NULL, 'direct',
+         'whatsapp-baileys', NULL, '${TENANT_A}', '${SHARED_TIMESTAMP}');
       `,
     );
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);
@@ -274,7 +280,6 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
             { lidJid: LID, phoneJid: JID },
             { lidJid: LID_WITHOUT_CANONICAL, phoneJid: RESOLVED_PHONE },
             { lidJid: LID_WITH_CANONICAL, phoneJid: RESOLVED_PHONE },
-            { lidJid: LID_WITH_CANONICAL_CONFLICT, phoneJid: JID },
           ],
         },
         { instanceId: INSTANCE_A },
@@ -285,13 +290,25 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
       LID,
       LID_WITHOUT_CANONICAL,
       LID_WITH_CANONICAL,
-      LID_WITH_CANONICAL_CONFLICT,
     ]);
     expect(await mappingsForTenant(TENANT_B, INSTANCE_A)).toEqual([]);
 
     expect((await chatForTenant(TENANT_A, CHAT_LID_A))[0]?.canonicalId).toBe(RESOLVED_PHONE);
     expect((await chatForTenant(TENANT_A, CHAT_CANONICAL_A))[0]?.canonicalId).toBe(EXISTING_CANONICAL);
     expect((await chatForTenant(TENANT_A, CHAT_GROUP_A))[0]?.canonicalId).toBeNull();
+
+    await fire(
+      'custom.lid-mapping.batch',
+      eventWith(
+        TENANT_A,
+        { mappings: [{ lidJid: LID_WITH_CANONICAL_CONFLICT, phoneJid: JID }] },
+        { instanceId: INSTANCE_CONFLICT_A },
+      ),
+    );
+
+    expect((await mappingsForTenant(TENANT_A, INSTANCE_CONFLICT_A)).map((m) => m.lidId)).toEqual([
+      LID_WITH_CANONICAL_CONFLICT,
+    ]);
     expect((await chatForTenant(TENANT_A, CHAT_CONFLICT_A))[0]?.canonicalId).toBeNull();
 
     // B's worker envelope aiming at A's instance: the derivation/WITH CHECK
@@ -309,7 +326,6 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
       LID,
       LID_WITHOUT_CANONICAL,
       LID_WITH_CANONICAL,
-      LID_WITH_CANONICAL_CONFLICT,
     ]);
     expect(await mappingsForTenant(TENANT_B, INSTANCE_A)).toEqual([]);
   });
