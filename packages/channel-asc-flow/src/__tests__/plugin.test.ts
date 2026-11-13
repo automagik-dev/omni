@@ -2,7 +2,7 @@
  * Inbound parsing, the outbound turn sequence, and handoff.
  */
 
-import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 
 import { parseInboundTurn } from '../handlers/webhook';
 import { AscFlowPlugin, normalizeBaseUrl } from '../plugin';
@@ -11,7 +11,6 @@ import {
   BASE_URL,
   HANDOFF_SERVICO,
   MockEventBus,
-  MockLogger,
   OK_BODY,
   type RecordedCall,
   TURN_TEXT,
@@ -194,18 +193,12 @@ describe('outbound turn', () => {
   // O nó `api_rest` não espera a resposta HTTP (medido no flow #225, síncrono
   // e assíncrono), então NADA viaja no `resposta`: o turno inteiro é empurrado
   // por `/callbackFlowMsg`, que chega em ~1s e é registrado como entregue.
-  it('pushes EVERY bubble, with typing between them, and answers with an empty resposta', async () => {
+  it('pushes EVERY bubble, with no typing between them, and answers with an empty resposta', async () => {
     await boot();
     const result = await send({ type: 'text', text: 'um\n\ndois\n\ntres' });
 
     expect(result.success).toBe(true);
-    expect(sequence()).toEqual([
-      '/callbackFlowMsg',
-      '/sendIndicador',
-      '/callbackFlowMsg',
-      '/sendIndicador',
-      '/callbackFlowMsg',
-    ]);
+    expect(sequence()).toEqual(['/callbackFlowMsg', '/callbackFlowMsg', '/callbackFlowMsg']);
     expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois', 'tres']);
     expect(ready('42')).toMatchObject({ pronto: 1, resposta: '', hand_off: 'nao', bolhas: ['um', 'dois', 'tres'] });
   });
@@ -822,41 +815,60 @@ describe('emoji codec', () => {
   });
 });
 
-// Em produção a plataforma passou a responder HTTP 429 no `/sendIndicador` nos
-// picos. O indicador estava no MESMO try da bolha: a falha dele (cosmética)
-// parava o laço depois de a bolha já ter saído, e as seguintes se perdiam.
-describe('typing between bubbles', () => {
+// Um "digitando…" por mensagem do beneficiário. Em produção (13/11/2026) saíam
+// ~3 por mensagem: o do plugin quando o turno chega, o "composing" do
+// dispatcher no mesmo instante, o "paused" do fim (que o `/sendIndicador`, sem
+// "parar", transformava em mais um "digitando") e um entre cada bolha. Cada um
+// é uma requisição que a plataforma repassa à Meta.
+describe('one typing per beneficiary message', () => {
   const send = (text: string) => plugin.sendMessage(instanceId, { to: '42', content: { type: 'text', text } as never });
-  const tooMany = () => jsonResponse({ cod_error: 1, msg: 'Too Many Requests' }, 429);
+  const inbound = (text: string) =>
+    plugin.handleInboundTurn(instanceId, {
+      codAtendimento: '42',
+      text,
+      phone: '5551999',
+      fromFallback: false,
+      entradaDefasada: false,
+    });
 
-  it('keeps pushing the bubbles when /sendIndicador answers 429', async () => {
-    const warn = spyOn(MockLogger.prototype, 'warn');
-    try {
-      await boot({ '/sendIndicador': tooMany });
-      const result = await send('um\n\ndois\n\ntres');
+  it('a whole turn — inbound, dispatcher composing, three bubbles, dispatcher paused — raises exactly one', async () => {
+    await boot();
+    await inbound('oi');
+    await plugin.sendTyping(instanceId, '42', 30000);
+    await send('um\n\ndois\n\ntres');
+    await plugin.sendTyping(instanceId, '42', 0);
 
-      expect(result.success).toBe(true);
-      // Todas as bolhas saem, na ordem, com a tentativa de indicador entre elas.
-      expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois', 'tres']);
-      expect(sequence()).toEqual([
-        '/callbackFlowMsg',
-        '/sendIndicador',
-        '/callbackFlowMsg',
-        '/sendIndicador',
-        '/callbackFlowMsg',
-      ]);
-      expect(ready('42')).toMatchObject({ pronto: 1, resposta: '', bolhas: ['um', 'dois', 'tres'] });
+    expect(of('/sendIndicador').map((c) => c.body)).toEqual([{ cod: 42, tipo: 1 }]);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois', 'tres']);
+  });
 
-      // `MockLogger.warn` declara zero parâmetros; o plugin chama com (mensagem, contexto).
-      const warns = warn.mock.calls as unknown as Array<[string, Record<string, unknown>]>;
-      const indicatorWarns = warns.filter(([msg]) => msg.includes('typing between bubbles failed'));
-      expect(indicatorWarns).toHaveLength(2);
-      expect(indicatorWarns[0]?.[1]).toMatchObject({ cod: 42 });
-      expect(String(indicatorWarns[0]?.[1].err)).toContain('HTTP 429');
-      expect(warns.some(([msg]) => msg.includes('bubble push failed'))).toBe(false);
-    } finally {
-      warn.mockRestore();
-    }
+  it('each new beneficiary message raises its own', async () => {
+    await boot();
+    await inbound('oi');
+    await send('primeira resposta');
+    await inbound('quero marcar');
+    await send('segunda resposta');
+
+    expect(of('/sendIndicador')).toHaveLength(2);
+  });
+
+  it('typing asked by anyone but the inbound path sends nothing', async () => {
+    await boot();
+    await plugin.sendTyping(instanceId, '42', 30000);
+    await plugin.sendTyping(instanceId, '42', 5000);
+    await plugin.sendTyping(instanceId, '42', 0);
+
+    expect(of('/sendIndicador')).toHaveLength(0);
+  });
+
+  it('a refused indicator still costs the turn nothing', async () => {
+    await boot({ '/sendIndicador': () => jsonResponse({ cod_error: 1, msg: 'Too Many Requests' }, 429) });
+    await inbound('oi');
+    const result = await send('um\n\ndois');
+
+    expect(eventBus.published.some((e) => e.type.includes('received'))).toBe(true);
+    expect(result.success).toBe(true);
+    expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois']);
   });
 
   it('still stops at the first refused bubble, so the rest never arrive out of order', async () => {
@@ -872,6 +884,6 @@ describe('typing between bubbles', () => {
     expect(result.success).toBe(true);
     // A primeira saiu, a segunda foi recusada e a terceira nem foi tentada.
     expect(of('/callbackFlowMsg').map((c) => c.body.msg_usuario)).toEqual(['um', 'dois']);
-    expect(sequence()).toEqual(['/callbackFlowMsg', '/sendIndicador', '/callbackFlowMsg']);
+    expect(sequence()).toEqual(['/callbackFlowMsg', '/callbackFlowMsg']);
   });
 });
