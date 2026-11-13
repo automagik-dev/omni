@@ -17,15 +17,22 @@ const rawSchema = z.object({
 }).passthrough()
 
 // Same seconds/milliseconds and unsigned protobuf Long handling as Omni's
-// extractPlatformTimestamp/isInboundTooStale. Missing timestamps mean now.
-function tooOld(raw, minutes) {
-  if (minutes <= 0) return false
-  const value = raw.messageTimestamp
+// extractPlatformTimestamp/isInboundTooStale. Missing timestamps mean now (undefined here).
+export function platformTimeOf(raw) {
+  const value = raw?.messageTimestamp
   const timestamp = typeof value === 'object' && value !== null
     ? ((value.high ?? 0) >>> 0) * 0x100000000 + (value.low >>> 0) : Number(value)
-  if (!timestamp || Number.isNaN(timestamp)) return false
-  return Date.now() - new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp).getTime() > minutes * 60_000
+  if (!timestamp || Number.isNaN(timestamp)) return undefined
+  return new Date(timestamp < 1e12 ? timestamp * 1000 : timestamp).getTime()
 }
+function tooOld(raw, minutes) {
+  if (minutes <= 0) return false
+  const at = platformTimeOf(raw)
+  return at !== undefined && Date.now() - at > minutes * 60_000
+}
+// #1706: a sender Omni knows only by their lid, with no phone beside it yet.
+const lidAddressed = (row, raw, primary) => primary.endsWith('@lid') || raw.addressingMode === 'lid' || raw.senderIsLid === true
+  || [row.chatId, raw.key?.remoteJid].some(jid => typeof jid === 'string' && jid.endsWith('@lid'))
 
 export function answerIntake(rt) {
   const cache = new Map(), warned = new Set()
@@ -46,11 +53,17 @@ export function answerIntake(rt) {
   }
   // `detail`: false, or what admitted the message: `{ person }`, the person the allow rule names
   // (null when no rule, or a rule that names no one person, admitted it), or `{ staff: true }`.
-  return async (row, { detail = false } = {}) => {
-    const admitted = await admit(row)
+  // `refused(why, { minutes })`, told once for a refusal (#1706): `unmatched`, a sender known
+  // only by their lid whom no rule matched (their phone may resolve later); `denied`, any other
+  // sender no rule matched; `failed`, a check that could not be made; `stale`, older than the
+  // instance's inboundMaxAgeMinutes; `filtered`, any other gate. The answer stays false.
+  return async (row, { detail = false, refused } = {}) => {
+    let why = 'filtered', minutes
+    const admitted = await admit(row, (reason, value) => { why = reason; minutes = value })
+    if (admitted === false) refused?.(why, { minutes })
     return detail || admitted === false ? admitted : true
   }
-  async function admit(row) {
+  async function admit(row, refusal) {
     if (!row.instanceId || !row.chatUuid) return false
     const parsed = rawSchema.safeParse(row.rawPayload ?? {})
     if (!parsed.success) return false
@@ -66,7 +79,7 @@ export function answerIntake(rt) {
       // notify; initial history has no upsertType. Require that positive live proof
       // only for Baileys, preserving Cloud API and other channels.
       if (instance.channel === 'whatsapp-baileys' && raw.upsertType !== 'notify') return false
-      if (tooOld(raw, instance.inboundMaxAgeMinutes)) return false
+      if (tooOld(raw, instance.inboundMaxAgeMinutes)) { refusal('stale', instance.inboundMaxAgeMinutes); return false }
       const chat = await cached(`chat:${row.chatUuid}`, () => read('GET', `/chats/${encodeURIComponent(row.chatUuid)}`, chatReply))
       if (chat.instanceId !== row.instanceId || chat.chatType !== 'dm' || forbiddenJid(chat.externalId)) return false
       // Proven staff receipts are checked separately against the canonical message.
@@ -76,14 +89,17 @@ export function answerIntake(rt) {
       if (typeof primary !== 'string' || !primary) return false
       const phone = value => typeof value === 'string' && /^\d{7,15}$/.test(value) ? value : undefined
       const ids = [...new Set([primary, phone(raw.key?.participantAlt?.replace(/@.*$/, '')), phone(raw.resolvedSenderPhone)].filter(Boolean))]
-      return await cached(JSON.stringify(['access', row.instanceId, instance.channel, ids]), async () => {
+      const admitted = await cached(JSON.stringify(['access', row.instanceId, instance.channel, ids]), async () => {
         for (const platformUserId of ids) {
           const result = await read('POST', '/access/check', accessReply, { instanceId: row.instanceId, platformUserId, channel: instance.channel })
           if (result.allowed) return { person: personOfRule(result.rule) }
         }
         return false
       }, value => value !== false)
+      if (admitted === false) refusal(ids.length === 1 && lidAddressed(row, raw, primary) ? 'unmatched' : 'denied', instance.inboundMaxAgeMinutes)
+      return admitted
     } catch {
+      refusal('failed')
       if (!warned.has(row.instanceId)) {
         warned.add(row.instanceId)
         rt.warn('ds-bot: answer intake check failed for instance %s; refusing messages', row.instanceId)

@@ -7,6 +7,7 @@ import { hostname } from 'node:os'
 import { z } from 'zod'
 import { answerIntake } from './answer-intake.js'
 import { answerAutomationMatcher } from './answer-automations.js'
+import { answerKept } from './answer-kept.js'
 
 const BACKOFF_MS = [2_000, 5_000, 15_000, 60_000]
 const MEDIA_LOOKUP_ATTEMPTS = 3
@@ -244,9 +245,22 @@ export function install(rt) {
     if (cancelled(controller)) return 'cancelled'
     await rt.waitChannelOwnership?.(row.instanceId)
     rt.syncAnswerSubscriptions?.()
-    const answerRelevant = Object.values(state.subscriptions ?? {}).some(sub => typeof sub.answerBotId === 'string' && matches(sub, row))
+    const answerSub = Object.values(state.subscriptions ?? {}).find(sub => typeof sub.answerBotId === 'string' && matches(sub, row))
+    const answerRelevant = answerSub !== undefined
       || (ownerReceipt(row.rawPayload, row.externalId) && rt.answerStaffThread?.(row) !== undefined)
-    const admission = answerRelevant ? await admitAnswer(row, { detail: true }) : false
+    let refusal
+    const admission = answerRelevant ? await admitAnswer(row, { detail: true, refused: (why, { minutes }) => { refusal = { why, minutes } } }) : false
+    // #1706: a sender known only by their lid is kept, before this row is acked, and checked
+    // again once their phone may be known; a person's admitted message first hands over the
+    // ones their chat kept.
+    if (refusal?.why === 'unmatched' && answerSub) await kept.keep(row, { botId: answerSub.answerBotId, minutes: refusal.minutes })
+    else if (admission !== false && 'person' in admission && row.rawPayload?.isFromMe !== true) await kept.release(row.chatUuid, admission)
+    return dispatch(row, admission, controller)
+  }
+
+  // What follows admission, for a live row and for a kept one (`answerOnly`: only the answer
+  // subscriptions, which did not take it when it arrived).
+  async function dispatch(row, admission, controller, { answerOnly = false } = {}) {
     const answerAllowed = admission !== false
     // Staff take-over comes before any dispatch, and its pause is saved before this row is
     // acked. The staff message itself is nobody's to answer.
@@ -263,7 +277,7 @@ export function install(rt) {
     const binding = answerAllowed && !ownSide ? rt.answerPerson?.(row, admission.person ?? null) : undefined
     const held = binding?.held === true
     const due = () => Object.values(state.subscriptions ?? {}).filter(sub => matches(sub, row) && !((ownSide || !answerAllowed || held) && typeof sub.answerBotId === 'string')
-      && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
+      && (!answerOnly || typeof sub.answerBotId === 'string') && (rt.automationOwned?.(sub, { instanceId: row.instanceId }) ?? true))
     if (due().length === 0) return 'unmatched'
     // Before any child creation or wake-up. Keep ordinary subscriptions running;
     // the journaled message remains available through chat history afterwards.
@@ -408,20 +422,32 @@ export function install(rt) {
     }
   }
 
+  const kept = answerKept(rt, {
+    admit: admitAnswer,
+    dispatch: async (row, admission) => {
+      if (stopped) return 'cancelled'
+      await rt.waitChannelOwnership?.(row.instanceId)
+      rt.syncAnswerSubscriptions?.()
+      return dispatch(row, admission, new AbortController(), { answerOnly: true })
+    },
+  })
+
   rt.syncOmniEvents = () => {
     if (stopped) return syncTail
     syncTail = syncTail.then(sync).catch(error => rt.warn('ds-bot: omni events: %s', error))
     return syncTail
   }
   rt.omniEventsView = () => ({ listening: [...loops].filter(([, entry]) => !cancelled(entry.controller)).map(([suffix]) => suffix) })
-  ctx.effect(() => rt.hooks.live(() => ({ omniEvents: rt.omniEventsView() })), 'ds-bot: omni events view')
+  // #1706: per answer Bot, how many kept messages wait for staff's eyes (its sidebar marker).
+  ctx.effect(() => rt.hooks.live(() => ({ omniEvents: rt.omniEventsView(), omniAnswerWaiting: kept.waitingView() })), 'ds-bot: omni events view')
   ctx.effect(() => {
     const timer = setInterval(rt.syncOmniEvents, 30_000)
-    const startup = Promise.resolve().then(() => rt.load()).then(rt.syncOmniEvents, () => {})
+    const startup = Promise.resolve().then(() => rt.load()).then(() => { kept.arm(); return rt.syncOmniEvents() }, () => {})
     rt.quiesceOmniEvents = () => {
       if (drain) return drain
       stopped = true
       clearInterval(timer)
+      kept.stop()
       for (const entry of loops.values()) entry.controller.abort()
       // Stop synchronously, but retain stopped tasks until every ingress await settles.
       // No sync can start another run after stopped, so this final census is complete.
@@ -429,6 +455,7 @@ export function install(rt) {
         await startup
         await syncTail
         await Promise.all([...loops.values()].map(entry => entry.task))
+        await kept.settled()
       })()
       return drain
     }
