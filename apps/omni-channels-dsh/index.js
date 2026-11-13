@@ -20,6 +20,7 @@ import * as omniTerminal from './src/host/omni-terminal.js'
 import * as omniUpdate from './src/host/omni-update.js'
 import * as omni from './src/host/omni.js'
 import * as omniEvents from './src/host/omni-events.js'
+import * as answerInvites from './src/host/answer-invites.js'
 import * as omniChannelActions from './src/host/omni-channel-actions.js'
 import * as threadKeys from './src/host/thread-keys.js'
 import * as threads from './src/host/threads.js'
@@ -45,9 +46,10 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'sessionTitle', 'setting
 // thread_needs_staff after those, whose guard it uses and whose staff take-over it hooks. The
 // standing-Session runs (automations that run each event in its chat's thread) after the
 // threads, whose removals they hear, and their restart recovery right after them, before the
-// events, which queue for them.
+// events, which queue for them. Letting in a person by an invite code (and the code list
+// staff upload) comes right before the events, which call it.
 // Changing channels from the Channels page comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, needsStaff, standingRuns, standingRecovery, omniEvents, omniChannelActions]
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, needsStaff, standingRuns, standingRecovery, answerInvites, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

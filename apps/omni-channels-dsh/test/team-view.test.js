@@ -305,6 +305,8 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'effect omni-channels: automations of removed threads',
     'effect omni-channels: stranded thread automations',
     'on session/event',
+    'effect omni-channels: omni-invite-codes',
+    'effect omni-channels: omni-invite-codes-add',
     'effect ds-bot: omni events view',
     'effect ds-bot: omni events',
     'effect omni-channels: omni-channel-abilities',

@@ -5,6 +5,7 @@ import { openConnectWizard } from './wizard.js'
 import { isOmniBot, omniActions, startLive, typeOf, unreadOf } from './omni-store.js'
 import { openPhone, requestPhone, threadName } from './omni-phone.js'
 import { call, hostText, icons, relativeShort, t } from './core.js'
+import { INVITE_CODES_CSS, InviteCodes } from './invite-codes.js'
 const { ChevronRightIcon, CloseIcon, DotsIcon, PlusIcon, SparkIcon } = icons
 
 // Under the Omni Bot's sidebar row: one collapsible item per channel of the linked Omni, each
@@ -576,6 +577,8 @@ const minutesOf = ms => String(Number.isInteger(ms) && ms >= 60_000 ? Math.round
 const ANSWER_TOOLS = [['read', 'Read files'], ['read_image', 'Read images'], ['glob', 'Find files by name'], ['grep', 'Search inside files']]
 // The host's SHARED_NOTES_MAX (src/host/threads.js, which the browser cannot load); a test keeps them equal.
 const SHARED_NOTES_MAX = 32000
+// The host's INVITE_WELCOME_MAX (src/host/threads.js).
+const INVITE_WELCOME_MAX = 1000
 
 // The Bot team's switch (bt-switch) in a row that is not a label, as the team draws its own: a
 // click on the words must not flip it twice. The switch is named by the words.
@@ -616,6 +619,7 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
   const [personBinding, setPersonBinding] = useState(value.personBinding === true)
   const [staffChat, setStaffChat] = useState(value.needsStaffChatId ?? '')
   const [staffChats, setStaffChats] = useState([])
+  const [inviteWelcome, setInviteWelcome] = useState(value.inviteWelcome ?? '')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
@@ -623,8 +627,8 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
     setResumeMinutes(minutesOf(value.resumeAfterMs)); setKnowledgeFolder(value.knowledgeFolder ?? ''); setPersonBinding(value.personBinding === true)
-    setStaffChat(value.needsStaffChatId ?? '')
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId])
+    setStaffChat(value.needsStaffChatId ?? ''); setInviteWelcome(value.inviteWelcome ?? '')
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId, value.inviteWelcome])
   // The staff chats to pick from, read when the settings open (the picker's own read).
   const channelIds = channels.map(channel => channel.id).join(',')
   useEffect(() => {
@@ -649,7 +653,9 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
     const person = personBinding || value.personBinding === true ? { personBinding } : {}
     // #1707: sent while one is named or being cleared; a bot that never named one saves as before.
     const staff = staffChat || value.needsStaffChatId ? { needsStaffChatId: staffChat || null } : {}
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff }); setOpen(false) }
+    // #1716: the same: sent while set or being cleared.
+    const welcome = inviteWelcome.trim() || value.inviteWelcome ? { inviteWelcome: inviteWelcome.trim() || null } : {}
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff, ...welcome }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -689,6 +695,10 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
         h('input', { className: 'bt-input ot-answer-folder', type: 'text', value: knowledgeFolder, title: knowledgeFolder || undefined, placeholder: '/path/to/folder', spellCheck: false, autoComplete: 'off', onChange: event => setKnowledgeFolder(event.target.value) })),
       h(SwitchRow, { label: 'Bind each child to its person', on: personBinding, onChange: setPersonBinding }),
       h('p', { className: 'bt-note' }, 'A child then takes the notes and the capability in its person\'s access rule, and answers only messages that rule lets in. Needs isolated visibility, and the file tools off or limited to a knowledge folder.'),
+      // #1716: a person whose first message carries a valid invite code is let in (host answer-invites.js).
+      h(Field, { label: 'Welcome after an invite code', note: 'Sent to a person once their invite code lets them in; their child answers from their next message. Empty: no welcome, and the child answers the code message.' },
+        h('textarea', { className: 'bt-input bt-input-area ot-answer-welcome', maxLength: INVITE_WELCOME_MAX, value: inviteWelcome, onChange: event => setInviteWelcome(event.target.value) })),
+      h(InviteCodes),
       h(Field, { label: 'Shared notes for collective children' },
         h('textarea', { className: 'bt-input bt-input-area', maxLength: SHARED_NOTES_MAX, value: sharedNotes, onChange: event => setSharedNotes(event.target.value) })),
       problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem)) : null,
@@ -939,4 +949,4 @@ ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 @keyframes ot-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.ot-chats{transition:none}.ot-chats .ot-thread{animation:none}.ot-chevron{transition:none}.ot-thread-acts{transition:none}}
 body[data-omni-thread] .bt-voice,body[data-omni-thread] .bt-plus,body[data-omni-thread] .bt-composer-model,body[data-omni-thread] .bt-mw-dock,body[data-omni-thread] .bt-btw-dock{display:none!important}
-`
+${INVITE_CODES_CSS}`

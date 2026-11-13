@@ -97,6 +97,35 @@ restart; calls while it is set tell no one again. It clears when staff answer in
 their own phone, or when they press **Dismiss**. DeepSeek Harness has no app notification a plugin
 can raise, so the sidebar row is the app's own sign.
 
+## Let a person in by an invite code
+
+An invite link opens WhatsApp with a message typed that carries a code: `INV-` and 9 letters or
+digits (Crockford base32: no I, L, O or U). When a sender that the allowlist refuses by default,
+or one Omni knows only by their lid, sends a message with a valid code, the plugin redeems it,
+writes one allow rule for the sender's primary id (their lid when Omni knows only that) and
+admits the message in the same pass, as if that rule had matched. The rule has `reason: invite`
+and `metadata: { source: 'invite', project, inviteId, context?, capability? }`, so person
+binding binds the person by it. A sender that a rule of its own refuses, and an admitted sender,
+are never checked. At most 2 codes are read from a message, and a chat gets at most 5 code checks
+an hour. A code read by hand is forgiven: case does not matter, and O reads as 0, I and L as 1.
+
+Codes come from a list staff upload under **Invite codes** in the answer settings: one a line,
+`code, project, expires YYYY-MM-DD[, note]`, or a JSON array of
+`{ code, project, expiresAt, context?, capability?, inviteId? }`. The list is the install's, saved,
+and keeps the newest 5000 codes. Each code is used once, before its expiry: the same code again
+from the same sender (any id they share) admits them again, and from anyone else it is used. The
+used mark is saved before the person is let in. Only staff read or add codes, on the
+`omni-invite-codes` and `omni-invite-codes-add` routes; no tool reaches them, and no code appears
+in a warning. A platform's own Redeem can later replace the list behind `src/host/invite-redeem.js`
+with no change to the call or the rule.
+
+With **Welcome after an invite code** set (`inviteWelcome`, at most 1000 characters), the person
+gets it in their chat once the code lets them in, and the child answers from their next message.
+Unset, the child answers the code message. A code that is unknown, used or expired, or a check
+that fails, sends nothing: the message goes on as refused. Omni publishes no event when a rule is
+written, so the invite rules themselves are the count: allow rules whose `metadata.source` is
+`invite` (`GET /access/rules?type=allow`), by `metadata.project`.
+
 ## Existing channel settings
 
 Open an existing channel to read its configuration groups, derived provider and assigned

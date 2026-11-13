@@ -249,13 +249,20 @@ export function install(rt) {
     const answerRelevant = answerSub !== undefined
       || (ownerReceipt(row.rawPayload, row.externalId) && rt.answerStaffThread?.(row) !== undefined)
     let refusal
-    const admission = answerRelevant ? await admitAnswer(row, { detail: true, refused: (why, { minutes }) => { refusal = { why, minutes } } }) : false
+    const admission = answerRelevant ? await admitAnswer(row, { detail: true, refused: (why, { minutes, blocked }) => { refusal = { why, minutes, blocked } } }) : false
+    // #1716: a sender refused only by the allowlist's default, or known only by their lid, whose
+    // message carries a valid invite code is let in now (answer-invites.js); with the bot's
+    // welcome set, the welcome answers this message and the child gets nothing of it.
+    const invited = answerSub && ['denied', 'unmatched'].includes(refusal?.why) && refusal.blocked !== true
+      ? await rt.answerInvite?.(row, answerSub.answerBotId) : undefined
+    if (invited) refusal = undefined
+    const admitted = invited?.admission ?? admission
     // #1706: a sender known only by their lid is kept, before this row is acked, and checked
     // again once their phone may be known; a person's admitted message first hands over the
     // ones their chat kept.
     if (refusal?.why === 'unmatched' && answerSub) await kept.keep(row, { botId: answerSub.answerBotId, minutes: refusal.minutes })
-    else if (admission !== false && 'person' in admission && row.rawPayload?.isFromMe !== true) await kept.release(row.chatUuid, admission)
-    return dispatch(row, admission, controller)
+    else if (admitted !== false && 'person' in admitted && row.rawPayload?.isFromMe !== true) await kept.release(row.chatUuid, admitted)
+    return dispatch(row, invited?.welcomed ? false : admitted, controller)
   }
 
   // What follows admission, for a live row and for a kept one (`answerOnly`: only the answer
