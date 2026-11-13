@@ -45,6 +45,10 @@ function keptRow(row) {
   }
 }
 
+// When a kept message is next looked at: its next check, or the moment it gets too old, so it is
+// dropped then and not up to a minute later.
+const dueAt = entry => Math.min(entry.nextAt, entry.until + 1)
+
 // The phone a chat's canonicalId names, when it is a phone JID.
 const phoneOf = canonicalId => /^(\d{7,15})(?::\d+)?@s\.whatsapp\.net$/.exec(canonicalId ?? '')?.[1]
 
@@ -70,7 +74,7 @@ export function answerKept(rt, { admit, dispatch }) {
     clearTimeout(timer)
     timer = undefined
     if (stopped) return
-    const next = Math.min(...entries().map(entry => entry.nextAt))
+    const next = Math.min(...entries().map(dueAt))
     if (!Number.isFinite(next)) return
     timer = setTimeout(() => { timer = undefined; serial(recheckDue) }, Math.max(0, next - Date.now()))
   }
@@ -170,7 +174,7 @@ export function answerKept(rt, { admit, dispatch }) {
     const now = Date.now()
     for (const entry of entries()) {
       if (stopped) break
-      if (!kept()[entry.row.id] || entry.nextAt > now) continue
+      if (!kept()[entry.row.id] || dueAt(entry) > now) continue
       if (now > entry.until) { drop(entry, 'older than the channel answers'); continue }
       try { await recheck(entry) } catch (error) {
         entry.nextAt = Date.now() + RECHECK_EVERY_MS

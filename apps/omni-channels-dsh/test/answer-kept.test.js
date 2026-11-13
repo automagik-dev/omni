@@ -98,7 +98,7 @@ test('kept answer: the first lid-only message is answered once when the phone re
   await until(() => b.team.state.subscriptionRuns.length >= 1)
   assert.equal(b.team.state.subscriptionRuns.length, 1)
   assert.equal(callsOf(b).length, 1)
-  assert.deepEqual(saved(b.home).omniAnswerKept, {})
+  await until(() => Object.keys(saved(b.home).omniAnswerKept ?? {}).length === 0)
   assert.deepEqual(b.view().omniAnswerWaiting, {})
 })
 
@@ -157,7 +157,7 @@ test('kept answer: a kept message survives a restart and is answered once', asyn
   await until(() => next.team.state.subscriptionRuns.length >= 1)
   assert.equal(next.team.state.subscriptionRuns.length, 1)
   assert.equal(callsOf(next).length, 1)
-  assert.deepEqual(saved(b.home).omniAnswerKept, {})
+  await until(() => Object.keys(saved(b.home).omniAnswerKept ?? {}).length === 0)
 })
 
 test('kept answer: with person binding, the kept message binds by the rule that admits it at the re-check', async t => {
@@ -205,7 +205,10 @@ test('kept answer: a kept message is dropped once older than the instance answer
   await recheck(t, b, 8_000)
   await recheck(t, b, 20_000)
   assert.equal(kept(b)[0].waiting, true)
-  t.mock.timers.tick(60_000)
+  // Dropped as soon as it is older than the instance's 10 minutes (here 60 s after it was kept),
+  // not at its next minute check (90 s).
+  assert.ok(kept(b)[0].nextAt > kept(b)[0].until + 1)
+  t.mock.timers.tick(30_001)
   await until(() => kept(b).length === 0)
   assert.equal(b.warned.filter(args => /was dropped/.test(args[0])).length, 1)
   assert.deepEqual(b.view().omniAnswerWaiting, {})
@@ -214,7 +217,8 @@ test('kept answer: a kept message is dropped once older than the instance answer
   t.mock.timers.tick(120_000)
   await signal(t, b)
   assert.equal(b.channels.threads.byChat(CHAT), undefined)
-  assert.deepEqual(saved(b.home).omniAnswerKept, {})
+  // The saved state follows: save() writes its snapshot asynchronously, after the in-memory drop.
+  await until(() => Object.keys(saved(b.home).omniAnswerKept ?? {}).length === 0)
 })
 
 test('kept answer: the intake names why it refused, and keeps only a lid-only sender as unmatched', async () => {
