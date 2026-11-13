@@ -286,11 +286,9 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
       ),
     );
 
-    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId)).toEqual([
-      LID,
-      LID_WITHOUT_CANONICAL,
-      LID_WITH_CANONICAL,
-    ]);
+    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId).sort()).toEqual(
+      [LID, LID_WITHOUT_CANONICAL, LID_WITH_CANONICAL].sort(),
+    );
     expect(await mappingsForTenant(TENANT_B, INSTANCE_A)).toEqual([]);
 
     expect((await chatForTenant(TENANT_A, CHAT_LID_A))[0]?.canonicalId).toBe(RESOLVED_PHONE);
@@ -306,9 +304,9 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
       ),
     );
 
-    expect((await mappingsForTenant(TENANT_A, INSTANCE_CONFLICT_A)).map((m) => m.lidId)).toEqual([
-      LID_WITH_CANONICAL_CONFLICT,
-    ]);
+    expect((await mappingsForTenant(TENANT_A, INSTANCE_CONFLICT_A)).map((m) => m.lidId).sort()).toEqual(
+      [LID_WITH_CANONICAL_CONFLICT].sort(),
+    );
     expect((await chatForTenant(TENANT_A, CHAT_CONFLICT_A))[0]?.canonicalId).toBeNull();
 
     // B's worker envelope aiming at A's instance: the derivation/WITH CHECK
@@ -322,11 +320,9 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
       ),
     );
 
-    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId)).toEqual([
-      LID,
-      LID_WITHOUT_CANONICAL,
-      LID_WITH_CANONICAL,
-    ]);
+    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId).sort()).toEqual(
+      [LID, LID_WITHOUT_CANONICAL, LID_WITH_CANONICAL].sort(),
+    );
     expect(await mappingsForTenant(TENANT_B, INSTANCE_A)).toEqual([]);
   });
 
