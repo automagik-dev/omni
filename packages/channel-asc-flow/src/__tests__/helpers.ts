@@ -10,6 +10,9 @@
 // for the full 120s deadline. Read per call by the handler, so setting it here
 // holds regardless of which module imported first.
 process.env.ASC_FLOW_HOLD_MS ??= '0';
+// A direct send parks its body for the turn's reply and answers only once the turn settles (`stageTurn`). The suite
+// pins each send's own body, so it settles at once; `turn-burst.test.ts` sets its own value.
+process.env.ASC_FLOW_TURN_SETTLE_MS ??= '0';
 
 import type { Logger, PluginContext, PluginStorage } from '@omni/channel-sdk';
 import type { EventBus, PublishResult, Subscription } from '@omni/core/events';
