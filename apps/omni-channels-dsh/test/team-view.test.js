@@ -278,6 +278,7 @@ test('apply registers its listeners, tools and effects after the team\'s, in a f
     'tool set_answer_shared_notes',
     'tool resume_answer_child',
     'tool create_thread',
+    'effect omni-channels: omni-phone-send',
     'tool thread_say',
     'tool thread_react',
     'tool thread_history',

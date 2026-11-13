@@ -20,7 +20,7 @@
 // host reads the message's row, checks it is in the thread's chat and has media, and only then
 // downloads it, saves it through DSH's attachments and hands the model the image beside Omni's
 // description of it.
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { lstatSync, realpathSync } from 'node:fs'
 import { dirname, isAbsolute, sep } from 'node:path'
 import { NativeToolExecutor } from '@deepseek-ai/dsh-tool-executor-native'
@@ -563,6 +563,85 @@ export function install(rt) {
     await rt.recordAnswerDraft({ threadId: draft.threadId, draftId: draft.draftId, approvedText: draft.text, sentText: '', outcome: 'rejected' })
       .catch(error => rt.warn('omni-channels: a rejected answer draft was not counted: %s', error?.message ?? error))
   }
+  // #1715: the draft whose card is up now, from the same listener: marked before the card shows,
+  // so the phone pane can show its text (threads.js threadsView, waitingDraft) while staff decide,
+  // and unmarked once the card settles, however it settles (a stopped turn rejects it).
+  rt.answerApprovalWaiting = (thread, request, waiting = true) => {
+    const draftId = draftIdOf(request?.agent, request?.callId)
+    const draft = draftId === null ? undefined : drafts.get(draftId)
+    if (draft !== undefined && request.toolName === 'thread_say' && thread?.id === draft.threadId) draft.waiting = waiting
+  }
+  /** The thread's newest draft waiting on its card: { id, text }, with `replaced` once staff sent their own text for it. */
+  rt.answerWaitingDraft = (threadId) => {
+    const waiting = [...drafts.values()].filter(draft => draft.threadId === threadId && draft.waiting === true && draft.approved !== true).at(-1)
+    return waiting === undefined ? undefined : { id: waiting.draftId, text: waiting.text, ...(waiting.replaced ? { replaced: true } : {}) }
+  }
+
+  // #1715: staff's own message from the phone pane, straight from the thread's channel to its
+  // chat on the link key: never through the thread's model, a tool or a card. Staff only: an
+  // endpoint of the owner's own interface, never a tool, so no model and no answer child can
+  // call it. It counts as staff answering from their own phone (rt.pauseAnswer, the take-over
+  // the events path runs for an own-device message, which an API send never passes), and it is
+  // not the child's send: no draft counts as sent. Sent in place of a waiting draft (`draftId`,
+  // the pane's Edit), that draft counts as edited, and it is never sent after it, even when
+  // staff allow its card later. DSH offers a plugin no way to answer that card: its controller
+  // is the agent loop's own turn, so the pane asks staff to reject it there. Once Omni accepts
+  // the message nothing here throws, so the pane never asks staff to send it again.
+  const PHONE_TEXT_MAX = 4096
+  const PhoneSend = z.object({
+    threadId: z.string().regex(ID),
+    text: z.string().transform(text => text.trim()).pipe(z.string().min(1).max(PHONE_TEXT_MAX)),
+    draftId: z.string().min(1).max(200).optional(),
+  }).strict()
+  const PhoneChat = z.object({ data: z.object({ id: z.string().regex(ID), instanceId: z.string().regex(ID), externalId: z.string().min(1).max(500) }) })
+  const phoneSending = new Set()
+  const phoneSend = async (body) => {
+    const parsed = PhoneSend.safeParse(body ?? {})
+    if (!parsed.success) throw invalid(parsed.error.issues.some(issue => issue.path[0] === 'text') ? `Write a message of 1 to ${PHONE_TEXT_MAX} characters.` : 'Pick a thread, and send only its message.')
+    const { threadId, text, draftId } = parsed.data
+    await rt.load()
+    if (rt.readOnly?.() !== undefined) throw invalid(rt.readOnly())
+    const thread = rt.threads?.byId(threadId)
+    if (thread === undefined) throw invalid('That chat is not a thread any more.')
+    // One message at a time per chat, so a second Send before the first answers sends nothing.
+    if (phoneSending.has(thread.id)) throw invalid('The message before this one is still being sent.')
+    phoneSending.add(thread.id)
+    try {
+      const found = await rt.omniRequest('GET', `/chats/${encodeURIComponent(thread.chatId)}`).catch(() => undefined)
+      if (found === null) throw invalid('Omni is not linked here.')
+      if (found === undefined) throw invalid('Could not reach Omni. Nothing was sent.')
+      const row = PhoneChat.safeParse(await found.json().catch(() => null))
+      if (!found.ok || !row.success || row.data.data.id !== thread.chatId || row.data.data.instanceId !== thread.channelId) throw invalid(`Omni answered ${found.status} for this chat. Nothing was sent.`)
+      const chat = row.data.data
+      const sent = await rt.omniRequest('POST', '/messages/send', { body: { instanceId: chat.instanceId, to: chat.externalId, text } }).catch(() => undefined)
+      const reply = await sent?.json().catch(() => null)
+      // No answer (a timeout among them) after the request left: it may have gone out.
+      if (sent === undefined) throw invalid('Omni did not answer, so this message may have gone out. Check the chat before sending it again.')
+      if (sent === null) throw invalid('Omni is not linked here.')
+      if (!sent.ok) {
+        const said = reply?.error?.message
+        throw invalid(`Omni answered ${sent.status}${typeof said === 'string' && said !== '' ? `: ${said.slice(0, 300)}` : ''}. Nothing was sent.`)
+      }
+      const messageId = typeof reply?.data?.messageId === 'string' && reply.data.messageId !== '' ? reply.data.messageId : null
+      const draft = draftId === undefined ? undefined : drafts.get(draftId)
+      const edited = draft !== undefined && draft.threadId === thread.id && draft.approved !== true && draft.replaced !== true
+      if (edited) draft.replaced = true
+      let paused = false
+      if (isAnswerChild(thread)) {
+        try {
+          paused = (await rt.pauseAnswer({ threadId: thread.id, receiptId: messageId ?? `phone:${randomUUID()}`, staffAt: Date.now() })).paused === true
+        } catch (error) { rt.warn('omni-channels: a phone pane message was sent but did not pause answer child %s: %s', thread.id, error?.message ?? error) }
+      }
+      if (edited) {
+        await rt.recordAnswerDraft({ threadId: thread.id, draftId: draft.draftId, approvedText: draft.text, sentText: text, outcome: 'edited' })
+          .catch(error => rt.warn('omni-channels: an edited answer draft was sent but not counted: %s', error?.message ?? error))
+      }
+      return { sent: true, messageId, paused, draft: edited ? 'edited' : null }
+    } finally {
+      phoneSending.delete(thread.id)
+    }
+  }
+  ctx.effect(() => rt.hooks.endpoint('omni-phone-send', phoneSend), 'omni-channels: omni-phone-send')
 
   // Each tool: its gate first (thread, team, key), then its arguments, then its one call.
   const tool = (definition, run, out = output, refuse = text => text) => ctx.tools.register(defineTool({
@@ -585,6 +664,8 @@ export function install(rt) {
     description: 'Sends one text message into a selected member of this thread\'s chat set, as the user. Requires chatId for a multi-chat set. Follows the owner\'s global send default or their thread switch (ask first unless changed); no tool can grant send permission. Send only what the user asked for.',
     parameters: { chatId: { type: 'string', description: 'Member chat UUID; required when this thread has several chats' }, text: { type: 'string', required: true, description: `The message, exactly as it should arrive (at most ${TEXT_MAX} characters)` } },
   }, async ({ text }, open, exec) => {
+    // #1715: staff sent their own text in place of this draft from the phone pane.
+    if (drafts.get(draftIdOf(exec?.agent, exec?.callId))?.replaced === true) return 'Not sent: staff already sent their own message in place of this draft. Send nothing more about it.'
     const reply = await ask(open, 'POST', '/messages/send', { instanceId: open.chat.channelId, to: open.chat.chatJid, text })
     if (reply.status < 200 || reply.status >= 300) return `Not sent. ${omniSaid(reply)}`
     await countDraft(exec, open, text)

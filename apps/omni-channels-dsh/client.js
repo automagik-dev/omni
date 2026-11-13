@@ -15670,6 +15670,84 @@ function SendSwitch({ thread }) {
     problem ? (0, import_react13.createElement)("span", { className: "op-send-problem", role: "alert" }, hostText(problem)) : null
   );
 }
+var PHONE_TEXT_MAX = 4096;
+function PhoneComposer({ thread }) {
+  const [text, setText] = (0, import_react13.useState)("");
+  const [editing, setEditing] = (0, import_react13.useState)(null);
+  const [sending, setSending] = (0, import_react13.useState)(false);
+  const [problem, setProblem] = (0, import_react13.useState)(null);
+  const busy = (0, import_react13.useRef)(false);
+  const box = (0, import_react13.useRef)(null);
+  const draft = thread.waitingDraft ?? null;
+  const send = async () => {
+    const message = text.trim();
+    if (busy.current || message === "") return;
+    busy.current = true;
+    setSending(true);
+    setProblem(null);
+    try {
+      await call("omni-phone-send", { threadId: thread.id, text: message, ...editing === null ? {} : { draftId: editing } });
+      setText("");
+      setEditing(null);
+    } catch (error) {
+      console.warn("Could not send the message:", error);
+      setProblem(typeof error?.message === "string" && error.message !== "" ? error.message : "Could not send this message. Check your connection and access, then try again.");
+    } finally {
+      busy.current = false;
+      setSending(false);
+    }
+  };
+  const edit = () => {
+    setText(draft.text);
+    setEditing(draft.id);
+    setProblem(null);
+    box.current?.focus?.();
+  };
+  return (0, import_react13.createElement)(
+    "footer",
+    { className: "op-compose" },
+    draft && draft.replaced !== true && editing !== draft.id ? (0, import_react13.createElement)(
+      "div",
+      { className: "op-draft", "data-draft-id": draft.id },
+      (0, import_react13.createElement)(
+        "div",
+        { className: "op-draft-head" },
+        (0, import_react13.createElement)("span", null, t("The bot's draft, waiting on its card")),
+        (0, import_react13.createElement)("button", { type: "button", className: "op-draft-edit", disabled: sending, onClick: edit }, t("Edit"))
+      ),
+      (0, import_react13.createElement)("p", { className: "op-draft-text" }, draft.text)
+    ) : null,
+    draft?.replaced === true ? (0, import_react13.createElement)("p", { className: "op-compose-note", role: "status" }, t("Reject the bot's draft on its card")) : null,
+    problem ? (0, import_react13.createElement)("p", { className: "op-compose-note op-compose-fail", role: "alert" }, t("Not sent: {reason}", { reason: hostText(problem) })) : null,
+    (0, import_react13.createElement)(
+      "div",
+      { className: "oc-compose", "data-off": sending ? true : void 0 },
+      (0, import_react13.createElement)("textarea", {
+        ref: box,
+        rows: 1,
+        value: text,
+        disabled: sending,
+        maxLength: PHONE_TEXT_MAX,
+        placeholder: t("Write your own message"),
+        "aria-label": t("Your message"),
+        // An emptied box lets the draft go back to waiting on its card.
+        onChange: (event) => {
+          setText(event.target.value);
+          if (event.target.value === "") setEditing(null);
+        },
+        onKeyDown: (event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent?.isComposing) {
+            event.preventDefault();
+            void send();
+          }
+        }
+      }),
+      (0, import_react13.createElement)("button", { type: "button", className: "oc-send", disabled: sending || text.trim() === "", "aria-label": t("Send"), onClick: () => {
+        void send();
+      } }, (0, import_react13.createElement)(icons.ArrowUpIcon))
+    )
+  );
+}
 function PhonePane({ params, sessionId, useRoster, visible = true }) {
   const thread = useRoster((roster) => phoneThreadOf(roster, params, sessionId));
   const read = useChatPoll(thread?.chatId ?? null, visible);
@@ -15705,7 +15783,8 @@ function PhonePane({ params, sessionId, useRoster, visible = true }) {
           read.messages?.length === 0 ? (0, import_react13.createElement)("p", { className: "op-note" }, t("No messages yet")) : null,
           (0, import_react13.createElement)(ChatMessages, { messages, onSized })
         )
-      )
+      ),
+      (0, import_react13.createElement)(PhoneComposer, { thread })
     )
   );
 }
@@ -15802,6 +15881,20 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
 .op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
 .op-dock-problem{margin:0 8px 4px;font-size:11.5px;color:var(--bt-danger, #dc2626)}
+.op-log{flex:1;min-height:0}
+.op-compose{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px;border-top:1px solid var(--bt-line, rgba(127,127,127,.2))}
+.op-compose .oc-compose{width:100%;max-width:none;margin:0;padding:3px 3px 3px 12px;border-radius:20px;gap:6px}
+.op-compose .oc-compose textarea{height:auto;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
+.op-compose .oc-send{width:30px;height:30px}
+.op-compose .oc-send svg{width:16px;height:16px}
+.op-draft{display:flex;flex-direction:column;gap:3px;padding:7px 10px;border-radius:12px;border:1px dashed var(--bt-line-2, rgba(127,127,127,.35));background:var(--bt-card, transparent)}
+.op-draft-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--bt-ink-3)}
+.op-draft-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.op-draft-edit{flex:none;padding:2px 9px;border:1px solid var(--bt-line-2, rgba(127,127,127,.35));border-radius:999px;background:none;color:var(--bt-ink);font:inherit;font-size:11.5px;cursor:pointer}
+.op-draft-edit:disabled{opacity:.5;cursor:default}
+.op-draft-text{margin:0;max-height:72px;overflow-y:auto;font-size:12.5px;line-height:17px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink-2, var(--bt-ink))}
+.op-compose-note{margin:0;padding:5px 9px;border-radius:10px;background:var(--bt-hover, rgba(127,127,127,.1));font-size:11.5px;line-height:16px;color:var(--bt-ink-2, var(--bt-ink-3));overflow-wrap:anywhere}
+.op-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
 `;
 
 // src/client/subscriptions.js
@@ -18393,6 +18486,16 @@ var STRINGS = {
   "Always allow send": "始终允许发送",
   "Sends into this chat go without asking you": "发送到这个聊天的消息不再询问你",
   "Each send into this chat asks you first": "每次发送到这个聊天都会先询问你",
+  // #1715: staff's own composer in the phone pane, and the host's refusals for its sends.
+  "The bot's draft, waiting on its card": "机器人的草稿，正在等待审批卡片",
+  "Reject the bot's draft on its card": "请在审批卡片上拒绝机器人的草稿",
+  "Write your own message": "输入你自己的消息",
+  "Your message": "你的消息",
+  "Write a message of 1 to 4096 characters.": "请输入 1 到 4096 个字符的消息。",
+  "Pick a thread, and send only its message.": "请选择一个聊天线程，并只发送它的消息。",
+  "The message before this one is still being sent.": "上一条消息仍在发送中。",
+  "Could not reach Omni. Nothing was sent.": "无法连接 Omni。没有发送任何内容。",
+  "Omni did not answer, so this message may have gone out. Check the chat before sending it again.": "Omni 没有回应，这条消息可能已经发出。再次发送前请先查看聊天。",
   "The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.": "验证令牌不是 Graph API 访问令牌。连接成功不代表 Webhook 已验证；Meta 必须能够访问此 HTTPS URL。"
 };
 
