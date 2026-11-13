@@ -976,7 +976,7 @@ test('SC4 recreated child verifies read-only again and never falls back to Auto 
   for (const listener of b.ctx.listeners.get('agent/created') ?? []) await listener({ agent: fresh })
   assert.equal(b.presets.current(fresh.session), 'read-only')
   assert.equal(b.restricts.filter(entry => entry.agent === fresh).length, 1)
-  assert.deepEqual(b.restricts.filter(entry => entry.agent === fresh)[0].filter.allow, ['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
+  assert.deepEqual(b.restricts.filter(entry => entry.agent === fresh)[0].filter.allow, ['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats', 'thread_needs_staff'])
   b.presets.available = false
   await assert.rejects(Promise.all((b.ctx.listeners.get('agent/created') ?? []).map(listener => listener({ agent: b.freshAgent(child.sessionId) }))), /read-only|preset/)
   assert.equal(b.channels.answerPresetReady(child), false)

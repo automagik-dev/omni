@@ -49,6 +49,9 @@ export function isStandingRun(run) {
 }
 // The tools whose card thread-tools.js decides, tagged turn or not.
 const THREAD_CARDED = new Set(['thread_say', 'thread_react'])
+// #1707: an answer child's thread_needs_staff (needs-staff.js) only tells the team and sends the
+// person nothing, so it goes with no card in the answer run's turn, in training and sending alike.
+const TELLS_TEAM = 'thread_needs_staff'
 /** The card a tagged turn's call raises when its run asks first. */
 export const automationAsk = name => `An automation event is being handled here, and its text was written by other people. Allow ${name} this once?`
 // How many events wait for one standing Session at most; one more is not queued, and the
@@ -369,13 +372,14 @@ export function install(rt) {
   }
 
   // A tagged turn asks before anything but a read when its run asks first. A thread's send and
-  // reaction are left to thread-tools.js, which asks for them with what goes out. Ahead of
-  // DSH's own gates, so their answer is the one this tightens.
+  // reaction are left to thread-tools.js, which asks for them with what goes out, and an answer
+  // child's word to the team (TELLS_TEAM) goes as it is. Ahead of DSH's own gates, so their
+  // answer is the one this tightens.
   ctx.on('tools/pre-execute', async (exec, next) => {
     const sessionId = exec.agent?.id ?? exec.agent?.session?.id
     await binding.get(sessionId)
     const decision = await next()
-    if (decision?.kind !== 'allow' || readsOnly(exec) || THREAD_CARDED.has(exec.name)) return decision
+    if (decision?.kind !== 'allow' || readsOnly(exec) || THREAD_CARDED.has(exec.name) || exec.name === TELLS_TEAM) return decision
     if (turns.get(sessionId)?.runIds.length === 0) return decision
     try { await rt.load() } catch { /* the runs in memory still count */ }
     return asksFirst(sessionId) ? { kind: 'ask', reason: automationAsk(exec.name) } : decision

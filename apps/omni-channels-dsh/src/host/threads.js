@@ -23,7 +23,8 @@ import { NOT_LINKED, OTHER_OMNI } from './thread-keys.js'
 import { PERSON_HELD, personBindingRefusal, toolPrefixOf } from './person-binding.js'
 
 // A thread's own chat tools, on top of DSH's and Omni's; no other Session lists them.
-export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats'])
+// thread_needs_staff (#1707, needs-staff.js) tells the team, never the person.
+export const ANSWER_CHAT_TOOLS = Object.freeze(['thread_say', 'thread_react', 'thread_history', 'thread_picture', 'answer_chats', 'thread_needs_staff'])
 // Explicitly vetted, read-only local tools. Unknown tools never acquire authority by name.
 export const ANSWER_EXTRA_TOOLS = Object.freeze(['read', 'read_image', 'glob', 'grep'])
 // The host's global registry is the served set accepted by tools.restrict(). A scoped view can
@@ -55,12 +56,15 @@ export const RESUME_AFTER_DEFAULT_MS = 30 * 60_000
 export const RESUME_AFTER_MIN_MS = 60_000
 export const RESUME_AFTER_MAX_MS = 24 * 60 * 60_000
 const resumeAfterOf = value => (Number.isInteger(value) && value >= RESUME_AFTER_MIN_MS && value <= RESUME_AFTER_MAX_MS ? value : RESUME_AFTER_DEFAULT_MS)
+// #1707: the staff chat that also hears when a child needs a person; never a person's own chat.
+export const NEEDS_STAFF_CHAT_REFUSAL = 'The staff chat cannot be a chat an answer child answers. Choose a chat only staff are in.'
+const needsStaffChatOf = value => (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null)
 export const answerSettingsOf = bot => ({
   enabled: bot?.answer?.enabled === true, visibility: bot?.answer?.visibility === 'collective' ? 'collective' : 'isolated',
   allowedTools: (Array.isArray(bot?.answer?.allowedTools) ? bot.answer.allowedTools : []).filter(name => ANSWER_EXTRA_TOOLS.includes(name)), sharedNotes: String(bot?.answer?.sharedNotes ?? ''),
   newChildMode: bot?.answer?.newChildMode === 'sending' ? 'sending' : 'training', graduateAfter: graduateOf(bot?.answer?.graduateAfter),
   resumeAfterMs: resumeAfterOf(bot?.answer?.resumeAfterMs), knowledgeFolder: knowledgeFolderOf(bot?.answer?.knowledgeFolder),
-  personBinding: bot?.answer?.personBinding === true,
+  personBinding: bot?.answer?.personBinding === true, needsStaffChatId: needsStaffChatOf(bot?.answer?.needsStaffChatId),
 })
 export const isAnswerChild = thread => thread?.answerChild === true
 /** When a paused child answers again by itself: its last staff message plus its bot's interval; null when not paused. */
@@ -258,6 +262,8 @@ export function answerInstructions(thread, bot, person) {
     'You run on read-only permissions. Use only your chat tools and the read-only tools the owner enabled. No shell, file writes, delegation, raw API calls or asking another bot.',
     sendingModeOf(thread) === 'sending' ? 'Staff let you send in your own chat without asking first. Every other rule here still applies.' : 'You are in training: staff approve each send before it goes. Only staff can change that.',
     'When staff write in your chat from their own phone, you are paused: read what arrives, but send, react and draft nothing until staff resume you or a quiet interval passes with no staff message.',
+    // #1707: one fixed rule, whatever the master instructions say about handing over.
+    'When the person needs someone from the team, call thread_needs_staff with a one-line reason, then tell the person the team has been told. Never say the team was told without calling it.',
     answer.visibility === 'collective' ? 'You may use answer_chats and thread_history to read the other chats owned by your bot. You may still reply and react only in your own chat.' : 'You may read only your own chat. Other chats and shared notes are private.',
     ...(answer.visibility === 'collective' && answer.sharedNotes ? [`## Shared notes (read only)\n${answer.sharedNotes}`] : []),
     ...(answer.knowledgeFolder ? [`## Knowledge folder\nThe files in ${JSON.stringify(answer.knowledgeFolder)} are the business's reference (its instructions, FAQ and the like): look answers up there with read, glob and grep (whichever of them you have). Give each call an absolute path inside that folder; a read anywhere else is refused.`] : []),
@@ -861,6 +867,8 @@ export function install(rt) {
     // #1689: an absolute path, stored as its real path; null or empty clears it.
     knowledgeFolder: z.string().max(4096).nullable().optional(),
     personBinding: z.boolean().optional(),
+    // #1707: a staff chat's UUID; null clears it, left out keeps it.
+    needsStaffChatId: id.nullable().optional(),
   }).strict()
   const realFolderOf = async value => {
     if (!value) return null
@@ -887,11 +895,19 @@ export function install(rt) {
     const before = bot.answer
     const kept = answerSettingsOf(bot)
     const folder = input.knowledgeFolder === undefined ? kept.knowledgeFolder : await realFolderOf(input.knowledgeFolder)
+    // #1707: never a chat an answer child answers, or one this save makes a child of. One that
+    // became a child's chat since it was named does not hold up other settings: each send to
+    // it is refused (needs-staff.js) until staff pick another.
+    const staffChat = input.needsStaffChatId === undefined ? kept.needsStaffChatId : input.needsStaffChatId
+    const staffHolder = staffChat === null ? undefined : byChat(staffChat)
+    const childNow = isAnswerChild(staffHolder)
+    if ((childNow && staffChat !== kept.needsStaffChatId) || (staffHolder !== undefined && !childNow && input.enabled && answerable().includes(staffHolder))) throw refused(NEEDS_STAFF_CHAT_REFUSAL)
     const next = {
       enabled: input.enabled, visibility: input.visibility, allowedTools: [...new Set(input.allowedTools)], sharedNotes: input.sharedNotes,
       newChildMode: input.newChildMode ?? kept.newChildMode, graduateAfter: input.graduateAfter === undefined ? kept.graduateAfter : input.graduateAfter,
       resumeAfterMs: input.resumeAfterMs ?? kept.resumeAfterMs, ...(folder ? { knowledgeFolder: folder } : {}),
       ...(input.personBinding ?? kept.personBinding ? { personBinding: true } : {}),
+      ...(staffChat === null ? {} : { needsStaffChatId: staffChat }),
     }
     // #1704: never bind persons where a child could read past its own chat and folder.
     const personRefusal = next.personBinding ? personBindingRefusal(answerSettingsOf({ answer: next })) : undefined
@@ -1051,6 +1067,8 @@ export function install(rt) {
         return {
           ...(isAnswerChild(thread) ? { answerChild: true, sendingMode: sendingModeOf(thread), approvedStreak: thread.approvedStreak ?? 0, graduateAfter: answerSettingsOf(rt.botOf(thread.ownerBotId)).graduateAfter } : {}),
           ...(isAnswerChild(thread) && thread.paused === true ? { paused: true, pausedUntil: Number.isFinite(pausedUntilOf(thread, rt.botOf(thread.ownerBotId))) ? pausedUntilOf(thread, rt.botOf(thread.ownerBotId)) : null } : {}),
+          // #1707: the child asked for someone from the team (needs-staff.js); staff dismiss it.
+          ...(isAnswerChild(thread) && thread.needsStaff ? { needsStaff: { at: thread.needsStaff.at, reason: thread.needsStaff.reason } } : {}),
           id: thread.id, sessionId: thread.sessionId, ownerBotId: thread.ownerBotId, chatId: thread.chatId, chatIds: [...thread.chatIds], automations: rt.threadAutomations?.(thread) ?? [], channelId: thread.channelId, title: chatNameOf(chatOfRecord(thread)), kind: kindOf(thread),
           status, connected: reason === null, reason, ...(reasonCode === undefined ? {} : { reasonCode }),
           permissions: permissionsOf(thread, state.omniSettings), ownPermissions: ownPermissionsOf(thread), defaultPermissions: permissionsOf(undefined, state.omniSettings),

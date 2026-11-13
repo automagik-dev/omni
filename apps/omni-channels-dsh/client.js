@@ -16428,6 +16428,10 @@ function pauseOf(thread, now = Date.now()) {
     title: until === null ? "Staff are answering this chat. It answers again when you resume it." : "Staff are answering this chat. It answers again when you resume it, or by itself once staff stay quiet there long enough."
   };
 }
+function needsStaffOf(thread) {
+  if (thread?.answerChild !== true || typeof thread.needsStaff?.reason !== "string") return null;
+  return { label: "Needs a person", reason: thread.needsStaff.reason, title: `Needs a person from the team: ${thread.needsStaff.reason}` };
+}
 function useNow(on2) {
   const [now, setNow] = (0, import_react16.useState)(() => Date.now());
   (0, import_react16.useEffect)(() => {
@@ -16473,6 +16477,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const [deleting2, setDeleting] = (0, import_react16.useState)(null);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   const [menu, setMenu] = (0, import_react16.useState)(false);
+  const [whyOpen, setWhyOpen] = (0, import_react16.useState)(false);
   const row = (0, import_react16.useRef)(null);
   const opens = teamReady(rowProps.roster);
   (0, import_react16.useEffect)(() => {
@@ -16498,10 +16503,11 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const answer = answerModeOf(thread);
   const now = useNow(thread.answerChild === true && thread.paused === true);
   const pause = pauseOf(thread, now);
+  const need = needsStaffOf(thread);
   const state = threadState(thread, { running, asking });
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: "needs_newer_team" }) : null;
   const dot = typeof rowProps.useSessionStatus === "function" && unread && !active;
-  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", answer ? `${answer.label}: ${answer.title}` : "", pause ? `${pause.label}, ${pause.left}` : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
+  const label = [name, state === "waiting" ? t("Waiting for you") : state === "working" ? t("Working") : "", reason ?? "", free ?? "", answer ? `${answer.label}: ${answer.title}` : "", need ? `${need.label}: ${need.reason}` : "", pause ? `${pause.label}, ${pause.left}` : "", dot ? t("Unread activity") : ""].filter(Boolean).join(", ");
   const menuLabel = answer ? `Sending mode in ${name}` : t("Asking first in {name}", { name });
   const onClick = () => {
     if (opens) {
@@ -16542,6 +16548,13 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       setProblem("Could not resume this chat. Try again.");
     });
   };
+  const dismiss2 = () => {
+    setProblem(null);
+    call("dismiss_needs_staff", { threadId: thread.id }).catch((error) => {
+      console.warn("Could not dismiss:", error);
+      setProblem("Could not dismiss this. Try again.");
+    });
+  };
   const onMenuKey = (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
@@ -16549,7 +16562,7 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   };
   return (0, import_react16.createElement)(
     "div",
-    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0, "data-answer": answer ? true : void 0, "data-paused": pause ? true : void 0 },
+    { ref: row, className: "ot-thread", "data-idle": state === "idle" || void 0, "data-answer": answer ? true : void 0, "data-paused": pause ? true : void 0, "data-needs": need ? true : void 0 },
     (0, import_react16.createElement)(
       "button",
       {
@@ -16594,6 +16607,29 @@ function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         onBlur: () => setConfirming(false)
       }, confirming ? t("Remove") : (0, import_react16.createElement)(CloseIcon))
     ),
+    // Needs a person: its own line under the name, at every width: the badge and Dismiss, then
+    // the child's reason, cut to one line until it is opened; the whole reason is the tooltip.
+    need ? (0, import_react16.createElement)(
+      "div",
+      { className: "ot-needs", title: need.title },
+      (0, import_react16.createElement)("span", { className: "ot-mode", "data-mode": "needs", "aria-hidden": true }, need.label),
+      (0, import_react16.createElement)("button", {
+        type: "button",
+        className: "ot-needs-why",
+        "aria-expanded": whyOpen,
+        "aria-label": `Why ${name} needs a person: ${need.reason}`,
+        tabIndex: shown ? void 0 : -1,
+        onClick: () => setWhyOpen((open) => !open)
+      }, need.reason),
+      (0, import_react16.createElement)("button", {
+        type: "button",
+        className: "bt-soft bt-soft-sm ot-dismiss",
+        "aria-label": `Dismiss: ${name} needs a person`,
+        title: "Someone from the team has it",
+        tabIndex: shown ? void 0 : -1,
+        onClick: dismiss2
+      }, "Dismiss")
+    ) : null,
     // Paused: its own line under the name, at every width, with the time left and Resume.
     pause ? (0, import_react16.createElement)(
       "div",
@@ -16945,7 +16981,12 @@ function Field({ label, note, children }) {
     note ? (0, import_react16.createElement)("span", { className: "bt-note" }, note) : null
   );
 }
-function AnswerSettings({ bot, value = {} }) {
+function staffChatOptions(chats, threads, chosen, several) {
+  const answered = new Set(threads.filter((thread) => thread.answerChild === true).flatMap((thread) => thread.chatIds ?? [thread.chatId]));
+  const options = chats.filter((chat) => !answered.has(chat.id)).map((chat) => ({ id: chat.id, label: several ? `${chat.name ?? chat.id} · ${chat.channel}` : chat.name ?? chat.id }));
+  return chosen && !options.some((option) => option.id === chosen) ? [{ id: chosen, label: "The chosen chat" }, ...options] : options;
+}
+function AnswerSettings({ bot, value = {}, channels: channels2 = [], threads = [] }) {
   const [open, setOpen] = (0, import_react16.useState)(false);
   const [enabled, setEnabled] = (0, import_react16.useState)(value.enabled === true);
   const [visibility, setVisibility] = (0, import_react16.useState)(value.visibility ?? "isolated");
@@ -16957,6 +16998,8 @@ function AnswerSettings({ bot, value = {} }) {
   const [resumeMinutes, setResumeMinutes] = (0, import_react16.useState)(minutesOf(value.resumeAfterMs));
   const [knowledgeFolder, setKnowledgeFolder] = (0, import_react16.useState)(value.knowledgeFolder ?? "");
   const [personBinding, setPersonBinding] = (0, import_react16.useState)(value.personBinding === true);
+  const [staffChat, setStaffChat] = (0, import_react16.useState)(value.needsStaffChatId ?? "");
+  const [staffChats, setStaffChats] = (0, import_react16.useState)([]);
   const [busy, setBusy] = (0, import_react16.useState)(false);
   const [problem, setProblem] = (0, import_react16.useState)(null);
   (0, import_react16.useEffect)(() => {
@@ -16970,7 +17013,26 @@ function AnswerSettings({ bot, value = {} }) {
     setResumeMinutes(minutesOf(value.resumeAfterMs));
     setKnowledgeFolder(value.knowledgeFolder ?? "");
     setPersonBinding(value.personBinding === true);
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding]);
+    setStaffChat(value.needsStaffChatId ?? "");
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId]);
+  const channelIds = channels2.map((channel) => channel.id).join(",");
+  (0, import_react16.useEffect)(() => {
+    if (!open || channels2.length === 0) return void 0;
+    let alive = true;
+    Promise.all(channels2.map((channel) => call("omni-thread-chats", { channelId: channel.id }).then(
+      (reply) => (Array.isArray(reply?.chats) ? reply.chats : []).map((chat) => ({ id: chat.id, name: chat.name, channel: channel.name })),
+      (error) => {
+        console.warn("Could not load chats:", error);
+        return [];
+      }
+    ))).then((lists) => {
+      if (alive) setStaffChats(lists.flat());
+    });
+    return () => {
+      alive = false;
+    };
+  }, [open, channelIds]);
+  const staffOptions = staffChatOptions(staffChats, threads, staffChat, channels2.length > 1);
   const count = Number(graduateAfter);
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100;
   const minutes = Number(resumeMinutes);
@@ -16979,8 +17041,9 @@ function AnswerSettings({ bot, value = {} }) {
     setBusy(true);
     setProblem(null);
     const person = personBinding || value.personBinding === true ? { personBinding } : {};
+    const staff = staffChat || value.needsStaffChatId ? { needsStaffChatId: staffChat || null } : {};
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null, ...person });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -17050,6 +17113,16 @@ function AnswerSettings({ bot, value = {} }) {
             onChange: (event) => setResumeMinutes(event.target.value)
           }),
           (0, import_react16.createElement)("span", { "aria-hidden": true }, "minutes")
+        )
+      ),
+      (0, import_react16.createElement)(
+        Field,
+        { label: "Staff chat when a person is needed", note: "When a child says its person needs someone from the team, the bot's own chat and the child's row here show it. Pick a chat only staff are in to get a message there too." },
+        (0, import_react16.createElement)(
+          "select",
+          { className: "bt-select ot-answer-staff", value: staffChat, onChange: (event) => setStaffChat(event.target.value) },
+          (0, import_react16.createElement)("option", { value: "" }, "None"),
+          staffOptions.map((option) => (0, import_react16.createElement)("option", { key: option.id, value: option.id }, option.label))
         )
       ),
       (0, import_react16.createElement)(
@@ -17155,7 +17228,7 @@ function OmniTree(props) {
       (0, import_react16.createElement)("span", { className: "ot-count", "aria-hidden": true }, String(waiting.count)),
       (0, import_react16.createElement)("span", { className: "ot-waiting-text", "aria-hidden": true }, waiting.label)
     ) : null,
-    (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
+    (0, import_react16.createElement)(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id], channels: ownedChannels, threads }),
     (0, import_react16.createElement)(RepairTools, { bot }),
     bot.id === defaultBotId ? (0, import_react16.createElement)("button", { type: "button", className: "ot-channel-row", onClick: () => setCreatingBot((value) => !value) }, "Add channel bot") : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? (0, import_react16.createElement)(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
@@ -17273,6 +17346,13 @@ var OMNI_TREE_CSS = `
 .ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
 .ot-paused-left{flex:1 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
 .ot-paused .ot-resume{height:24px;padding:0 10px}
+/* An answer child whose person needs someone from the team: under its name and aligned with it, at every width, the badge and staff's Dismiss on one line, the child's reason on the next, cut to one line until it is opened. */
+.ot-mode[data-mode=needs]{color:color-mix(in srgb,var(--bt-danger, #dc2626) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger, #dc2626) 14%,transparent)}
+.ot-needs{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
+.ot-needs .ot-dismiss{order:1;margin-left:auto;height:24px;padding:0 10px}
+.ot-needs-why{order:2;flex:1 1 100%;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink-2);font:inherit;font-size:11px;line-height:16px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.ot-needs-why[aria-expanded=true]{white-space:normal;overflow-wrap:anywhere}
+.ot-needs-why:focus-visible{outline:2px solid var(--bt-accent, #22d3ee);outline-offset:1px;border-radius:4px}
 .ot-answer-minutes{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--bt-ink-2)}
 ${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
 @container ot-tree (max-width:259px){${stackedRow(".ot-thread[data-answer]")}}
@@ -17286,6 +17366,7 @@ ${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
 .ot-answer-tools{display:grid;gap:8px}
 .ot-answer .ot-answer-count{width:88px}
 .ot-answer .ot-answer-folder{box-sizing:border-box;width:100%;min-width:0}
+.ot-answer .ot-answer-staff{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
