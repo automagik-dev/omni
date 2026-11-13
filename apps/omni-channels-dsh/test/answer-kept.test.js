@@ -119,6 +119,23 @@ test('kept answer: a later admitted message from the chat hands the kept one ove
   assert.equal(b.team.state.subscriptionRuns.length, 2)
 })
 
+test('kept answer: two kept messages of one chat are answered in the journal\'s order, once each', async t => {
+  const b = await bench(t)
+  // Kept within the same clock tick: their ids sort the other way round ('kept-10' < 'kept-9').
+  await b.deliver(firstMessage(9))
+  await b.deliver(firstMessage(10))
+  assert.equal(kept(b).length, 2)
+  b.omniState.canonical = `${PHONE}@s.whatsapp.net`
+  t.mock.timers.tick(2_000)
+  await until(() => kept(b).length === 0)
+  await signal(t, b)
+  await until(() => b.team.state.subscriptionRuns.length === 2)
+  assert.deepEqual(b.team.state.subscriptionRuns.map(run => run.answerIdentity ?? run.event?.externalId).reverse(), ['WA-kept-9', 'WA-kept-10'])
+  t.mock.timers.tick(120_000)
+  await until(() => callsOf(b).length >= 1)
+  assert.equal(b.team.state.subscriptionRuns.length, 2)
+})
+
 test('kept answer: a kept message survives a restart and is answered once', async t => {
   const omni = omniOf()
   const b = await attach(t, await answerBench(t, { clock: ANSWER_CLOCK }), omni)

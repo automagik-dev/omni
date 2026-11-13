@@ -14,7 +14,7 @@ import { platformTimeOf } from './answer-intake.js'
 
 // When to check a kept message again, after it was kept; then every minute until it is too old.
 // The window ends with the last of these.
-export const RECHECK_MS = [2_000, 10_000, 30_000]
+const RECHECK_MS = [2_000, 10_000, 30_000]
 const RECHECK_EVERY_MS = 60_000
 const DEFAULT_MINUTES = 10
 const PER_CHAT_MAX = 20
@@ -24,7 +24,7 @@ const chatReply = z.object({ data: z.object({ instanceId: z.string(), chatType: 
 const rulesReply = z.object({ items: z.array(z.object({ phonePattern: z.string().nullish(), enabled: z.boolean().nullish() }).passthrough()) })
 const text = z.string().nullish()
 const keptSchema = z.object({
-  row: z.object({ id: z.string(), chatUuid: z.string(), instanceId: z.string(), externalId: text }).passthrough(),
+  row: z.object({ id: z.string(), journalSeq: z.number().optional(), chatUuid: z.string(), instanceId: z.string(), externalId: text }).passthrough(),
   botId: z.string(), keptAt: z.number(), until: z.number(), checks: z.number().int().nonnegative(), nextAt: z.number(),
   waiting: z.boolean(),
 })
@@ -62,7 +62,8 @@ export function answerKept(rt, { admit, dispatch }) {
 
   function entries(chatUuid) {
     return Object.values(kept()).filter(entry => keptSchema.safeParse(entry).success && (chatUuid === undefined || entry.row.chatUuid === chatUuid))
-      .sort((a, b) => a.keptAt - b.keptAt || a.row.id.localeCompare(b.row.id))
+      // Oldest first: kept in the journal's order, which a frozen or coarse clock cannot tell apart.
+      .sort((a, b) => a.keptAt - b.keptAt || (a.row.journalSeq ?? 0) - (b.row.journalSeq ?? 0) || a.row.id.localeCompare(b.row.id))
   }
 
   function schedule() {

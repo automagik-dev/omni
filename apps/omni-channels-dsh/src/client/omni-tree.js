@@ -655,7 +655,7 @@ export function RepairTools({ bot }) {
 // #1706: messages this bot keeps because their sender is known only by a lid Omni has no phone
 // for yet (host answer-kept.js). Staff see how many wait; the bot answers each once Omni knows
 // the phone or the person writes again, and drops it after the channel's age limit.
-export function waitingOf(roster, botId) {
+function waitingOf(roster, botId) {
   const count = roster?.omniAnswerWaiting?.[botId]
   if (!Number.isInteger(count) || count < 1) return null
   return { count, label: `${count === 1 ? 'message' : 'messages'} waiting: sender not matched yet`, title: 'Omni does not know this sender\'s phone yet, so their phone access rule cannot match them. The bot answers once Omni learns the phone or the person writes again; after the channel\'s age limit the message is dropped.' }
