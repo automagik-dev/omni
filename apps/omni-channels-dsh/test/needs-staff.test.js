@@ -7,7 +7,7 @@ import { afterEach, test } from 'node:test'
 import { NEEDS_STAFF_PAUSED, REASON_MAX } from '../src/host/needs-staff.js'
 import { NEEDS_STAFF_ONLY } from '../src/host/thread-tools.js'
 import { NEEDS_STAFF_CHAT_REFUSAL } from '../src/host/threads.js'
-import { answerBench, ANSWER_CLOCK, ANSWER_MASTER, boot, CHAT, CHATS, dsh, ELSEWHERE, GROUP, guarded, INSTANCE, OTHER_INSTANCE, preExecute, resetFetch, saved, use } from './thread-fixture.js'
+import { answerBench, ANSWER_CLOCK, ANSWER_MASTER, boot, CHAT, CHATS, dsh, ELSEWHERE, GROUP, guarded, INSTANCE, logOf, OTHER_INSTANCE, preExecute, resetFetch, saved, signal, until, use } from './thread-fixture.js'
 
 afterEach(resetFetch)
 
@@ -48,7 +48,37 @@ test('thread_needs_staff takes a reason of one line of 1 to 200 characters', asy
   assert.match(await ask(b, child, 'x'.repeat(REASON_MAX)), /^The team was told at/)
 })
 
+// The child's queued answer run, handed over and in its tagged turn, which asks first (as
+// standing-runs.test.js answering): where a child calls the tool for real.
+async function answering(t, b) {
+  const sub = b.team.state.subscriptions[`answer:${ANSWER_MASTER}`]
+  await b.channels.fireSubscription(sub, b.incoming())
+  await signal(t, b)
+  const child = b.channels.threads.byChat(CHAT)
+  await until(() => b.agentOf(child.sessionId).calls.length === 1)
+  const message = b.agentOf(child.sessionId).calls[0]
+  b.emit(child.sessionId, 'turn/start', { turn: 1 }, Date.now())
+  b.emit(child.sessionId, 'user/message', { content: message.content, source: message.source })
+  logOf(b, child.sessionId, [{ type: 'turn/start', data: { turn: 1 } }, { type: 'user/message', data: { content: message.content, source: message.source } }])
+  assert.equal(b.channels.standingRuns.asksFirst(child.sessionId), true, 'the answer run asks first')
+  return child
+}
+
 for (const mode of ['training', 'sending']) {
+  test(`in ${mode} mode, inside the answer run's own turn (which asks first for everything else), thread_needs_staff raises no card`, async t => {
+    const b = await answerBench(t)
+    const child = await answering(t, b)
+    await b.call('set_child_sending', { threadId: child.id, mode })
+    // The run's ask-first gate still asks for a tool that is not a read.
+    assert.equal((await preExecute(b, 'answer_chats', child.sessionId)).kind, 'ask')
+    assert.deepEqual(await preExecute(b, 'thread_needs_staff', child.sessionId, { reason: REASON }), { kind: 'allow' })
+    const call = await dsh(b, 'thread_needs_staff', child.sessionId, { reason: REASON })
+    assert.equal(call.card, false)
+    assert.match(call.result, /^The team was told at .*: the sidebar marks this chat; Service was told in its own chat\./)
+    assert.equal(needsNotes(b).length, 1)
+    assert.deepEqual(b.omni.sent, [])
+  })
+
   test(`in ${mode} mode thread_needs_staff runs with no card and tells the team the same way`, async t => {
     const b = await answerBench(t)
     const child = await b.child()
@@ -143,10 +173,27 @@ test('a staff chat staff named gets a short text on the bot\'s channel; a person
   assert.match(await ask(b, staffChild, 'Wants a person.'), /: the sidebar marks this chat; Service was told in its own chat\. /)
   assert.equal(b.omni.sent.length, 1)
   assert.equal(warned.filter(args => /could not tell the staff chat/.test(args[1]) && /an answer child answers now/.test(args[2])).length, 2)
+  // It does not hold up other settings: a save that keeps it, or leaves it out, goes through.
+  await b.call('omni-answer-settings', { ...b.settings, needsStaffChatId: GROUP, sharedNotes: 'Kept.' })
+  await b.call('omni-answer-settings', b.settings)
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].needsStaffChatId, GROUP)
   // Clearing it takes null.
   await b.call('omni-answer-settings', { ...b.settings, needsStaffChatId: null })
   assert.equal(b.view().omniAnswers[ANSWER_MASTER].needsStaffChatId, null)
   assert.equal(saved(b.home).bots[ANSWER_MASTER].answer.needsStaffChatId, undefined)
+})
+
+test('switching answer mode on is refused while it would make the staff chat\'s own thread an answer child', async t => {
+  const b = await answerBench(t, { enabled: false })
+  const staffThread = await b.call('omni-thread-add', { channelId: INSTANCE, chatId: GROUP })
+  assert.equal(staffThread.ok, true)
+  await b.call('omni-answer-settings', { ...b.settings, needsStaffChatId: GROUP })
+  await assert.rejects(b.call('omni-answer-settings', { ...b.settings, enabled: true }), { message: NEEDS_STAFF_CHAT_REFUSAL })
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, false)
+  assert.equal(b.channels.threads.byChat(GROUP).answerChild, undefined)
+  // With the staff chat cleared, answer mode goes on.
+  await b.call('omni-answer-settings', { ...b.settings, enabled: true, needsStaffChatId: null })
+  assert.equal(b.view().omniAnswers[ANSWER_MASTER].enabled, true)
 })
 
 test('a staff chat on a channel the bot does not own gets nothing', async t => {

@@ -895,10 +895,13 @@ export function install(rt) {
     const before = bot.answer
     const kept = answerSettingsOf(bot)
     const folder = input.knowledgeFolder === undefined ? kept.knowledgeFolder : await realFolderOf(input.knowledgeFolder)
-    // #1707: never a chat an answer child answers, or one this save makes a child of.
+    // #1707: never a chat an answer child answers, or one this save makes a child of. One that
+    // became a child's chat since it was named does not hold up other settings: each send to
+    // it is refused (needs-staff.js) until staff pick another.
     const staffChat = input.needsStaffChatId === undefined ? kept.needsStaffChatId : input.needsStaffChatId
     const staffHolder = staffChat === null ? undefined : byChat(staffChat)
-    if (isAnswerChild(staffHolder) || (staffHolder !== undefined && input.enabled && answerable().includes(staffHolder))) throw refused(NEEDS_STAFF_CHAT_REFUSAL)
+    const childNow = isAnswerChild(staffHolder)
+    if ((childNow && staffChat !== kept.needsStaffChatId) || (staffHolder !== undefined && !childNow && input.enabled && answerable().includes(staffHolder))) throw refused(NEEDS_STAFF_CHAT_REFUSAL)
     const next = {
       enabled: input.enabled, visibility: input.visibility, allowedTools: [...new Set(input.allowedTools)], sharedNotes: input.sharedNotes,
       newChildMode: input.newChildMode ?? kept.newChildMode, graduateAfter: input.graduateAfter === undefined ? kept.graduateAfter : input.graduateAfter,
