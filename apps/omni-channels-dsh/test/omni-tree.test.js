@@ -1350,3 +1350,84 @@ test('#1689 answer settings name a knowledge folder in a text field with its not
   }
   answer = () => ({})
 })
+
+// #1707 in the sidebar: a child whose person needs someone from the team shows it under its
+// name, with the child's reason (whole on hover, opened by a click) and staff's Dismiss.
+test('a child that needs a person shows the badge and its reason under its name, and Dismiss sends the staff action', async () => {
+  calls.length = 0
+  answer = () => ({})
+  const roster = hooked()
+  const rowProps = ui.rowPropsOf({ roster }, roster.omniRowProps)
+  const reason = 'Wants to change the delivery address of an order that already left.'
+  const child = extra => THREAD(1, CHANNEL_A, { answerChild: true, sendingMode: 'training', approvedStreak: 0, graduateAfter: null, permissions: { sends: 'ask', reactions: 'list' }, ownPermissions: {}, ...extra })
+  const needs = mount(() => react.createElement(ui.ThreadRow, { thread: child({ needsStaff: { at: Date.now(), reason } }), actions: {}, rowProps }))
+  let root = needs.draw()
+  assert.equal(one(root, 'ot-thread').props['data-needs'], true)
+  // The mode keeps its place in the row; the badge has a line of its own.
+  assert.equal(text(one(one(root, 'bt-thread'), 'ot-mode')), 'Training')
+  const line = one(root, 'ot-needs')
+  assert.equal(line.props.title, `Needs a person from the team: ${reason}`)
+  assert.deepEqual([text(one(line, 'ot-mode')), one(line, 'ot-mode').props['data-mode']], ['Needs a person', 'needs'])
+  assert.equal(one(root, 'bt-thread').props['aria-label'], `Chat 1, Training: Asks you before each send, Needs a person: ${reason}`)
+  const why = one(line, 'ot-needs-why')
+  assert.deepEqual([why.type, why.props['aria-expanded'], why.props['aria-label'], text(why)], ['button', false, `Why Chat 1 needs a person: ${reason}`, reason])
+  why.props.onClick()
+  await settle()
+  assert.equal(one(needs.draw(), 'ot-needs-why').props['aria-expanded'], true)
+  const button = one(line, 'ot-dismiss')
+  assert.deepEqual([button.type, classOf(button), button.props['aria-label'], text(button)], ['button', ['bt-soft', 'bt-soft-sm', 'ot-dismiss'], 'Dismiss: Chat 1 needs a person', 'Dismiss'])
+  button.props.onClick()
+  await settle()
+  assert.deepEqual(calls, [['dismiss_needs_staff', { threadId: 't1' }]])
+  // A refused dismiss says so in the row.
+  answer = () => { throw new Error('nope') }
+  one(needs.draw(), 'ot-dismiss').props.onClick()
+  await settle()
+  assert.equal(text(one(needs.draw(), 'ot-thread-problem')), 'Could not dismiss this. Try again.')
+  needs.unmount()
+  answer = () => ({})
+  // No mark, or not an answer child: no line.
+  for (const thread of [child({}), THREAD(1, CHANNEL_A, { needsStaff: { at: 1, reason } })]) {
+    const view = mount(() => react.createElement(ui.ThreadRow, { thread, actions: {}, rowProps }))
+    root = view.draw()
+    assert.deepEqual([one(root, 'ot-needs'), one(root, 'ot-thread').props['data-needs']], [undefined, undefined])
+    view.unmount()
+  }
+})
+
+test('answer settings name a staff chat from the bot\'s channels, never a chat a child answers, and save it or clear it', async t => {
+  calls.length = 0
+  const chats = [{ id: 'c1', name: 'Chat 1', added: true }, { id: 'c9', name: 'Team room', added: false }]
+  answer = endpoint => (endpoint === 'omni-thread-chats' ? { chats } : {})
+  const threads = [THREAD(1, CHANNEL_A, { answerChild: true, chatIds: ['c1'] })]
+  let value = {}
+  const view = mount(() => react.createElement(ui.AnswerSettings, { bot: { id: 'dedicated' }, value, channels: [CHANNEL_A], threads }))
+  t.after(() => { view.unmount(); answer = () => ({}) })
+  const open = async () => {
+    nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Answer mode').props.onClick()
+    // The open settings read the chats in an effect, which runs on the next draw.
+    view.draw()
+    await settle()
+    await settle()
+  }
+  await open()
+  assert.deepEqual(calls, [['omni-thread-chats', { channelId: CHANNEL_A.id }]])
+  const staff = () => one(view.draw(), 'ot-answer-staff')
+  const label = () => nodes(view.draw()).find(node => node.props?.className === 'bt-field-label' && /Staff chat/.test(text(node)))
+  assert.equal(text(label()), 'Staff chat when a person is needed')
+  assert.deepEqual(nodes(staff()).filter(node => node.type === 'option').map(node => [node.props.value, text(node)]), [['', 'None'], ['c9', 'Team room']])
+  assert.equal(staff().props.value, '')
+  const save = () => nodes(view.draw()).find(node => node.type === 'button' && text(node) === 'Save answer settings').props.onClick()
+  staff().props.onChange({ target: { value: 'c9' } })
+  await save()
+  await settle()
+  assert.deepEqual(calls.at(-1), ['omni-answer-settings', { botId: 'dedicated', enabled: false, visibility: 'isolated', allowedTools: [], sharedNotes: '', newChildMode: 'training', graduateAfter: null, resumeAfterMs: 1_800_000, knowledgeFolder: null, needsStaffChatId: 'c9' }])
+  // Once saved, None clears it.
+  value = { needsStaffChatId: 'c9' }
+  await open()
+  assert.equal(staff().props.value, 'c9')
+  staff().props.onChange({ target: { value: '' } })
+  await save()
+  await settle()
+  assert.equal(calls.at(-1)[1].needsStaffChatId, null)
+})

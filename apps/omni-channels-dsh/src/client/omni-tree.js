@@ -141,6 +141,16 @@ export function pauseOf(thread, now = Date.now()) {
   }
 }
 
+/**
+ * An answer child that told the team its person needs someone (host needs-staff.js): the badge,
+ * the child's one-line reason, and the line's tooltip; null for any other thread. It stays until
+ * staff answer in that chat or dismiss it here.
+ */
+export function needsStaffOf(thread) {
+  if (thread?.answerChild !== true || typeof thread.needsStaff?.reason !== 'string') return null
+  return { label: 'Needs a person', reason: thread.needsStaff.reason, title: `Needs a person from the team: ${thread.needsStaff.reason}` }
+}
+
 // The clock a paused row counts down by: it ticks only while the row shows a countdown.
 function useNow(on) {
   const [now, setNow] = useState(() => Date.now())
@@ -213,6 +223,7 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const [deleting, setDeleting] = useState(null)
   const [problem, setProblem] = useState(null)
   const [menu, setMenu] = useState(false)
+  const [whyOpen, setWhyOpen] = useState(false)
   const row = useRef(null)
   const opens = teamReady(rowProps.roster)
   // An open menu closes on a click anywhere outside its row.
@@ -236,10 +247,11 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
   const answer = answerModeOf(thread)
   const now = useNow(thread.answerChild === true && thread.paused === true)
   const pause = pauseOf(thread, now)
+  const need = needsStaffOf(thread)
   const state = threadState(thread, { running, asking })
   const reason = thread.connected === false || !opens ? threadReason(opens ? thread : { ...thread, reasonCode: 'needs_newer_team' }) : null
   const dot = typeof rowProps.useSessionStatus === 'function' && unread && !active
-  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', answer ? `${answer.label}: ${answer.title}` : '', pause ? `${pause.label}, ${pause.left}` : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
+  const label = [name, state === 'waiting' ? t('Waiting for you') : state === 'working' ? t('Working') : '', reason ?? '', free ?? '', answer ? `${answer.label}: ${answer.title}` : '', need ? `${need.label}: ${need.reason}` : '', pause ? `${pause.label}, ${pause.left}` : '', dot ? t('Unread activity') : ''].filter(Boolean).join(', ')
   const menuLabel = answer ? `Sending mode in ${name}` : t('Asking first in {name}', { name })
   const onClick = () => {
     if (opens) {
@@ -283,12 +295,20 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
       setProblem('Could not resume this chat. Try again.')
     })
   }
+  // Staff's own dismiss (host needs-staff.js dismiss_needs_staff); the row follows on the next pull.
+  const dismiss = () => {
+    setProblem(null)
+    call('dismiss_needs_staff', { threadId: thread.id }).catch(error => {
+      console.warn('Could not dismiss:', error)
+      setProblem('Could not dismiss this. Try again.')
+    })
+  }
   const onMenuKey = (event) => {
     if (event.key !== 'Escape') return
     event.stopPropagation()
     setMenu(false)
   }
-  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined, 'data-answer': answer ? true : undefined, 'data-paused': pause ? true : undefined },
+  return h('div', { ref: row, className: 'ot-thread', 'data-idle': state === 'idle' || undefined, 'data-answer': answer ? true : undefined, 'data-paused': pause ? true : undefined, 'data-needs': need ? true : undefined },
     h('button', {
       type: 'button', className: 'bt-thread', 'data-state': state, 'data-thread-id': thread.id, 'aria-label': label, title: reason ?? name,
       'aria-current': active ? 'page' : undefined, tabIndex: shown ? undefined : -1, onClick,
@@ -309,6 +329,18 @@ export function ThreadRow({ thread, actions, rowProps = {}, shown = true }) {
         'aria-label': confirming ? t('Remove {name} from the sidebar? Click again', { name }) : t('Remove {name}', { name }),
         title: confirming ? t('Click again to remove') : t('Remove'), tabIndex: shown ? undefined : -1, onClick: remove, onBlur: () => setConfirming(false),
       }, confirming ? t('Remove') : h(CloseIcon))),
+    // Needs a person: its own line under the name, at every width: the badge and Dismiss, then
+    // the child's reason, cut to one line until it is opened; the whole reason is the tooltip.
+    need ? h('div', { className: 'ot-needs', title: need.title },
+      h('span', { className: 'ot-mode', 'data-mode': 'needs', 'aria-hidden': true }, need.label),
+      h('button', {
+        type: 'button', className: 'ot-needs-why', 'aria-expanded': whyOpen, 'aria-label': `Why ${name} needs a person: ${need.reason}`,
+        tabIndex: shown ? undefined : -1, onClick: () => setWhyOpen(open => !open),
+      }, need.reason),
+      h('button', {
+        type: 'button', className: 'bt-soft bt-soft-sm ot-dismiss', 'aria-label': `Dismiss: ${name} needs a person`, title: 'Someone from the team has it',
+        tabIndex: shown ? undefined : -1, onClick: dismiss,
+      }, 'Dismiss')) : null,
     // Paused: its own line under the name, at every width, with the time left and Resume.
     pause ? h('div', { className: 'ot-paused', title: pause.title },
       h('span', { className: 'ot-mode', 'data-mode': 'paused', 'aria-hidden': true }, pause.label),
@@ -561,8 +593,16 @@ function Field({ label, note, children }) {
     note ? h('span', { className: 'bt-note' }, note) : null)
 }
 
+// The chats staff may name for "needs a person" (host needs-staff.js): the bot's channels' chats,
+// none an answer child answers (the host refuses those too), and the one named now.
+function staffChatOptions(chats, threads, chosen, several) {
+  const answered = new Set(threads.filter(thread => thread.answerChild === true).flatMap(thread => thread.chatIds ?? [thread.chatId]))
+  const options = chats.filter(chat => !answered.has(chat.id)).map(chat => ({ id: chat.id, label: several ? `${chat.name ?? chat.id} · ${chat.channel}` : chat.name ?? chat.id }))
+  return chosen && !options.some(option => option.id === chosen) ? [{ id: chosen, label: 'The chosen chat' }, ...options] : options
+}
+
 // Owner-only endpoint; no model tool can enable answer mode or widen its tools.
-export function AnswerSettings({ bot, value = {} }) {
+export function AnswerSettings({ bot, value = {}, channels = [], threads = [] }) {
   const [open, setOpen] = useState(false)
   const [enabled, setEnabled] = useState(value.enabled === true)
   const [visibility, setVisibility] = useState(value.visibility ?? 'isolated')
@@ -574,6 +614,8 @@ export function AnswerSettings({ bot, value = {} }) {
   const [resumeMinutes, setResumeMinutes] = useState(minutesOf(value.resumeAfterMs))
   const [knowledgeFolder, setKnowledgeFolder] = useState(value.knowledgeFolder ?? '')
   const [personBinding, setPersonBinding] = useState(value.personBinding === true)
+  const [staffChat, setStaffChat] = useState(value.needsStaffChatId ?? '')
+  const [staffChats, setStaffChats] = useState([])
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
@@ -581,7 +623,20 @@ export function AnswerSettings({ bot, value = {} }) {
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
     setResumeMinutes(minutesOf(value.resumeAfterMs)); setKnowledgeFolder(value.knowledgeFolder ?? ''); setPersonBinding(value.personBinding === true)
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding])
+    setStaffChat(value.needsStaffChatId ?? '')
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId])
+  // The staff chats to pick from, read when the settings open (the picker's own read).
+  const channelIds = channels.map(channel => channel.id).join(',')
+  useEffect(() => {
+    if (!open || channels.length === 0) return undefined
+    let alive = true
+    Promise.all(channels.map(channel => call('omni-thread-chats', { channelId: channel.id }).then(
+      reply => (Array.isArray(reply?.chats) ? reply.chats : []).map(chat => ({ id: chat.id, name: chat.name, channel: channel.name })),
+      (error) => { console.warn('Could not load chats:', error); return [] },
+    ))).then(lists => { if (alive) setStaffChats(lists.flat()) })
+    return () => { alive = false }
+  }, [open, channelIds])
+  const staffOptions = staffChatOptions(staffChats, threads, staffChat, channels.length > 1)
   // Graduation is off unless staff turn it on with a whole number of drafts (host GRADUATE_MAX).
   const count = Number(graduateAfter)
   const countOk = Number.isInteger(count) && count >= 1 && count <= 100
@@ -592,7 +647,9 @@ export function AnswerSettings({ bot, value = {} }) {
     setBusy(true); setProblem(null)
     // #1704: sent while it is on or being switched off; a bot that never used it saves as before.
     const person = personBinding || value.personBinding === true ? { personBinding } : {}
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person }); setOpen(false) }
+    // #1707: sent while one is named or being cleared; a bot that never named one saves as before.
+    const staff = staffChat || value.needsStaffChatId ? { needsStaffChatId: staffChat || null } : {}
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -620,6 +677,10 @@ export function AnswerSettings({ bot, value = {} }) {
             'aria-invalid': !minutesOk || undefined, onChange: event => setResumeMinutes(event.target.value),
           }),
           h('span', { 'aria-hidden': true }, 'minutes'))),
+      h(Field, { label: 'Staff chat when a person is needed', note: 'When a child says its person needs someone from the team, the bot\'s own chat and the child\'s row here show it. Pick a chat only staff are in to get a message there too.' },
+        h('select', { className: 'bt-select ot-answer-staff', value: staffChat, onChange: event => setStaffChat(event.target.value) },
+          h('option', { value: '' }, 'None'),
+          staffOptions.map(option => h('option', { key: option.id, value: option.id }, option.label)))),
       h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
         h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
         ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
@@ -691,7 +752,7 @@ export function OmniTree(props) {
   const plus = plusOf(roster, state)
   const listed = new Set(ownedChannels.map(channel => channel.id))
   return h('div', { className: 'ot-tree', role: 'group', 'aria-label': t('{name}\'s channels', { name: bot.name }) },
-    h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id] }),
+    h(AnswerSettings, { bot, value: roster?.omniAnswers?.[bot.id], channels: ownedChannels, threads }),
     h(RepairTools, { bot }),
     bot.id === defaultBotId ? h('button', { type: 'button', className: 'ot-channel-row', onClick: () => setCreatingBot(value => !value) }, 'Add channel bot') : null,
     bot.id === defaultBotId && (creatingBot || roster?.omniBotProposals?.length > 0) ? h(ChannelBotForm, { channels: state.channels, roster, onClose: () => setCreatingBot(false) }) : null,
@@ -810,6 +871,13 @@ export const OMNI_TREE_CSS = `
 .ot-paused{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
 .ot-paused-left{flex:1 0 auto;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;line-height:16px;color:var(--bt-ink-3);font-variant-numeric:tabular-nums}
 .ot-paused .ot-resume{height:24px;padding:0 10px}
+/* An answer child whose person needs someone from the team: under its name and aligned with it, at every width, the badge and staff's Dismiss on one line, the child's reason on the next, cut to one line until it is opened. */
+.ot-mode[data-mode=needs]{color:color-mix(in srgb,var(--bt-danger, #dc2626) 72%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger, #dc2626) 14%,transparent)}
+.ot-needs{display:flex;flex-wrap:wrap;align-items:center;gap:2px 6px;flex-basis:100%;grid-column:1/-1;min-width:0;padding:0 4px 4px 28px}
+.ot-needs .ot-dismiss{order:1;margin-left:auto;height:24px;padding:0 10px}
+.ot-needs-why{order:2;flex:1 1 100%;min-width:0;padding:0;border:0;background:none;color:var(--bt-ink-2);font:inherit;font-size:11px;line-height:16px;text-align:left;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer}
+.ot-needs-why[aria-expanded=true]{white-space:normal;overflow-wrap:anywhere}
+.ot-needs-why:focus-visible{outline:2px solid var(--bt-accent, #22d3ee);outline-offset:1px;border-radius:4px}
 .ot-answer-minutes{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--bt-ink-2)}
 ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 @container ot-tree (max-width:259px){${stackedRow('.ot-thread[data-answer]')}}
@@ -823,6 +891,7 @@ ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 .ot-answer-tools{display:grid;gap:8px}
 .ot-answer .ot-answer-count{width:88px}
 .ot-answer .ot-answer-folder{box-sizing:border-box;width:100%;min-width:0}
+.ot-answer .ot-answer-staff{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}

@@ -927,7 +927,7 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
   // handed-over event, an ask's answer; the wake. None carries the marker or the team's resume
   // roles.
   const delivered = Object.entries(files).flatMap(([name, source]) => codeOf(source).filter(line => line.includes('rt.deliver(')).map(line => [name, /role: '([^']+)'/.exec(line)?.[1]]))
-  assert.deepEqual(delivered, [['asks.js', 'task'], ['grants.js', 'permission'], ['subscriptions.js', 'task']])
+  assert.deepEqual(delivered, [['asks.js', 'task'], ['grants.js', 'permission'], ['needs-staff.js', 'permission'], ['subscriptions.js', 'task']])
   assert.deepEqual(count(/\.(followup|steer)\(/), { 'asks.js': 1, 'standing-runs.js': 1 })
   assert.deepEqual(count(/createUserMessage\(/), { 'asks.js': 1 })
   assert.deepEqual(count(/await followupAndFlush\(rt,/), { 'asks.js': 1, 'standing-runs.js': 1 })
@@ -964,7 +964,7 @@ test('the plugin has no resume pass of its own: no copy of the team\'s, no resum
   // included, is counted per file, so a new one fails here until it is reviewed.
   const raw = pattern => Object.fromEntries(Object.entries(files)
     .map(([name, source]) => [name, source.split('\n').filter(line => pattern.test(line)).length]).filter(([, n]) => n > 0))
-  assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
+  assert.deepEqual(raw(/\bdeliver\b/), { 'asks.js': 3, 'grants.js': 1, 'needs-staff.js': 1, 'standing-recovery.js': 1, 'subscriptions.js': 1 })
   assert.deepEqual(raw(/\bfollowup(AndFlush)?\b|\bsteer\b/), { 'asks.js': 3, 'standing-runs.js': 3 })
   assert.deepEqual(raw(/cutByRestart/), { 'asks.js': 1, 'standing-recovery.js': 7, 'standing-runs.js': 1, 'subscriptions.js': 1, 'threads.js': 1 })
   assert.deepEqual(raw(/\bset(Timeout|Interval|Immediate)\b|timers\/promises|queueMicrotask|\bsleep\b/), { 'omni-events.js': 2, 'omni-link.js': 1, 'omni-local.js': 1, 'thread-keys.js': 4, 'threads.js': 1 })

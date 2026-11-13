@@ -91,6 +91,8 @@ export function knowledgeRefusal(folder, name, args) {
   return real !== undefined && (real === folder || real.startsWith(folder.endsWith(sep) ? folder : `${folder}${sep}`)) ? undefined : refusal
 }
 
+// #1707: thread_needs_staff (needs-staff.js) anywhere but in an answer child.
+export const NEEDS_STAFF_ONLY = 'Only an answer child uses thread_needs_staff, to tell the team its person needs someone.'
 // RFC-0001 staff take-over: what a paused answer child is told when it tries to send or react.
 export const STAFF_PAUSED = 'Paused: staff are answering this chat themselves. Read along; nothing goes out until staff resume you or the quiet interval with no staff message passes.'
 
@@ -109,7 +111,7 @@ export const isFreeReaction = (emoji, list) => {
 
 /** The names a Session other than a thread may keep: every thread tool left out. */
 export function withoutThreadTools(names) {
-  return [...names].filter(name => ![...THREAD_TOOLS, 'answer_chats'].includes(name))
+  return [...names].filter(name => ![...THREAD_TOOLS, 'answer_chats', 'thread_needs_staff'].includes(name))
 }
 
 export const NOT_A_THREAD = 'This tool works only in an added chat\'s thread, on that chat.'
@@ -202,6 +204,8 @@ export function install(rt) {
     // calls them (a bot's own, an ordinary thread, another child).
     if (foreignPersonTool(exec?.agent?.id ?? exec?.agent?.session?.id, exec?.name)) return PERSON_TOOL_REFUSAL
     const thread = rt.threads?.bySession(exec?.agent?.id ?? exec?.agent?.session?.id)
+    // #1707: telling the team that a person needs someone is an answer child's alone.
+    if (exec?.name === 'thread_needs_staff' && !isAnswerChild(thread)) return NEEDS_STAFF_ONLY
     if (!isAnswerChild(thread)) return undefined
     if (!rt.answerCanSend(thread.id, thread.chatId)) return 'Answer mode or channel ownership changed.'
     const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id

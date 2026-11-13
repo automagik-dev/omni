@@ -24,6 +24,7 @@ import * as omniChannelActions from './src/host/omni-channel-actions.js'
 import * as threadKeys from './src/host/thread-keys.js'
 import * as threads from './src/host/threads.js'
 import * as threadTools from './src/host/thread-tools.js'
+import * as needsStaff from './src/host/needs-staff.js'
 import * as standingRecovery from './src/host/standing-recovery.js'
 import * as standingRuns from './src/host/standing-runs.js'
 
@@ -40,12 +41,13 @@ export const inject = ['omniTeam', 'tools', 'sessions', 'sessionTitle', 'setting
 // Asking the Omni Bot from a thread (asks.js) comes right after the automations, whose run
 // log it shares. Permissions come before the tools that check them. The threads' own keys
 // come after omni.js, whose requests they make, the threads after their keys, and the
-// threads' own tools after the threads, whose additions they restrict. The standing-Session
-// runs (automations that run each event in its chat's thread) after the threads, whose
-// removals they hear, and their restart recovery right after them, before the events, which
-// queue for them.
+// threads' own tools after the threads, whose additions they restrict, and an answer child's
+// thread_needs_staff after those, whose guard it uses and whose staff take-over it hooks. The
+// standing-Session runs (automations that run each event in its chat's thread) after the
+// threads, whose removals they hear, and their restart recovery right after them, before the
+// events, which queue for them.
 // Changing channels from the Channels page comes last: it only calls omni through omni.js.
-const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, standingRuns, standingRecovery, omniEvents, omniChannelActions]
+const MODULES = [resumeHook, grants, subscriptions, asks, omniApi, omniLink, omniDiscover, omniLocal, omniTerminal, omniUpdate, omni, threadKeys, threads, threadTools, needsStaff, standingRuns, standingRecovery, omniEvents, omniChannelActions]
 
 export function apply(ctx, config = {}) {
   ctx.provide('omniChannels', createRuntime(ctx, ctx.omniTeam, config))

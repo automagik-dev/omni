@@ -66,6 +66,23 @@ The rule is the person's only record. Staff write its `metadata` (`POST`/`PATCH
 Context and capability are kept in memory only: after a restart they return with the person's
 next admitted message.
 
+## When a person needs someone from the team
+
+An answer child that cannot help its person calls `thread_needs_staff` with a one-line reason
+(1 to 200 characters), then tells the person the team has been told; its fixed instructions say
+so, whatever the bot's own instructions say. The tool sends nothing to the person and raises no
+card, in training and in sending mode alike. Only answer children may call it, and a child that
+staff took over is refused: staff are in its chat already.
+
+The team is told once: the owning bot gets a note in its own chat naming the chat and the
+reason, the child's row in the sidebar shows **Needs a person** with the reason and a
+**Dismiss** button, and, when staff pick one under **Staff chat when a person is needed**
+(`needsStaffChatId`, settings panel only), that chat gets a short message on the bot's channel.
+The staff chat can never be a chat an answer child answers. The mark is saved, so it outlives a
+restart; calls while it is set tell no one again. It clears when staff answer in that chat from
+their own phone, or when they press **Dismiss**. DeepSeek Harness has no app notification a plugin
+can raise, so the sidebar row is the app's own sign.
+
 ## Existing channel settings
 
 Open an existing channel to read its configuration groups, derived provider and assigned
