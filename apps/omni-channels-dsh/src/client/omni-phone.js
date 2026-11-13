@@ -408,7 +408,7 @@ export const OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-log{flex:1;min-height:0}
 .op-compose{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px;border-top:1px solid var(--bt-line, rgba(127,127,127,.2))}
 .op-compose .oc-compose{width:100%;max-width:none;margin:0;padding:3px 3px 3px 12px;border-radius:20px;gap:6px}
-.op-compose .oc-compose textarea{height:30px;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
+.op-compose .oc-compose textarea{height:auto;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
 .op-compose .oc-send{width:30px;height:30px}
 .op-compose .oc-send svg{width:16px;height:16px}
 .op-draft{display:flex;flex-direction:column;gap:3px;padding:7px 10px;border-radius:12px;border:1px dashed var(--bt-line-2, rgba(127,127,127,.35));background:var(--bt-card, transparent)}

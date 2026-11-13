@@ -406,6 +406,7 @@ export function install(rt) {
       await rt.answerApprovalOutcome?.(thread, request, outcome)
       return outcome
     }).finally(() => {
+      rt.answerApprovalWaiting?.(thread, request, false)
       const still = byId(thread.id)
       if (still?.status !== 'waiting') return
       still.status = rt.teamResume?.running?.(still.sessionId) === false ? 'idle' : 'working'

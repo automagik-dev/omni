@@ -46,8 +46,11 @@ async function say(b, child, text, { answer = 'allowed-once', onCard } = {}) {
   if (decision.kind === 'ask') {
     const approvals = [...(b.ctx.listeners.get('approval/request') ?? [])].reverse()
     const request = { agent, toolName: 'thread_say', callId, reason: decision.reason }
-    const step = index => (index < approvals.length ? Promise.resolve(approvals[index](request, () => step(index + 1))) : Promise.resolve().then(async () => { card = true; await onCard?.(); return answer }))
-    if (await step(0) !== 'allowed-once') return { card, decision, result: null }
+    // An Error for `answer`: the card is torn down as a stopped turn tears it down (it rejects).
+    const step = index => (index < approvals.length ? Promise.resolve(approvals[index](request, () => step(index + 1))) : Promise.resolve().then(async () => { card = true; await onCard?.(); if (answer instanceof Error) throw answer; return answer }))
+    const outcome = await step(0).catch(error => error)
+    if (outcome instanceof Error) return { card, decision, result: null, error: outcome }
+    if (outcome !== 'allowed-once') return { card, decision, result: null }
   } else if (decision.kind !== 'allow') {
     return { card, decision, result: null }
   }
@@ -193,7 +196,7 @@ for (const resumed of [false, true]) {
   })
 }
 
-for (const [status, reason] of [[503, 'Omni answered 503: instance not connected. Nothing was sent.'], [0, 'Could not reach Omni. Nothing was sent.']]) {
+for (const [status, reason] of [[503, 'Omni answered 503: instance not connected. Nothing was sent.'], [0, 'Omni did not answer, so this message may have gone out. Check the chat before sending it again.']]) {
   test(`a failed phone pane send (${status === 0 ? 'Omni unreachable' : `Omni answers ${status}`}) says why, sends nothing twice, and leaves the child and its waiting draft as they were`, async t => {
     const b = await answerBench(t)
     const seen = recorded(b)
@@ -226,4 +229,23 @@ test('two phone pane sends at once into one chat send one message; the other is 
   // Once it answered, the next one goes.
   await b.call(SEND, { threadId: child.id, text: 'third' })
   assert.deepEqual(sentTexts(b), ['first', 'third'])
+})
+
+test('a card torn down with its turn leaves no waiting draft behind for the thread\'s next card', async t => {
+  const b = await answerBench(t)
+  const child = await answering(t, b)
+  let shown
+  const stopped = await say(b, child, DRAFT, { answer: new Error('approval request was aborted'), onCard: () => { shown = rowOf(b, child).waitingDraft } })
+  assert.equal(shown.text, DRAFT)
+  assert.equal(stopped.error.message, 'approval request was aborted')
+  assert.equal(rowOf(b, child).waitingDraft, undefined)
+  // The thread's next card, for a reaction, shows no draft.
+  const agent = b.agentOf(child.sessionId)
+  const approvals = [...b.ctx.listeners.get('approval/request')].reverse()
+  let during
+  const request = { agent, toolName: 'thread_react', callId: 'call-react', reason: 'React?' }
+  const step = index => (index < approvals.length ? Promise.resolve(approvals[index](request, () => step(index + 1))) : Promise.resolve().then(() => { during = b.channels.threads.byId(child.id).status === 'waiting' ? rowOf(b, child) : null; return 'rejected' }))
+  assert.equal(await step(0), 'rejected')
+  assert.ok(during, 'the reaction card was up')
+  assert.equal(during.waitingDraft, undefined)
 })

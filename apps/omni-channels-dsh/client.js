@@ -15884,7 +15884,7 @@ var OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
 .op-log{flex:1;min-height:0}
 .op-compose{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px;border-top:1px solid var(--bt-line, rgba(127,127,127,.2))}
 .op-compose .oc-compose{width:100%;max-width:none;margin:0;padding:3px 3px 3px 12px;border-radius:20px;gap:6px}
-.op-compose .oc-compose textarea{height:30px;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
+.op-compose .oc-compose textarea{height:auto;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
 .op-compose .oc-send{width:30px;height:30px}
 .op-compose .oc-send svg{width:16px;height:16px}
 .op-draft{display:flex;flex-direction:column;gap:3px;padding:7px 10px;border-radius:12px;border:1px dashed var(--bt-line-2, rgba(127,127,127,.35));background:var(--bt-card, transparent)}
@@ -18439,6 +18439,7 @@ var STRINGS = {
   "Pick a thread, and send only its message.": "请选择一个聊天线程，并只发送它的消息。",
   "The message before this one is still being sent.": "上一条消息仍在发送中。",
   "Could not reach Omni. Nothing was sent.": "无法连接 Omni。没有发送任何内容。",
+  "Omni did not answer, so this message may have gone out. Check the chat before sending it again.": "Omni 没有回应，这条消息可能已经发出。再次发送前请先查看聊天。",
   "The Verify token is not your Graph API access token. Connection alone does not verify the webhook; Meta must be able to reach this HTTPS URL.": "验证令牌不是 Graph API 访问令牌。连接成功不代表 Webhook 已验证；Meta 必须能够访问此 HTTPS URL。"
 };
 

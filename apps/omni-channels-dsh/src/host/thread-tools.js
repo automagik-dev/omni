@@ -554,7 +554,6 @@ export function install(rt) {
     const draftId = draftIdOf(request?.agent, request?.callId)
     const draft = draftId === null ? undefined : drafts.get(draftId)
     if (draft === undefined || request.toolName !== 'thread_say' || thread?.id !== draft.threadId) return
-    draft.waiting = false
     if (outcome === 'allowed-once') {
       draft.approved = true
       return
@@ -564,12 +563,13 @@ export function install(rt) {
     await rt.recordAnswerDraft({ threadId: draft.threadId, draftId: draft.draftId, approvedText: draft.text, sentText: '', outcome: 'rejected' })
       .catch(error => rt.warn('omni-channels: a rejected answer draft was not counted: %s', error?.message ?? error))
   }
-  // #1715: the draft whose card is up now, from the same listener before the card shows, so the
-  // phone pane can show its text (threads.js threadsView, waitingDraft) while staff decide.
-  rt.answerApprovalWaiting = (thread, request) => {
+  // #1715: the draft whose card is up now, from the same listener: marked before the card shows,
+  // so the phone pane can show its text (threads.js threadsView, waitingDraft) while staff decide,
+  // and unmarked once the card settles, however it settles (a stopped turn rejects it).
+  rt.answerApprovalWaiting = (thread, request, waiting = true) => {
     const draftId = draftIdOf(request?.agent, request?.callId)
     const draft = draftId === null ? undefined : drafts.get(draftId)
-    if (draft !== undefined && request.toolName === 'thread_say' && thread?.id === draft.threadId) draft.waiting = true
+    if (draft !== undefined && request.toolName === 'thread_say' && thread?.id === draft.threadId) draft.waiting = waiting
   }
   /** The thread's newest draft waiting on its card: { id, text }, with `replaced` once staff sent their own text for it. */
   rt.answerWaitingDraft = (threadId) => {
@@ -615,7 +615,9 @@ export function install(rt) {
       const chat = row.data.data
       const sent = await rt.omniRequest('POST', '/messages/send', { body: { instanceId: chat.instanceId, to: chat.externalId, text } }).catch(() => undefined)
       const reply = await sent?.json().catch(() => null)
-      if (sent === undefined || sent === null) throw invalid('Could not reach Omni. Nothing was sent.')
+      // No answer (a timeout among them) after the request left: it may have gone out.
+      if (sent === undefined) throw invalid('Omni did not answer, so this message may have gone out. Check the chat before sending it again.')
+      if (sent === null) throw invalid('Omni is not linked here.')
       if (!sent.ok) {
         const said = reply?.error?.message
         throw invalid(`Omni answered ${sent.status}${typeof said === 'string' && said !== '' ? `: ${said.slice(0, 300)}` : ''}. Nothing was sent.`)
