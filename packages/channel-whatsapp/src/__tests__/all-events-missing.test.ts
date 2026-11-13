@@ -36,6 +36,7 @@ function createMockPlugin() {
     handleSettingsUpdate: mock(() => undefined),
     handleChatLockUpdate: mock(() => undefined),
     handleGroupMemberTagUpdate: mock(() => undefined),
+    publishLidMappings: mock(() => undefined),
   };
 }
 
@@ -114,6 +115,17 @@ describe('setupAllEventHandlers missing Baileys events', () => {
 
     expect(plugin.handleGroupMemberTagUpdate).toHaveBeenCalledTimes(1);
     expect(plugin.handleGroupMemberTagUpdate).toHaveBeenCalledWith(instanceId, payload);
+  });
+
+  test('publishes mappings after lid-mapping.update', () => {
+    const sock = createMockSocket();
+    const plugin = createMockPlugin();
+    setupAllEventHandlers(sock as WASocket, plugin as never, instanceId);
+
+    sock.ev.emit('lid-mapping.update', { lid: 'fixture-lid', phone: 'fixture-phone' });
+
+    expect(plugin.storeLidMapping).toHaveBeenCalledWith(instanceId, 'fixture-lid@lid', 'fixture-phone@s.whatsapp.net');
+    expect(plugin.publishLidMappings).toHaveBeenCalledWith(instanceId);
   });
 });
 

@@ -4230,7 +4230,7 @@ export class WhatsAppPlugin extends BaseChannelPlugin {
    * for DB persistence. A `{lidJid, phoneJid}` pair is its own identity, so
    * known pairs are skipped (issue #1040).
    */
-  private publishLidMappings(instanceId: string): void {
+  publishLidMappings(instanceId: string): void {
     const lidCache = this.lidMappingCache.get(instanceId);
     if (!lidCache || lidCache.size === 0) return;
 

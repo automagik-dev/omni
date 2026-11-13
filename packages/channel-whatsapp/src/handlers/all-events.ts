@@ -306,5 +306,6 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   sock.ev.on('lid-mapping.update', (data) => {
     if (DEBUG) logEvent('lid-mapping.update', data);
     processLidMappings(data, plugin, instanceId);
+    plugin.publishLidMappings(instanceId);
   });
 }

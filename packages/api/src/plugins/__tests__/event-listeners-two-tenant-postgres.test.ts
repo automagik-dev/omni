@@ -61,9 +61,19 @@ const INSTANCE_A = '55555555-5555-4555-8555-5555555555ea';
 const INSTANCE_B = '55555555-5555-4555-8555-5555555555eb';
 const CHAT_A = '66666666-6666-4666-8666-6666666666ea';
 const CHAT_B = '66666666-6666-4666-8666-6666666666eb';
+const CHAT_LID_A = '66666666-6666-4666-8666-6666666666ec';
+const CHAT_CANONICAL_A = '66666666-6666-4666-8666-6666666666ed';
+const CHAT_GROUP_A = '66666666-6666-4666-8666-6666666666ee';
+const CHAT_CONFLICT_A = '66666666-6666-4666-8666-6666666666ef';
 
 const JID = '5511999990000@s.whatsapp.net';
 const LID = '123456789@lid';
+const LID_WITHOUT_CANONICAL = 'fixture-lid@lid';
+const LID_WITH_CANONICAL = 'fixture-existing-lid@lid';
+const LID_WITH_CANONICAL_CONFLICT = 'fixture-conflict-lid@lid';
+const GROUP_JID = 'fixture-group@g.us';
+const RESOLVED_PHONE = 'fixture-phone@s.whatsapp.net';
+const EXISTING_CANONICAL = 'fixture-existing@s.whatsapp.net';
 const SHARED_TIMESTAMP = '2026-01-01 00:00:00+00';
 
 function password(): string {
@@ -154,10 +164,10 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
   const chatForTenant = (
     tenantId: string,
     chatId: string,
-  ): Promise<{ name: string | null; unreadCount: number | null }[]> =>
+  ): Promise<{ name: string | null; unreadCount: number | null; canonicalId: string | null }[]> =>
     runInWorkerTenantScope(runtimeDb, tenantId, async () =>
       scopedHandle(runtimeDb)
-        .select({ name: chats.name, unreadCount: chats.unreadCount })
+        .select({ name: chats.name, unreadCount: chats.unreadCount, canonicalId: chats.canonicalId })
         .from(chats)
         .where(eq(chats.id, chatId)),
     );
@@ -182,7 +192,15 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
         ('${CHAT_A}', '${INSTANCE_A}', '${JID}', '${JID}', 'direct', 'whatsapp-baileys', NULL,
          '${TENANT_A}', '${SHARED_TIMESTAMP}'),
         ('${CHAT_B}', '${INSTANCE_B}', '${JID}', '${JID}', 'direct', 'whatsapp-baileys', NULL,
-         '${TENANT_B}', '${SHARED_TIMESTAMP}');
+         '${TENANT_B}', '${SHARED_TIMESTAMP}'),
+        ('${CHAT_LID_A}', '${INSTANCE_A}', '${LID_WITHOUT_CANONICAL}', NULL, 'direct', 'whatsapp-baileys', NULL,
+         '${TENANT_A}', '${SHARED_TIMESTAMP}'),
+        ('${CHAT_CANONICAL_A}', '${INSTANCE_A}', '${LID_WITH_CANONICAL}', '${EXISTING_CANONICAL}', 'direct',
+         'whatsapp-baileys', NULL, '${TENANT_A}', '${SHARED_TIMESTAMP}'),
+        ('${CHAT_GROUP_A}', '${INSTANCE_A}', '${GROUP_JID}', NULL, 'group', 'whatsapp-baileys', NULL,
+         '${TENANT_A}', '${SHARED_TIMESTAMP}'),
+        ('${CHAT_CONFLICT_A}', '${INSTANCE_A}', '${LID_WITH_CANONICAL_CONFLICT}', NULL, 'direct', 'whatsapp-baileys',
+         NULL, '${TENANT_A}', '${SHARED_TIMESTAMP}');
       `,
     );
     if (seeded.exitCode !== 0) throw new Error(`seed failed: ${seeded.stderr}`);
@@ -249,20 +267,50 @@ postgresDescribe('two-tenant event-listeners containment (real PostgreSQL)', () 
   test("lid-mapping batch under A persists only under A; a B-envelope aiming at A's instance persists nothing", async () => {
     await fire(
       'custom.lid-mapping.batch',
-      eventWith(TENANT_A, { mappings: [{ lidJid: LID, phoneJid: JID }] }, { instanceId: INSTANCE_A }),
+      eventWith(
+        TENANT_A,
+        {
+          mappings: [
+            { lidJid: LID, phoneJid: JID },
+            { lidJid: LID_WITHOUT_CANONICAL, phoneJid: RESOLVED_PHONE },
+            { lidJid: LID_WITH_CANONICAL, phoneJid: RESOLVED_PHONE },
+            { lidJid: LID_WITH_CANONICAL_CONFLICT, phoneJid: JID },
+          ],
+        },
+        { instanceId: INSTANCE_A },
+      ),
     );
 
-    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId)).toEqual([LID]);
+    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId)).toEqual([
+      LID,
+      LID_WITHOUT_CANONICAL,
+      LID_WITH_CANONICAL,
+      LID_WITH_CANONICAL_CONFLICT,
+    ]);
     expect(await mappingsForTenant(TENANT_B, INSTANCE_A)).toEqual([]);
+
+    expect((await chatForTenant(TENANT_A, CHAT_LID_A))[0]?.canonicalId).toBe(RESOLVED_PHONE);
+    expect((await chatForTenant(TENANT_A, CHAT_CANONICAL_A))[0]?.canonicalId).toBe(EXISTING_CANONICAL);
+    expect((await chatForTenant(TENANT_A, CHAT_GROUP_A))[0]?.canonicalId).toBeNull();
+    expect((await chatForTenant(TENANT_A, CHAT_CONFLICT_A))[0]?.canonicalId).toBeNull();
 
     // B's worker envelope aiming at A's instance: the derivation/WITH CHECK
     // refuses the cross-tenant insert; the handler's per-item skip swallows it.
     await fire(
       'custom.lid-mapping.batch',
-      eventWith(TENANT_B, { mappings: [{ lidJid: '987654321@lid', phoneJid: JID }] }, { instanceId: INSTANCE_A }),
+      eventWith(
+        TENANT_B,
+        { mappings: [{ lidJid: 'fixture-forged-lid@lid', phoneJid: RESOLVED_PHONE }] },
+        { instanceId: INSTANCE_A },
+      ),
     );
 
-    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId)).toEqual([LID]);
+    expect((await mappingsForTenant(TENANT_A, INSTANCE_A)).map((m) => m.lidId)).toEqual([
+      LID,
+      LID_WITHOUT_CANONICAL,
+      LID_WITH_CANONICAL,
+      LID_WITH_CANONICAL_CONFLICT,
+    ]);
     expect(await mappingsForTenant(TENANT_B, INSTANCE_A)).toEqual([]);
   });
 
