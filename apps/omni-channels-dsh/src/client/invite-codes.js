@@ -100,9 +100,9 @@ export const INVITE_CODES_CSS = `
 .ot-invites .ot-invites-paste{box-sizing:border-box;width:100%;min-width:0;font-family:var(--bt-mono, ui-monospace, monospace);font-size:12px}
 .ot-invites .bt-actions{justify-content:flex-end}
 .ot-invite-list{display:grid;gap:6px;max-height:220px;margin:0;padding:0;overflow-y:auto;list-style:none}
-.ot-invite{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1px 8px;min-width:0;padding:6px 8px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:8px}
-.ot-invite-code{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--bt-mono, ui-monospace, monospace);font-size:12px;line-height:17px;color:var(--bt-ink)}
-.ot-invite-state{font-size:11px;line-height:17px;color:var(--bt-ink-2)}
+.ot-invite{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:1px 8px;min-width:0;padding:6px 8px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:8px}
+.ot-invite-code{flex:1 0 auto;max-width:100%;overflow-wrap:anywhere;font-family:var(--bt-mono, ui-monospace, monospace);font-size:12px;line-height:17px;color:var(--bt-ink)}
+.ot-invite-state{flex:none;font-size:11px;line-height:17px;color:var(--bt-ink-2)}
 .ot-invite[data-state=open] .ot-invite-state{color:var(--bt-ok, #16a34a)}
-.ot-invite-meta{grid-column:1 / -1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;line-height:17px;color:var(--bt-ink-3)}
+.ot-invite-meta{flex-basis:100%;min-width:0;overflow-wrap:anywhere;font-size:12px;line-height:17px;color:var(--bt-ink-3)}
 `
