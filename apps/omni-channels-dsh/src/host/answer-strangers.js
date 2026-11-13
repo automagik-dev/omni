@@ -76,12 +76,12 @@ export function install(rt) {
     if (why !== undefined) rt.warn('omni-channels: the reply to a person no rule lets in was not sent in chat %s (not tried again today): %s', row.chatUuid, why)
   }
 
-  // A message of a sender no rule lets in, on a bot's answer channel. True when the bot has a
-  // reply text: the message is taken (a request noted, and the reply sent unless the chat had it
-  // within a day); false when it has none, and nothing changed.
+  // A message of a sender no rule lets in, on a bot's answer channel. True when the bot answers
+  // and has a reply text: the message is taken (a request noted, and the reply sent unless the
+  // chat had it within a day); false otherwise, and nothing changed.
   rt.answerStranger = async (row, botId) => {
-    const text = answerSettingsOf(rt.botOf(botId)).strangerReply
-    if (text === null || !row?.instanceId || !row.chatUuid || row.rawPayload?.isFromMe === true) return false
+    const { enabled, strangerReply: text } = answerSettingsOf(rt.botOf(botId))
+    if (!enabled || text === null || !row?.instanceId || !row.chatUuid || row.rawPayload?.isFromMe === true) return false
     const now = Date.now()
     note(row, botId, now)
     // Checked and marked with no wait between: a live message and a re-check at once send once.
@@ -92,7 +92,11 @@ export function install(rt) {
       for (const [other, at] of Object.entries(replied())) if (now - at >= DAY_MS) delete replied()[other]
       bound(replied(), REPLIED_MAX, at => at)
     }
-    await rt.save()
+    // Not saved: the day's mark goes again, so the message tried again can still get the reply.
+    try { await rt.save() } catch (error) {
+      if (due && replied()[key] === now) delete replied()[key]
+      throw error
+    }
     if (due) await send(row, botId, text)
     return true
   }

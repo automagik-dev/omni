@@ -240,6 +240,17 @@ test('stranger reply: a failed send is warned once and not tried again; the kept
   assert.deepEqual([kept(b), staffWarnings(b), requests(b).map(row => row.count)], [[], [], [2]])
 })
 
+test('stranger reply: with answer mode switched off, a kept lid-only message gets no reply and stays kept as before', async t => {
+  const b = await bench(t, { externalId: `${LID}@lid` })
+  await b.deliver(lidOnly(1))
+  await b.call('omni-answer-settings', { ...b.settings, enabled: false, strangerReply: REPLY })
+  await recheck(t, b, 2_000)
+  await recheck(t, b, 8_000)
+  await recheck(t, b, 20_000)
+  assert.deepEqual([b.omniState.sends, requests(b)], [[], []])
+  assert.deepEqual(kept(b).map(entry => entry.waiting), [true])
+})
+
 test('stranger reply: the setting saves, clears with null or empty, and is kept by a save that leaves it out', async t => {
   const b = await answerBench(t)
   const setting = () => b.view().omniAnswers[ANSWER_MASTER].strangerReply
@@ -283,7 +294,7 @@ test('stranger reply: the day\'s marks keep the newest 5000, the requests the ne
   const rt = {
     state, ctx: { effect: fn => fn() }, hooks: { endpoint: (name, fn) => { endpoints[name] = fn } },
     load: async () => {}, save: async () => {}, warn: () => {},
-    botOf: id => (id === 'bot' ? { kind: 'omni', answer: { strangerReply: REPLY } } : undefined),
+    botOf: id => (id === 'bot' ? { kind: 'omni', answer: { enabled: true, strangerReply: REPLY } } : undefined),
     omniRequest: async (method, path, args) => {
       if (method === 'POST') { sends.push(args.body); return { ok: true } }
       return reply({ instanceId: 'i', chatType: 'dm', externalId: `${STRANGER}@s.whatsapp.net` })
@@ -301,8 +312,17 @@ test('stranger reply: the day\'s marks keep the newest 5000, the requests the ne
   assert.equal(state.omniAnswerRequests.bot.new.text.length, REQUEST_TEXT_MAX)
   const listed = await endpoints['omni-answer-requests']({ botId: 'bot' })
   assert.deepEqual([listed.count, listed.requests[0].chatUuid, listed.requests[1].chatUuid], [REQUESTS_MAX, 'new', `old-${REQUESTS_MAX - 1}`])
-  // A bot with no reply set: nothing is noted or sent.
-  rt.botOf = id => (id === 'bot' ? { kind: 'omni', answer: {} } : undefined)
+  // A save that fails takes the day's mark back, so the message tried again gets the reply.
+  rt.save = async () => { throw new Error('disk full') }
+  await assert.rejects(rt.answerStranger({ ...row, chatUuid: 'retried' }, 'bot'), /disk full/)
+  assert.equal('i:retried' in state.omniStrangerReplies, false)
+  rt.save = async () => {}
+  assert.equal(await rt.answerStranger({ ...row, chatUuid: 'retried' }, 'bot'), true)
+  assert.deepEqual([sends.length, 'i:retried' in state.omniStrangerReplies], [2, true])
+  // A bot with no reply set, or with answer mode off: nothing is noted or sent.
+  rt.botOf = id => (id === 'bot' ? { kind: 'omni', answer: { enabled: false, strangerReply: REPLY } } : undefined)
   assert.equal(await rt.answerStranger({ ...row, chatUuid: 'other' }, 'bot'), false)
-  assert.deepEqual([sends.length, 'other' in state.omniAnswerRequests.bot], [1, false])
+  rt.botOf = id => (id === 'bot' ? { kind: 'omni', answer: { enabled: true } } : undefined)
+  assert.equal(await rt.answerStranger({ ...row, chatUuid: 'other' }, 'bot'), false)
+  assert.deepEqual([sends.length, 'other' in state.omniAnswerRequests.bot], [2, false])
 })
