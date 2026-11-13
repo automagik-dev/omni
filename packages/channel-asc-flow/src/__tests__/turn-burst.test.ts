@@ -144,6 +144,22 @@ describe('a turn answered in several sends answers the held call once, after the
     expect(order.lastIndexOf('/callbackFlowMsg')).toBeLessThan(order.indexOf('ANSWER'));
   });
 
+  // A reply that finishes while ANOTHER send is still pushing (a caller sending directly at the same time) must wait
+  // for it too: the answer would otherwise reach the flow between that send's pushes. Review of #1720.
+  it('holds a finished reply while an overlapping direct send is still pushing', async () => {
+    const call = openingCall();
+    const trace = await opened();
+
+    const bubbles = Array.from({ length: 12 }, (_, i) => `Bolha ${i + 1}.`);
+    const long = direct(bubbles.join('\n\n')); // ~0.5 s of pushes
+    await Bun.sleep(60);
+    await reply('Para começar, qual é o seu CPF?', trace);
+    await long;
+    await call.body;
+
+    expect(order.lastIndexOf('/callbackFlowMsg')).toBeLessThan(order.indexOf('ANSWER'));
+  });
+
   it('still answers at once when a direct send hands off', async () => {
     const call = openingCall();
     await opened();

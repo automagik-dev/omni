@@ -1648,6 +1648,12 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       return { pronto: 1, resposta: '', hand_off: 'nao', bolhas: [] };
     }
 
+    // An answer waits for every send still pushing to this turn, not only for its own: a direct send made while the
+    // reply delivers would otherwise push after the answer reached the flow, which is the race `stageTurn` closes. The
+    // hold re-checks on its next tick; the TTL bounds a send that never returns. A parked handoff taken by a NEWER
+    // input (above) is not held: that input would overwrite the window and lose the transfer.
+    if (entry.sending && ageMs <= IN_FLIGHT_TTL_MS) return null;
+
     state.inFlight.delete(codAtendimento);
     // Past the TTL the answer is handed over anyway. The text already matched,
     // so this IS the answer to the question being asked, and the alternative —
