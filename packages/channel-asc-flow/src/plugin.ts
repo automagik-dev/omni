@@ -39,7 +39,10 @@
  * back in `resposta`, which is the single slot the flow's `message` node
  * renders. The dispatcher does split one reply across several `sendMessage`
  * calls, so the parts before the last are HELD on the turn window and the last
- * one answers with all of them — see `collectTurnParts`.
+ * one answers with all of them — see `collectTurnParts`. A DIRECT send made
+ * while the agent runs (`POST /messages/send`: an opening's bubbles, a button)
+ * pushes its bubbles but does not answer either: the turn answers once, after
+ * its last send — see `stageTurn`.
  *
  * Handoff. Detected from `metadata.isHandoff` (the Gupshup precedent), not by
  * sniffing the agent's prose: the adapter only regex-matched the invitation
@@ -143,6 +146,15 @@ interface AscFlowTurnState {
   parts?: string[];
   /** Set by `sendMessage`; the next poll takes it and the turn is over. */
   ready?: AscFlowTurnReady;
+  /**
+   * The body a direct send left while the turn's reply is still to come (`stageTurn`). The reply replaces it; it only
+   * answers the turn when no reply comes (`settleStagedTurn`).
+   */
+  staged?: AscFlowTurnReady;
+  /** When the last direct send finished: the settle clock. */
+  stagedAt?: number;
+  /** Sends still delivering to this turn. Nothing settles it while one is under way. */
+  sending?: number;
 }
 
 interface AscFlowInstanceState {
@@ -256,6 +268,29 @@ const quoteLookupTimeoutMs = () => {
   const ms = Number(process.env.ASC_FLOW_QUOTE_LOOKUP_MS ?? QUOTE_LOOKUP_DEFAULT_MS);
   return Number.isNaN(ms) ? QUOTE_LOOKUP_DEFAULT_MS : ms;
 };
+
+/**
+ * How long a turn answered so far only by direct sends waits for the agent's reply before the held call is answered
+ * with them anyway (`settleStagedTurn`).
+ *
+ * A direct send no longer answers the held call; the turn's reply does (`stageTurn`). This is the floor for a reply
+ * that never comes: an empty or suppressed one, which the dispatcher does not send at all. Generous on purpose: the
+ * reply follows the last direct send by ~0.25 s (the opening in the Odonto HML, 13/11/2026), and answering before it
+ * brings back the race `stageTurn` closes. `ASC_FLOW_TURN_SETTLE_MS` overrides it, read per CALL like `ASC_FLOW_HOLD_MS`.
+ */
+const TURN_SETTLE_DEFAULT_MS = 3_000;
+const turnSettleMs = () => {
+  const ms = Number(process.env.ASC_FLOW_TURN_SETTLE_MS ?? TURN_SETTLE_DEFAULT_MS);
+  return Number.isNaN(ms) ? TURN_SETTLE_DEFAULT_MS : ms;
+};
+
+/**
+ * A DIRECT send (`POST /messages/send` and its siblings) rather than a part of the agent's reply. The dispatcher stamps
+ * every part of a reply with `partIndex`/`partCount` and its trace (`sendResponseParts`); the API routes stamp neither.
+ */
+function isDirectSend(meta: Record<string, unknown>): boolean {
+  return meta.partCount === undefined && meta.correlationId === undefined;
+}
 
 /**
  * Markdown → WhatsApp syntax, honoring the instance's `messageFormatMode`
@@ -578,18 +613,21 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // text send report success.
       const answering = state.inFlight.get(to.trim());
       const polling = answering !== undefined && answering.text !== '';
+      // The turn a poll is holding open for this send, if any.
+      const held = polling ? answering : undefined;
 
       // One agent reply, many sends. Hold every part but the last so ONE turn
       // answers with all of them — see `collectTurnParts`. A held part reached
       // nobody yet and produced no message, hence no id: the dispatcher does
       // not read this result, and nothing else stamps the hint.
-      const turnMessage = collectTurnParts(message, polling ? answering : undefined);
+      const turnMessage = collectTurnParts(message, held);
       if (!turnMessage) return { success: true, timestamp: Date.now() };
 
       const content = turnMessage.content;
       const text = resolveOutboundText(turnMessage, this.logger);
 
-      const { rich, bubbles } = await this.prepareTurn(turnMessage, text);
+      // Everything below that talks to the network runs with the held turn marked busy (`whileSending`).
+      const { rich, bubbles } = await this.whileSending(held, () => this.prepareTurn(turnMessage, text));
 
       // The URA rides on the LAST bubble — the options attach to the last thing
       // the beneficiary read, and that bubble is the one that goes back in
@@ -599,14 +637,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       const lastBubble = bubbles[bubbles.length - 1] ?? '';
       const interativa = rich ? null : interactiveOf(content, meta, lastBubble);
 
-      const { delivered } = await this.deliver(state, cod, {
-        text,
-        bubbles,
-        lastBubble,
-        rich,
-        interativa,
-        message: turnMessage,
-      });
+      const { delivered } = await this.whileSending(held, () =>
+        this.deliver(state, cod, { text, bubbles, lastBubble, rich, interativa, message: turnMessage }),
+      );
 
       // Nothing reached the handset and no poll is waiting for the text either:
       // undeliverable, and it must not be recorded as sent. Every content type
@@ -617,7 +650,9 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // on the handset (`delivered`); in flow mode it rides `resposta` as usual.
       const handoff =
         meta.isHandoff === true
-          ? await this.runHandoff(state, instanceId, cod, meta, delivered ? '' : lastBubble)
+          ? await this.whileSending(held, () =>
+              this.runHandoff(state, instanceId, cod, meta, delivered ? '' : lastBubble),
+            )
           : null;
       // A handoff that did not hold must not read as one. `hand_off:'nao'` is
       // already the honest poll body, but reporting success let the route answer
@@ -625,12 +660,11 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       // happened, and disarm the follow-ups that would have revisited the chat.
       const handoffRefused = meta.isHandoff === true && handoff === null;
 
-      this.resolveTurn(
+      this.answerOrStage(
         state,
         to,
         buildReadyBody({ delivered, lastBubble, bubbles, handoff, mode: state.config.ascFlowHandoffMode }),
-        answering,
-        correlationId,
+        { held, answering, correlationId, delivered, meta },
       );
 
       if (handoffRefused) return this.refuseSend(instanceId, to, HANDOFF_REFUSED_ERROR);
@@ -683,6 +717,45 @@ export class AscFlowPlugin extends BaseChannelPlugin {
 
       return { success: false, error: errorMessage, retryable, timestamp: Date.now() };
     }
+  }
+
+  /**
+   * Run one step of a send with the held turn marked busy meanwhile: nothing settles it then (`settleStagedTurn`),
+   * since an answer let out mid-send would reach the flow while a push is waking it. Only the steps that wait on the
+   * network need it; between them the send runs without yielding to the hold's timer.
+   */
+  private async whileSending<T>(held: AscFlowTurnState | undefined, step: () => Promise<T>): Promise<T> {
+    if (held) held.sending = (held.sending ?? 0) + 1;
+    try {
+      return await step();
+    } finally {
+      if (held) held.sending = Math.max(0, (held.sending ?? 1) - 1);
+    }
+  }
+
+  /**
+   * Answer the turn with this send's body, or park the body on it when the send is a direct one the turn's reply still
+   * follows (`stageTurn`). A handoff ends the turn, and an undelivered send needs `resposta` to carry its text, so both
+   * answer at once.
+   */
+  private answerOrStage(
+    state: AscFlowInstanceState,
+    to: string,
+    body: AscFlowTurnReady,
+    send: {
+      held: AscFlowTurnState | undefined;
+      answering: AscFlowTurnState | undefined;
+      correlationId: string | undefined;
+      delivered: boolean;
+      meta: Record<string, unknown>;
+    },
+  ): void {
+    const { held, delivered, meta } = send;
+    if (held && delivered && meta.isHandoff !== true && isDirectSend(meta)) {
+      this.stageTurn(to, held, body);
+      return;
+    }
+    this.resolveTurn(state, to, body, send.answering, send.correlationId);
   }
 
   /** `message.sent` for a turn that was delivered or parked for the poll. */
@@ -886,12 +959,51 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         return;
       }
       entry.ready = ready;
+      entry.staged = undefined;
       entry.at = Date.now();
       return;
     }
     // An outbound with no inbound turn in flight (a proactive send): still park
     // it, so a poll that arrives for this cod collects it.
     state.inFlight.set(cod, { text: '', at: Date.now(), ready });
+  }
+
+  /**
+   * Leave a direct send's body on the turn without answering the held call.
+   *
+   * Every `/callbackFlowMsg` after the first one of a turn WAKES the ASC flow, which calls the webhook again: a turn of
+   * N bubbles brings N-1 extra calls, measured on every turn of atendimento 24505190 (Odonto HML, 13/11/2026). A turn
+   * survives that when the held call is answered after its LAST push, so the flow's own calls all land first. An
+   * opening sent bubble by bubble through the send API answered the held call on its FIRST send instead, the answer
+   * reached the flow while the next push was waking it, and that atendimento never reached the agent again: 5 of 9 such
+   * openings in the HML (0 of 11 that went in one send), ~4% of Saúde's in production.
+   *
+   * So a direct send pushes and parks its body here, and whatever ends the turn answers it: the agent's reply, a
+   * handoff, or the settle when no reply comes (`settleStagedTurn`).
+   */
+  private stageTurn(chatId: string, turn: AscFlowTurnState, body: AscFlowTurnReady): void {
+    turn.staged = body;
+    turn.stagedAt = Date.now();
+    this.logger.debug('[asc-flow] direct send delivered — the held call waits for the end of the turn', {
+      cod: chatId.trim(),
+    });
+  }
+
+  /**
+   * Answer a turn with its direct sends once it went quiet without a reply: an empty or suppressed reply is never sent
+   * by the dispatcher, and the held call must still answer. Never while a send is delivering or a reply's parts are
+   * being collected: an answer let out then reaches the flow mid-burst, which is the race `stageTurn` closes.
+   */
+  private settleStagedTurn(instanceId: string, codAtendimento: string, entry: AscFlowTurnState): void {
+    if (entry.ready || !entry.staged || entry.sending || entry.parts?.length) return;
+    if (Date.now() - (entry.stagedAt ?? 0) < turnSettleMs()) return;
+    entry.ready = entry.staged;
+    entry.staged = undefined;
+    entry.at = Date.now();
+    this.logger.info('[asc-flow] no reply after the direct sends — answering the turn with them', {
+      instanceId,
+      codAtendimento,
+    });
   }
 
   /**
@@ -1487,6 +1599,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     const entry = state?.inFlight.get(codAtendimento);
     if (!state || !entry) return null;
 
+    this.settleStagedTurn(instanceId, codAtendimento, entry);
+
     // A parked HANDOFF belongs to the atendimento, not to the message: the next
     // poll takes it whatever text it carries. With the synchronous node a missed
     // hold leaves the flow waiting for the beneficiary's next message, so that
@@ -1533,6 +1647,12 @@ export class AscFlowPlugin extends BaseChannelPlugin {
       });
       return { pronto: 1, resposta: '', hand_off: 'nao', bolhas: [] };
     }
+
+    // An answer waits for every send still pushing to this turn, not only for its own: a direct send made while the
+    // reply delivers would otherwise push after the answer reached the flow, which is the race `stageTurn` closes. The
+    // hold re-checks on its next tick; the TTL bounds a send that never returns. A parked handoff taken by a NEWER
+    // input (above) is not held: that input would overwrite the window and lose the transfer.
+    if (entry.sending && ageMs <= IN_FLIGHT_TTL_MS) return null;
 
     state.inFlight.delete(codAtendimento);
     // Past the TTL the answer is handed over anyway. The text already matched,

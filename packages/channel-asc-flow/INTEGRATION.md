@@ -354,12 +354,50 @@ Cada um nasceu de uma medição na linha viva:
 |---|---|
 | **toda bolha empurrada**, `resposta` vazia | o `api_rest` **não espera** a resposta HTTP em nenhum dos dois modos — medido 3× (22327328, 22327711). O flow renderiza `{#resposta}` ~1s depois do inbound, com o valor do ciclo ANTERIOR. `/callbackFlowMsg` chega em ~1s e é registrado entregue |
 | **segurar o inbound** até o agente responder | responder a PRIMEIRA chamada com o turno pronto elimina a dúvida sobre o `async_condition`: a condição vale sobre a única resposta que existe. Teto 40s, sob os 45s do nó |
+| **envio direto não responde a chamada segura**; quem responde é o fim do turno | ver "Cada push acorda o flow" abaixo |
 | **guard de réplica** (`isStaleFlowReplay`) | flow reiniciado reentra com `{#entrada}` velho. Só um texto que REPETE o último turno respondido paga uma ida a `/atendimento` para perguntar à plataforma qual é a última mensagem real. Falha ABERTO |
 | **fallback congelado** (`fromFallback` + `hasSeenCod`) | `{#MENSAGEM}` só pode ABRIR conversa; depois que o cod é conhecido, é poll |
 | **botão em vez de lista** | lista **não renderiza** nesta plataforma: vira texto achatado com menu numerado que a ASC monta. Até 3 opções o `forceList` do agente é ignorado e os títulos são encurtados em fronteira de palavra (limite 20 do Meta) |
 | **transliteração latin-1** | §3 |
 | **dedupe por janela de turno** | a plataforma não dá id de mensagem por turno; em modo async o nó re-POSTa a cada ~2s (medido: ~22 chamadas e 3 runs de agente para UMA mensagem) |
 | **`asc-flow` em `CHANNELS_WITH_MESSAGING_WINDOW`** | a janela de sessão vale aqui como em qualquer canal WhatsApp |
+
+### 🔴 Cada push acorda o flow: a chamada segura só responde no fim do turno
+
+Medido na HML do Odonto (conta 20, flow #263) em 13/11/2026, pelo log do Omni e pelo `/atendimento`:
+
+- **Todo `/callbackFlowMsg` depois do primeiro de um turno acorda o flow**, que volta ao `api_rest` e chama o webhook
+  de novo. Um turno de N bolhas traz N−1 chamadas extras. A conta fechou em todos os turnos do atendimento 24505190.
+  O primeiro push solta a espera do `api_rest`, e o `/sendMsgInterativaAvancado` não acorda o flow.
+- **As chamadas extras chegam sem entrada.** Na abertura, `chatInput` e `message` vêm vazios (log
+  `webhook with no chatInput nor message`). No meio da conversa, chegam com o `{#entrada}` do turno, e o log é
+  `chatInput is behind message`. O plugin trata as duas como poll (`pronto:0`).
+- **Cada volta deixa na ASC uma mensagem de saída VAZIA** (`descricao_msg` com tamanho 0), que é o `msg_resposta` dela.
+  Um script que imprime `None` para o vazio mostra "o bot respondeu None".
+
+Um turno normal sobrevive a isso porque todos os pushes saem ANTES de a chamada segura ser respondida, e nada sai
+depois dela. A abertura que o agente mandava bolha a bolha pelo `POST /messages/send` (saudação, protocolo, aviso com
+botão, e o pedido na resposta) respondia a chamada segura no PRIMEIRO envio. A resposta chegava à ASC junto com o flow
+acordado pelo envio seguinte. A partir daí, cada mensagem da pessoa virava uma chamada sem entrada, e o atendimento
+nunca mais chegava ao agente:
+
+| abertura | atendimentos | travaram |
+|---|---|---|
+| inteira num envio só | 11 | 0 |
+| bolha a bolha pelo `/messages/send` | 9 | 5 |
+
+No Saúde (conta 19, mesma ASC) a mesma corrida trava ~4% das aberturas com botão: depois da saudação vem o botão, que
+não acorda o flow. Com o aviso em texto, que acorda, travam 8 de 29.
+
+Por isso o envio direto (sem `partIndex`/`partCount` nem `correlationId`, que o despachante carimba na resposta) faz
+os pushes e **estaciona** o corpo no turno (`stageTurn`). O turno é respondido por quem o encerra:
+
+1. a resposta do agente;
+2. um handoff;
+3. sem resposta nenhuma, o turno parado por `ASC_FLOW_TURN_SETTLE_MS` (3 s por padrão). Ele nunca assenta com um
+   envio em andamento.
+
+Um envio direto que não entregou responde na hora, porque o texto dele precisa ir em `resposta`.
 
 ### Como o agente fala com o Omni
 
@@ -479,7 +517,8 @@ onde a ASC assume a conversa.
 
 | pergunta | onde a resposta ESTÁ |
 |---|---|
-| o que o flow mandou e recebeu? | `GET /RelRequisicoes` da ASC — request e response, com horário |
+| o que o flow mandou e recebeu? | `GET /RelRequisicoes` da ASC — request e response, com horário. Pela API, um dia da conta com o Saúde em produção estoura o gateway (502 em ~30s); o relatório do portal filtra por atendimento |
+| o atendimento travou depois da abertura? | o Omni para de publicar `message.received` para o cod, e cada mensagem da pessoa ganha na ASC uma saída vazia no mesmo segundo. O log `webhook with no chatInput nor message` sozinho **não** é sinal: toda abertura tem de uma a três |
 | o que o beneficiário leu? | `GET /atendimento?codigo_atendimento=` |
 | **renderizou botão de verdade?** | **só o lado receptor** — `raw_payload.message` no Baileys: `buttonsMessage` vs `conversation`. O `/atendimento` registra os dois como `tip_msg: TEXTO` e **não serve** para isso |
 | o canal mandou componente? | `raw_payload.ascFlow` da mensagem no Omni: `{uraOptions, interactive, viaMensagem, handoff}` |
