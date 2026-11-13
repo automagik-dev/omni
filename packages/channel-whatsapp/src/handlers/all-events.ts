@@ -26,9 +26,9 @@ function logEvent(event: string, data: unknown): void {
  * Process a single LID mapping entry and store it in the plugin cache
  */
 function processLidEntry(entry: unknown, plugin: WhatsAppPlugin, instanceId: string): void {
-  const e = entry as { lid?: string; phone?: string; id?: string };
+  const e = entry as { lid?: string; pn?: string; phone?: string; id?: string };
   const lid = e.lid;
-  const phone = e.phone || e.id;
+  const phone = e.pn || e.phone || e.id;
   if (!lid || !phone || typeof lid !== 'string' || typeof phone !== 'string') return;
 
   const lidJid = lid.includes('@') ? lid : `${lid}@lid`;
@@ -306,5 +306,6 @@ export function setupAllEventHandlers(sock: WASocket, plugin: WhatsAppPlugin, in
   sock.ev.on('lid-mapping.update', (data) => {
     if (DEBUG) logEvent('lid-mapping.update', data);
     processLidMappings(data, plugin, instanceId);
+    plugin.publishLidMappings(instanceId);
   });
 }

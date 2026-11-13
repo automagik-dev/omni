@@ -225,6 +225,25 @@ export async function setupLidMappingListener(eventBus: EventBus, db?: Database)
               });
           });
           persisted++;
+
+          // Keep this backfill in its own transaction: a pre-existing phone
+          // chat may already own this canonical id, and that uniqueness race
+          // must not roll back the durable LID mapping above.
+          try {
+            await runConsumerInTenantContext(db, event, async () => {
+              await scopedHandle(db)
+                .update(chats)
+                .set({ canonicalId: phoneJid, updatedAt: new Date() })
+                .where(and(eq(chats.instanceId, instanceId), eq(chats.externalId, lidJid), isNull(chats.canonicalId)));
+            });
+          } catch (error) {
+            lidLog.debug('Canonical chat backfill skipped', {
+              instanceId,
+              lidJid,
+              phoneJid,
+              error: String(error),
+            });
+          }
         } catch {
           // Skip individual failures
         }
