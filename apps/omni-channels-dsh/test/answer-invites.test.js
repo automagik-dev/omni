@@ -167,17 +167,23 @@ test('invite codes: a Redeem whose save fails answers no ok and leaves the code 
   assert.equal((await redeem({ code: CODE, channel: 'whatsapp', sender: { phone: STRANGER } })).ok, true)
 })
 
-test('invite codes: the upload normalises codes, gives each an invite id, keeps the newest 5000 and never reopens a used code', async t => {
+test('invite codes: the upload normalises codes, gives each an invite id, keeps the newest 5000 and leaves a used code as it is', async t => {
   const b = await bench(t, { entries: [] })
   const added = await b.call('omni-invite-codes-add', { entries: [{ code: 'inv-7k2qx9mdo', project: 'proj-a', expiresAt: inDays(7) }, { code: OTHER, project: 'proj-b', expiresAt: inDays(3), context: 'A note.' }] })
-  assert.deepEqual(added, { added: 2, updated: 0, count: 2 })
+  assert.deepEqual(added, { added: 2, updated: 0, used: 0, count: 2 })
   assert.match(stateOf(b, CODE).inviteId, /^[0-9a-f-]{36}$/)
   assert.equal(saved(b.home).omniInviteCodes[CODE].project, 'proj-a')
-  // Used, then uploaded again with a later expiry: it takes the new fields, stays used, keeps its id.
-  const inviteId = stateOf(b, CODE).inviteId
-  await inviteRedeem(b.channels)({ code: CODE, channel: 'whatsapp', sender: { lid: LID } })
-  assert.deepEqual(await b.call('omni-invite-codes-add', { entries: [{ code: CODE, project: 'proj-a', expiresAt: inDays(30) }] }), { added: 0, updated: 1, count: 2 })
-  assert.deepEqual([stateOf(b, CODE).expiresAt, stateOf(b, CODE).inviteId, stateOf(b, CODE).used?.by], [inDays(30), inviteId, { lid: LID }])
+  // An open code uploaded again takes the new fields and keeps its id.
+  const otherId = stateOf(b, OTHER).inviteId
+  assert.deepEqual(await b.call('omni-invite-codes-add', { entries: [{ code: OTHER, project: 'proj-b2', expiresAt: inDays(30) }] }), { added: 0, updated: 1, used: 0, count: 2 })
+  assert.deepEqual([stateOf(b, OTHER).project, stateOf(b, OTHER).expiresAt, stateOf(b, OTHER).inviteId, stateOf(b, OTHER).context], ['proj-b2', inDays(30), otherId, undefined])
+  // A used code uploaded again is left as it is: its person's retry gets the same ok.
+  const redeem = inviteRedeem(b.channels)
+  const first = await redeem({ code: CODE, channel: 'whatsapp', sender: { lid: LID } })
+  const record = structuredClone(stateOf(b, CODE))
+  assert.deepEqual(await b.call('omni-invite-codes-add', { entries: [{ code: CODE, project: 'proj-z', expiresAt: inDays(30), context: 'Another note.' }] }), { added: 0, updated: 0, used: 1, count: 2 })
+  assert.deepEqual(stateOf(b, CODE), record)
+  assert.deepEqual(await redeem({ code: CODE, channel: 'whatsapp', sender: { lid: LID } }), first)
   // One bad entry changes nothing, and the refusal names it by its place, never the code.
   const bad = 'INV-7K2QX9MDU'
   const refusal = await b.call('omni-invite-codes-add', { entries: [{ code: SPARE, project: 'proj-c', expiresAt: inDays(7) }, { code: bad, project: 'proj-c', expiresAt: inDays(7) }] }).then(() => null, error => error.message)
@@ -190,11 +196,11 @@ test('invite codes: the upload normalises codes, gives each an invite id, keeps 
   const save = b.channels.save
   b.channels.save = () => Promise.reject(new Error('disk full'))
   await assert.rejects(b.call('omni-invite-codes-add', { entries: [{ code: SPARE, project: 'proj-c', expiresAt: inDays(7) }] }), /disk full/)
-  assert.deepEqual(Object.keys(b.channels.state.omniInviteCodes), [OTHER, CODE])
+  assert.deepEqual(Object.keys(b.channels.state.omniInviteCodes), [CODE, OTHER])
   b.channels.save = save
   // The newest INVITE_CODES_MAX stay: the oldest go first.
   const many = Array.from({ length: INVITE_CODES_MAX }, (_, index) => ({ code: `INV-${String(index).padStart(9, '0')}`, project: 'proj-d', expiresAt: inDays(7) }))
-  assert.deepEqual(await b.call('omni-invite-codes-add', { entries: many }), { added: INVITE_CODES_MAX, updated: 0, count: INVITE_CODES_MAX })
+  assert.deepEqual(await b.call('omni-invite-codes-add', { entries: many }), { added: INVITE_CODES_MAX, updated: 0, used: 0, count: INVITE_CODES_MAX })
   assert.equal(stateOf(b, OTHER), undefined)
   assert.equal(stateOf(b, CODE), undefined)
   assert.equal((await b.call('omni-invite-codes', {})).codes[0].code, `INV-${String(INVITE_CODES_MAX - 1).padStart(9, '0')}`)

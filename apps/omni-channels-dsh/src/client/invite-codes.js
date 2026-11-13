@@ -69,7 +69,8 @@ export function InviteCodes() {
     try {
       const reply = await call('omni-invite-codes-add', { entries: parsed.entries })
       setText('')
-      setResult({ ok: true, text: `Added ${reply?.added ?? 0}, updated ${reply?.updated ?? 0}.` })
+      const used = reply?.used ? ` ${reply.used} already used, left as they were.` : ''
+      setResult({ ok: true, text: `Added ${reply?.added ?? 0}, updated ${reply?.updated ?? 0}.${used}` })
       setRead(before => before + 1)
     } catch (error) { setResult({ ok: false, text: hostText(error.message) }) } finally { setBusy(false) }
   }

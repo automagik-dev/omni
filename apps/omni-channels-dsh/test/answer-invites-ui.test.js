@@ -96,7 +96,7 @@ test('the invite codes section lists the codes when shown, and adds pasted lines
     if (endpoint === 'omni-invite-codes-add') {
       if (body.entries[0].project === 'proj-z') return new Error('Entry 1: the code is not an invite code (INV- and 9 letters or digits).')
       codes = [{ code: 'INV-5G4ZB7KA2', project: 'proj-c', expiresAt: body.entries[0].expiresAt, inviteId: 'i3', state: 'open' }, ...codes]
-      return { added: 1, updated: 0, count: codes.length }
+      return { added: 1, updated: 0, used: 0, count: codes.length }
     }
     return {}
   }

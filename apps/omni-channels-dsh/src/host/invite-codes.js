@@ -71,9 +71,10 @@ export const stateOf = (record, now = Date.now()) => (record.used ? 'used' : Dat
 export function inviteCodes(rt) {
   const list = () => (rt.state.omniInviteCodes ??= {})
 
-  // Staff's upload: every entry is checked first, so one bad entry changes nothing. A code
-  // already listed takes the new project, expiry, context and capability; it keeps its invite's
-  // id unless one is given, and a used code stays used.
+  // Staff's upload: every entry is checked first, so one bad entry changes nothing. An open code
+  // already listed takes the new project, expiry, context and capability, and keeps its invite's
+  // id unless one is given. A used code is left as it is, so its person's retry still gets the
+  // same ok.
   async function add(body) {
     const { entries } = Upload.parse(body ?? {})
     const checked = entries.map((raw, index) => {
@@ -88,14 +89,15 @@ export function inviteCodes(rt) {
       return record
     })
     const before = structuredClone(list())
-    let added = 0, updated = 0
+    let added = 0, updated = 0, used = 0
     for (const record of checked) {
       const known = list()[record.code]
+      if (known?.used) { used += 1; continue }
       if (known) updated += 1
       else added += 1
       // Re-inserted, so it counts as the newest.
       delete list()[record.code]
-      list()[record.code] = { ...record, addedAt: Date.now(), ...(known?.used ? { used: known.used } : {}) }
+      list()[record.code] = { ...record, addedAt: Date.now() }
     }
     const codes = Object.keys(list())
     for (const code of codes.slice(0, Math.max(0, codes.length - INVITE_CODES_MAX))) delete list()[code]
@@ -103,7 +105,7 @@ export function inviteCodes(rt) {
       rt.state.omniInviteCodes = before
       throw error
     }
-    return { added, updated, count: Object.keys(list()).length }
+    return { added, updated, used, count: Object.keys(list()).length }
   }
 
   // Newest first, with each code's state.
