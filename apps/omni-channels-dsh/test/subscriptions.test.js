@@ -12,6 +12,7 @@ import { SessionProjectionRegistry } from '@deepseek-ai/dsh-session-projection'
 import { SystemPrompt } from '@deepseek-ai/dsh-system-prompt'
 import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { ToolRuntime } from '@deepseek-ai/dsh-tools'
+import { EVENT_RUN_REFUSAL } from '../src/host/grants.js'
 import { NOT_PICKED_UP } from '../src/host/standing-recovery.js'
 import { NO_CHAT, RETIRED_QUEUED, ROW_RETIRED, UNKNOWN_WORKER, WORKER_MOVED } from '../src/host/subscriptions.js'
 import { AUTOMATION_THREADS_MAX, THREADS_FULL } from '../src/host/threads.js'
@@ -278,6 +279,22 @@ test('"as chat" sends the event into the Bot\'s own chat instead', async (t) => 
   assert.equal(run.task, undefined)
   assert.equal(run.sessionId, 'b2')
   assert.equal(sent[0].sessionId, 'b2')
+})
+
+test("an automation run's omni_call or omni_connect write is refused by Omni's rule and noted once, naming the tool; its reads note nothing", async (t) => {
+  const { tool, call, ctx, team } = setup(t)
+  const stops = []
+  team.noteStop = (sessionId, detail) => stops.push({ sessionId, detail })
+  assert.match(await tool('save_automation')({ sources: 'chat:obras', trigger: 'reaction', emoji: '📌' }), /^Saved /)
+  const sub = (await call('state', {})).value.subscriptions[0]
+  const run = (await call('automation-test', { id: sub.id })).value
+  const exec = { agent: { id: run.sessionId }, callId: 'call-1' }
+  assert.equal(await ctx.registeredTools.get('omni_call').execute({ method: 'POST', path: '/instances/wa-1/connect' }, exec), EVENT_RUN_REFUSAL)
+  assert.deepEqual(stops, [{ sessionId: run.sessionId, detail: { why: 'rule', tool: 'omni_call', callId: 'call-1', text: EVENT_RUN_REFUSAL } }])
+  assert.equal(await ctx.registeredTools.get('omni_connect').execute({ channel: 'wa-1' }, { ...exec, callId: 'call-2' }), EVENT_RUN_REFUSAL)
+  assert.deepEqual(stops[1], { sessionId: run.sessionId, detail: { why: 'rule', tool: 'omni_connect', callId: 'call-2', text: EVENT_RUN_REFUSAL } })
+  assert.match(await ctx.registeredTools.get('omni_call').execute({ method: 'GET', path: '/instances' }, exec), /"status":200/)
+  assert.equal(stops.length, 2)
 })
 
 test('an automation Omni handles itself gives it each event as a task that only reads omni', async (t) => {

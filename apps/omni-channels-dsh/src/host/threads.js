@@ -183,6 +183,8 @@ const chatOfRecord = thread => ({ name: thread.title, externalId: thread.chatJid
 const unnamed = thread => ownNameOf(chatOfRecord(thread)) === '' || (kindOf(thread) === 'direct' && BARE_PHONE.test(thread.title ?? ''))
 // What a thread is told it works on, and its DSH Session's title: its name, else the word.
 const labelOf = (name, kind) => name ?? (kind === 'group' ? 'Group' : 'Chat')
+/** A thread's chat label on one line, bounded for notices and asks. */
+export const threadLabelOf = thread => (thread == null ? '' : thread.chatName ?? chatNameOf(chatOfRecord(thread)) ?? '').replace(/\s+/g, ' ').trim().slice(0, NAME_MAX)
 // A search that reads as a phone number ("+55 (11) 98888-7777", "11.98888.7777") goes to Omni as its digits,
 // the way a WhatsApp id writes them, so it finds the chat by its id; any other goes as typed.
 const PHONE_QUERY = /^\+?[\d\s().-]+$/
@@ -1094,6 +1096,12 @@ export function install(rt) {
   }
   ctx.effect(() => rt.hooks.view(() => rt.threadsView()), 'omni-channels: threads view')
   ctx.effect(() => rt.hooks.live(() => rt.threadsOffer()), 'omni-channels: threads offer')
+
+  // Names a thread's Session for the team's approval and stop notices only.
+  if (typeof rt.hooks?.sessionOwner === 'function') ctx.effect(() => rt.hooks.sessionOwner((sessionId) => {
+    const thread = bySession(sessionId)
+    return thread === undefined ? undefined : { botId: thread.ownerBotId ?? rt.eventsBotId?.(), label: threadLabelOf(thread) }
+  }), 'omni-channels: thread Session owners')
 
   const parse = (schema, value, what) => {
     const parsed = schema.safeParse(value ?? {})

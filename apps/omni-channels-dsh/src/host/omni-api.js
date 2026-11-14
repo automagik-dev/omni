@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { z } from 'zod'
 import { defineTool } from '@deepseek-ai/dsh-tools'
-import { isThreadSession, omniActorOf, operatesHere, operatesOmni } from './grants.js'
+import { EVENT_RUN_REFUSAL, isThreadSession, noteOmniStop, omniActorOf, operatesHere, operatesOmni } from './grants.js'
 import { output } from './output.js'
 import { SOURCE_ROUTES } from './omni-routes.js'
 import { THREAD_TOOLS } from './threads.js'
@@ -244,7 +244,7 @@ export function install(rt) {
   // A Main Bot or an Omni Bot operates omni, and a chat thread as the Omni Bot. In a Session
   // that handles an automation's event, whose text came from other people, it only reads; a
   // thread's automation turns ask first instead (standing-runs.js).
-  async function allowed(exec, method) {
+  async function allowed(exec, method, tool) {
     await rt.load()
     const answerRefusal = rt.answerToolRefusal?.(exec)
     if (answerRefusal) return answerRefusal
@@ -252,7 +252,10 @@ export function install(rt) {
     const self = omniActorOf(rt, id)
     if (!operatesOmni(rt, self)) return 'Only an Omni Bot or a Main Bot operates omni. Ask one in its chat.'
     const eventRun = !isThreadSession(rt, id) && (state.subscriptionRuns ?? []).some(run => run.sessionId === id)
-    if (eventRun && method !== 'GET') return 'This Session handles an automation event, so it only reads omni. Tell the user what you would change instead.'
+    if (eventRun && method !== 'GET') {
+      noteOmniStop(rt, id, { why: 'rule', tool, callId: exec.callId, text: EVENT_RUN_REFUSAL }, exec.agent)
+      return EVENT_RUN_REFUSAL
+    }
     return null
   }
 
@@ -322,7 +325,7 @@ export function install(rt) {
     parameters: { search: { type: 'string', required: true, description: 'Words for what you want to do, e.g. "connect whatsapp qr" or "send message"' } },
     output,
     async execute(args, exec) {
-      const refusal = await allowed(exec, 'GET')
+      const refusal = await allowed(exec, 'GET', 'omni_endpoints')
       if (refusal) return refusal
       try {
         const found = search(await operations(), args.search).slice(0, FOUND_MAX)
@@ -353,7 +356,7 @@ export function install(rt) {
       const answerRefusal = rt.answerToolRefusal?.({ ...exec, name: 'omni_call' })
       if (answerRefusal) return answerRefusal
       const method = String(args.method ?? '').toUpperCase()
-      const refusal = await allowed(exec, method)
+      const refusal = await allowed(exec, method, 'omni_call')
       if (refusal) return refusal
       try {
         if (!METHODS.includes(method)) throw invalid(`method must be one of ${METHODS.join(', ')}`)
@@ -431,7 +434,7 @@ export function install(rt) {
     ...definition,
     output,
     async execute(args, exec) {
-      const refusal = await allowed(exec, method)
+      const refusal = await allowed(exec, method, definition.name)
       if (refusal) return refusal
       try {
         return await execute(args, exec)

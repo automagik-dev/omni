@@ -15,6 +15,41 @@ import { answerBench, ANSWER_MASTER, use, OMNI, INSTANCE, CHAT, GROUP, ELSEWHERE
 
 afterEach(resetFetch)
 
+test("with a Bot team that names Session owners, a thread's Session is named as the Bot it acts as, labelled with its chat on one line; no other Session is Omni's to name, and stopping takes it away", async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, fakeOmni(), teamState({ omniThreads: {
+    th1: record('th1', 'th1-session', { chatName: '  ada\n  x ', title: 'ada', ownerBotId: 'someone' }),
+    th2: record('th2', 'th2-session', { chatId: GROUP, chatName: 'x'.repeat(100) }),
+  } })), { stops: 'record' })
+  assert.deepEqual(run.stops.ownerOf('th1-session'), { botId: 'someone', label: 'ada x' })
+  assert.deepEqual(run.stops.ownerOf('th2-session'), { botId: 'm1', label: 'x'.repeat(80) })
+  assert.equal(run.stops.ownerOf('m1'), undefined)
+  assert.equal(run.stops.ownerOf('x'), undefined)
+  assert.equal(run.ctx.calls.filter(call => call === 'effect omni-channels: thread Session owners').length, 1)
+  const gate = run.ctx.listeners.get('approval/request').at(-1)
+  let answer
+  const pending = gate({ agent: { id: 'th1-session' }, toolName: 'thread_say' }, () => new Promise((resolve) => { answer = resolve }))
+  assert.equal(run.channels.threads.bySession('th1-session').status, 'waiting')
+  answer('rejected')
+  assert.equal(await pending, 'rejected')
+  await run.stop()
+  assert.deepEqual(run.stops.owners, [])
+})
+
+test('on a Bot team without sessionOwner or noteStop nothing new is registered and a thread works as before', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const run = await boot(t, homeFor(t, fakeOmni()), { stops: 'none' })
+  assert.equal(run.ctx.calls.some(call => /effect omni-channels: (thread|ask) Session owners/.test(call)), false)
+  const { thread } = await run.channels.threads.add(INSTANCE, CHAT)
+  assert.ok(thread)
+  const gate = run.ctx.listeners.get('approval/request').at(-1)
+  let answer
+  const pending = gate({ agent: { id: thread.sessionId }, toolName: 'thread_say' }, () => new Promise((resolve) => { answer = resolve }))
+  assert.equal(run.channels.threads.byId(thread.id).status, 'waiting')
+  answer('rejected')
+  assert.equal(await pending, 'rejected')
+})
+
 test('an added chat is a plain Session of the plugin\'s: outside the team\'s agents and Tasks, on the Omni Bot\'s model, and it stays after its reply and a restart (:185)', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] })
   const omni = fakeOmni()

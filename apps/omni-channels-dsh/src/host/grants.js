@@ -24,6 +24,12 @@ const invalid = message => Object.assign(new Error(message), { code: 'bot/invali
 // no computer: a task would give it one by another door. Every other Bot, and every Bot while
 // no Omni is named, keeps the team's tool.
 export const START_TASK_REFUSAL = 'Omni has no computer: it works only through its own tools. Tell the user what the work needs, so they can give it to a Bot that has one.'
+export const EVENT_RUN_REFUSAL = 'This Session handles an automation event, so it only reads omni. Tell the user what you would change instead.'
+
+// bots-dsh rt.noteStop is optional on older teams; a failing note changes no answer.
+export function noteOmniStop(rt, sessionId, detail, agent) {
+  try { rt.noteStop?.(sessionId, detail, agent) } catch { /* only a note */ }
+}
 
 /**
  * Whether `botId` operates Omni: a Main Bot, or an Omni Bot (kind 'omni') whether it is a Main
@@ -131,7 +137,8 @@ export function install(rt) {
     const eventRun = rt.chatOwners?.has(sessionId) !== true && (state.subscriptionRuns ?? []).some(run => run.sessionId === sessionId)
     const reads = action === 'read' || action === 'media'
     if (main && eventRun && !reads) {
-      return 'This Session handles an automation event, so it only reads omni. Tell the user what you would change instead.'
+      noteOmniStop(rt, sessionId, { why: 'rule', tool: call?.tool ?? exec.name, callId: exec.callId, text: EVENT_RUN_REFUSAL }, exec.agent)
+      return EVENT_RUN_REFUSAL
     }
     let verdict = force ?? decide({ main, grants: grants(), botId, resource, action })
     // Any other Bot's run asks before anything that is not a read, grant or not.
@@ -269,6 +276,19 @@ export function install(rt) {
   // denied before any card asks for it (DSH's gates run before its guards), and
   // refused by the guard whatever a gate said.
   const refusesStartTask = exec => exec.name === 'start_task' && operatesHere(rt, exec.agent?.id ?? exec.agent?.session?.id)
-  ctx.on('tools/pre-execute', (exec, next) => (refusesStartTask(exec) ? { kind: 'deny', reason: START_TASK_REFUSAL } : next()), { prepend: true })
-  ctx.tools.guard(exec => (refusesStartTask(exec) ? START_TASK_REFUSAL : undefined))
+  const noteStartTask = exec => noteOmniStop(rt, exec.agent?.id ?? exec.agent?.session?.id,
+    { why: 'rule', tool: 'start_task', callId: exec.callId, text: START_TASK_REFUSAL }, exec.agent)
+  ctx.on('tools/pre-execute', (exec, next) => {
+    if (refusesStartTask(exec)) {
+      noteStartTask(exec)
+      return { kind: 'deny', reason: START_TASK_REFUSAL }
+    }
+    return next()
+  }, { prepend: true })
+  ctx.tools.guard(exec => {
+    if (refusesStartTask(exec)) {
+      noteStartTask(exec)
+      return START_TASK_REFUSAL
+    }
+  })
 }

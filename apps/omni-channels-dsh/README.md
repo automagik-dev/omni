@@ -246,10 +246,22 @@ deletion is reported separately, without treating deletion as failed
 - **Host**: it injects the team's runtime (`omniTeam`) and installs `subscriptions`,
   `omni-api`, `omni-link`, `omni` and `omni-events` on a runtime of its own whose prototype is
   the team's, so they call the team's functions while their tools and effects stay on this
-  plugin's fiber. It adds to the team only through `rt.hooks`: the `omni-*` and
+  plugin's fiber. It adds to the team only through `rt.hooks` and, on a Bot team that has it,
+  `rt.noteStop`. The hooks add the `omni-*` and
   `automation-*` endpoints of `POST /api/omni-ui` (the reads also on a host that only reads
   the team), the automations in the team view, the events Omni listens to in every state
   answer, and the operator rules. It provides its runtime as `omniChannels`.
+  On a Bot team that has `rt.hooks.sessionOwner`, it names
+  its chat threads' and ask runs' Sessions with that hook (a thread as the Bot it acts as,
+  an ask run as the Omni Bot, each labelled with the chat), so its DSH card is noted under
+  that Bot in the sidebar,
+  the Live rail and notifications. When `rt.noteStop` is available, it notes stopped steps
+  for the person, and the team keeps those notes in memory for a while:
+  `rule` when one of Omni's own rules refused one (an ask run's non-read, an automation event
+  run's write, `start_task` for a Bot that operates Omni), and `level` when a thread cannot
+  leave Auto review once it is gone (DSH then refuses its Session). A thread that keeps DSH's
+  default permissions, because Auto review is off or could not be set, is not a stop: none of
+  its steps was refused. These are notes only: no answer, level or policy changes.
 - **Browser**: `client.js` names `@automagik/bots-dsh/client` in `dsh.client.external`, so
   DSH loads the team's bundle
   first and this one shares it: the host call, the interface
