@@ -384,7 +384,7 @@ export function PhoneDock({ sessionId, useRoster }) {
 
 // The pane's own rules; the header, log, bubbles and bar are the chat view's (CHANNELS_CSS).
 export const OMNI_PHONE_CSS = `
-.op-pane{box-sizing:border-box;height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bt-main);color:var(--bt-ink);font-family:var(--bt-font)}
+.op-pane{box-sizing:border-box;flex:1 1 auto;height:100%;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bt-main);color:var(--bt-ink);font-family:var(--bt-font)}
 .op-pane .oc-chat-head{padding:8px 8px 8px 12px;min-height:58px}
 .op-pane .oc-thread-in{max-width:none;padding:8px 14px 14px}
 .op-pane .oc-bar-wrap{padding:8px 10px 10px}

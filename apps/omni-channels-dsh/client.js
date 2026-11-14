@@ -13356,7 +13356,7 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
    tint out. The wallpaper's pattern is two staggered dot grids of the ink. */
 .oc-chat,.op-pane{--oc-wall:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main));--oc-in:var(--bt-card);--oc-out:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));--oc-dot:color-mix(in srgb,var(--bt-ink) 9%,transparent);--oc-shade:color-mix(in srgb,var(--bt-ink) 12%,transparent)}
 body[data-ds-dark-theme] :is(.oc-chat,.op-pane){--oc-wall:var(--bt-main);--oc-in:var(--bt-bubble);--oc-out:color-mix(in srgb,var(--bt-accent) 26%,var(--bt-bubble));--oc-dot:color-mix(in srgb,var(--bt-ink) 6%,transparent);--oc-shade:color-mix(in srgb,var(--bt-main) 70%,transparent)}
-.oc-chat{container-type:inline-size}
+.oc-chat{container:oc-chat/inline-size}
 .oc-chat-empty{align-items:center;justify-content:center;gap:12px;color:var(--bt-ink-3)}
 .oc-chat-head{position:relative;z-index:1;flex:none;display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:12px;align-items:center;min-height:60px;padding:8px 12px 8px 16px;box-sizing:border-box;border-bottom:.5px solid var(--bt-line-2);background:var(--bt-main)}
 .oc-chat-head>.oc-ava{grid-column:1;grid-row:1/3}
@@ -13365,7 +13365,7 @@ body[data-ds-dark-theme] :is(.oc-chat,.op-pane){--oc-wall:var(--bt-main);--oc-in
 .oc-chat-status{grid-column:2;grid-row:2;align-self:start;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;line-height:17px;color:var(--bt-ink-2)}
 .oc-chat-status[data-off]{color:var(--bt-danger)}
 .oc-chat-acts{grid-column:3;grid-row:1/3;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 6px}
-@container (max-width:560px){.oc-chat-head{grid-template-columns:auto minmax(0,1fr)}.oc-chat-acts{grid-column:1/-1;grid-row:3;justify-content:flex-start;margin-top:6px}}
+@container oc-chat (max-width:560px){.oc-chat-head{grid-template-columns:auto minmax(0,1fr)}.oc-chat-acts{grid-column:1/-1;grid-row:3;justify-content:flex-start;margin-top:6px}}
 .oc-icon-act{display:inline-grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:none;color:var(--bt-ink-2);cursor:pointer;transition:background-color .12s ease,color .12s ease}
 .oc-icon-act:hover{background:var(--bt-hover);color:var(--bt-ink)}
 .oc-icon-act[aria-checked=true]{background:color-mix(in srgb,var(--bt-accent) 14%,transparent);color:var(--bt-accent)}
@@ -15946,7 +15946,7 @@ function PhoneDock({ sessionId, useRoster }) {
   return (0, import_react12.createElement)("div", { className: "op-dock" }, (0, import_react12.createElement)("span", { className: "op-dock-problem", role: "alert" }, hostText(problem)));
 }
 var OMNI_PHONE_CSS = `
-.op-pane{box-sizing:border-box;height:100%;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bt-main);color:var(--bt-ink);font-family:var(--bt-font)}
+.op-pane{box-sizing:border-box;flex:1 1 auto;height:100%;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bt-main);color:var(--bt-ink);font-family:var(--bt-font)}
 .op-pane .oc-chat-head{padding:8px 8px 8px 12px;min-height:58px}
 .op-pane .oc-thread-in{max-width:none;padding:8px 14px 14px}
 .op-pane .oc-bar-wrap{padding:8px 10px 10px}
