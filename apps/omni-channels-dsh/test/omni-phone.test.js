@@ -842,7 +842,7 @@ function withOverview(t, patch) {
   ui.omniStore.set({ ...before, ...patch })
   t.after(() => ui.omniStore.set(before))
 }
-const SUPPORT = { id: 'wa', type: 'whatsapp-baileys', name: 'Support line', status: 'connected', answeredBy: 'Omni' }
+const SUPPORT = { id: 'wa', type: 'telegram', name: 'Support line', status: 'connected', answeredBy: 'Omni' }
 
 test('the header: the chat\'s photo from the overview, else its initials; its name; the channel\'s name, or why the thread cannot reach it; never presence', async (t) => {
   reset()
@@ -988,10 +988,10 @@ test('the chat page draws the same header, log and bar; its bar sends on the pag
   t.after(() => view.unmount())
   let root = await drawn(view)
   assert.deepEqual(one(root, 'oc-chat').children.map(child => child.props.className.split(' ')[0]), ['oc-chat-head', 'oc-thread', 'oc-bar-wrap'])
-  assert.deepEqual([text(one(root, 'oc-chat-name')), text(one(root, 'oc-chat-status'))], ['Ana Lima', 'WhatsApp · Support line'])
+  assert.deepEqual([text(one(root, 'oc-chat-name')), text(one(root, 'oc-chat-status'))], ['Ana Lima', 'Telegram · Support line'])
   assert.equal(one(root, 'oc-tick').props['data-status'], 'delivered')
   const field = () => ofType(one(root, 'oc-bar'), 'textarea')[0]
-  assert.deepEqual([field().props.placeholder, field().props['aria-label']], ['Reply on WhatsApp', 'Reply'])
+  assert.deepEqual([field().props.placeholder, field().props['aria-label']], ['Reply on Telegram', 'Reply'])
   field().props.onChange({ target: { value: 'See you at 10.' } })
   root = await drawn(view)
   assert.equal(keyOn(root, { shiftKey: true }).prevented, false)

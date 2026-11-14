@@ -785,8 +785,10 @@ body[data-ds-dark-theme] :is(.oc-chat,.op-pane){--oc-wall:var(--bt-main);--oc-in
 .oc-tick svg{width:15px;height:15px}
 .oc-tick svg+svg{margin-left:-10px}
 .oc-tick[data-status=read]{color:color-mix(in srgb,var(--bt-accent) 72%,var(--bt-ink))}
-body[data-ds-dark-theme] .oc-tick[data-status=read]{color:color-mix(in srgb,var(--bt-accent) 62%,var(--bt-ink))}
 .oc-tick[data-status=failed]{color:var(--bt-danger)}
+body[data-ds-dark-theme] .oc-tick{color:color-mix(in srgb,var(--bt-ink) 45%,transparent)}
+body[data-ds-dark-theme] .oc-tick[data-status=read]{color:color-mix(in srgb,var(--bt-accent) 50%,var(--bt-ink))}
+body[data-ds-dark-theme] .oc-tick[data-status=failed]{color:color-mix(in srgb,var(--bt-danger) 60%,var(--bt-ink))}
 .oc-tick[data-status=failed] svg{transform:rotate(180deg)}
 .oc-bubble[data-media]{padding:3px 3px 6px}
 .oc-media-caption,.oc-media-text{display:block;margin:4px 7px 0}
