@@ -22,8 +22,11 @@ afterEach(() => {
 
 type MountOptions = {
   channel?: string;
+  /** What the instance's plugin declares — default true (whatsapp-business does). */
+  canSendFlow?: boolean;
   metaAccessToken?: string | null;
   sendMessage?: ReturnType<typeof mock>;
+  pluginLoaded?: boolean;
 };
 
 function mountFlowsRoutes(options: MountOptions = {}): {
@@ -39,7 +42,11 @@ function mountFlowsRoutes(options: MountOptions = {}): {
       timestamp: 123,
     }));
 
-  const registryGet = mock((_channel: string) => ({ sendMessage }));
+  const registryGet = mock((_channel: string) =>
+    options.pluginLoaded === false
+      ? undefined
+      : { sendMessage, capabilities: { canSendFlow: options.canSendFlow ?? true } },
+  );
   const app = new Hono<{ Variables: AppVariables }>();
   app.use('*', async (c, next) => {
     c.set('services', {
@@ -54,9 +61,7 @@ function mountFlowsRoutes(options: MountOptions = {}): {
         })),
       },
     } as never);
-    c.set('channelRegistry', {
-      get: registryGet,
-    } as never);
+    c.set('channelRegistry', { get: registryGet } as never);
     c.set('apiKey', {
       id: 'test',
       name: 'test',
@@ -283,7 +288,7 @@ describe('POST /instances/:id/whatsapp-flows/send', () => {
   });
 
   test('still refuses a channel that renders no flow', async () => {
-    const { app, sendMessage } = mountFlowsRoutes({ channel: 'whatsapp' });
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'whatsapp', canSendFlow: false });
 
     const res = await postSend(app, { to: '5511999998888', flowId: '1', cta: 'Go', bodyText: 'Body' });
 
@@ -353,5 +358,58 @@ describe('POST /instances/:id/whatsapp-flows/send', () => {
     const json = (await res.json()) as { error: { code: string; message: string } };
     expect(json.error.code).toBe('OMNI_OUTSIDE_24H_WINDOW');
     expect(json.error.message).toBe('outside 24h window');
+  });
+  test("dispatches through the instance's own plugin when its channel declares canSendFlow (BSP, e.g. gupshup)", async () => {
+    const { app, sendMessage, registryGet } = mountFlowsRoutes({ channel: 'gupshup', metaAccessToken: null });
+
+    const res = await postSend(app, { to: '5511999998888', flowId: 'FLOW-1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(201);
+    expect(registryGet).toHaveBeenCalledWith('gupshup');
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  test('a BSP channel that sends flows by id only refuses a flowName with 400, before the plugin', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'gupshup', metaAccessToken: null });
+
+    const res = await postSend(app, { to: '5511999998888', flowName: 'lead_capture', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(400);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  test('a channel with no plugin loaded is a 400 wrong channel, as before', async () => {
+    const { app } = mountFlowsRoutes({ channel: 'gupshup', metaAccessToken: null, pluginLoaded: false });
+
+    const res = await postSend(app, { to: '5511999998888', flowId: 'FLOW-1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('WRONG_CHANNEL');
+  });
+
+  test('a plugin that rejects the descriptor as a bad request answers 400, not 500', async () => {
+    const sendMessage = mock(async () => ({
+      success: false,
+      error: 'bad flow',
+      errorCode: 'GUPSHUP_BAD_REQUEST',
+      timestamp: 1,
+    }));
+    const { app } = mountFlowsRoutes({ channel: 'gupshup', metaAccessToken: null, sendMessage });
+
+    const res = await postSend(app, { to: '5511999998888', flowId: 'FLOW-1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects a channel that cannot send flows', async () => {
+    const { app, sendMessage } = mountFlowsRoutes({ channel: 'telegram', canSendFlow: false });
+
+    const res = await postSend(app, { to: '123', flowId: 'FLOW-1', cta: 'Go', bodyText: 'Body' });
+
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('WRONG_CHANNEL');
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });

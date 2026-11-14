@@ -9,15 +9,17 @@
  * entries (see packages/api/src/constants/scopes.ts).
  *
  * Flow management (list/create/publish/preview) hits Graph API directly via
- * `MetaWhatsAppClient`; the send route goes through the channel plugin's
- * `sendMessage` dispatch (`content.type='flow'` + `metadata.flow` descriptor)
- * so retry/observability stay consistent with other outbound sends.
+ * `MetaWhatsAppClient` and needs a whatsapp-business instance; the send route
+ * goes through the instance's own channel plugin (`content.type='flow'` +
+ * `metadata.flow` descriptor) for any channel declaring `canSendFlow`, so
+ * retry/observability stay consistent with other outbound sends.
  */
 
 import { zValidator } from '@hono/zod-validator';
 import { MetaWhatsAppClient, buildFlowToken, generateFlowKeyPair } from '@omni/channel-whatsapp-business';
 import { createLogger } from '@omni/core';
 import { WhatsAppFlowSendSchema, validateFlowJson } from '@omni/core/schemas';
+import type { ChannelType } from '@omni/core/types';
 import { whatsappFlowKeys } from '@omni/db';
 import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
@@ -518,19 +520,19 @@ whatsappFlowsRoutes.post(
     const channelRegistry = c.get('channelRegistry');
 
     const instance = await services.instances.getById(instanceId);
-    // asc-flow is a BSP on Meta and renders the same flow message
-    // (`msg_interativa_parametros.tipo = 5`); only SENDING goes through it.
-    // Flow management (create/publish/keys) stays Meta-direct and
-    // whatsapp-business-only: on ASC the flow is registered on the platform.
-    const channel = instance.channel === 'asc-flow' ? 'asc-flow' : 'whatsapp-business';
+    const channel = instance.channel;
+    const plugin = channelRegistry?.get(channel as ChannelType);
+    const bspChannel = channel === 'asc-flow' || channel === 'whatsapp-business';
+    if (!bspChannel && !plugin?.capabilities.canSendFlow) {
+      return c.json(jsonError(`Instance channel "${channel}" cannot send WhatsApp Flows`, 'WRONG_CHANNEL'), 400);
+    }
     if (channel === 'whatsapp-business') {
       const guard = ensureWhatsAppBusiness(instance);
       if (!guard.ok) return c.json(guard.payload, 400);
     } else if (!flow.flowId) {
-      return c.json(jsonError('asc-flow sends a flow by flowId only'), 400);
+      return c.json(jsonError(`${channel} sends a flow by flowId only`), 400);
     }
 
-    const plugin = channelRegistry?.get(channel);
     if (!plugin) {
       return c.json(jsonError(`${channel} plugin not registered`, 'PLUGIN_NOT_FOUND'), 500);
     }
@@ -549,7 +551,11 @@ whatsappFlowsRoutes.post(
 
     if (!result.success) {
       log.error('flow send failed', { instanceId, to, error: result.error, errorCode: result.errorCode });
-      return c.json(jsonError(result.error ?? 'Flow send failed', result.errorCode ?? 'SEND_FAILED'), 500);
+      const rejected = result.errorCode?.endsWith('BAD_REQUEST') === true;
+      return c.json(
+        jsonError(result.error ?? 'Flow send failed', result.errorCode ?? 'SEND_FAILED'),
+        rejected ? 400 : 500,
+      );
     }
 
     return c.json({ messageId: result.messageId, flowToken }, 201);
