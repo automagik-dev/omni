@@ -152,6 +152,8 @@ export interface EmitMessageFailedParams {
 
   /** Whether the error is retryable */
   retryable: boolean;
+
+  providerAliases?: string[];
 }
 
 /**
@@ -169,6 +171,8 @@ export interface EmitMessageDeliveredParams {
 
   /** When the message was delivered */
   deliveredAt: number;
+
+  providerAliases?: string[];
 }
 
 /**
@@ -186,6 +190,8 @@ export interface EmitMessageReadParams {
 
   /** When the message was read */
   readAt: number;
+
+  providerAliases?: string[];
 }
 
 /**

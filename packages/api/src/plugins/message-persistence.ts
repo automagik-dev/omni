@@ -1156,6 +1156,18 @@ async function handleMessagePinState(
   }
 }
 
+type ReceiptMessage = Awaited<ReturnType<Services['messages']['getByExternalId']>>;
+
+async function findReceiptMessage(
+  services: Services,
+  chatId: string,
+  receipt: { externalId: string; providerAliases?: string[] },
+): Promise<ReceiptMessage> {
+  const byExternalId = await services.messages.getByExternalId(chatId, receipt.externalId);
+  if (byExternalId || !receipt.providerAliases?.length) return byExternalId;
+  return services.messages.findByProviderAlias(chatId, receipt.providerAliases);
+}
+
 /**
  * Handle message.failed — the channel reported that an outbound message did
  * not reach the recipient (#1277). Marks it `failed` unless the platform has
@@ -1183,7 +1195,10 @@ export async function handleMessageFailed(services: Services, event: TypedOmniEv
         return;
       }
 
-      const message = await services.messages.getByExternalId(chat.id, externalId);
+      const message = await findReceiptMessage(services, chat.id, {
+        externalId,
+        providerAliases: payload.providerAliases,
+      });
       if (!message) {
         log.debug('Message not found for message.failed', { externalId });
         return;
@@ -1492,8 +1507,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               return;
             }
 
-            // Find the message
-            const message = await services.messages.getByExternalId(chat.id, payload.externalId);
+            const message = await findReceiptMessage(services, chat.id, payload);
             if (!message) {
               log.debug('Message not found for message.delivered', { externalId: payload.externalId });
               return;
@@ -1548,8 +1562,7 @@ export async function setupMessagePersistence(eventBus: EventBus, services: Serv
               return;
             }
 
-            // Find the message
-            const message = await services.messages.getByExternalId(chat.id, payload.externalId);
+            const message = await findReceiptMessage(services, chat.id, payload);
             if (!message) {
               log.debug('Message not found for message.read', { externalId: payload.externalId });
               return;

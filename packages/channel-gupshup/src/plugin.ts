@@ -360,21 +360,33 @@ export class GupshupPlugin extends BaseChannelPlugin {
     }
   }
 
-  async handleMessageDelivered(params: { instanceId: string; externalId: string; to: string }): Promise<void> {
+  async handleMessageDelivered(params: {
+    instanceId: string;
+    externalId: string;
+    to: string;
+    providerAliases?: string[];
+  }): Promise<void> {
     await this.emitMessageDelivered({
       instanceId: params.instanceId,
       externalId: params.externalId,
       chatId: params.to,
       deliveredAt: Date.now(),
+      providerAliases: params.providerAliases,
     });
   }
 
-  async handleMessageRead(params: { instanceId: string; externalId: string; to: string }): Promise<void> {
+  async handleMessageRead(params: {
+    instanceId: string;
+    externalId: string;
+    to: string;
+    providerAliases?: string[];
+  }): Promise<void> {
     await this.emitMessageRead({
       instanceId: params.instanceId,
       externalId: params.externalId,
       chatId: params.to,
       readAt: Date.now(),
+      providerAliases: params.providerAliases,
     });
   }
 
@@ -383,6 +395,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
     externalId: string;
     to: string;
     reason?: string;
+    providerAliases?: string[];
   }): Promise<void> {
     await this.emitMessageFailed({
       instanceId: params.instanceId,
@@ -390,6 +403,7 @@ export class GupshupPlugin extends BaseChannelPlugin {
       chatId: params.to,
       error: params.reason ?? 'Delivery failed',
       retryable: false,
+      providerAliases: params.providerAliases,
     });
   }
 
