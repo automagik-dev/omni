@@ -1,6 +1,6 @@
 {
   "name": "omni",
-  "version": "2.261114.1",
+  "version": "2.261114.2",
   "description": "Omni CLI skills for agent setup, multichannel messaging, automations, events, and platform operations",
   "author": {
     "name": "Automagik"
