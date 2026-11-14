@@ -8,7 +8,7 @@
 
 import type { OpenAPIRegistry } from '@asteasolutions/zod-to-openapi';
 import { z } from '../../lib/zod-openapi';
-import { listQuerySchema, sendTextSchema } from '../../routes/v2/messages';
+import { listQuerySchema, sendTextBodySchema } from '../../routes/v2/messages';
 import { ErrorSchema } from './common';
 import { MessageResponseSchema, PacingForbiddenResponse } from './messages';
 
@@ -37,6 +37,9 @@ const SentTextSchema = MessageResponseSchema.extend({
     .number()
     .optional()
     .openapi({ description: 'Platform send time (ms since epoch), when the channel reports one' }),
+  flowToken: z.string().optional().openapi({
+    description: "Present on a flow send: the caller's flowToken, or the one generated; the nfm_reply echoes it",
+  }),
 });
 const FilteredTextSchema = z.object({
   messageId: z.literal('').openapi({ description: 'Empty: nothing was sent' }),
@@ -46,7 +49,9 @@ const FilteredTextSchema = z.object({
 });
 const SendRejectedSchema = z.object({
   error: z.object({
-    code: z.string().openapi({ description: 'INVALID_JSON or VALIDATION_ERROR' }),
+    code: z.string().openapi({
+      description: 'INVALID_JSON, VALIDATION_ERROR, or WRONG_CHANNEL (a flow on a channel without a flow sender)',
+    }),
     message: z.string().optional(),
     issues: z
       .array(z.record(z.unknown()))
@@ -64,15 +69,18 @@ export function registerMessageCoreSchemas(registry: OpenAPIRegistry): void {
     tags: ['Messages'],
     summary: 'Send a text message',
     description:
-      'Plain text only; media goes to POST /messages/send/media (a media payload here answers 422 WRONG_ENDPOINT).',
-    request: { body: { content: { 'application/json': { schema: sendTextSchema } } } },
+      'Text, optionally with buttons, a list, a location request or a WhatsApp Flow (`flow`, on whatsapp-business and asc-flow); media goes to POST /messages/send/media (a media payload here answers 422 WRONG_ENDPOINT).',
+    request: { body: { content: { 'application/json': { schema: sendTextBodySchema } } } },
     responses: {
       201: { description: 'Sent', content: { 'application/json': { schema: z.object({ data: SentTextSchema }) } } },
       200: {
         description: 'Filtered by the outbound rules; nothing was sent',
         content: { 'application/json': { schema: z.object({ data: FilteredTextSchema }) } },
       },
-      400: { description: 'Invalid JSON or body', content: { 'application/json': { schema: SendRejectedSchema } } },
+      400: {
+        description: 'Invalid JSON or body, or a flow on another channel',
+        content: { 'application/json': { schema: SendRejectedSchema } },
+      },
       403: PacingForbiddenResponse,
       422: {
         description: 'A media payload, which belongs to /messages/send/media',
