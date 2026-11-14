@@ -108,6 +108,23 @@ export const ZenviaHandoffRoutingSchema = z
     }
   });
 
+const ZENVIA_MEDIA_HOST_LABEL = '(?!-)[a-z0-9-]{1,63}(?<!-)';
+const ZENVIA_MEDIA_HOST_PATTERN = new RegExp(`^${ZENVIA_MEDIA_HOST_LABEL}(?:\\.${ZENVIA_MEDIA_HOST_LABEL})+$`);
+export const ZenviaMediaHostsSchema = z
+  .array(
+    z
+      .string()
+      .trim()
+      .toLowerCase()
+      .max(253)
+      .regex(
+        ZENVIA_MEDIA_HOST_PATTERN,
+        'must be a host name such as files.example.com, without scheme, port, path or wildcard',
+      )
+      .refine((host) => !/^\d+$/.test(host.slice(host.lastIndexOf('.') + 1)), 'must be a host name, not an address'),
+  )
+  .max(64);
+
 export const ZENVIA_HANDOFF_SOLUTIONS = ['conversion', 'zenvia_chat', 'nlu'] as const;
 
 type NullableOptional<T extends z.ZodRawShape> = { [K in keyof T]: z.ZodOptional<z.ZodNullable<T[K]>> };
@@ -147,6 +164,11 @@ const zenviaInstanceFields = {
     description:
       'Routes a handoff to a Sales group by the value of one handoffFields key: { field, groups: { <value>: <groupId> } }. zenviaHandoffGroupId is the fallback for an unmapped or missing value; without it such a handoff is refused (422). Read by the plugin at connect: restart the instance after changing it. null clears it',
   }),
+  zenviaMediaHosts: ZenviaMediaHostsSchema.openapi({
+    description:
+      'Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it',
+    example: ['zenvia.com'],
+  }),
   webhookVerifyToken: z.string().openapi({
     description:
       'Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it',
@@ -171,6 +193,7 @@ const zenviaInstanceResponseShape = nullableOptional({
   zenviaHandoffGroupId: zenviaInstanceFields.zenviaHandoffGroupId,
   zenviaHandoffUserId: zenviaInstanceFields.zenviaHandoffUserId,
   zenviaHandoffRouting: zenviaInstanceFields.zenviaHandoffRouting,
+  zenviaMediaHosts: zenviaInstanceFields.zenviaMediaHosts,
 });
 
 /**

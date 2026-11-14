@@ -14,6 +14,7 @@ export interface ZenviaConfig {
   handoffGroupId?: string;
   handoffUserId?: string;
   handoffRouting?: ZenviaHandoffRouting;
+  mediaHosts?: readonly string[];
 }
 
 export const ZenviaSalesProspectSchema = z.object({ id: z.string().min(1) }).passthrough();

@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 
+import { isAllowedMediaHost } from './media-hosts';
 import { type ZenviaOutboundMessage, type ZenviaSendResponse, ZenviaSendResponseSchema } from './types';
 import { ZenviaApiError, ZenviaErrorCode } from './utils/errors';
 import { parseJsonOrUndefined, readBodyText, zenviaErrorFromResponse, zenviaFetch } from './utils/http';
@@ -19,6 +20,7 @@ export interface ZenviaClientOptions {
   timeoutMs?: number;
   downloadTimeoutMs?: number;
   resolveHost?: HostResolver;
+  mediaHosts?: readonly string[];
 }
 
 interface ZenviaRequestInit {
@@ -32,7 +34,7 @@ function isZenviaHost(url: URL): boolean {
   return host === ZENVIA_HOST || host.endsWith(`.${ZENVIA_HOST}`);
 }
 
-function assertFetchableFileUrl(url: URL): void {
+function assertFetchableFileUrl(url: URL, mediaHosts: readonly string[] | undefined): void {
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   if (url.protocol !== 'https:') {
     throw new ZenviaApiError(ZenviaErrorCode.INVALID_REQUEST, 'Refusing to download a non-https file URL', {
@@ -44,6 +46,13 @@ function assertFetchableFileUrl(url: URL): void {
       operation: 'downloadFile',
     });
   }
+  if (mediaHosts && mediaHosts.length > 0 && !isAllowedMediaHost(url, mediaHosts)) {
+    throw new ZenviaApiError(
+      ZenviaErrorCode.INVALID_REQUEST,
+      'Refusing to download a file from a host outside zenviaMediaHosts',
+      { operation: 'downloadFile' },
+    );
+  }
 }
 
 export class ZenviaClient {
@@ -52,6 +61,7 @@ export class ZenviaClient {
   private readonly timeoutMs: number;
   private readonly downloadTimeoutMs: number;
   private readonly resolveHost: HostResolver;
+  private readonly mediaHosts: readonly string[] | undefined;
 
   constructor(opts: ZenviaClientOptions) {
     this.baseUrl = (opts.baseUrl ?? DEFAULT_ZENVIA_BASE_URL).replace(/\/+$/, '');
@@ -59,6 +69,7 @@ export class ZenviaClient {
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.downloadTimeoutMs = opts.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
     this.resolveHost = opts.resolveHost ?? resolveHostAddresses;
+    this.mediaHosts = opts.mediaHosts;
   }
 
   async sendMessage(message: ZenviaOutboundMessage): Promise<ZenviaSendResponse> {
@@ -75,7 +86,7 @@ export class ZenviaClient {
 
   async downloadFile(fileUrl: string): Promise<Response> {
     let currentUrl = new URL(fileUrl);
-    assertFetchableFileUrl(currentUrl);
+    assertFetchableFileUrl(currentUrl, this.mediaHosts);
     let sendToken = isZenviaHost(currentUrl);
 
     for (let redirects = 0; redirects <= MAX_DOWNLOAD_REDIRECTS; redirects++) {
@@ -93,7 +104,7 @@ export class ZenviaClient {
           });
         }
         const nextUrl = new URL(location, currentUrl);
-        assertFetchableFileUrl(nextUrl);
+        assertFetchableFileUrl(nextUrl, this.mediaHosts);
         sendToken = sendToken && isZenviaHost(nextUrl);
         currentUrl = nextUrl;
         continue;

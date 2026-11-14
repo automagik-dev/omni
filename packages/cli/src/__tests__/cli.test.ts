@@ -546,6 +546,29 @@ describe('CLI Integration Tests', () => {
       expect(instance.data).toHaveProperty('zenviaHandoffRouting', null);
     });
 
+    test('instances update --zenvia-media-hosts forwards the comma-separated list', async () => {
+      if (!testInstanceId) return;
+
+      const result = await runCli(
+        ['instances', 'update', testInstanceId, '--zenvia-media-hosts', 'zenvia.com, media.example.org,'],
+        { OMNI_FORMAT: 'json' },
+      );
+
+      assertSuccess(result, 'instances update --zenvia-media-hosts');
+      expect(JSON.parse(result.stdout).zenviaMediaHosts).toEqual(['zenvia.com', 'media.example.org']);
+    });
+
+    test('instances update --zenvia-media-hosts null clears the field', async () => {
+      if (!testInstanceId) return;
+
+      const result = await runCli(['instances', 'update', testInstanceId, '--zenvia-media-hosts', 'null'], {
+        OMNI_FORMAT: 'json',
+      });
+
+      assertSuccess(result, 'instances update --zenvia-media-hosts null');
+      expect(JSON.parse(result.stdout)).toHaveProperty('zenviaMediaHosts', null);
+    });
+
     test('instances delete removes instance', async () => {
       if (!testInstanceId) {
         return;

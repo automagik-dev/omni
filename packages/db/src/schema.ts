@@ -1009,6 +1009,7 @@ export const instances = pgTable(
     zenviaHandoffGroupId: varchar('zenvia_handoff_group_id', { length: 64 }),
     zenviaHandoffUserId: varchar('zenvia_handoff_user_id', { length: 64 }),
     zenviaHandoffRouting: jsonb('zenvia_handoff_routing').$type<ZenviaHandoffRouting>(),
+    zenviaMediaHosts: jsonb('zenvia_media_hosts').$type<string[]>(),
 
     // ---- ASC platform Flow Configuration ----
     // Per-instance credentials for the ASC platform REST API (/rest/v2), the

@@ -26,6 +26,7 @@ import { ZENVIA_CAPABILITIES } from './capabilities';
 import { ZenviaClient } from './client';
 import { handleZenviaWebhookRequest } from './handlers/webhook';
 import { type HandoffRoutingMiss, parseHandoffRouting, resolveHandoffGroup } from './handoff-routing';
+import { parseMediaHosts } from './media-hosts';
 import { ZenviaSalesClient } from './sales-client';
 import {
   ZENVIA_HANDOFF_SOLUTIONS,
@@ -97,7 +98,11 @@ export class ZenviaPlugin extends BaseChannelPlugin {
 
     this.logger.info('Connecting Zenvia instance', { instanceId, senderId: zenviaConfig.senderId });
 
-    const client = new ZenviaClient({ apiToken: zenviaConfig.apiToken, resolveHost: this.hostResolver });
+    const client = new ZenviaClient({
+      apiToken: zenviaConfig.apiToken,
+      resolveHost: this.hostResolver,
+      mediaHosts: zenviaConfig.mediaHosts,
+    });
 
     const reachable = await client.ping();
     if (!reachable) {
@@ -718,6 +723,7 @@ function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
   const handoffGroupId = pick('zenviaHandoffGroupId');
   const handoffUserId = pick('zenviaHandoffUserId');
   const handoffRouting = parseHandoffRouting(creds.zenviaHandoffRouting ?? opts.zenviaHandoffRouting);
+  const mediaHosts = parseMediaHosts(creds.zenviaMediaHosts ?? opts.zenviaMediaHosts);
 
   if (!apiToken) {
     throw new ZenviaApiError(ZenviaErrorCode.AUTH_FAILED, 'zenviaApiToken is required to connect a zenvia instance');
@@ -751,6 +757,7 @@ function readZenviaConfig(config: InstanceConfig): ZenviaConfig {
     handoffGroupId,
     handoffUserId,
     handoffRouting,
+    mediaHosts,
   };
 }
 

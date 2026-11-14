@@ -6143,6 +6143,13 @@ export interface components {
                 };
             } | null;
             /**
+             * @description Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it
+             * @example [
+             *       "zenvia.com"
+             *     ]
+             */
+            zenviaMediaHosts?: string[] | null;
+            /**
              * Format: date-time
              * @description Creation timestamp
              */
@@ -6381,6 +6388,13 @@ export interface components {
                     [key: string]: string;
                 };
             } | null;
+            /**
+             * @description Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it
+             * @example [
+             *       "zenvia.com"
+             *     ]
+             */
+            zenviaMediaHosts?: string[] | null;
             /** @description Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it */
             webhookVerifyToken?: string | null;
         };
@@ -6462,6 +6476,13 @@ export interface components {
                     [key: string]: string;
                 };
             };
+            /**
+             * @description Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it
+             * @example [
+             *       "zenvia.com"
+             *     ]
+             */
+            zenviaMediaHosts?: string[];
             /** @description Zenvia only. Replaces the stored webhook verify token and is persisted on a successful connect, so it can be rotated; omit it to keep the stored one. Sealed at rest and write-only: never returned. Ignored for other channels */
             webhookVerifyToken?: string;
         };
@@ -12947,6 +12968,13 @@ export interface operations {
                             [key: string]: string;
                         };
                     } | null;
+                    /**
+                     * @description Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it
+                     * @example [
+                     *       "zenvia.com"
+                     *     ]
+                     */
+                    zenviaMediaHosts?: string[] | null;
                     /** @description Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it */
                     webhookVerifyToken?: string | null;
                 };
@@ -13345,6 +13373,13 @@ export interface operations {
                             [key: string]: string;
                         };
                     } | null;
+                    /**
+                     * @description Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it
+                     * @example [
+                     *       "zenvia.com"
+                     *     ]
+                     */
+                    zenviaMediaHosts?: string[] | null;
                     /** @description Shared secret the webhook of a Gupshup, ASC, ASC Flow or Zenvia instance checks. On Zenvia the subscription sends it as x-webhook-token and the instance does not connect without it. Sealed at rest and write-only: never returned. null clears it */
                     webhookVerifyToken?: string | null;
                     agentReplyFilter?: {
@@ -13887,6 +13922,13 @@ export interface operations {
                             [key: string]: string;
                         };
                     };
+                    /**
+                     * @description Hosts the inbound media of the instance may be downloaded from, each covering its subdomains (up to 64). A file URL or redirect outside the list is refused. Empty or null accepts any host that resolves only to public addresses. Read by the plugin at connect: restart the instance after changing it
+                     * @example [
+                     *       "zenvia.com"
+                     *     ]
+                     */
+                    zenviaMediaHosts?: string[];
                     /** @description Zenvia only. Replaces the stored webhook verify token and is persisted on a successful connect, so it can be rotated; omit it to keep the stored one. Sealed at rest and write-only: never returned. Ignored for other channels */
                     webhookVerifyToken?: string;
                 };
