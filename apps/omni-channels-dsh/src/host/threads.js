@@ -59,12 +59,16 @@ const resumeAfterOf = value => (Number.isInteger(value) && value >= RESUME_AFTER
 // #1707: the staff chat that also hears when a child needs a person; never a person's own chat.
 export const NEEDS_STAFF_CHAT_REFUSAL = 'The staff chat cannot be a chat an answer child answers. Choose a chat only staff are in.'
 const needsStaffChatOf = value => (typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null)
+// #1713: the one reply a person no allow rule lets in gets (answer-strangers.js); null is none.
+export const STRANGER_REPLY_MAX = 1000
+const strangerReplyOf = value => (typeof value === 'string' && value.trim() !== '' ? value.trim().slice(0, STRANGER_REPLY_MAX) : null)
 export const answerSettingsOf = bot => ({
   enabled: bot?.answer?.enabled === true, visibility: bot?.answer?.visibility === 'collective' ? 'collective' : 'isolated',
   allowedTools: (Array.isArray(bot?.answer?.allowedTools) ? bot.answer.allowedTools : []).filter(name => ANSWER_EXTRA_TOOLS.includes(name)), sharedNotes: String(bot?.answer?.sharedNotes ?? ''),
   newChildMode: bot?.answer?.newChildMode === 'sending' ? 'sending' : 'training', graduateAfter: graduateOf(bot?.answer?.graduateAfter),
   resumeAfterMs: resumeAfterOf(bot?.answer?.resumeAfterMs), knowledgeFolder: knowledgeFolderOf(bot?.answer?.knowledgeFolder),
   personBinding: bot?.answer?.personBinding === true, needsStaffChatId: needsStaffChatOf(bot?.answer?.needsStaffChatId),
+  strangerReply: strangerReplyOf(bot?.answer?.strangerReply),
 })
 export const isAnswerChild = thread => thread?.answerChild === true
 /** When a paused child answers again by itself: its last staff message plus its bot's interval; null when not paused. */
@@ -872,6 +876,8 @@ export function install(rt) {
     personBinding: z.boolean().optional(),
     // #1707: a staff chat's UUID; null clears it, left out keeps it.
     needsStaffChatId: id.nullable().optional(),
+    // #1713: null or empty clears it, left out keeps it.
+    strangerReply: z.string().max(STRANGER_REPLY_MAX).nullable().optional(),
   }).strict()
   const realFolderOf = async value => {
     if (!value) return null
@@ -904,6 +910,7 @@ export function install(rt) {
     const staffChat = input.needsStaffChatId === undefined ? kept.needsStaffChatId : input.needsStaffChatId
     const staffHolder = staffChat === null ? undefined : byChat(staffChat)
     const childNow = isAnswerChild(staffHolder)
+    const strangerReply = input.strangerReply === undefined ? kept.strangerReply : strangerReplyOf(input.strangerReply)
     if ((childNow && staffChat !== kept.needsStaffChatId) || (staffHolder !== undefined && !childNow && input.enabled && answerable().includes(staffHolder))) throw refused(NEEDS_STAFF_CHAT_REFUSAL)
     const next = {
       enabled: input.enabled, visibility: input.visibility, allowedTools: [...new Set(input.allowedTools)], sharedNotes: input.sharedNotes,
@@ -911,6 +918,7 @@ export function install(rt) {
       resumeAfterMs: input.resumeAfterMs ?? kept.resumeAfterMs, ...(folder ? { knowledgeFolder: folder } : {}),
       ...(input.personBinding ?? kept.personBinding ? { personBinding: true } : {}),
       ...(staffChat === null ? {} : { needsStaffChatId: staffChat }),
+      ...(strangerReply === null ? {} : { strangerReply }),
     }
     // #1704: never bind persons where a child could read past its own chat and folder.
     const personRefusal = next.personBinding ? personBindingRefusal(answerSettingsOf({ answer: next })) : undefined

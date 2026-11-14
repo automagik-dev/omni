@@ -576,6 +576,8 @@ const minutesOf = ms => String(Number.isInteger(ms) && ms >= 60_000 ? Math.round
 const ANSWER_TOOLS = [['read', 'Read files'], ['read_image', 'Read images'], ['glob', 'Find files by name'], ['grep', 'Search inside files']]
 // The host's SHARED_NOTES_MAX (src/host/threads.js, which the browser cannot load); a test keeps them equal.
 const SHARED_NOTES_MAX = 32000
+// The host's STRANGER_REPLY_MAX (src/host/threads.js).
+const STRANGER_REPLY_MAX = 1000
 
 // The Bot team's switch (bt-switch) in a row that is not a label, as the team draws its own: a
 // click on the words must not flip it twice. The switch is named by the words.
@@ -601,6 +603,37 @@ function staffChatOptions(chats, threads, chosen, several) {
   return chosen && !options.some(option => option.id === chosen) ? [{ id: chosen, label: 'The chosen chat' }, ...options] : options
 }
 
+// #1713: the people who wrote, were not let in and got the reply (host answer-strangers.js), newest
+// first; read-only, read when staff open them.
+function StrangerRequests({ botId }) {
+  const [shown, setShown] = useState(false)
+  const [requests, setRequests] = useState(null)
+  const [problem, setProblem] = useState(null)
+  useEffect(() => {
+    if (!shown) return undefined
+    let alive = true
+    setProblem(null)
+    call('omni-answer-requests', { botId }).then(
+      reply => { if (alive) setRequests(Array.isArray(reply?.requests) ? reply.requests : []) },
+      (error) => { if (alive) setProblem(error.message) },
+    )
+    return () => { alive = false }
+  }, [shown, botId])
+  const messages = count => `${count} ${count === 1 ? 'message' : 'messages'}`
+  return h('div', { className: 'ot-answer-requests', role: 'group', 'aria-label': 'Requests' },
+    h('div', { className: 'ot-answer-requests-head' },
+      h('span', { className: 'bt-field-label' }, shown && requests !== null ? `Requests (${requests.length})` : 'Requests'),
+      h('button', { type: 'button', className: 'bt-soft bt-soft-sm', 'aria-expanded': shown, onClick: () => setShown(before => !before) }, shown ? 'Hide' : 'Show')),
+    !shown ? null
+      : problem ? h('p', { className: 'ot-picker-problem', role: 'alert' }, hostText(problem))
+      : requests === null ? null
+      : requests.length === 0 ? h('span', { className: 'bt-note' }, 'Nobody yet.')
+      : h('ul', { className: 'ot-requests' }, requests.map(request => h('li', { key: request.chatUuid, className: 'ot-request' },
+        h('span', { className: 'ot-request-who', title: (request.senders ?? []).join(', ') }, (request.senders ?? []).join(' · ')),
+        h('span', { className: 'ot-request-text', title: request.text }, request.text),
+        h('span', { className: 'ot-picker-at' }, `${relativeShort(request.lastAt)} · ${messages(request.count)}`)))))
+}
+
 // Owner-only endpoint; no model tool can enable answer mode or widen its tools.
 export function AnswerSettings({ bot, value = {}, channels = [], threads = [] }) {
   const [open, setOpen] = useState(false)
@@ -616,6 +649,7 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
   const [personBinding, setPersonBinding] = useState(value.personBinding === true)
   const [staffChat, setStaffChat] = useState(value.needsStaffChatId ?? '')
   const [staffChats, setStaffChats] = useState([])
+  const [strangerReply, setStrangerReply] = useState(value.strangerReply ?? '')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   useEffect(() => {
@@ -623,8 +657,8 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
     setAllowedTools(value.allowedTools ?? []); setSharedNotes(value.sharedNotes ?? '')
     setNewChildMode(value.newChildMode ?? 'training'); setGraduates(Number.isInteger(value.graduateAfter)); setGraduateAfter(String(value.graduateAfter ?? 5))
     setResumeMinutes(minutesOf(value.resumeAfterMs)); setKnowledgeFolder(value.knowledgeFolder ?? ''); setPersonBinding(value.personBinding === true)
-    setStaffChat(value.needsStaffChatId ?? '')
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId])
+    setStaffChat(value.needsStaffChatId ?? ''); setStrangerReply(value.strangerReply ?? '')
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId, value.strangerReply])
   // The staff chats to pick from, read when the settings open (the picker's own read).
   const channelIds = channels.map(channel => channel.id).join(',')
   useEffect(() => {
@@ -649,7 +683,9 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
     const person = personBinding || value.personBinding === true ? { personBinding } : {}
     // #1707: sent while one is named or being cleared; a bot that never named one saves as before.
     const staff = staffChat || value.needsStaffChatId ? { needsStaffChatId: staffChat || null } : {}
-    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff }); setOpen(false) }
+    // #1713: the same: sent while set or being cleared.
+    const stranger = strangerReply.trim() || value.strangerReply ? { strangerReply: strangerReply.trim() || null } : {}
+    try { await call('omni-answer-settings', { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 60_000, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff, ...stranger }); setOpen(false) }
     catch (error) { setProblem(error.message) } finally { setBusy(false) }
   }
   const tool = (name, on) => setAllowedTools(before => (on ? [...before.filter(item => item !== name), name] : before.filter(item => item !== name)))
@@ -681,6 +717,9 @@ export function AnswerSettings({ bot, value = {}, channels = [], threads = [] })
         h('select', { className: 'bt-select ot-answer-staff', value: staffChat, onChange: event => setStaffChat(event.target.value) },
           h('option', { value: '' }, 'None'),
           staffOptions.map(option => h('option', { key: option.id, value: option.id }, option.label)))),
+      h(Field, { label: 'Reply to people who are not let in', note: 'Sent once a day to each person no rule lets in. Empty: no reply.' },
+        h('textarea', { className: 'bt-input bt-input-area ot-answer-stranger', maxLength: STRANGER_REPLY_MAX, value: strangerReply, onChange: event => setStrangerReply(event.target.value) })),
+      h(StrangerRequests, { botId: bot.id }),
       h('div', { className: 'ot-answer-tools', role: 'group', 'aria-label': 'Children may also' },
         h('span', { className: 'bt-field-label', 'aria-hidden': true }, 'Children may also'),
         ANSWER_TOOLS.map(([name, label]) => h(SwitchRow, { key: name, label, title: name, on: allowedTools.includes(name), onChange: on => tool(name, on) }))),
@@ -910,6 +949,13 @@ ${stackedRow('.ot-thread[data-answer]:has(.ot-thread-reason)')}
 .ot-answer .ot-answer-staff{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
+.ot-answer-requests{display:grid;gap:6px;min-width:0}
+.ot-answer-requests-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.ot-requests{display:grid;gap:6px;max-height:220px;margin:0;padding:0;overflow-y:auto;list-style:none}
+.ot-request{display:grid;gap:1px;min-width:0;padding:6px 8px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:8px}
+.ot-request-who,.ot-request-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;line-height:17px}
+.ot-request-who{color:var(--bt-ink);font-variant-numeric:tabular-nums}
+.ot-request-text{color:var(--bt-ink-2)}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}

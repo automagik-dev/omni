@@ -17127,6 +17127,7 @@ var RESUME_MINUTES_MAX = 24 * 60;
 var minutesOf = (ms2) => String(Number.isInteger(ms2) && ms2 >= 6e4 ? Math.round(ms2 / 6e4) : RESUME_MINUTES_DEFAULT);
 var ANSWER_TOOLS = [["read", "Read files"], ["read_image", "Read images"], ["glob", "Find files by name"], ["grep", "Search inside files"]];
 var SHARED_NOTES_MAX = 32e3;
+var STRANGER_REPLY_MAX = 1e3;
 function SwitchRow({ label, title, on: on2, onChange }) {
   return (0, import_react15.createElement)(
     "div",
@@ -17152,6 +17153,45 @@ function staffChatOptions(chats, threads, chosen, several) {
   const options = chats.filter((chat) => !answered.has(chat.id)).map((chat) => ({ id: chat.id, label: several ? `${chat.name ?? chat.id} · ${chat.channel}` : chat.name ?? chat.id }));
   return chosen && !options.some((option) => option.id === chosen) ? [{ id: chosen, label: "The chosen chat" }, ...options] : options;
 }
+function StrangerRequests({ botId }) {
+  const [shown, setShown] = (0, import_react15.useState)(false);
+  const [requests, setRequests] = (0, import_react15.useState)(null);
+  const [problem, setProblem] = (0, import_react15.useState)(null);
+  (0, import_react15.useEffect)(() => {
+    if (!shown) return void 0;
+    let alive = true;
+    setProblem(null);
+    call("omni-answer-requests", { botId }).then(
+      (reply) => {
+        if (alive) setRequests(Array.isArray(reply?.requests) ? reply.requests : []);
+      },
+      (error) => {
+        if (alive) setProblem(error.message);
+      }
+    );
+    return () => {
+      alive = false;
+    };
+  }, [shown, botId]);
+  const messages = (count) => `${count} ${count === 1 ? "message" : "messages"}`;
+  return (0, import_react15.createElement)(
+    "div",
+    { className: "ot-answer-requests", role: "group", "aria-label": "Requests" },
+    (0, import_react15.createElement)(
+      "div",
+      { className: "ot-answer-requests-head" },
+      (0, import_react15.createElement)("span", { className: "bt-field-label" }, shown && requests !== null ? `Requests (${requests.length})` : "Requests"),
+      (0, import_react15.createElement)("button", { type: "button", className: "bt-soft bt-soft-sm", "aria-expanded": shown, onClick: () => setShown((before) => !before) }, shown ? "Hide" : "Show")
+    ),
+    !shown ? null : problem ? (0, import_react15.createElement)("p", { className: "ot-picker-problem", role: "alert" }, hostText(problem)) : requests === null ? null : requests.length === 0 ? (0, import_react15.createElement)("span", { className: "bt-note" }, "Nobody yet.") : (0, import_react15.createElement)("ul", { className: "ot-requests" }, requests.map((request) => (0, import_react15.createElement)(
+      "li",
+      { key: request.chatUuid, className: "ot-request" },
+      (0, import_react15.createElement)("span", { className: "ot-request-who", title: (request.senders ?? []).join(", ") }, (request.senders ?? []).join(" · ")),
+      (0, import_react15.createElement)("span", { className: "ot-request-text", title: request.text }, request.text),
+      (0, import_react15.createElement)("span", { className: "ot-picker-at" }, `${relativeShort(request.lastAt)} · ${messages(request.count)}`)
+    )))
+  );
+}
 function AnswerSettings({ bot, value = {}, channels: channels2 = [], threads = [] }) {
   const [open, setOpen] = (0, import_react15.useState)(false);
   const [enabled, setEnabled] = (0, import_react15.useState)(value.enabled === true);
@@ -17166,6 +17206,7 @@ function AnswerSettings({ bot, value = {}, channels: channels2 = [], threads = [
   const [personBinding, setPersonBinding] = (0, import_react15.useState)(value.personBinding === true);
   const [staffChat, setStaffChat] = (0, import_react15.useState)(value.needsStaffChatId ?? "");
   const [staffChats, setStaffChats] = (0, import_react15.useState)([]);
+  const [strangerReply, setStrangerReply] = (0, import_react15.useState)(value.strangerReply ?? "");
   const [busy, setBusy] = (0, import_react15.useState)(false);
   const [problem, setProblem] = (0, import_react15.useState)(null);
   (0, import_react15.useEffect)(() => {
@@ -17180,7 +17221,8 @@ function AnswerSettings({ bot, value = {}, channels: channels2 = [], threads = [
     setKnowledgeFolder(value.knowledgeFolder ?? "");
     setPersonBinding(value.personBinding === true);
     setStaffChat(value.needsStaffChatId ?? "");
-  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId]);
+    setStrangerReply(value.strangerReply ?? "");
+  }, [value.enabled, value.visibility, JSON.stringify(value.allowedTools), value.sharedNotes, value.newChildMode, value.graduateAfter, value.resumeAfterMs, value.knowledgeFolder, value.personBinding, value.needsStaffChatId, value.strangerReply]);
   const channelIds = channels2.map((channel) => channel.id).join(",");
   (0, import_react15.useEffect)(() => {
     if (!open || channels2.length === 0) return void 0;
@@ -17208,8 +17250,9 @@ function AnswerSettings({ bot, value = {}, channels: channels2 = [], threads = [
     setProblem(null);
     const person = personBinding || value.personBinding === true ? { personBinding } : {};
     const staff = staffChat || value.needsStaffChatId ? { needsStaffChatId: staffChat || null } : {};
+    const stranger = strangerReply.trim() || value.strangerReply ? { strangerReply: strangerReply.trim() || null } : {};
     try {
-      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff });
+      await call("omni-answer-settings", { botId: bot.id, enabled, visibility, allowedTools, sharedNotes, newChildMode, graduateAfter: graduates ? count : null, resumeAfterMs: minutes * 6e4, knowledgeFolder: knowledgeFolder.trim() || null, ...person, ...staff, ...stranger });
       setOpen(false);
     } catch (error) {
       setProblem(error.message);
@@ -17291,6 +17334,12 @@ function AnswerSettings({ bot, value = {}, channels: channels2 = [], threads = [
           staffOptions.map((option) => (0, import_react15.createElement)("option", { key: option.id, value: option.id }, option.label))
         )
       ),
+      (0, import_react15.createElement)(
+        Field,
+        { label: "Reply to people who are not let in", note: "Sent once a day to each person no rule lets in. Empty: no reply." },
+        (0, import_react15.createElement)("textarea", { className: "bt-input bt-input-area ot-answer-stranger", maxLength: STRANGER_REPLY_MAX, value: strangerReply, onChange: (event) => setStrangerReply(event.target.value) })
+      ),
+      (0, import_react15.createElement)(StrangerRequests, { botId: bot.id }),
       (0, import_react15.createElement)(
         "div",
         { className: "ot-answer-tools", role: "group", "aria-label": "Children may also" },
@@ -17535,6 +17584,13 @@ ${stackedRow(".ot-thread[data-answer]:has(.ot-thread-reason)")}
 .ot-answer .ot-answer-staff{box-sizing:border-box;width:100%;min-width:0}
 .ot-answer .bt-input[aria-invalid=true]{border-color:var(--bt-danger, #dc2626)}
 .ot-answer .bt-actions{justify-content:flex-end}
+.ot-answer-requests{display:grid;gap:6px;min-width:0}
+.ot-answer-requests-head{display:flex;align-items:center;justify-content:space-between;gap:8px;min-width:0}
+.ot-requests{display:grid;gap:6px;max-height:220px;margin:0;padding:0;overflow-y:auto;list-style:none}
+.ot-request{display:grid;gap:1px;min-width:0;padding:6px 8px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:8px}
+.ot-request-who,.ot-request-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;line-height:17px}
+.ot-request-who{color:var(--bt-ink);font-variant-numeric:tabular-nums}
+.ot-request-text{color:var(--bt-ink-2)}
 .ot-thread-remove[data-confirm]{color:var(--bt-danger, #dc2626)}
 .ot-thread-problem{flex-basis:100%;padding:0 8px 3px 28px;font-size:11px;color:var(--bt-danger, #dc2626)}
 .ot-picker{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;margin:2px 0 4px;padding:6px;border:1px solid var(--bt-line, rgba(127,127,127,.2));border-radius:10px;background:var(--bt-surface, transparent)}

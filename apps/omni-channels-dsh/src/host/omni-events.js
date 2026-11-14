@@ -249,11 +249,13 @@ export function install(rt) {
     const answerRelevant = answerSub !== undefined
       || (ownerReceipt(row.rawPayload, row.externalId) && rt.answerStaffThread?.(row) !== undefined)
     let refusal
-    const admission = answerRelevant ? await admitAnswer(row, { detail: true, refused: (why, { minutes }) => { refusal = { why, minutes } } }) : false
+    const admission = answerRelevant ? await admitAnswer(row, { detail: true, refused: (why, { minutes, blocked }) => { refusal = { why, minutes, blocked } } }) : false
     // #1706: a sender known only by their lid is kept, before this row is acked, and checked
     // again once their phone may be known; a person's admitted message first hands over the
     // ones their chat kept.
     if (refusal?.why === 'unmatched' && answerSub) await kept.keep(row, { botId: answerSub.answerBotId, minutes: refusal.minutes })
+    // #1713: a sender no rule lets in, and none blocks, gets the bot's reply, if it has one (answer-strangers.js).
+    else if (refusal?.why === 'denied' && answerSub) await rt.answerStranger?.(row, answerSub.answerBotId, refusal)
     else if (admission !== false && 'person' in admission && row.rawPayload?.isFromMe !== true) await kept.release(row.chatUuid, admission)
     return dispatch(row, admission, controller)
   }

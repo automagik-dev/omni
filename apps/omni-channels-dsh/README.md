@@ -80,6 +80,28 @@ If the sender is still not matched after 30 seconds and the channel has an allow
 the host warns once and the bot's sidebar shows "1 message waiting: sender not matched yet". A
 sender whose phone is known and matches no rule is refused as before, without a marker.
 
+## A reply for people who are not let in
+
+By default a sender that no allow rule matches gets no answer. Staff can set one reply under
+**Reply to people who are not let in** (`strangerReply`, at most 1000 characters, settings panel
+only; empty turns it off). With a reply set, such a sender gets it once a day per chat, in the
+chat they wrote from, through Omni's send for that chat, and only after their own message. No
+answer child is made or woken for them. A sender known only by their lid gets it once the
+30-second check still finds no rule, or as soon as a check finds a phone no rule allows. Their
+message then leaves the kept messages, with no warning and no marker. A rule that matches at an
+earlier check admits them as before. Only the allowlist's default refusal gets the reply: a
+sender that a rule of its own refuses (block or silent_block, on any of their ids) gets nothing
+and is not listed. A check that failed, a message that is too old, a group, history and the
+number's own messages get nothing. A failed send takes the day's mark back, so the person's next
+message tries again; nothing tries on a timer, and the failure is warned once per chat until a
+send there works.
+
+Each sender who gets the reply is listed under **Requests** in the answer settings: one row per
+chat, with the ids they wrote from, their first text (500 characters), when they last wrote and
+how many messages they sent. The list keeps the newest 500 rows per bot, and the day's marks keep
+the newest 5000 chats. Both are saved, so they outlive a restart. Only staff read the list, on the
+`omni-answer-requests` route; no tool reads it.
+
 ## When a person needs someone from the team
 
 An answer child that cannot help its person calls `thread_needs_staff` with a one-line reason
