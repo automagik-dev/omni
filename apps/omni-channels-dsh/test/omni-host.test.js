@@ -101,6 +101,15 @@ test('a media row carries its type, mime and Omni\'s text apart from the caption
   assert.deepEqual([plain.type, plain.hasMedia, plain.mime, plain.caption, plain.mediaText, plain.text], ['text', false, null, null, null, 'hi'])
 })
 
+test('a message carries Omni\'s delivery status as its status, and none for a value Omni does not use', () => {
+  for (const status of ['pending', 'sent', 'delivered', 'read', 'failed']) {
+    assert.equal(messageOf({ id: 'm', isFromMe: true, source: 'api', textContent: 'hi', deliveryStatus: status }).status, status)
+  }
+  for (const deliveryStatus of [undefined, null, '', 'seen', 'READ', 3]) {
+    assert.equal(Object.hasOwn(messageOf({ id: 'm', isFromMe: true, textContent: 'hi', deliveryStatus }), 'status'), false, String(deliveryStatus))
+  }
+})
+
 const runtime = ({ url, key, answers = {} }) => {
   const asked = []
   globalThis.fetch = async (address, init) => {

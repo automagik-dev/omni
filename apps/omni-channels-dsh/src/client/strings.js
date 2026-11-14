@@ -721,15 +721,22 @@ export const STRINGS = {
   'Sticker': '贴纸',
   'not available': '无法显示',
   'Play video': '播放视频',
-  // The phone pane: a thread's chat in a drawn phone, in DSH's right column (omni-phone.js).
-  'Phone pane': '手机面板',
+  // The chat pane: a thread's chat in DSH's right column (omni-phone.js); its tab is the team's
+  // "Chat", its region the team's "Chat with {name}".
   'Phone': '手机',
   'Show {name} in the phone pane': '在手机面板中显示 {name}',
-  '{name} on the phone': '手机上的 {name}',
-  'The phone pane needs DSH\'s right column.': '手机面板需要 DSH 的右侧栏。',
-  'Open a conversation first; the phone pane opens beside it.': '请先打开一个对话；手机面板会在它旁边打开。',
+  'The chat needs DSH\'s right column.': '聊天需要 DSH 的右侧栏。',
+  'Open a conversation first; the chat opens beside it.': '请先打开一个对话；聊天会在它旁边打开。',
   'This chat is no longer in the sidebar.': '这个聊天已不在侧边栏中。',
-  'Open the phone pane from a chat in the sidebar.': '请从侧边栏中的聊天打开手机面板。',
+  'Open a chat from the sidebar to see it here.': '从侧边栏打开一个聊天，即可在这里查看。',
+  // The chat view (channels.js): delivery marks and the message bar's emoji picker.
+  'Waiting to send': '等待发送',
+  'Sent': '已发送',
+  'Delivered': '已送达',
+  'Seen': '已读',
+  'Not delivered': '未送达',
+  'Emoji': '表情',
+  'Pick an emoji': '选择表情',
   'Not configured': '未配置',
   'Meta webhook setup': 'Meta Webhook 设置',
   'Show webhook setup': '显示 Webhook 设置',
@@ -755,9 +762,10 @@ export const STRINGS = {
   'Always allow send': '始终允许发送',
   'Sends into this chat go without asking you': '发送到这个聊天的消息不再询问你',
   'Each send into this chat asks you first': '每次发送到这个聊天都会先询问你',
-  // #1715: staff's own composer in the phone pane, and the host's refusals for its sends.
+  // #1715: staff's own composer in the chat pane, and the host's refusals for its sends.
   'The bot\'s draft, waiting on its card': '机器人的草稿，正在等待审批卡片',
   'Reject the bot\'s draft on its card': '请在审批卡片上拒绝机器人的草稿',
+  'Editing the bot\'s draft': '正在编辑机器人的草稿',
   'Write your own message': '输入你自己的消息',
   'Your message': '你的消息',
   'Write a message of 1 to 4096 characters.': '请输入 1 到 4096 个字符的消息。',

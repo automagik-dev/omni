@@ -244,6 +244,28 @@ function logStructuredInput(
 }
 
 /**
+ * A body that carries no message. With the `codAtendimento`, it is the flow calling on its own: every push after the
+ * first of a turn wakes it, and at the opening `{#entrada}` and `{#MENSAGEM}` are still empty (one to three of these
+ * on every opening in the Odonto HML, 13/11/2026). That is routine, so it is info and names the atendimento. A body
+ * without the `codAtendimento` is the anomaly and stays a warning.
+ */
+function logUnparsedTurn(
+  logger: ReturnType<AscFlowPlugin['getLogger']>,
+  instanceId: string,
+  body: AscFlowInboundBody,
+): void {
+  const codAtendimento = firstString(body.codAtendimento, body.cod_atendimento);
+  if (codAtendimento) {
+    logger.info('[asc-flow] webhook with no chatInput nor message — the flow calling on its own, a poll', {
+      instanceId,
+      codAtendimento,
+    });
+    return;
+  }
+  logger.warn('[asc-flow] webhook missing codAtendimento or chatInput', { instanceId });
+}
+
+/**
  * Full HTTP entry point used by `plugin.handleWebhook`.
  */
 export async function handleAscFlowWebhookRequest(
@@ -305,7 +327,7 @@ export async function handleAscFlowWebhookRequest(
 
   const turn = parseInboundTurn(parsedJson as AscFlowInboundBody);
   if (!turn) {
-    logger.warn('[asc-flow] webhook missing codAtendimento or chatInput', { instanceId });
+    logUnparsedTurn(logger, instanceId, parsedJson as AscFlowInboundBody);
     return pending();
   }
 

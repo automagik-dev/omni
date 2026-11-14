@@ -2,7 +2,7 @@
  * The HTTP surface of the inbound route.
  */
 
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { inboundShapeOf } from '../handlers/webhook';
 import { AscFlowPlugin } from '../plugin';
@@ -134,6 +134,23 @@ describe('handleWebhook', () => {
       expect(await body(response)).toEqual({ pronto: 0 });
     }
     expect(received()).toHaveLength(0);
+  });
+
+  // Every push after the first of a turn wakes the flow, and at the opening it calls with no input at all: routine, so
+  // it names the atendimento at info. Only a body without the atendimento stays a warning.
+  it('logs the flow calling on its own with its atendimento, and warns only without one', async () => {
+    await boot();
+    const logger = plugin.getLogger();
+    const info = spyOn(logger, 'info');
+    const warn = spyOn(logger, 'warn');
+
+    await post({ codAtendimento: '42', chatInput: '', message: '' });
+    await post({ chatInput: '' });
+
+    expect(info.mock.calls.find(([msg]) => String(msg).includes('the flow calling on its own'))?.[1]).toMatchObject({
+      codAtendimento: '42',
+    });
+    expect(warn.mock.calls.filter(([msg]) => String(msg).includes('missing codAtendimento'))).toHaveLength(1);
   });
 
   // The route is mounted auth-exempt, so this token is the only lock once it is
