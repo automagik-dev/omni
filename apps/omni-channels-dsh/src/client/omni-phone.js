@@ -1,14 +1,15 @@
 import { threadReason } from './problem-words.js'
 import { createElement as h, useEffect, useMemo, useRef, useState } from 'react'
-import { ChatMessages, useStayAtEnd } from './channels.js'
-import { POLL_MS } from './omni-store.js'
-import { PHONE_FRAME_CSS, PhoneFrame } from './phone-frame.js'
+import { ChatHead, ChatMessages, MessageBar, useOmni, useStayAtEnd } from './channels.js'
+import { POLL_MS, channelOf, chatOf } from './omni-store.js'
 import { call, hostText, icons, t } from './core.js'
 
-// The phone pane: a tab of DSH's right column that shows one thread's chat in a drawn iPhone
-// (phone-frame.js), files and Omni's text for them included. It is the owner's own view: it
-// reads on the host's link key, polling as the chat view does. Its header holds the thread's
-// "Always allow send" switch (SendSwitch); its foot, staff's own composer (PhoneComposer, #1715).
+// The chat pane (its ids still say phone): a tab of DSH's right column that shows one thread's
+// chat as a chat app's web client does, across the whole pane: the chat's header, its log, and
+// the message bar at its foot, drawn by the chat view the chat page draws too (channels.js),
+// files and Omni's text for them included. It is the owner's own view: it reads on the host's
+// link key, polling as the chat page does. Its header holds the thread's "Always allow send"
+// switch (SendSwitch); its foot, staff's own message bar (PhoneComposer, #1715).
 //
 // It opens only from the thread, never by itself: a click on the thread's row or a pick in
 // the picker, which opens it beside the thread's own Session. On a Bot team without the
@@ -23,7 +24,7 @@ export const PHONE_KIND = 'omni-phone'
 // thread's id.
 export const PHONE_TAB_ID = 'ds-bot/omni-phone'
 export const phoneTabId = threadId => `${PHONE_TAB_ID}:${threadId}`
-export const phoneTabDefinition = () => ({ id: PHONE_TAB_ID, kind: PHONE_KIND, title: () => t('Phone pane') })
+export const phoneTabDefinition = () => ({ id: PHONE_TAB_ID, kind: PHONE_KIND, title: () => t('Chat') })
 export const phoneParams = thread => ({ threadId: thread.id, chatId: thread.chatId })
 
 const threadsIn = roster => (Array.isArray(roster?.omniThreads) ? roster.omniThreads : [])
@@ -106,7 +107,7 @@ export function installPhone(ctx, face) {
  * with its surface there. Returns null when it opened, else why not. It opens no Session.
  * Called when that surface is not there it changes nothing: requestPhone waits instead.
  */
-const phoneUnavailable = () => t('Open a conversation first; the phone pane opens beside it.')
+const phoneUnavailable = () => t('Open a conversation first; the chat opens beside it.')
 const phoneFailure = error => {
   console.warn('Could not open the phone pane:', error)
   return phoneUnavailable()
@@ -114,7 +115,7 @@ const phoneFailure = error => {
 
 export function openPhone(thread) {
   const right = phoneRight
-  if (!right) return t('The phone pane needs DSH\'s right column.')
+  if (!right) return t('The chat needs DSH\'s right column.')
   try {
     const snapshot = right.mounted?.getSnapshot?.()
     if (snapshot === undefined || (typeof right.actionsFor === 'function' && right.actionsFor(snapshot) === undefined)) return phoneUnavailable()
@@ -132,7 +133,7 @@ export function openPhone(thread) {
  */
 export function requestPhone(thread) {
   const right = phoneRight
-  if (!right) return t('The phone pane needs DSH\'s right column.')
+  if (!right) return t('The chat needs DSH\'s right column.')
   if (phoneSurfaceIs(right, thread)) return openPhone(thread)
   noteIntent(thread.id)
   return null
@@ -176,10 +177,11 @@ function useChatPoll(chatId, on) {
 export const sendsAllowed = thread => (thread?.answerChild === true ? thread.sendingMode === 'sending' : thread?.permissions?.sends === 'allow')
 
 /**
- * The thread's "Always allow send" switch: on, its sends into this chat go without a card;
- * off, each asks on DSH's card. It sets only this thread's own choice (omni-thread-permissions;
- * an answer child's sending mode, set_child_sending), and shows the new state on the team's next
- * roster pull; until then it shows the one asked for.
+ * The thread's "Always allow send" switch, an icon action in the chat's header: on (tinted),
+ * its sends into this chat go without a card; off, each asks on DSH's card. It sets only this
+ * thread's own choice (omni-thread-permissions; an answer child's sending mode,
+ * set_child_sending), and shows the new state on the team's next roster pull; until then it
+ * shows the one asked for. A failed change says so under the header.
  */
 export function SendSwitch({ thread }) {
   const on = sendsAllowed(thread)
@@ -202,23 +204,22 @@ export function SendSwitch({ thread }) {
     })
   }
   return h('div', { className: 'op-send' },
-    h('label', { className: 'op-send-row' },
-      h('span', null, t('Always allow send')),
-      h('button', {
-        type: 'button', role: 'switch', 'aria-checked': shown, className: 'op-switch', 'data-thread-id': thread.id,
-        title: shown ? t('Sends into this chat go without asking you') : t('Each send into this chat asks you first'), onClick: flip,
-      }, h('span'))),
+    h('button', {
+      type: 'button', role: 'switch', 'aria-checked': shown, 'aria-label': t('Always allow send'), className: 'oc-icon-act op-switch', 'data-thread-id': thread.id,
+      title: shown ? t('Sends into this chat go without asking you') : t('Each send into this chat asks you first'), onClick: flip,
+    }, h(icons.ArrowUpIcon)),
     problem ? h('span', { className: 'op-send-problem', role: 'alert' }, hostText(problem)) : null)
 }
 
 /**
- * #1715: the pane's composer, as a chat app's. Staff's own text goes from the thread's channel
- * straight to its chat (host omni-phone-send): never through the thread's model, a tool or a
- * card, and it shows above on the next poll. Enter sends, Shift+Enter adds a line, and the box
- * waits while one is being sent; a failed one says why and keeps the text, and nothing is sent
- * again until staff send it. An answer child's draft waiting on its card shows above the box
- * with Edit, which puts its text in the box: sent from here it goes out as typed and counts as
- * edited. DSH lets no plugin answer that card, so the pane then asks staff to reject it there.
+ * #1715: the pane's composer, on the chat view's message bar (channels.js MessageBar). Staff's
+ * own text goes from the thread's channel straight to its chat (host omni-phone-send): never
+ * through the thread's model, a tool or a card, and it shows above on the next poll. Enter
+ * sends, Shift+Enter adds a line, and the bar waits while one is being sent; a failed one says
+ * why and keeps the text, and nothing is sent again until staff send it. An answer child's
+ * draft waiting on its card shows over the bar with Edit, which puts its text in the field:
+ * sent from here it goes out as typed and counts as edited. DSH lets no plugin answer that
+ * card, so the pane then asks staff to reject it there.
  */
 // The longest message the host sends (omni-phone-send).
 export const PHONE_TEXT_MAX = 4096
@@ -255,54 +256,55 @@ export function PhoneComposer({ thread }) {
     setProblem(null)
     box.current?.focus?.()
   }
-  return h('footer', { className: 'op-compose' },
-    draft && draft.replaced !== true && editing !== draft.id ? h('div', { className: 'op-draft', 'data-draft-id': draft.id },
-      h('div', { className: 'op-draft-head' },
-        h('span', null, t('The bot\'s draft, waiting on its card')),
-        h('button', { type: 'button', className: 'op-draft-edit', disabled: sending, onClick: edit }, t('Edit'))),
-      h('p', { className: 'op-draft-text' }, draft.text)) : null,
-    draft?.replaced === true ? h('p', { className: 'op-compose-note', role: 'status' }, t('Reject the bot\'s draft on its card')) : null,
-    problem ? h('p', { className: 'op-compose-note op-compose-fail', role: 'alert' }, t('Not sent: {reason}', { reason: hostText(problem) })) : null,
-    h('div', { className: 'oc-compose', 'data-off': sending ? true : undefined },
-      h('textarea', {
-        ref: box, rows: 1, value: text, disabled: sending, maxLength: PHONE_TEXT_MAX, placeholder: t('Write your own message'), 'aria-label': t('Your message'),
-        // An emptied box lets the draft go back to waiting on its card.
-        onChange: (event) => {
-          setText(event.target.value)
-          if (event.target.value === '') setEditing(null)
-        },
-        onKeyDown: (event) => {
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent?.isComposing) { event.preventDefault(); void send() }
-        },
-      }),
-      h('button', { type: 'button', className: 'oc-send', disabled: sending || text.trim() === '', 'aria-label': t('Send'), onClick: () => { void send() } }, h(icons.ArrowUpIcon))))
+  const editingDraft = draft !== null && editing === draft.id
+  return h(MessageBar, {
+    className: 'op-compose', value: text, sending, maxLength: PHONE_TEXT_MAX, placeholder: t('Write your own message'), label: t('Your message'), boxRef: box,
+    // An emptied field lets the draft go back to waiting on its card.
+    onChange: (next) => {
+      setText(next)
+      if (next === '') setEditing(null)
+    },
+    onSend: () => { void send() },
+  },
+  draft && draft.replaced !== true && !editingDraft ? h('div', { className: 'op-draft', 'data-draft-id': draft.id },
+    h('div', { className: 'op-draft-head' },
+      h('span', null, t('The bot\'s draft, waiting on its card')),
+      h('button', { type: 'button', className: 'op-draft-edit', disabled: sending, onClick: edit }, h(icons.PencilIcon), t('Edit'))),
+    h('p', { className: 'op-draft-text' }, draft.text)) : null,
+  editingDraft && draft.replaced !== true ? h('p', { className: 'op-edit-note', role: 'status' }, h(icons.PencilIcon), t('Editing the bot\'s draft')) : null,
+  draft?.replaced === true ? h('p', { className: 'op-compose-note', role: 'status' }, t('Reject the bot\'s draft on its card')) : null,
+  problem ? h('p', { className: 'op-compose-note op-compose-fail', role: 'alert' }, t('Not sent: {reason}', { reason: hostText(problem) })) : null)
 }
 
-/** One thread's chat in the drawn frame. `visible` false (the tab hidden): it does not poll. */
+/**
+ * One thread's chat across the whole pane: its header (the chat's photo or initials, its name,
+ * the channel's name, or why the thread cannot reach it, and the thread's send switch), its log
+ * and the message bar. `visible` false (the tab hidden): it does not poll. The chat's photo and
+ * its channel's name come from the overview the sidebar already reads; nothing more is asked.
+ */
 export function PhonePane({ params, sessionId, useRoster, visible = true }) {
   const thread = useRoster(roster => phoneThreadOf(roster, params, sessionId))
   const read = useChatPoll(thread?.chatId ?? null, visible)
+  const overview = useOmni()
   const messages = read.messages ?? []
   const { scroller, onScroll, onSized } = useStayAtEnd(thread?.chatId, messages.length)
   if (!thread) {
     const named = typeof params?.threadId === 'string' || typeof params?.chatId === 'string'
-    return h('div', { className: 'op-pane' }, h('p', { className: 'op-note' }, named ? t('This chat is no longer in the sidebar.') : t('Open the phone pane from a chat in the sidebar.')))
+    return h('div', { className: 'op-pane' }, h('p', { className: 'op-note' }, named ? t('This chat is no longer in the sidebar.') : t('Open a chat from the sidebar to see it here.')))
   }
   const loading = read.messages === null && read.error === null
   const name = threadName(thread)
-  return h('div', { className: 'op-pane', 'data-thread-id': thread.id },
-    h(PhoneFrame, { label: t('{name} on the phone', { name }) },
-      h('header', { className: 'op-head' },
-        h('strong', null, name),
-        thread.connected === false && thread.reason ? h('span', null, threadReason(thread)) : null,
-        h(SendSwitch, { thread })),
-      h('div', { ref: scroller, className: 'oc-thread op-log', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name }) },
-        h('div', { className: 'oc-thread-in' },
-          loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
-          read.error ? h('p', { className: 'op-note', role: 'alert' }, hostText(read.error)) : null,
-          read.messages?.length === 0 ? h('p', { className: 'op-note' }, t('No messages yet')) : null,
-          h(ChatMessages, { messages, onSized }))),
-      h(PhoneComposer, { thread })))
+  const cut = thread.connected === false && Boolean(thread.reason)
+  return h('div', { className: 'op-pane', 'data-thread-id': thread.id, role: 'region', 'aria-label': t('Chat with {name}', { name }) },
+    h(ChatHead, { className: 'op-head', chat: chatOf(overview, thread.chatId), name, status: cut ? threadReason(thread) : channelOf(overview, thread.channelId)?.name ?? null, off: cut },
+      h(SendSwitch, { thread })),
+    h('div', { ref: scroller, className: 'oc-thread op-log', onScroll, role: 'log', 'aria-label': t('Conversation with {name}', { name }) },
+      h('div', { className: 'oc-thread-in' },
+        loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
+        read.error ? h('p', { className: 'op-note', role: 'alert' }, hostText(read.error)) : null,
+        read.messages?.length === 0 ? h('p', { className: 'op-note' }, t('No messages yet')) : null,
+        h(ChatMessages, { messages, onSized }))),
+    h(PhoneComposer, { thread }))
 }
 
 // Each tab's last params on this page, by Session and tab, the newest KEPT_TABS of them.
@@ -380,43 +382,28 @@ export function PhoneDock({ sessionId, useRoster }) {
   return h('div', { className: 'op-dock' }, h('span', { className: 'op-dock-problem', role: 'alert' }, hostText(problem)))
 }
 
-export const OMNI_PHONE_CSS = `${PHONE_FRAME_CSS}
-.op-pane{box-sizing:border-box;height:100%;overflow-y:auto;padding:20px 16px}
-.op-head{display:flex;flex-direction:column;align-items:center;gap:1px;padding:28px 12px 8px;border-bottom:1px solid var(--bt-line, rgba(127,127,127,.2));text-align:center}
-.op-head strong{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;font-weight:600}
-.op-head > span{font-size:11px;color:var(--bt-ink-3)}
-.op-send{display:flex;flex-direction:column;align-items:center;gap:2px;margin-top:4px}
-.op-send-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--bt-ink-2, var(--bt-ink-3));cursor:pointer}
-.op-send-problem{font-size:11px;color:var(--bt-danger, #dc2626)}
-.op-switch{position:relative;flex:none;width:26px;height:15px;border-radius:999px;border:0;padding:0;background:var(--bt-line-2, rgba(127,127,127,.35));cursor:pointer;transition:background-color .15s ease}
-.op-switch span{position:absolute;top:2px;left:2px;width:11px;height:11px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s cubic-bezier(.2,0,0,1)}
-.op-switch[aria-checked=true]{background:var(--bt-accent, #22d3ee)}
-.op-switch[aria-checked=true] span{transform:translateX(11px)}
-.op-screen .oc-thread-in{max-width:none;padding:8px 8px 14px}
-.op-screen .oc-msg{max-width:86%}
-.op-screen .oc-bubble{padding:6px 10px 5px;border-radius:16px;font-size:13px;line-height:18px}
-.op-screen .oc-bubble[data-media]{padding:3px 3px 6px}
-.op-screen .oc-bubble[data-media=sticker]{padding:0}
-.op-screen .oc-media-img{max-height:220px;border-radius:12px}
-.op-screen .oc-media-still,.op-screen .oc-media-wait{width:180px}
-.op-screen .oc-media-audio,.op-screen .oc-media-wait-audio{width:190px}
-.op-screen .oc-media-sticker,.op-screen .oc-media-wait-sticker{width:110px;height:110px}
-.op-screen .oc-media-doc{min-width:0;font-size:12.5px}
+// The pane's own rules; the header, log, bubbles and bar are the chat view's (CHANNELS_CSS).
+export const OMNI_PHONE_CSS = `
+.op-pane{box-sizing:border-box;flex:1 1 auto;height:100%;min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--bt-main);color:var(--bt-ink);font-family:var(--bt-font)}
+.op-pane .oc-chat-head{padding:8px 8px 8px 12px;min-height:58px}
+.op-pane .oc-thread-in{max-width:none;padding:8px 14px 14px}
+.op-pane .oc-bar-wrap{padding:8px 10px 10px}
+.op-send{display:contents}
+.op-send-problem{position:absolute;top:calc(100% + 6px);left:12px;right:12px;z-index:2;padding:6px 10px;border-radius:10px;background:var(--bt-card);box-shadow:0 6px 18px -8px var(--oc-shade);font-size:12px;line-height:16px;color:var(--bt-danger)}
 .op-note{margin:12px 8px;font-size:12.5px;color:var(--bt-ink-3);text-align:center}
+.op-pane>.op-note{margin:auto 16px}
 .op-dock{display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 4px 4px}
-.op-dock-problem{margin:0 8px 4px;font-size:11.5px;color:var(--bt-danger, #dc2626)}
-.op-log{flex:1;min-height:0}
-.op-compose{flex:none;display:flex;flex-direction:column;gap:6px;padding:6px 8px 14px;border-top:1px solid var(--bt-line, rgba(127,127,127,.2))}
-.op-compose .oc-compose{width:100%;max-width:none;margin:0;padding:3px 3px 3px 12px;border-radius:20px;gap:6px}
-.op-compose .oc-compose textarea{height:auto;min-height:30px;max-height:96px;padding:5px 0;font-size:13px;line-height:20px}
-.op-compose .oc-send{width:30px;height:30px}
-.op-compose .oc-send svg{width:16px;height:16px}
-.op-draft{display:flex;flex-direction:column;gap:3px;padding:7px 10px;border-radius:12px;border:1px dashed var(--bt-line-2, rgba(127,127,127,.35));background:var(--bt-card, transparent)}
-.op-draft-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:11px;color:var(--bt-ink-3)}
+.op-dock-problem{margin:0 8px 4px;font-size:11.5px;color:var(--bt-danger)}
+.op-draft{display:flex;flex-direction:column;gap:4px;padding:8px 10px 9px 12px;border-left:3px solid var(--bt-accent);border-radius:10px;background:color-mix(in srgb,var(--bt-accent) 7%,var(--bt-card))}
+.op-draft-head{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;line-height:16px;font-weight:600;color:var(--bt-accent)}
 .op-draft-head span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.op-draft-edit{flex:none;padding:2px 9px;border:1px solid var(--bt-line-2, rgba(127,127,127,.35));border-radius:999px;background:none;color:var(--bt-ink);font:inherit;font-size:11.5px;cursor:pointer}
+.op-draft-edit{flex:none;display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 10px 0 8px;border:1px solid var(--bt-line-2);border-radius:999px;background:var(--bt-card);color:var(--bt-ink);font:inherit;font-size:12px;font-weight:500;cursor:pointer}
+.op-draft-edit svg{width:13px;height:13px}
+.op-draft-edit:hover:not(:disabled){background:var(--bt-hover)}
 .op-draft-edit:disabled{opacity:.5;cursor:default}
-.op-draft-text{margin:0;max-height:72px;overflow-y:auto;font-size:12.5px;line-height:17px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink-2, var(--bt-ink))}
-.op-compose-note{margin:0;padding:5px 9px;border-radius:10px;background:var(--bt-hover, rgba(127,127,127,.1));font-size:11.5px;line-height:16px;color:var(--bt-ink-2, var(--bt-ink-3));overflow-wrap:anywhere}
-.op-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
+.op-draft-text{margin:0;max-height:76px;overflow-y:auto;font-size:13px;line-height:18px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink-2)}
+.op-edit-note{display:flex;align-items:center;gap:6px;margin:0;padding:0 4px;font-size:12px;line-height:16px;font-weight:600;color:var(--bt-accent)}
+.op-edit-note svg{width:13px;height:13px}
+.op-compose-note{margin:0;padding:7px 10px;border-radius:10px;background:var(--bt-hover);font-size:12.5px;line-height:17px;color:var(--bt-ink-2);overflow-wrap:anywhere}
+.op-compose-fail{color:color-mix(in srgb,var(--bt-danger) 80%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
 `

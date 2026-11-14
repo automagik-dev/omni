@@ -9,7 +9,7 @@ import {
   CHANNEL_TYPES, CHANNELS_PANEL, STATUS, canSend, canWrite, channelOf, chatOf, healthSummary, omniActions, omniStore, startLive, typeOf, unreadOf, visibleChats,
 } from './omni-store.js'
 import { call, OmniMark, relativeShort, t, icons } from './core.js'
-const { ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon, PlusIcon } = icons
+const { ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronRightIcon, ClockIcon, InfoIcon, PlusIcon, SmileIcon } = icons
 
 // Omni channels inside the Bot surface. The Channels page (CHANNELS_PANEL) connects new
 // channels and shows the health of the connected ones; a chat opens in the CHAT_PANEL main
@@ -205,9 +205,32 @@ export function useStayAtEnd(chatId, count) {
   return { scroller, onScroll, onSized }
 }
 
-// A chat's messages, as the chat view and the phone pane (omni-phone.js) draw them: the day
-// over its first message, the sender over the first of a run, each file in its bubble with
-// Omni's text for it under it. Names and text from the chat are text only.
+// -------------------------------------------------------------------------
+// The chat view. The chat page below (ChatPage) and the chat pane (omni-phone.js PhonePane)
+// draw the same header, log and message bar; each sends on its own path.
+
+// Omni's delivery status on a message staff or Omni sent (host omni.js messageOf): a clock
+// while it waits, one tick once sent, two once delivered, two in the accent once read, and a
+// danger mark when it failed. The marks are the team's own icons.
+export const TICKS = Object.freeze({
+  pending: { label: 'Waiting to send', marks: [ClockIcon] },
+  sent: { label: 'Sent', marks: [CheckIcon] },
+  delivered: { label: 'Delivered', marks: [CheckIcon, CheckIcon] },
+  read: { label: 'Seen', marks: [CheckIcon, CheckIcon] },
+  // The team's info mark turned over: an exclamation mark in a circle.
+  failed: { label: 'Not delivered', marks: [InfoIcon] },
+})
+export function TickMark({ status }) {
+  const tick = Object.hasOwn(TICKS, status) ? TICKS[status] : null
+  if (!tick) return null
+  return h('span', { className: 'oc-tick', 'data-status': status, role: 'img', 'aria-label': t(tick.label), title: t(tick.label) },
+    tick.marks.map((Mark, index) => h(Mark, { key: index })))
+}
+
+// A chat's messages, as the chat page and the chat pane draw them: the day over its first
+// message, the sender over the first of a run (whose bubble has the tail), each file in its
+// bubble with Omni's text for it under it, and the time inside each bubble, with the delivery
+// mark after it on what staff and Omni sent. Names and text from the chat are text only.
 export function ChatMessages({ messages, onSized }) {
   return messages.map((message, index) => {
     const mine = message.from !== 'them'
@@ -220,8 +243,110 @@ export function ChatMessages({ messages, onSized }) {
         drawnMedia(message) ? h(MediaPart, { message, onSized }) : null,
         drawnMedia(message) ? (message.text ? h('span', { className: 'oc-media-caption' }, message.text) : null) : message.text,
         drawnMedia(message) && message.mediaText ? h('span', { className: 'oc-media-text' }, message.mediaText) : null,
-        h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })))))
+        h('span', { className: 'oc-meta' },
+          h('time', null, message.sending ? t('Sending…') : new Date(message.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })),
+          mine ? h(TickMark, { status: message.sending ? 'pending' : message.status }) : null))))
   })
+}
+
+// Initials for a name the overview has no chat for, as the host's initialsOf makes them.
+function initialsOf(name) {
+  const text = String(name ?? '').trim()
+  if (text.startsWith('#')) return '#'
+  const words = text.split(/\s+/).filter(word => /\p{L}|\p{N}/u.test(word))
+  return (words.length > 1 ? words[0][0] + words.at(-1)[0] : (words[0] ?? '?').slice(0, 2)).toUpperCase()
+}
+
+/**
+ * A chat's header: its photo (else its initials), its name, one status line under it and the
+ * actions on the right. `off` draws the status line as a problem. It never says "online" or
+ * "typing": Omni does not give presence.
+ */
+export function ChatHead({ chat, name, status = null, off = false, className = '', children }) {
+  const actions = [children].flat().filter(Boolean)
+  // The avatar comes last in the markup, so the header reads as its name; the grid draws it first.
+  return h('header', { className: `oc-chat-head${className ? ` ${className}` : ''}`, 'data-status': status ? true : undefined },
+    h('strong', { className: 'oc-chat-name' }, name),
+    status ? h('span', { className: 'oc-chat-status', 'data-off': off || undefined }, status) : null,
+    actions.length > 0 ? h('div', { className: 'oc-chat-acts' }, actions) : null,
+    h(ChatAvatar, { chat: { name, initials: chat?.initials ?? initialsOf(name), avatarUrl: chat?.avatarUrl ?? null }, size: 40 }))
+}
+
+// About forty common emoji for the bar's picker; a pick goes in at the caret.
+export const EMOJI = Object.freeze(['😀', '😂', '😊', '😍', '😘', '😉', '😎', '🤔', '😅', '😭', '😢', '😡', '😴', '🙄', '😮', '🥳', '🤗', '🙏', '👍', '👎', '👏', '🙌', '👋', '💪', '🤝', '👌', '✌️', '🤞', '❤️', '💔', '🔥', '✨', '🎉', '✅', '❌', '⭐', '💯', '👀', '☕', '🚀'])
+
+/** `text` with `insert` put in place of its characters from `start` to `end`, and the caret after it. */
+export function insertAt(text, insert, start = text.length, end = start) {
+  const clamp = at => Math.min(Math.max(Number.isInteger(at) ? at : text.length, 0), text.length)
+  const from = Math.min(clamp(start), clamp(end))
+  const to = Math.max(clamp(start), clamp(end))
+  return { text: text.slice(0, from) + insert + text.slice(to), caret: from + insert.length }
+}
+
+/**
+ * The message bar at a chat's foot, as a chat app's: a text field that grows to about six
+ * lines, an emoji button inside it whose picker puts a pick at the caret, and the accent Send
+ * button, waiting while the field is empty or a message is being sent. Enter sends, Shift+Enter
+ * adds a line. It holds no message of its own: `value` and `onChange` are its owner's text, and
+ * `onSend` its owner's send path. `children` are the notes over it.
+ */
+export function MessageBar({ value, onChange, onSend, disabled = false, sending = false, placeholder, label, maxLength, boxRef, className = '', children }) {
+  const ownBox = useRef(null)
+  const box = boxRef ?? ownBox
+  const opener = useRef(null)
+  const caret = useRef(null)
+  const [picking, setPicking] = useState(false)
+  // After a pick, the caret goes back after it, in the field.
+  useEffect(() => {
+    if (caret.current === null) return
+    const at = caret.current
+    caret.current = null
+    box.current?.focus?.()
+    box.current?.setSelectionRange?.(at, at)
+  }, [value])
+  const off = disabled || sending
+  const empty = value.trim() === ''
+  const send = () => {
+    if (off || empty) return
+    setPicking(false)
+    onSend()
+  }
+  const pick = (emoji) => {
+    const node = box.current
+    const end = typeof node?.selectionEnd === 'number' ? node.selectionEnd : value.length
+    const next = insertAt(value, emoji, typeof node?.selectionStart === 'number' ? node.selectionStart : end, end)
+    if (typeof maxLength === 'number' && next.text.length > maxLength) return
+    caret.current = next.caret
+    onChange(next.text)
+  }
+  const closePicker = () => {
+    setPicking(false)
+    opener.current?.focus?.()
+  }
+  return h('footer', { className: `oc-bar-wrap${className ? ` ${className}` : ''}` },
+    children,
+    h('div', { className: 'oc-bar', 'data-off': disabled || undefined },
+      h('div', { className: 'oc-bar-field' },
+        h('button', {
+          ref: opener, type: 'button', className: 'oc-bar-emoji', disabled: off, 'aria-label': t('Emoji'), 'aria-expanded': picking, title: t('Emoji'),
+          onClick: () => setPicking(open => !open),
+        }, h(SmileIcon)),
+        picking && !off ? h('div', {
+          className: 'oc-emoji', role: 'group', 'aria-label': t('Pick an emoji'),
+          onKeyDown: (event) => { if (event.key === 'Escape') { event.preventDefault(); closePicker() } },
+        }, EMOJI.map(emoji => h('button', { key: emoji, type: 'button', className: 'oc-emoji-pick', onClick: () => pick(emoji) }, emoji))) : null,
+        h('textarea', {
+          ref: box, rows: 1, value, disabled: off, maxLength, placeholder, 'aria-label': label,
+          onChange: event => onChange(event.target.value),
+          onMouseDown: () => setPicking(false),
+          onKeyDown: (event) => {
+            if (event.key === 'Escape' && picking) { event.preventDefault(); setPicking(false); return }
+            if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent?.isComposing) return
+            event.preventDefault()
+            send()
+          },
+        })),
+      h('button', { type: 'button', className: 'oc-send', disabled: off || empty, 'aria-label': t('Send'), onClick: send }, h(ArrowUpIcon))))
 }
 
 export function ChatPage({ actions }) {
@@ -244,11 +369,7 @@ export function ChatPage({ actions }) {
   const send = () => { omni.sendText(chat.id, draft); setDraft('') }
   const failed = state.sendError?.chatId === chat.id ? state.sendError : null
   return h('div', { className: 'oc-page oc-chat' },
-    h('header', { className: 'oc-chat-head' },
-      h(ChatAvatar, { chat, channel, size: 40 }),
-      h('div', { className: 'oc-chat-who' },
-        h('strong', null, chat.name),
-        h('span', null, `${type.label} · ${channel.name}`)),
+    h(ChatHead, { chat, name: chat.name, status: `${type.label} · ${channel.name}` },
       h('span', { className: 'oc-answer', 'data-by': channel.answeredBy === 'Omni' ? 'omni' : 'you' },
         channel.answeredBy === 'Omni' ? h(Fragment, null, h(OmniMark, { size: 14 }), t('Omni answers here')) : t('You answer here')),
       h('button', { type: 'button', className: 'oc-ghost', onClick: () => omni.openChannels('channel', channel.id) }, h(StatusDot, { status: channel.status }), t('Channel health')),
@@ -257,20 +378,11 @@ export function ChatPage({ actions }) {
       h('div', { className: 'oc-thread-in' },
         loading ? h('div', { className: 'oc-day' }, h('span', { className: 'oc-spinner', 'aria-hidden': true }), t('Loading messages…')) : null,
         h(ChatMessages, { messages, onSized }))),
-    h('footer', { className: 'oc-compose-wrap' },
+    h(MessageBar, { className: 'oc-compose-wrap', value: draft, onChange: setDraft, onSend: send, disabled: !live, placeholder: t('Reply on {channel}', { channel: type.label }), label: t('Reply') },
       failed ? h('button', { type: 'button', className: 'oc-compose-note oc-compose-fail', role: 'alert', onClick: () => setDraft(failed.text) }, t('Not sent: {reason}', { reason: failed.message }), ' ', h('u', null, t('Put it back'))) : null,
       !writable ? h('div', { className: 'oc-compose-note oc-compose-info' }, t('This device\'s key can\'t send messages; ask your Omni\'s owner.'))
         : live ? null : h('button', { type: 'button', className: 'oc-compose-note', onClick: () => omni.openChannels('channel', channel.id) },
-          h(StatusDot, { status: channel.status }), t('{name} is not connected. Fix it to reply.', { name: channel.name })),
-      h('div', { className: 'oc-compose', 'data-off': live ? undefined : true },
-        h('textarea', {
-          rows: 1, value: draft, disabled: !live, placeholder: t('Reply on {channel}', { channel: type.label }), 'aria-label': t('Reply'),
-          onChange: event => setDraft(event.target.value),
-          onKeyDown: (event) => {
-            if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); send() }
-          },
-        }),
-        h('button', { type: 'button', className: 'oc-send', disabled: !live || draft.trim() === '', 'aria-label': t('Send'), onClick: send }, h(ArrowUpIcon)))))
+          h(StatusDot, { status: channel.status }), t('{name} is not connected. Fix it to reply.', { name: channel.name }))))
 }
 
 // -------------------------------------------------------------------------
@@ -608,7 +720,6 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-ava-face{font-weight:600;letter-spacing:.01em}
 .oc-ava-img{position:absolute;inset:0;width:100%;height:100%;border-radius:50%;object-fit:cover}
 .oc-ava-badge{position:absolute;right:-4px;bottom:-4px;display:inline-flex;border-radius:32%;box-shadow:0 0 0 2px var(--bt-sidebar)}
-.oc-chat .oc-ava-badge{box-shadow:0 0 0 2px var(--bt-main)}
 
 /* Main panels */
 .oc-page{position:relative;height:100%;min-height:0;display:flex;flex-direction:column;background:var(--bt-main);color:var(--bt-ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;animation:oc-page-in .22s cubic-bezier(.2,0,0,1)}
@@ -627,53 +738,100 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-spinner{width:14px;height:14px;border-radius:50%;border:2px solid color-mix(in srgb,var(--bt-accent) 25%,transparent);border-top-color:var(--bt-accent);animation:oc-spin .8s linear infinite;flex:none}
 @keyframes oc-spin{to{transform:rotate(360deg)}}
 
-/* Chat */
+/* The chat view: the chat page (.oc-chat) and the chat pane (.op-pane, omni-phone.js) draw the
+   same header, log and bar from the DSH tokens alone. Light: white bubbles in from the person
+   on a soft wallpaper, accent-tinted bubbles out; dark: the team's bubble surface in, its accent
+   tint out. The wallpaper's pattern is two staggered dot grids of the ink. */
+.oc-chat,.op-pane{--oc-wall:color-mix(in srgb,var(--bt-ink) 4%,var(--bt-main));--oc-in:var(--bt-card);--oc-out:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-card));--oc-dot:color-mix(in srgb,var(--bt-ink) 9%,transparent);--oc-shade:color-mix(in srgb,var(--bt-ink) 12%,transparent)}
+body[data-ds-dark-theme] :is(.oc-chat,.op-pane){--oc-wall:var(--bt-main);--oc-in:var(--bt-bubble);--oc-out:color-mix(in srgb,var(--bt-accent) 26%,var(--bt-bubble));--oc-dot:color-mix(in srgb,var(--bt-ink) 6%,transparent);--oc-shade:color-mix(in srgb,var(--bt-main) 70%,transparent)}
+.oc-chat{container:oc-chat/inline-size}
 .oc-chat-empty{align-items:center;justify-content:center;gap:12px;color:var(--bt-ink-3)}
-.oc-chat-head{display:flex;align-items:center;gap:12px;padding:12px 20px;border-bottom:.5px solid var(--bt-line-2);flex-wrap:wrap}
-.oc-chat-who{display:flex;flex-direction:column;min-width:0;margin-right:auto}
-.oc-chat-who strong{font-size:15px;line-height:20px;font-weight:600}
-.oc-chat-who span{font-size:12.5px;color:var(--bt-ink-2)}
+.oc-chat-head{position:relative;z-index:1;flex:none;display:grid;grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:12px;align-items:center;min-height:60px;padding:8px 12px 8px 16px;box-sizing:border-box;border-bottom:.5px solid var(--bt-line-2);background:var(--bt-main)}
+.oc-chat-head>.oc-ava{grid-column:1;grid-row:1/3}
+.oc-chat-name{grid-column:2;grid-row:1;align-self:end;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px;line-height:20px;font-weight:600}
+.oc-chat-head:not([data-status]) .oc-chat-name{grid-row:1/3;align-self:center}
+.oc-chat-status{grid-column:2;grid-row:2;align-self:start;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;line-height:17px;color:var(--bt-ink-2)}
+.oc-chat-status[data-off]{color:var(--bt-danger)}
+.oc-chat-acts{grid-column:3;grid-row:1/3;display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:4px 6px}
+@container oc-chat (max-width:560px){.oc-chat-head{grid-template-columns:auto minmax(0,1fr)}.oc-chat-acts{grid-column:1/-1;grid-row:3;justify-content:flex-start;margin-top:6px}}
+.oc-icon-act{display:inline-grid;place-items:center;width:36px;height:36px;padding:0;border:0;border-radius:50%;background:none;color:var(--bt-ink-2);cursor:pointer;transition:background-color .12s ease,color .12s ease}
+.oc-icon-act:hover{background:var(--bt-hover);color:var(--bt-ink)}
+.oc-icon-act[aria-checked=true]{background:color-mix(in srgb,var(--bt-accent) 14%,transparent);color:var(--bt-accent)}
+.oc-icon-act svg{width:18px;height:18px}
+:is(.oc-chat,.op-pane) button:focus-visible{outline:2px solid var(--bt-accent);outline-offset:2px}
 .oc-answer{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 11px;border-radius:999px;font-size:12.5px;color:var(--bt-accent);background:color-mix(in srgb,var(--bt-accent) 10%,transparent)}
 .oc-answer[data-by=you]{color:var(--bt-ink-2);background:var(--bt-hover)}
-.oc-thread{flex:1;min-height:0;overflow-y:auto}
-.oc-thread-in{display:flex;flex-direction:column;gap:2px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:20px 24px 12px}
-.oc-day{align-self:center;margin:4px 0 12px;font-size:11.5px;color:var(--bt-ink-3)}
-.oc-msg{display:flex;flex-direction:column;max-width:72%;animation:oc-msg-in .2s cubic-bezier(.2,0,0,1)}
+.oc-chat-acts .oc-preview-chip{margin-left:0}
+.oc-thread{flex:1;min-height:0;overflow-y:auto;background-color:var(--oc-wall);background-image:radial-gradient(circle,var(--oc-dot) 1px,transparent 1.5px),radial-gradient(circle,var(--oc-dot) 1px,transparent 1.5px);background-size:22px 22px;background-position:0 0,11px 11px}
+.oc-thread-in{display:flex;flex-direction:column;gap:2px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:12px 20px 16px;box-sizing:border-box}
+.oc-day{align-self:center;display:inline-flex;align-items:center;gap:8px;margin:10px 0 6px;padding:4px 12px;border-radius:8px;background:var(--oc-in);box-shadow:0 1px 1px var(--oc-shade);font-size:12px;line-height:17px;font-weight:500;color:var(--bt-ink-2)}
+.oc-msg{display:flex;flex-direction:column;max-width:min(80%,560px);animation:oc-msg-in .2s cubic-bezier(.2,0,0,1)}
 @keyframes oc-msg-in{from{opacity:0;transform:translateY(4px)}}
-.oc-msg-first{margin-top:10px}
+.oc-msg-first{margin-top:8px}
 .oc-msg-them{align-self:flex-start;align-items:flex-start}
 .oc-msg-omni,.oc-msg-you{align-self:flex-end;align-items:flex-end}
-.oc-msg-author{display:inline-flex;align-items:center;gap:4px;margin:0 12px 3px;font-size:12px;font-weight:500;color:var(--bt-ink-2)}
+.oc-msg-author{display:inline-flex;align-items:center;gap:4px;margin:0 10px 2px;font-size:12px;line-height:16px;font-weight:600;color:var(--bt-ink-2)}
 .oc-msg-omni .oc-msg-author{color:var(--bt-accent)}
-.oc-bubble{position:relative;padding:8px 12px 7px;border-radius:18px;font-size:14.5px;line-height:21px;white-space:pre-wrap;overflow-wrap:anywhere;margin-top:2px}
-.oc-bubble time{float:right;margin:5px 0 -3px 10px;font-size:10.5px;line-height:14px;opacity:.55}
-.oc-msg-them .oc-bubble{background:var(--bt-bubble);color:var(--bt-ink)}
-.oc-msg-omni .oc-bubble{background:color-mix(in srgb,var(--bt-accent) 14%,var(--bt-main));color:var(--bt-ink)}
-.oc-msg-you .oc-bubble{background:var(--bt-user);color:var(--bt-user-ink)}
-.oc-bubble[data-media]{padding:4px 4px 7px}
-.oc-media-caption,.oc-media-text{display:block;margin:2px 8px 0}
-.oc-bubble[data-media]>time{margin-right:8px}
-.oc-bubble[data-media=sticker]{background:none;padding:0}
-.oc-media-img{display:block;max-width:100%;max-height:340px;border-radius:14px;margin-bottom:4px}
-.oc-media-sticker{display:block;width:140px;height:140px;object-fit:contain}
-.oc-media-audio{display:block;width:260px;max-width:100%;height:40px;margin-top:4px;margin-bottom:4px}
-.oc-media-still{display:grid;place-items:center;width:240px;max-width:100%;aspect-ratio:16/10;margin-bottom:4px;border:0;border-radius:14px;background:linear-gradient(160deg,#2b2f36,#14161a);color:#fff;cursor:pointer}
-.oc-media-play{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:rgba(0,0,0,.45);padding-left:3px;box-sizing:border-box}
-.oc-media-wait{display:grid;place-items:center;width:240px;max-width:100%;aspect-ratio:4/3;margin-bottom:4px;border-radius:14px;background:var(--bt-hover)}
-.oc-media-wait-audio{aspect-ratio:auto;height:40px;width:260px}
-.oc-media-wait-sticker{width:140px;aspect-ratio:1}
-.oc-media-doc{display:flex;align-items:center;gap:8px;min-width:180px;padding:8px 10px;border-radius:12px;background:var(--bt-hover);font-size:13.5px}
-.oc-media-doc span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.oc-bubble{position:relative;max-width:100%;box-sizing:border-box;padding:6px 9px 7px 10px;border-radius:12px;font-size:14px;line-height:20px;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--bt-ink);background:var(--oc-in);box-shadow:0 1px 1px var(--oc-shade)}
+.oc-msg-omni .oc-bubble,.oc-msg-you .oc-bubble{background:var(--oc-out)}
+.oc-msg-first .oc-bubble::before{content:"";position:absolute;top:0;width:8px;height:12px;background:inherit}
+.oc-msg-them.oc-msg-first .oc-bubble{border-top-left-radius:0}
+.oc-msg-them.oc-msg-first .oc-bubble::before{left:-7px;clip-path:polygon(0 0,100% 0,100% 100%)}
+:is(.oc-msg-omni,.oc-msg-you).oc-msg-first .oc-bubble{border-top-right-radius:0}
+:is(.oc-msg-omni,.oc-msg-you).oc-msg-first .oc-bubble::before{right:-7px;clip-path:polygon(0 0,100% 0,0 100%)}
+.oc-meta{float:right;position:relative;display:inline-flex;align-items:center;gap:3px;margin:6px -2px -5px 12px;font-size:11px;line-height:15px;white-space:nowrap;color:var(--bt-ink-2)}
+.oc-meta time{font-variant-numeric:tabular-nums}
+.oc-tick{display:inline-flex;align-items:center}
+.oc-tick svg{width:15px;height:15px}
+.oc-tick svg+svg{margin-left:-10px}
+.oc-tick[data-status=read]{color:color-mix(in srgb,var(--bt-accent) 72%,var(--bt-ink))}
+.oc-tick[data-status=failed]{color:var(--bt-danger)}
+body[data-ds-dark-theme] .oc-tick{color:color-mix(in srgb,var(--bt-ink) 45%,transparent)}
+body[data-ds-dark-theme] .oc-tick[data-status=read]{color:color-mix(in srgb,var(--bt-accent) 50%,var(--bt-ink))}
+body[data-ds-dark-theme] .oc-tick[data-status=failed]{color:color-mix(in srgb,var(--bt-danger) 60%,var(--bt-ink))}
+.oc-tick[data-status=failed] svg{transform:rotate(180deg)}
+.oc-bubble[data-media]{padding:3px 3px 6px}
+.oc-media-caption,.oc-media-text{display:block;margin:4px 7px 0}
+.oc-bubble[data-media]>.oc-meta{margin-right:5px}
+.oc-bubble[data-media=sticker]{padding:0;background:none;box-shadow:none}
+.oc-bubble[data-media=sticker]::before{display:none}
+.oc-media-img{display:block;max-width:100%;max-height:300px;border-radius:9px}
+.oc-media-sticker{display:block;width:120px;height:120px;object-fit:contain}
+.oc-media-audio{display:block;width:240px;max-width:100%;height:40px;margin:2px 0}
+.oc-media-still{display:grid;place-items:center;width:220px;max-width:100%;aspect-ratio:16/10;border:0;border-radius:9px;background:color-mix(in srgb,var(--bt-ink) 80%,var(--bt-main));color:var(--bt-main);cursor:pointer}
+.oc-media-play{display:grid;place-items:center;width:48px;height:48px;border-radius:50%;background:color-mix(in srgb,var(--bt-main) 22%,transparent);padding-left:3px;box-sizing:border-box}
+.oc-media-wait{display:grid;place-items:center;width:220px;max-width:100%;aspect-ratio:4/3;border-radius:9px;background:var(--bt-hover)}
+.oc-media-wait-audio{aspect-ratio:auto;height:40px;width:240px}
+.oc-media-wait-sticker{width:120px;aspect-ratio:1}
+.oc-media-doc{display:flex;align-items:center;gap:8px;min-width:0;max-width:100%;width:220px;padding:10px;border-radius:9px;box-sizing:border-box;background:color-mix(in srgb,var(--bt-ink) 6%,transparent);font-size:13.5px}
+.oc-media-doc svg{flex:none;color:var(--bt-accent)}
+.oc-media-doc span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .oc-media-miss{margin:6px 8px 2px;font-size:12.5px;color:var(--bt-ink-3)}
-.oc-media-text{font-size:13px;line-height:19px;opacity:.75}
-.oc-compose-wrap{padding:8px 24px 20px}
-.oc-compose-note{display:flex;align-items:center;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto 8px;width:100%;padding:8px 12px;border:0;border-radius:12px;background:color-mix(in srgb,#f59e0b 12%,transparent);color:var(--bt-ink);font:inherit;font-size:13px;text-align:left;cursor:pointer;box-sizing:border-box}
-.oc-compose{display:flex;align-items:flex-end;gap:8px;max-width:var(--dsh-chat-content-width,748px);margin:0 auto;padding:6px 6px 6px 16px;border-radius:24px;border:1px solid var(--bt-line-2);background:var(--bt-card);box-shadow:0 2px 8px -2px rgba(0,0,0,.06);box-sizing:border-box}
-.oc-compose[data-off]{opacity:.6}
-.oc-compose textarea{flex:1;height:36px;min-height:36px;max-height:160px;padding:8px 0;box-sizing:border-box;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:14.5px;line-height:20px;resize:none;outline:none;field-sizing:content}
-.oc-send{width:36px;height:36px;border-radius:50%;border:0;background:var(--bt-accent);color:var(--bt-accent-ink,#fff);display:inline-grid;place-items:center;cursor:pointer;flex:none;transition:opacity .12s ease,transform .12s ease}
-.oc-send:disabled{opacity:.3;cursor:default}
+.oc-media-text{font-size:13px;line-height:19px;color:var(--bt-ink-2)}
+/* The message bar, pinned to the chat's foot, and the notes over it. */
+.oc-bar-wrap{flex:none;display:flex;flex-direction:column;gap:6px;padding:8px 12px 12px;box-sizing:border-box;border-top:.5px solid var(--bt-line-2);background:var(--bt-main)}
+.oc-bar-wrap>*{width:100%;max-width:var(--dsh-chat-content-width,748px);margin-left:auto;margin-right:auto;box-sizing:border-box}
+.oc-bar{position:relative;display:flex;align-items:flex-end;gap:8px}
+.oc-bar[data-off]{opacity:.6}
+.oc-bar-field{flex:1;min-width:0;display:flex;align-items:flex-end;gap:2px;padding:2px 14px 2px 3px;border:1px solid var(--bt-line-2);border-radius:22px;background:var(--bt-card);transition:border-color .12s ease,box-shadow .12s ease}
+.oc-bar-field:focus-within{border-color:var(--bt-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--bt-accent) 16%,transparent)}
+.oc-bar textarea{flex:1;min-width:0;height:auto;min-height:38px;max-height:138px;padding:9px 2px;box-sizing:border-box;border:0;background:none;color:var(--bt-ink);font:inherit;font-size:14px;line-height:20px;resize:none;outline:none;overflow-y:auto;field-sizing:content}
+.oc-bar textarea::placeholder{color:var(--bt-ink-3)}
+.oc-bar-emoji{flex:none;display:inline-grid;place-items:center;width:34px;height:34px;margin:1px 0;padding:0;border:0;border-radius:50%;background:none;color:var(--bt-ink-2);cursor:pointer}
+.oc-bar-emoji:hover:not(:disabled),.oc-bar-emoji[aria-expanded=true]{background:var(--bt-hover);color:var(--bt-ink)}
+.oc-bar-emoji:disabled{cursor:default}
+.oc-bar-emoji svg{width:20px;height:20px}
+.oc-emoji{position:absolute;left:0;bottom:calc(100% + 8px);z-index:3;display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:2px;width:min(320px,100%);padding:8px;box-sizing:border-box;border:.5px solid var(--bt-line-2);border-radius:16px;background:var(--bt-card);box-shadow:0 14px 36px -14px var(--oc-shade)}
+.oc-emoji-pick{display:grid;place-items:center;min-width:0;aspect-ratio:1;padding:0;border:0;border-radius:8px;background:none;font-size:20px;line-height:1;cursor:pointer}
+.oc-emoji-pick:hover{background:var(--bt-hover)}
+.oc-send{flex:none;display:inline-grid;place-items:center;width:42px;height:42px;padding:0;border:0;border-radius:50%;background:var(--bt-accent);color:var(--bt-knob);cursor:pointer;transition:opacity .12s ease,transform .12s ease}
+.oc-send svg{width:18px;height:18px}
+.oc-send:disabled{opacity:.35;cursor:default}
 .oc-send:active:not(:disabled){transform:scale(.94)}
+.oc-compose-note{display:flex;align-items:center;gap:8px;margin:0;padding:8px 12px;border:0;border-radius:12px;background:var(--bt-hover);color:var(--bt-ink);font:inherit;font-size:13px;text-align:left;cursor:pointer}
+.oc-compose-info{cursor:default;color:var(--bt-ink-2)}
+.oc-compose-fail{color:color-mix(in srgb,var(--bt-danger) 80%,var(--bt-ink));background:color-mix(in srgb,var(--bt-danger) 10%,transparent)}
+.oc-bubble[data-sending]{opacity:.6}
 
 /* Channels */
 .oc-channels{overflow-y:auto}
@@ -785,9 +943,7 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-live-chip{gap:6px;border-style:solid;border-color:color-mix(in srgb,#16a34a 35%,transparent);color:color-mix(in srgb,#16a34a 70%,var(--bt-ink))}
 .oc-live-chip[data-error]{border-color:color-mix(in srgb,#f59e0b 45%,transparent);color:color-mix(in srgb,#d97706 80%,var(--bt-ink))}
 .oc-live-dot{width:6px;height:6px;border-radius:50%;background:currentColor;animation:oc-pulse 2s ease-in-out infinite}
-.oc-compose-info{cursor:default;background:var(--bt-hover);color:var(--bt-ink-2)}
 .oc-seg-static{cursor:default}
-.oc-day{display:inline-flex;align-items:center;gap:8px}
 .oc-qr-wait{display:inline-flex;align-items:center;gap:8px;font-size:12.5px;color:var(--bt-ink-2)}
 .oc-qr .oc-qr-wait{color:#475569}
 .oc-qr-code{position:relative;display:inline-flex}
@@ -800,8 +956,6 @@ body[data-ds-dark-theme] .oc-ava{background:hsl(var(--oc-hue) 30% 26%);color:hsl
 .oc-fix{display:flex;align-items:flex-end;gap:10px}
 .oc-fix .oc-field{flex:1}
 .oc-problem{margin:4px 0 0;padding:10px 12px;border-radius:12px;font-size:13px;color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
-.oc-compose-fail{color:color-mix(in srgb,#d97706 85%,var(--bt-ink));background:color-mix(in srgb,#f59e0b 12%,transparent)}
-.oc-bubble[data-sending]{opacity:.6}
 .oc-type:disabled{opacity:.5;cursor:not-allowed}
 .oc-qr-empty{display:grid;place-items:center;width:196px;height:196px}
 @media (max-width:720px){.oc-guide{grid-template-columns:1fr;gap:12px}.oc-guide-steps{flex-direction:row;flex-wrap:wrap;gap:4px 14px}.oc-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-seg{grid-template-columns:1fr}.oc-channels-in{padding:20px 16px 40px}.oc-head{flex-direction:column}}

@@ -34,6 +34,9 @@ const DRAWN = new Set(['image', 'audio', 'video', 'document', 'sticker'])
 // picture or video. A document's extracted text stays out: the whole file's text would ride
 // every poll.
 const OMNI_TEXT = ['transcription', 'imageDescription', 'videoDescription']
+// Omni's delivery status of a message (its deliveryStatus), as the chat view draws it on the
+// messages staff and Omni sent; any other value draws nothing.
+const STATUSES = new Set(['pending', 'sent', 'delivered', 'read', 'failed'])
 const MediaPayload = z.object({ messageId: z.string().min(1) })
 const MediaMessage = z.object({ data: z.object({
   hasMedia: z.boolean(),
@@ -166,6 +169,7 @@ export function messageOf(message) {
     mediaText: hasMedia ? omniTextOf(message) : null,
     fileName: hasMedia && typeof fileName === 'string' && fileName !== '' ? fileName : null,
     at: time(message.platformTimestamp) ?? time(message.createdAt) ?? 0,
+    ...(STATUSES.has(message.deliveryStatus) ? { status: message.deliveryStatus } : {}),
   }
 }
 
