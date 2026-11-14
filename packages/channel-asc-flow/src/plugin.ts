@@ -574,14 +574,28 @@ export class AscFlowPlugin extends BaseChannelPlugin {
   // Outbound
   // ─────────────────────────────────────────────────────────────
 
-  /** `POST /sendIndicador` — the "digitando…" bubble. */
-  async sendTyping(instanceId: string, chatId: string, _duration?: number): Promise<void> {
+  /**
+   * Deliberately a no-op: on this channel "digitando…" goes out ONCE per
+   * beneficiary message, raised by the plugin itself when the turn lands
+   * (`raiseTyping`, on the inbound path).
+   *
+   * Every other caller lands here: the dispatcher raises "composing" when the
+   * agent run starts (the same instant as the inbound one), "composing" again
+   * between reply chunks, and "paused" when the run ends — and `/sendIndicador`
+   * has no "stop", so "paused" used to raise the bubble a THIRD time. Each call
+   * is one request the platform relays to Meta: measured in production on
+   * 13/11/2026, ~3 indicators per beneficiary message, most of what we sent the
+   * platform, with HTTP 500 on the ones that collided.
+   */
+  async sendTyping(_instanceId: string, _chatId: string, _duration?: number): Promise<void> {}
+
+  /** `POST /sendIndicador` — the "digitando…" bubble. Never throws: it is never worth failing a turn over. */
+  private async raiseTyping(instanceId: string, chatId: string): Promise<void> {
     const state = this.ascFlowInstances.get(instanceId);
     if (!state) return;
     try {
       await state.client.call('/sendIndicador', { cod: toCodAtendimento(chatId), tipo: 1 });
     } catch (err) {
-      // A typing indicator is never worth failing a turn over.
       this.logger.warn('[asc-flow] sendIndicador failed', { instanceId, chatId, err: String(err) });
     }
   }
@@ -1254,17 +1268,12 @@ export class AscFlowPlugin extends BaseChannelPlugin {
   }
 
   /**
-   * Every bubble EXCEPT the last one, in order, with typing after each so the
-   * next one lands with a beat (the first typing was raised on the inbound
-   * path). The last bubble is not pushed — it goes back in `resposta`.
+   * The bubbles, in order. No typing between them: the one "digitando…" of the
+   * turn was raised on the inbound path (see `sendTyping`).
    *
    * Best-effort: a push refused by the platform must not cost the beneficiary
    * the answer, which the flow will render from `resposta` anyway. Stop at the
    * first failure — the remaining bubbles would arrive out of order.
-   *
-   * Only a failed BUBBLE stops the loop. The typing indicator between bubbles
-   * is cosmetic: when the platform refuses it (HTTP 429 at peak hours), the
-   * next bubble still goes out — the loop is sequential, so order holds.
    */
   private async pushBubbles(state: AscFlowInstanceState, cod: number, bubbles: string[]): Promise<number> {
     let enviadas = 0;
@@ -1286,22 +1295,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
         return enviadas;
       }
       enviadas++;
-      // Typing between bubbles, for rhythm — never after the last one.
-      if (enviadas < bubbles.length) await this.typingBetweenBubbles(state, cod);
     }
     return enviadas;
-  }
-
-  /** `POST /sendIndicador` between two bubbles. Never throws: a refused indicator must not cost a bubble. */
-  private async typingBetweenBubbles(state: AscFlowInstanceState, cod: number): Promise<void> {
-    try {
-      await state.client.call('/sendIndicador', { cod, tipo: 1 });
-    } catch (err) {
-      this.logger.warn('[asc-flow] typing between bubbles failed — sending the next bubble anyway', {
-        cod,
-        err: String(err),
-      });
-    }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -1352,8 +1347,8 @@ export class AscFlowPlugin extends BaseChannelPlugin {
     const quote = this.quotedReplyTo(client, instanceId, turn);
 
     // Raise "digitando…" as soon as the turn lands: the agent run is the slow
-    // part, and the beneficiary is already waiting.
-    await this.sendTyping(instanceId, turn.codAtendimento);
+    // part, and the beneficiary is already waiting. The ONLY one of the turn.
+    await this.raiseTyping(instanceId, turn.codAtendimento);
 
     const externalId = turn.messageId ?? crypto.randomUUID();
 
